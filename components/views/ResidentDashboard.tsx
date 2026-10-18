@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import Modal from '../common/Modal';
-import { useAuth } from '../../contexts/AuthContext';
+import { useAuth, getHomeRouteForRole } from '../../contexts/AuthContext';
 import {
   FinancialsIcon,
   AnnouncementsIcon,
@@ -32,7 +33,16 @@ import {
   getAssembleesGeneralesForBuilding,
   getSyndics,
 } from '../../firebase/services';
-import type { MaintenanceRequest, PaymentProof, PaymentMethod, Quittance, AssembleeGenerale } from '../../types';
+import type {
+  MaintenanceRequest,
+  PaymentProof,
+  PaymentMethod,
+  Quittance,
+  AssembleeGenerale,
+  Syndic,
+  Building,
+  Resident,
+} from '../../types';
 import { generateQuittancePDF } from '../../services/pdfService';
 import Loading from '../common/Loading';
 
@@ -43,7 +53,8 @@ const currencyFormatter = new Intl.NumberFormat('fr-MA', {
 });
 
 const ResidentDashboard: React.FC = () => {
-  const { userProfile, logout } = useAuth();
+  const { userProfile, logout, loginWithEmail, changePassword } = useAuth();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
 
   const [activeTab, setActiveTab] = useState<
@@ -56,6 +67,12 @@ const ResidentDashboard: React.FC = () => {
   const [isDownloadingChargeQuit, setIsDownloadingChargeQuit] = useState<string | null>(null);
   const [previewDocName, setPreviewDocName] = useState<string | null>(null);
 
+  // Password Change State
+  const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [passwordMsg, setPasswordMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
   // Maintenance Form State
   const [maintCategory, setMaintCategory] = useState<MaintenanceRequest['category']>('plumbing');
   const [maintDesc, setMaintDesc] = useState('');
@@ -67,27 +84,74 @@ const ResidentDashboard: React.FC = () => {
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('virement');
   const [proofNote, setProofNote] = useState('');
 
-  // Resolve Resident Info (demo fallback to Fatima Zahra in demo mode if residentId not set)
-  const effectiveResidentId = userProfile?.role === 'resident' && userProfile?.uid && userProfile.uid !== 'mock-google-user'
-    ? userProfile.uid
-    : 'res-2';
-
   // Fetch Syndic and Building Data
   const { data: syndics = [] } = useQuery({
     queryKey: ['syndics'],
     queryFn: getSyndics,
   });
 
-  const activeSyndic = syndics[0];
-  const activeBuilding = activeSyndic?.buildings[0];
+  // Dynamically resolve exact Syndic, Building, Resident, and Apartment across all buildings
+  const { activeSyndic, activeBuilding, currentResident, currentApartment } = useMemo(() => {
+    let foundSyndic: Syndic | undefined;
+    let foundBuilding: Building | undefined;
+    let foundResident: Resident | undefined;
 
-  const currentResident = activeBuilding?.residents.find(
-    (r) => r.id === effectiveResidentId || r.email === userProfile?.email
-  ) || activeBuilding?.residents[1];
+    const targetUid = userProfile?.uid;
+    const targetEmail = userProfile?.email?.trim().toLowerCase();
+    const targetCin = userProfile?.cin?.trim().toLowerCase();
 
-  const currentApartment = activeBuilding?.apartments.find(
-    (a) => a.ownerId === currentResident?.id || a.tenantId === currentResident?.id
-  ) || activeBuilding?.apartments[1];
+    // 1. Search across all syndics and buildings for the exact logged-in resident
+    for (const s of syndics) {
+      for (const b of s.buildings) {
+        const match = b.residents.find(
+          (r) =>
+            (targetUid && r.id === targetUid) ||
+            (targetEmail && r.email.trim().toLowerCase() === targetEmail) ||
+            (targetCin && r.cin && r.cin.trim().toLowerCase() === targetCin)
+        );
+        if (match) {
+          foundSyndic = s;
+          foundBuilding = b;
+          foundResident = match;
+          break;
+        }
+      }
+      if (foundResident) break;
+    }
+
+    // 2. If not matched by resident record, resolve by userProfile.syndicId & userProfile.buildingId
+    if (!foundSyndic) {
+      foundSyndic =
+        (userProfile?.syndicId && syndics.find((s) => s.id === userProfile.syndicId)) ||
+        syndics[0];
+    }
+    if (!foundBuilding && foundSyndic) {
+      foundBuilding =
+        (userProfile?.buildingId &&
+          foundSyndic.buildings.find((b) => b.id === userProfile.buildingId)) ||
+        foundSyndic.buildings[0];
+    }
+    if (!foundResident && foundBuilding) {
+      foundResident = foundBuilding.residents[1] || foundBuilding.residents[0];
+    }
+
+    const foundApt =
+      foundBuilding?.apartments.find(
+        (a) =>
+          (foundResident?.apartmentId && a.id === foundResident.apartmentId) ||
+          (userProfile?.apartmentId && a.id === userProfile.apartmentId) ||
+          (foundResident && (a.ownerId === foundResident.id || a.tenantId === foundResident.id))
+      ) || foundBuilding?.apartments[0];
+
+    return {
+      activeSyndic: foundSyndic,
+      activeBuilding: foundBuilding,
+      currentResident: foundResident,
+      currentApartment: foundApt,
+    };
+  }, [syndics, userProfile]);
+
+  const isOwnerResident = currentResident ? currentResident.isOwner : userProfile?.isOwner ?? true;
 
   // Fetch Charges for Resident
   const { data: myCharges = [], isLoading: loadingCharges } = useQuery({
@@ -137,7 +201,6 @@ const ResidentDashboard: React.FC = () => {
       setIsProofModalOpen(false);
       setRefNumber('');
       setProofNote('');
-      alert('Votre justificatif a été transmis au Syndic pour vérification et émission de votre quittance.');
     },
   });
 
@@ -154,35 +217,140 @@ const ResidentDashboard: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['maintenance', currentResident?.id] });
       setIsReportModalOpen(false);
       setMaintDesc('');
-      alert('Votre signalement a été enregistré.');
     },
   });
+
+  const handleQuickRoleSwitch = async (targetEmail: string) => {
+    const profile = await loginWithEmail(targetEmail, 'password123');
+    navigate(getHomeRouteForRole(profile.role), { replace: true });
+  };
+
+  const handleLogout = async () => {
+    await logout();
+    navigate('/login', { replace: true });
+  };
+
+  const handlePasswordSubmit = async () => {
+    setPasswordMsg(null);
+    if (newPassword.trim().length < 6) {
+      setPasswordMsg({
+        type: 'error',
+        text: 'Le nouveau mot de passe doit comporter au moins 6 caractères.',
+      });
+      return;
+    }
+    if (newPassword.trim() !== confirmPassword.trim()) {
+      setPasswordMsg({
+        type: 'error',
+        text: 'Les deux mots de passe ne correspondent pas.',
+      });
+      return;
+    }
+    try {
+      await changePassword(newPassword.trim());
+      setPasswordMsg({
+        type: 'success',
+        text: 'Votre mot de passe personnel a été enregistré avec succès.',
+      });
+      setNewPassword('');
+      setConfirmPassword('');
+      setTimeout(() => {
+        setIsPasswordModalOpen(false);
+        setPasswordMsg(null);
+      }, 1500);
+    } catch (e: any) {
+      setPasswordMsg({
+        type: 'error',
+        text: e?.message || 'Erreur lors de la mise à jour du mot de passe.',
+      });
+    }
+  };
 
   const pendingCharges = myCharges.filter((c) => c.status === 'pending' || c.status === 'overdue');
   const totalPendingAmount = pendingCharges.reduce((sum, c) => sum + c.amount, 0);
 
-  if (loadingCharges) return <Loading message="Chargement de votre espace copropriétaire..." />;
+  if (loadingCharges) return <Loading message="Chargement de votre espace résident..." />;
 
   return (
     <div className="min-h-screen bg-slate-100">
       {/* Top Navbar */}
       <nav className="bg-slate-900 text-white shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16 items-center">
-            <div className="flex items-center gap-2">
+          <div className="flex flex-wrap justify-between min-h-16 py-2 items-center gap-3">
+            <div className="flex items-center gap-2.5 flex-wrap">
               <span className="text-xl font-bold tracking-tight text-white">Syndik</span>
-              <span className="text-xs bg-teal-700 text-teal-100 px-2 py-0.5 rounded font-medium">
-                Espace Copropriétaire
+              <span
+                className={`text-xs px-2.5 py-0.5 rounded-full font-bold ${
+                  isOwnerResident
+                    ? 'bg-emerald-600/30 text-emerald-200 border border-emerald-500/40'
+                    : 'bg-sky-600/30 text-sky-200 border border-sky-500/40'
+                }`}
+              >
+                {isOwnerResident ? 'Espace Copropriétaire' : 'Espace Locataire'}
               </span>
+              {activeBuilding && (
+                <span className="text-xs text-slate-300 font-medium hidden md:inline">
+                  • {activeBuilding.name}
+                  {currentApartment ? ` (Lot ${currentApartment.number})` : ''}
+                </span>
+              )}
             </div>
-            <div className="flex items-center gap-4">
-              <span className="text-sm text-slate-300 hidden sm:inline">
-                Bonjour, <strong>{currentResident?.name || userProfile?.displayName}</strong>
+
+            <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+              {/* Quick Role Switcher for Smooth Demo Testing */}
+              <div className="hidden lg:flex items-center gap-1.5 bg-slate-800 px-2 py-1 rounded-lg border border-slate-700">
+                <span className="text-[10px] text-slate-400 font-semibold uppercase me-1">
+                  Basculer :
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleQuickRoleSwitch('contact@syndicpro.ma')}
+                  className="px-2 py-0.5 rounded bg-teal-500/20 hover:bg-teal-500/30 text-teal-200 text-[11px] font-semibold"
+                >
+                  🏢 Syndic
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleQuickRoleSwitch(
+                      isOwnerResident ? 'youssef.benali@email.com' : 'fatima.zahra@email.com'
+                    )
+                  }
+                  className="px-2 py-0.5 rounded bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-200 text-[11px] font-semibold"
+                >
+                  {isOwnerResident ? '🏠 Vue Locataire' : '🔑 Vue Copropriétaire'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleQuickRoleSwitch('provider@syndik.ma')}
+                  className="px-2 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 text-[11px] font-semibold"
+                >
+                  🛠️ Prestataire
+                </button>
+              </div>
+
+              <span className="text-xs sm:text-sm text-slate-300 hidden sm:inline">
+                <strong>{currentResident?.name || userProfile?.displayName}</strong>
               </span>
-              <NotificationBell />
+
               <button
-                onClick={() => logout()}
-                className="text-xs text-rose-400 hover:text-rose-200 transition-colors font-semibold"
+                type="button"
+                onClick={() => {
+                  setPasswordMsg(null);
+                  setIsPasswordModalOpen(true);
+                }}
+                className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 px-2.5 py-1.5 rounded-lg border border-slate-700 font-medium"
+                title="Modifier mon mot de passe"
+              >
+                🔑 Mot de passe
+              </button>
+
+              <NotificationBell />
+
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="text-xs text-rose-400 hover:text-rose-200 transition-colors font-semibold px-2 py-1"
               >
                 Déconnexion
               </button>
@@ -190,6 +358,28 @@ const ResidentDashboard: React.FC = () => {
           </div>
         </div>
       </nav>
+
+      {/* First-Login Temporary Password Notice */}
+      {userProfile?.mustChangePassword && (
+        <div className="bg-amber-50 border-b border-amber-200 px-4 py-3">
+          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+            <div className="text-xs text-amber-950">
+              <span className="font-bold">🔐 Première connexion avec mot de passe temporaire :</span>{' '}
+              Vous utilisez actuellement le mot de passe généré par votre Syndic. Pour sécuriser votre compte, définissez votre mot de passe personnel.
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setPasswordMsg(null);
+                setIsPasswordModalOpen(true);
+              }}
+              className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shrink-0"
+            >
+              Personnaliser mon mot de passe
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Sub Navigation Bar for Resident Features */}
       <div className="bg-white border-b border-slate-200 sticky top-0 z-10 shadow-xs">
@@ -1110,6 +1300,74 @@ const ResidentDashboard: React.FC = () => {
           </div>
         </Modal>
       )}
+
+      {/* Change Password Modal */}
+      <Modal
+        isOpen={isPasswordModalOpen}
+        onClose={() => setIsPasswordModalOpen(false)}
+        title="Sécurité du compte & Mot de passe personnel"
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setIsPasswordModalOpen(false)}>
+              Annuler
+            </Button>
+            <Button onClick={handlePasswordSubmit}>
+              Enregistrer le mot de passe
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-4">
+          <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-700">
+            <div>
+              Compte : <strong>{currentResident?.name || userProfile?.displayName}</strong> (
+              {isOwnerResident ? 'Copropriétaire' : 'Locataire'})
+            </div>
+            <div className="font-mono text-slate-500 mt-0.5">
+              Identifiant : {currentResident?.email || userProfile?.email}
+              {currentResident?.cin ? ` • CIN : ${currentResident.cin}` : ''}
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              Nouveau mot de passe (min. 6 caractères)
+            </label>
+            <input
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              placeholder="••••••••"
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              Confirmer le nouveau mot de passe
+            </label>
+            <input
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              placeholder="••••••••"
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono"
+            />
+          </div>
+
+          {passwordMsg && (
+            <div
+              className={`p-3 rounded-lg text-xs font-medium border ${
+                passwordMsg.type === 'success'
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                  : 'bg-rose-50 border-rose-200 text-rose-700'
+              }`}
+            >
+              {passwordMsg.text}
+            </div>
+          )}
+        </div>
+      </Modal>
 
       {/* Fixed Mobile Bottom Navigation Bar (< md) */}
       <nav

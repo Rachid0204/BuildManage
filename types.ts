@@ -9,8 +9,14 @@ export interface UserProfile {
   role: UserRole;
   syndicId?: string;
   buildingId?: string;
+  buildingName?: string;
   apartmentId?: string;
+  apartmentNumber?: string;
+  isOwner?: boolean;
+  cin?: string;
+  phone?: string;
   photoURL?: string;
+  mustChangePassword?: boolean;
 }
 
 export interface Transaction {
@@ -242,6 +248,9 @@ export interface Resident {
   buildingId: string; // Relation
   apartmentId?: string; // Relation
   cin?: string; // Moroccan National Identity Card
+  hasAccount?: boolean;
+  generatedPassword?: string;
+  credentialsCreatedAt?: string;
 }
 
 export interface Apartment {

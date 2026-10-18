@@ -8,7 +8,7 @@ import {
   useNavigate,
 } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useAuth } from './contexts/AuthContext';
+import { useAuth, getHomeRouteForRole } from './contexts/AuthContext';
 import { BuildingProvider, useBuilding } from './contexts/BuildingContext';
 import DashboardLayout from './components/layout/DashboardLayout';
 import Loading from './components/common/Loading';
@@ -22,10 +22,15 @@ import {
   getSyndics,
   saveSyndic,
   addBuilding,
+  updateBuilding,
+  deleteBuilding,
   addResident,
   updateResident,
   deleteResident,
+  regenerateResidentCredentials,
   addApartment,
+  addApartmentsBulk,
+  rebalanceBuildingTantiemes,
   updateApartment,
   deleteApartment,
   generateMonthlyCharges,
@@ -38,6 +43,7 @@ import type {
   Resident,
   Apartment,
   SubscriptionPlan,
+  UserRole,
   View,
 } from './types';
 
@@ -61,10 +67,11 @@ const Settings = React.lazy(() => import('./components/views/Settings'));
 
 // Dedicated Provider Portal for Prestataire Agréé role
 const ProviderPortal: React.FC = () => {
-  const { userProfile, logout, login } = useAuth();
+  const { userProfile, logout, loginWithEmail } = useAuth();
   const { selectedBuilding } = useBuilding();
   const queryClient = useQueryClient();
-  const buildingId = selectedBuilding?.id || 'bld-1';
+  const navigate = useNavigate();
+  const buildingId = userProfile?.buildingId || selectedBuilding?.id || 'bld-1';
 
   const [activeTicketId, setActiveTicketId] = useState<string | null>(null);
   const [techNote, setTechNote] = useState('');
@@ -86,7 +93,7 @@ const ProviderPortal: React.FC = () => {
               ? 'Intervention clôturée par le prestataire'
               : 'Compte-rendu technique du prestataire',
           note: payload.note,
-          updatedBy: userProfile?.name || 'Prestataire Agréé',
+          updatedBy: userProfile?.displayName || 'Prestataire Agréé',
           updatedByRole: 'provider',
         }
       ),
@@ -97,6 +104,16 @@ const ProviderPortal: React.FC = () => {
     },
   });
 
+  const handleQuickSwitch = async (targetEmail: string) => {
+    const profile = await loginWithEmail(targetEmail, 'password123');
+    navigate(getHomeRouteForRole(profile.role), { replace: true });
+  };
+
+  const handleLogout = async () => {
+    await logout();
+    navigate('/login', { replace: true });
+  };
+
   return (
     <div className="min-h-screen bg-slate-50">
       <header className="bg-slate-900 text-white px-6 py-4 flex flex-wrap justify-between items-center gap-4">
@@ -104,25 +121,34 @@ const ProviderPortal: React.FC = () => {
           <span className="text-[11px] uppercase tracking-wider font-bold px-2.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-400/30">
             Portail Prestataire Agréé
           </span>
-          <h1 className="text-xl font-bold mt-1">{userProfile?.name || 'Artisan Partenaire'}</h1>
+          <h1 className="text-xl font-bold mt-1">{userProfile?.displayName || 'Artisan Partenaire'}</h1>
           <p className="text-xs text-slate-400">
             Interventions techniques assignées • {selectedBuilding?.name || 'Résidence Les Palmiers'}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
-            onClick={() => login('syndic@demo.com', 'syndic')}
+            type="button"
+            onClick={() => handleQuickSwitch('contact@syndicpro.ma')}
             className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-emerald-300 border border-slate-700"
           >
-            Vue Syndic
+            🏢 Vue Syndic
           </button>
           <button
-            onClick={() => login('resident@demo.com', 'resident')}
+            type="button"
+            onClick={() => handleQuickSwitch('fatima.zahra@email.com')}
             className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-sky-300 border border-slate-700"
           >
-            Vue Résident
+            🔑 Vue Copropriétaire
           </button>
-          <Button variant="secondary" onClick={logout}>
+          <button
+            type="button"
+            onClick={() => handleQuickSwitch('admin@syndik.ma')}
+            className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-rose-300 border border-slate-700"
+          >
+            🛡️ Vue Admin
+          </button>
+          <Button variant="secondary" onClick={handleLogout}>
             Déconnexion
           </Button>
         </div>
@@ -222,7 +248,7 @@ const ProviderPortal: React.FC = () => {
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
                 >
                   <option value="in_progress">En cours d&apos;intervention sur site</option>
-                  <option value="completed">Travaux terminés & vérifiés</option>
+                  <option value="completed">Travaux terminés &amp; vérifiés</option>
                 </select>
               </div>
               <div>
@@ -266,7 +292,7 @@ const ProviderPortal: React.FC = () => {
 const SyndicDataProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
-  const { currentUser } = useAuth();
+  const { currentUser, userProfile } = useAuth();
   const { setSyndicData } = useBuilding();
 
   const { data: syndics = [], isLoading } = useQuery({
@@ -277,30 +303,35 @@ const SyndicDataProvider: React.FC<{ children: React.ReactNode }> = ({
 
   useEffect(() => {
     if (syndics.length > 0) {
-      setSyndicData(syndics[0]);
+      const targetSyndic =
+        (userProfile?.syndicId &&
+          syndics.find((s) => s.id === userProfile.syndicId)) ||
+        syndics[0];
+      setSyndicData(targetSyndic);
     }
-  }, [syndics, setSyndicData]);
+  }, [syndics, userProfile?.syndicId, setSyndicData]);
 
-  if (isLoading) return <Loading message="Loading account data..." />;
+  if (isLoading) return <Loading message="Chargement des données de la copropriété..." />;
 
   return <>{children}</>;
 };
 
 const ProtectedRoute: React.FC<{
   children: React.ReactNode;
-  roles?: string[];
+  roles?: UserRole[];
 }> = ({ children, roles }) => {
   const { currentUser, userProfile, loading } = useAuth();
   const location = useLocation();
 
   if (loading) return <Loading />;
 
-  if (!currentUser) {
+  if (!currentUser || !userProfile) {
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
 
-  if (roles && userProfile && !roles.includes(userProfile.role)) {
-    return <Navigate to="/" replace />;
+  if (roles && !roles.includes(userProfile.role)) {
+    const correctHome = getHomeRouteForRole(userProfile.role);
+    return <Navigate to={correctHome} replace />;
   }
 
   return <>{children}</>;
@@ -345,6 +376,24 @@ const AppContent: React.FC = () => {
         | 'syndicId'
       > & { apartments?: Omit<Apartment, 'id' | 'buildingId'>[] };
     }) => addBuilding(data.syndicId, data.building),
+    onSuccess: (created) => {
+      queryClient.invalidateQueries({ queryKey: ['syndics'] });
+      if (created && 'id' in created) {
+        setSelectedBuilding(created as Building);
+      }
+    },
+  });
+
+  const updateBuildingMutation = useMutation({
+    mutationFn: (data: {
+      buildingId: string;
+      updates: Partial<Building> & { syncApartmentFees?: boolean };
+    }) => updateBuilding(data.buildingId, data.updates),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['syndics'] }),
+  });
+
+  const deleteBuildingMutation = useMutation({
+    mutationFn: deleteBuilding,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['syndics'] }),
   });
 
@@ -366,8 +415,26 @@ const AppContent: React.FC = () => {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['syndics'] }),
   });
 
+  const regenerateCredentialsMutation = useMutation({
+    mutationFn: regenerateResidentCredentials,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['syndics'] }),
+  });
+
   const addApartmentMutation = useMutation({
     mutationFn: addApartment,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['syndics'] }),
+  });
+
+  const addApartmentsBulkMutation = useMutation({
+    mutationFn: (data: {
+      buildingId: string;
+      apartments: Omit<Apartment, 'id' | 'buildingId'>[];
+    }) => addApartmentsBulk(data.buildingId, data.apartments),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['syndics'] }),
+  });
+
+  const rebalanceTantiemesMutation = useMutation({
+    mutationFn: rebalanceBuildingTantiemes,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['syndics'] }),
   });
 
@@ -424,7 +491,8 @@ const AppContent: React.FC = () => {
       | 'syndicId'
     >,
     numApartments: number,
-    numberingSystem: 'numeric' | 'alphabetic'
+    numberingSystem: 'numeric' | 'alphabetic' | 'floor_numeric',
+    floorsCount: number = 4
   ) => {
     if (!syndic) return;
 
@@ -439,9 +507,21 @@ const AppContent: React.FC = () => {
     if (currentBuildings >= limit) return;
 
     const generatedApartments: Omit<Apartment, 'id' | 'buildingId'>[] = [];
+    const safeFloors = Math.max(1, floorsCount || 4);
+    const unitsPerFloor = Math.max(1, Math.ceil(numApartments / safeFloors));
+    const baseTantieme = numApartments > 0 ? Math.floor(1000 / numApartments) : 100;
+
     for (let i = 1; i <= numApartments; i++) {
+      const floorIndex = Math.min(
+        safeFloors,
+        Math.floor((i - 1) / unitsPerFloor) + 1
+      );
+      const unitOnFloor = ((i - 1) % unitsPerFloor) + 1;
       let number = '';
-      if (numberingSystem === 'numeric') {
+
+      if (numberingSystem === 'floor_numeric') {
+        number = `${floorIndex}${unitOnFloor < 10 ? `0${unitOnFloor}` : unitOnFloor}`;
+      } else if (numberingSystem === 'numeric') {
         number = `${i}`;
       } else {
         let n = i;
@@ -453,8 +533,13 @@ const AppContent: React.FC = () => {
       }
       generatedApartments.push({
         number,
-        floor: 1,
-        area: 60,
+        floor: floorIndex,
+        area: 80,
+        tantiemes:
+          i === 1
+            ? baseTantieme + (1000 - baseTantieme * numApartments)
+            : baseTantieme,
+        coproType: 'apartment',
         ownerId: null,
         tenantId: null,
         monthlyFees: buildingData.monthlySyndicFees,
@@ -470,7 +555,7 @@ const AppContent: React.FC = () => {
     });
   };
 
-  const handleAddResident = (
+  const handleAddResident = async (
     residentData: Omit<Resident, 'id' | 'syndicId' | 'buildingId'>,
     generateCredentials?: boolean
   ) => {
@@ -480,9 +565,9 @@ const AppContent: React.FC = () => {
       syndicId: syndic.id,
       buildingId: selectedBuilding.id,
     };
-    addResidentMutation.mutate({
+    return await addResidentMutation.mutateAsync({
       resident,
-      generateCredentials: !!generateCredentials,
+      generateCredentials: generateCredentials ?? true,
     });
   };
 
@@ -494,13 +579,18 @@ const AppContent: React.FC = () => {
     addApartmentMutation.mutate(apartment);
   };
 
-  // Render helpers for non-syndic roles
-  if (userProfile?.role === 'admin') return <AdminDashboard />;
-  if (userProfile?.role === 'resident') return <ResidentDashboard />;
-  if (userProfile?.role === 'provider') return <ProviderPortal />;
+  const handleAddApartmentsBulk = (
+    apartmentsList: Omit<Apartment, 'id' | 'buildingId'>[]
+  ) => {
+    if (!selectedBuilding) return;
+    addApartmentsBulkMutation.mutate({
+      buildingId: selectedBuilding.id,
+      apartments: apartmentsList,
+    });
+  };
 
   return (
-    <Suspense fallback={<Loading message="Loading view..." />}>
+    <Suspense fallback={<Loading message="Chargement du module..." />}>
       <Routes>
         <Route element={<DashboardLayout />}>
           <Route
@@ -515,7 +605,7 @@ const AppContent: React.FC = () => {
                   }}
                 />
               ) : (
-                <Navigate to="/buildings" />
+                <Navigate to="/buildings" replace />
               )
             }
           />
@@ -527,12 +617,15 @@ const AppContent: React.FC = () => {
               <Buildings
                 syndic={syndic!}
                 onAddBuilding={handleAddBuilding}
-                onSelectBuilding={(buildingId: string) => {
-                  const found = syndic?.buildings.find((b) => b.id === buildingId);
-                  if (found) {
-                    setSelectedBuilding(found);
-                    navigate('/');
-                  }
+                onUpdateBuilding={(buildingId, updates) =>
+                  updateBuildingMutation.mutate({ buildingId, updates })
+                }
+                onDeleteBuilding={(buildingId) =>
+                  deleteBuildingMutation.mutate(buildingId)
+                }
+                onSelectBuilding={(building: Building) => {
+                  setSelectedBuilding(building);
+                  navigate('/');
                 }}
               />
             }
@@ -547,9 +640,12 @@ const AppContent: React.FC = () => {
                   onAddResident={handleAddResident}
                   onUpdateResident={updateResidentMutation.mutate}
                   onDeleteResident={deleteResidentMutation.mutate}
+                  onRegenerateCredentials={(residentId) =>
+                    regenerateCredentialsMutation.mutateAsync(residentId)
+                  }
                 />
               ) : (
-                <Navigate to="/buildings" />
+                <Navigate to="/buildings" replace />
               )
             }
           />
@@ -562,11 +658,15 @@ const AppContent: React.FC = () => {
                   building={selectedBuilding}
                   residents={selectedBuilding.residents}
                   onAddApartment={handleAddApartment}
+                  onAddApartmentsBulk={handleAddApartmentsBulk}
+                  onRebalanceTantiemes={() =>
+                    rebalanceTantiemesMutation.mutate(selectedBuilding.id)
+                  }
                   onUpdateApartment={updateApartmentMutation.mutate}
                   onDeleteApartment={deleteApartmentMutation.mutate}
                 />
               ) : (
-                <Navigate to="/buildings" />
+                <Navigate to="/buildings" replace />
               )
             }
           />
@@ -589,7 +689,7 @@ const AppContent: React.FC = () => {
                   }
                 />
               ) : (
-                <Navigate to="/buildings" />
+                <Navigate to="/buildings" replace />
               )
             }
           />
@@ -610,7 +710,7 @@ const AppContent: React.FC = () => {
                   }
                 />
               ) : (
-                <Navigate to="/buildings" />
+                <Navigate to="/buildings" replace />
               )
             }
           />
@@ -624,7 +724,7 @@ const AppContent: React.FC = () => {
                   documents={selectedBuilding.documents}
                 />
               ) : (
-                <Navigate to="/buildings" />
+                <Navigate to="/buildings" replace />
               )
             }
           />
@@ -635,7 +735,7 @@ const AppContent: React.FC = () => {
               selectedBuilding ? (
                 <Maintenance building={selectedBuilding} />
               ) : (
-                <Navigate to="/buildings" />
+                <Navigate to="/buildings" replace />
               )
             }
           />
@@ -646,7 +746,7 @@ const AppContent: React.FC = () => {
               selectedBuilding ? (
                 <AssembleeGenerale building={selectedBuilding} syndic={syndic || undefined} />
               ) : (
-                <Navigate to="/buildings" />
+                <Navigate to="/buildings" replace />
               )
             }
           />
@@ -657,7 +757,7 @@ const AppContent: React.FC = () => {
               selectedBuilding ? (
                 <Prestataires building={selectedBuilding} />
               ) : (
-                <Navigate to="/buildings" />
+                <Navigate to="/buildings" replace />
               )
             }
           />
@@ -668,7 +768,7 @@ const AppContent: React.FC = () => {
               selectedBuilding ? (
                 <CommunityChat building={selectedBuilding} />
               ) : (
-                <Navigate to="/buildings" />
+                <Navigate to="/buildings" replace />
               )
             }
           />
@@ -679,7 +779,7 @@ const AppContent: React.FC = () => {
               selectedBuilding ? (
                 <MarketplaceView building={selectedBuilding} />
               ) : (
-                <Navigate to="/buildings" />
+                <Navigate to="/buildings" replace />
               )
             }
           />
@@ -690,7 +790,7 @@ const AppContent: React.FC = () => {
               selectedBuilding ? (
                 <Analytics building={selectedBuilding} />
               ) : (
-                <Navigate to="/buildings" />
+                <Navigate to="/buildings" replace />
               )
             }
           />
@@ -708,15 +808,29 @@ const AppContent: React.FC = () => {
               )
             }
           />
+
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>
     </Suspense>
   );
 };
 
+const LandingRouteWrapper: React.FC<{ onDone: () => void }> = ({ onDone }) => {
+  const navigate = useNavigate();
+  return (
+    <LandingPage
+      onLoginClick={() => {
+        onDone();
+        navigate('/login');
+      }}
+    />
+  );
+};
+
 const App: React.FC = () => {
   const [showLanding, setShowLanding] = React.useState(true);
-  const { currentUser, loading } = useAuth();
+  const { currentUser, userProfile, loading } = useAuth();
 
   useEffect(() => {
     if (!loading && currentUser) {
@@ -731,10 +845,15 @@ const App: React.FC = () => {
       <BuildingProvider>
         <Routes>
           <Route
+            path="/welcome"
+            element={<LandingRouteWrapper onDone={() => setShowLanding(false)} />}
+          />
+
+          <Route
             path="/login"
             element={
-              currentUser ? (
-                <Navigate to="/" replace />
+              currentUser && userProfile ? (
+                <Navigate to={getHomeRouteForRole(userProfile.role)} replace />
               ) : (
                 <LoginScreen
                   onLogin={() => setShowLanding(false)}
@@ -745,14 +864,45 @@ const App: React.FC = () => {
           />
 
           <Route
+            path="/admin"
+            element={
+              <ProtectedRoute roles={['admin']}>
+                <SyndicDataProvider>
+                  <AdminDashboard />
+                </SyndicDataProvider>
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/resident"
+            element={
+              <ProtectedRoute roles={['resident']}>
+                <SyndicDataProvider>
+                  <ResidentDashboard />
+                </SyndicDataProvider>
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/provider"
+            element={
+              <ProtectedRoute roles={['provider']}>
+                <SyndicDataProvider>
+                  <ProviderPortal />
+                </SyndicDataProvider>
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
             path="/*"
             element={
               showLanding && !currentUser ? (
-                <LandingPage onLoginClick={() => setShowLanding(false)} />
+                <LandingRouteWrapper onDone={() => setShowLanding(false)} />
               ) : (
-                <ProtectedRoute
-                  roles={['syndic', 'admin', 'resident', 'provider']}
-                >
+                <ProtectedRoute roles={['syndic']}>
                   <SyndicDataProvider>
                     <AppContent />
                   </SyndicDataProvider>
@@ -767,3 +917,4 @@ const App: React.FC = () => {
 };
 
 export default App;
+

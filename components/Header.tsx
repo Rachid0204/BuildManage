@@ -1,7 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import type { Syndic, Building, Language } from '../types';
 import { LogoutIcon } from './icons/IconComponents';
 import { useI18n } from '../hooks/useI18n';
+import { useAuth, getHomeRouteForRole } from '../contexts/AuthContext';
 import NotificationBell from './common/NotificationBell';
 
 interface HeaderProps {
@@ -70,6 +72,14 @@ const LanguageSwitcher: React.FC = () => {
 
 const Header: React.FC<HeaderProps> = ({ syndic, selectedBuilding, onLogout, onOpenMobileMenu }) => {
     const { t } = useI18n();
+    const { loginWithEmail } = useAuth();
+    const navigate = useNavigate();
+
+    const handleSwitchRole = async (email: string) => {
+        const profile = await loginWithEmail(email, 'password123');
+        navigate(getHomeRouteForRole(profile.role), { replace: true });
+    };
+
     return (
         <header className="flex items-center justify-between h-16 sm:h-20 px-3 sm:px-6 bg-white border-b border-slate-200 shrink-0">
             <div className="flex items-center gap-2.5 min-w-0 flex-1">
@@ -95,9 +105,46 @@ const Header: React.FC<HeaderProps> = ({ syndic, selectedBuilding, onLogout, onO
                 </div>
             </div>
            
-            <div className="flex items-center gap-1.5 sm:gap-3 shrink-0 ms-2">
+            <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0 ms-2">
+                {/* Role Switcher Pills for Demo & Testing */}
+                <div className="hidden xl:flex items-center gap-1 bg-slate-100 p-1 rounded-lg border border-slate-200 me-1">
+                    <span className="text-[10px] font-bold text-slate-500 uppercase px-1.5">Simuler :</span>
+                    <button
+                        type="button"
+                        onClick={() => handleSwitchRole('fatima.zahra@email.com')}
+                        className="px-2 py-1 rounded bg-white hover:bg-indigo-50 text-indigo-800 border border-slate-200 text-[11px] font-semibold transition-colors"
+                        title="Basculer vers l'Espace Copropriétaire"
+                    >
+                        🔑 Copropriétaire
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => handleSwitchRole('youssef.benali@email.com')}
+                        className="px-2 py-1 rounded bg-white hover:bg-sky-50 text-sky-800 border border-slate-200 text-[11px] font-semibold transition-colors"
+                        title="Basculer vers l'Espace Locataire"
+                    >
+                        🏠 Locataire
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => handleSwitchRole('provider@syndik.ma')}
+                        className="px-2 py-1 rounded bg-white hover:bg-amber-50 text-amber-800 border border-slate-200 text-[11px] font-semibold transition-colors"
+                        title="Basculer vers le Portail Prestataire"
+                    >
+                        🛠️ Prestataire
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => handleSwitchRole('admin@syndik.ma')}
+                        className="px-2 py-1 rounded bg-white hover:bg-slate-200 text-slate-800 border border-slate-200 text-[11px] font-semibold transition-colors"
+                        title="Basculer vers la Console Super Admin"
+                    >
+                        🛡️ Admin
+                    </button>
+                </div>
+
                 <div className="flex items-center">
-                    <span className="me-3 font-medium text-slate-700 hidden xl:block text-sm">{syndic.name}</span>
+                    <span className="me-3 font-medium text-slate-700 hidden 2xl:block text-sm">{syndic.name}</span>
                     <img className="h-8 w-8 sm:h-10 sm:w-10 rounded-full object-cover border border-slate-200" src={syndic.logoUrl} alt="Syndic Logo" />
                 </div>
                 

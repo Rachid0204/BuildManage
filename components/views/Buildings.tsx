@@ -1,61 +1,94 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import type { Building, Syndic, SubscriptionPlan } from '../../types';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import Modal from '../common/Modal';
-import { PlusIcon } from '../icons/IconComponents';
+import { PlusIcon, PencilIcon, TrashIcon } from '../icons/IconComponents';
 import { useI18n } from '../../hooks/useI18n';
+
+export type BuildingFormPayload = Omit<
+  Building,
+  | 'id'
+  | 'residents'
+  | 'apartments'
+  | 'announcements'
+  | 'documents'
+  | 'financials'
+  | 'syndicId'
+>;
 
 type BuildingModalProps = {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (
-    buildingData: Omit<
-      Building,
-      | 'id'
-      | 'residents'
-      | 'apartments'
-      | 'announcements'
-      | 'documents'
-      | 'financials'
-      | 'syndicId'
-    >,
+  onSaveCreate: (
+    buildingData: BuildingFormPayload,
     numApartments: number,
-    numberingSystem: 'numeric' | 'alphabetic'
+    numberingSystem: 'numeric' | 'alphabetic' | 'floor_numeric',
+    floorsCount: number
   ) => void;
+  onSaveUpdate?: (
+    buildingId: string,
+    updates: Partial<BuildingFormPayload> & { syncApartmentFees?: boolean }
+  ) => void;
+  existingBuilding?: Building | null;
   syndicName: string;
 };
 
 const BuildingModal: React.FC<BuildingModalProps> = ({
   isOpen,
   onClose,
-  onSave,
+  onSaveCreate,
+  onSaveUpdate,
+  existingBuilding,
   syndicName,
 }) => {
   const { t } = useI18n();
   const [name, setName] = useState('');
   const [address, setAddress] = useState('');
   const [city, setCity] = useState('');
-  const [numApartments, setNumApartments] = useState('');
+  const [numApartments, setNumApartments] = useState('12');
+  const [floorsCount, setFloorsCount] = useState('4');
   const [numberingSystem, setNumberingSystem] = useState<
-    'numeric' | 'alphabetic'
-  >('numeric');
-  const [monthlyFees, setMonthlyFees] = useState('');
+    'numeric' | 'alphabetic' | 'floor_numeric'
+  >('floor_numeric');
+  const [monthlyFees, setMonthlyFees] = useState('250');
+  const [reserveFundRate, setReserveFundRate] = useState('5');
+  const [bankName, setBankName] = useState('');
+  const [bankRib, setBankRib] = useState('');
   const [managerName, setManagerName] = useState('');
   const [managerPhone, setManagerPhone] = useState('');
+  const [syncApartmentFees, setSyncApartmentFees] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  const resetForm = () => {
-    setName('');
-    setAddress('');
-    setCity('');
-    setNumApartments('');
-    setNumberingSystem('numeric');
-    setMonthlyFees('');
-    setManagerName('');
-    setManagerPhone('');
+  useEffect(() => {
+    if (existingBuilding) {
+      setName(existingBuilding.name || '');
+      setAddress(existingBuilding.address || '');
+      setCity(existingBuilding.city || '');
+      setMonthlyFees(String(existingBuilding.monthlySyndicFees || 250));
+      setReserveFundRate(String(existingBuilding.reserveFundRate ?? 5));
+      setBankName(existingBuilding.bankName || '');
+      setBankRib(existingBuilding.bankRib || '');
+      setManagerName(existingBuilding.managerName || '');
+      setManagerPhone(existingBuilding.managerPhone || '');
+      setSyncApartmentFees(false);
+    } else {
+      setName('');
+      setAddress('');
+      setCity('');
+      setNumApartments('12');
+      setFloorsCount('4');
+      setNumberingSystem('floor_numeric');
+      setMonthlyFees('250');
+      setReserveFundRate('5');
+      setBankName('');
+      setBankRib('');
+      setManagerName('');
+      setManagerPhone('');
+      setSyncApartmentFees(false);
+    }
     setErrors({});
-  };
+  }, [existingBuilding, isOpen]);
 
   const validate = () => {
     const newErrors: Record<string, string> = {};
@@ -66,15 +99,17 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
     if (!city.trim())
       newErrors.city = t('buildings.modal.validation.cityRequired');
 
-    const numApt = parseInt(numApartments, 10);
-    if (!numApartments.trim()) {
-      newErrors.numApartments = t(
-        'buildings.modal.validation.numApartmentsRequired'
-      );
-    } else if (isNaN(numApt) || numApt <= 0) {
-      newErrors.numApartments = t(
-        'buildings.modal.validation.numApartmentsInvalid'
-      );
+    if (!existingBuilding) {
+      const numApt = parseInt(numApartments, 10);
+      if (!numApartments.trim()) {
+        newErrors.numApartments = t(
+          'buildings.modal.validation.numApartmentsRequired'
+        );
+      } else if (isNaN(numApt) || numApt < 0) {
+        newErrors.numApartments = t(
+          'buildings.modal.validation.numApartmentsInvalid'
+        );
+      }
     }
 
     const fees = parseFloat(monthlyFees);
@@ -95,44 +130,55 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
   const handleSave = () => {
     if (!validate()) return;
 
-    onSave(
-      {
-        name,
-        address,
-        city,
-        monthlySyndicFees: parseFloat(monthlyFees),
-        managerName: managerName.trim() || undefined,
-        managerPhone: managerPhone.trim() || undefined,
-      },
-      parseInt(numApartments, 10),
-      numberingSystem
-    );
-    resetForm();
-    onClose();
-  };
+    const payload: BuildingFormPayload = {
+      name: name.trim(),
+      address: address.trim(),
+      city: city.trim(),
+      monthlySyndicFees: parseFloat(monthlyFees),
+      reserveFundRate: parseFloat(reserveFundRate) || 5,
+      bankName: bankName.trim() || undefined,
+      bankRib: bankRib.trim() || undefined,
+      managerName: managerName.trim() || undefined,
+      managerPhone: managerPhone.trim() || undefined,
+    };
 
-  const handleClose = () => {
-    resetForm();
+    if (existingBuilding && onSaveUpdate) {
+      onSaveUpdate(existingBuilding.id, {
+        ...payload,
+        syncApartmentFees,
+      });
+    } else {
+      onSaveCreate(
+        payload,
+        Math.max(0, parseInt(numApartments, 10) || 0),
+        numberingSystem,
+        Math.max(1, parseInt(floorsCount, 10) || 1)
+      );
+    }
     onClose();
   };
 
   const renderError = (field: string) =>
     errors[field] ? (
-      <p className="text-sm text-red-600 mt-1">{errors[field]}</p>
+      <p className="text-xs text-red-600 mt-1">{errors[field]}</p>
     ) : null;
 
   return (
     <Modal
       isOpen={isOpen}
-      onClose={handleClose}
-      title={t('buildings.modal.addTitle')}
+      onClose={onClose}
+      title={
+        existingBuilding
+          ? `Modifier l'immeuble : ${existingBuilding.name}`
+          : t('buildings.modal.addTitle')
+      }
       footer={
         <>
-          <Button variant="secondary" onClick={handleClose}>
+          <Button variant="secondary" onClick={onClose}>
             {t('buildings.modal.cancel')}
           </Button>
           <Button onClick={handleSave} className="ms-3">
-            {t('buildings.modal.save')}
+            {existingBuilding ? 'Enregistrer les modifications' : t('buildings.modal.save')}
           </Button>
         </>
       }
@@ -141,7 +187,7 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
         <div>
           <label
             htmlFor="bld-name"
-            className="block text-sm font-medium text-gray-700"
+            className="block text-xs font-semibold text-slate-700 mb-1"
           >
             {t('buildings.modal.name')}
           </label>
@@ -151,121 +197,222 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder={t('buildings.modal.namePlaceholder')}
-            className={`mt-1 block w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm ${
-              errors.name ? 'border-red-500' : 'border-gray-300'
+            className={`block w-full px-3 py-2 border rounded-md text-sm ${
+              errors.name ? 'border-red-500' : 'border-slate-300'
             }`}
           />
           {renderError('name')}
         </div>
-        <div>
-          <label
-            htmlFor="bld-address"
-            className="block text-sm font-medium text-gray-700"
-          >
-            {t('buildings.modal.address')}
-          </label>
-          <input
-            type="text"
-            id="bld-address"
-            value={address}
-            onChange={(e) => setAddress(e.target.value)}
-            placeholder={t('buildings.modal.addressPlaceholder')}
-            className={`mt-1 block w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm ${
-              errors.address ? 'border-red-500' : 'border-gray-300'
-            }`}
-          />
-          {renderError('address')}
-        </div>
-        <div>
-          <label
-            htmlFor="bld-city"
-            className="block text-sm font-medium text-gray-700"
-          >
-            {t('buildings.modal.city')}
-          </label>
-          <input
-            type="text"
-            id="bld-city"
-            value={city}
-            onChange={(e) => setCity(e.target.value)}
-            placeholder={t('buildings.modal.cityPlaceholder')}
-            className={`mt-1 block w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm ${
-              errors.city ? 'border-red-500' : 'border-gray-300'
-            }`}
-          />
-          {renderError('city')}
-        </div>
-        <div className="grid grid-cols-2 gap-4">
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="sm:col-span-2">
+            <label
+              htmlFor="bld-address"
+              className="block text-xs font-semibold text-slate-700 mb-1"
+            >
+              {t('buildings.modal.address')}
+            </label>
+            <input
+              type="text"
+              id="bld-address"
+              value={address}
+              onChange={(e) => setAddress(e.target.value)}
+              placeholder={t('buildings.modal.addressPlaceholder')}
+              className={`block w-full px-3 py-2 border rounded-md text-sm ${
+                errors.address ? 'border-red-500' : 'border-slate-300'
+              }`}
+            />
+            {renderError('address')}
+          </div>
           <div>
             <label
-              htmlFor="bld-num-apartments"
-              className="block text-sm font-medium text-gray-700"
+              htmlFor="bld-city"
+              className="block text-xs font-semibold text-slate-700 mb-1"
             >
-              {t('buildings.modal.numApartments')}
+              {t('buildings.modal.city')}
+            </label>
+            <input
+              type="text"
+              id="bld-city"
+              value={city}
+              onChange={(e) => setCity(e.target.value)}
+              placeholder={t('buildings.modal.cityPlaceholder')}
+              className={`block w-full px-3 py-2 border rounded-md text-sm ${
+                errors.city ? 'border-red-500' : 'border-slate-300'
+              }`}
+            />
+            {renderError('city')}
+          </div>
+        </div>
+
+        {!existingBuilding && (
+          <div className="p-3.5 bg-slate-50 rounded-lg border border-slate-200 space-y-3">
+            <p className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+              Génération initiale des lots (Optionnel)
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label
+                  htmlFor="bld-num-apartments"
+                  className="block text-xs font-medium text-slate-700 mb-1"
+                >
+                  Nombre de lots
+                </label>
+                <input
+                  type="number"
+                  id="bld-num-apartments"
+                  min={0}
+                  value={numApartments}
+                  onChange={(e) => setNumApartments(e.target.value)}
+                  placeholder="Ex: 12"
+                  className={`block w-full px-3 py-2 border rounded-md text-sm bg-white ${
+                    errors.numApartments ? 'border-red-500' : 'border-slate-300'
+                  }`}
+                />
+                {renderError('numApartments')}
+              </div>
+              <div>
+                <label
+                  htmlFor="bld-floors"
+                  className="block text-xs font-medium text-slate-700 mb-1"
+                >
+                  Nombre d&apos;étages
+                </label>
+                <input
+                  type="number"
+                  id="bld-floors"
+                  min={1}
+                  value={floorsCount}
+                  onChange={(e) => setFloorsCount(e.target.value)}
+                  placeholder="Ex: 4"
+                  className="block w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
+                />
+              </div>
+              <div>
+                <label
+                  htmlFor="bld-numbering"
+                  className="block text-xs font-medium text-slate-700 mb-1"
+                >
+                  Format de numérotation
+                </label>
+                <select
+                  id="bld-numbering"
+                  value={numberingSystem}
+                  onChange={(e) =>
+                    setNumberingSystem(
+                      e.target.value as 'numeric' | 'alphabetic' | 'floor_numeric'
+                    )
+                  }
+                  className="block w-full px-3 py-2 border border-slate-300 bg-white rounded-md text-sm"
+                >
+                  <option value="floor_numeric">Par étage (101, 102, 201...)</option>
+                  <option value="numeric">Numérique (1, 2, 3...)</option>
+                  <option value="alphabetic">Alphabétique (A, B, C...)</option>
+                </select>
+              </div>
+            </div>
+            <p className="text-[11px] text-slate-500">
+              Vous pourrez aussi générer ou personnaliser des lots par bloc/étage via l&apos;outil de création en masse dans le module Lots &amp; Appartements.
+            </p>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label
+              htmlFor="bld-monthly-fees"
+              className="block text-xs font-semibold text-slate-700 mb-1"
+            >
+              {t('buildings.modal.monthlyFees')} (MAD)
             </label>
             <input
               type="number"
-              id="bld-num-apartments"
-              value={numApartments}
-              onChange={(e) => setNumApartments(e.target.value)}
-              placeholder={t('buildings.modal.numApartmentsPlaceholder')}
-              className={`mt-1 block w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm ${
-                errors.numApartments ? 'border-red-500' : 'border-gray-300'
+              id="bld-monthly-fees"
+              value={monthlyFees}
+              onChange={(e) => setMonthlyFees(e.target.value)}
+              placeholder={t('buildings.modal.monthlyFeesPlaceholder')}
+              className={`block w-full px-3 py-2 border rounded-md text-sm ${
+                errors.monthlyFees ? 'border-red-500' : 'border-slate-300'
               }`}
             />
-            {renderError('numApartments')}
+            {renderError('monthlyFees')}
           </div>
           <div>
             <label
-              htmlFor="bld-numbering"
-              className="block text-sm font-medium text-gray-700"
+              htmlFor="bld-reserve-rate"
+              className="block text-xs font-semibold text-slate-700 mb-1"
             >
-              {t('buildings.modal.numberingSystem')}
+              Fonds de réserve Loi 106-12 (%)
             </label>
-            <select
-              id="bld-numbering"
-              value={numberingSystem}
-              onChange={(e) =>
-                setNumberingSystem(
-                  e.target.value as 'numeric' | 'alphabetic'
-                )
-              }
-              className="mt-1 block w-full px-3 py-2 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
-            >
-              <option value="numeric">{t('buildings.modal.numeric')}</option>
-              <option value="alphabetic">
-                {t('buildings.modal.alphabetic')}
-              </option>
-            </select>
+            <input
+              type="number"
+              id="bld-reserve-rate"
+              min={0}
+              max={50}
+              value={reserveFundRate}
+              onChange={(e) => setReserveFundRate(e.target.value)}
+              placeholder="Ex: 5"
+              className="block w-full px-3 py-2 border border-slate-300 rounded-md text-sm"
+            />
           </div>
         </div>
-        <div>
-          <label
-            htmlFor="bld-monthly-fees"
-            className="block text-sm font-medium text-gray-700"
-          >
-            {t('buildings.modal.monthlyFees')}
+
+        {existingBuilding && (
+          <label className="flex items-center gap-2 text-xs text-slate-700 bg-amber-50 border border-amber-200 p-2.5 rounded-lg cursor-pointer">
+            <input
+              type="checkbox"
+              checked={syncApartmentFees}
+              onChange={(e) => setSyncApartmentFees(e.target.checked)}
+              className="rounded border-slate-300 text-teal-600 focus:ring-teal-500"
+            />
+            <span>
+              Appliquer cette nouvelle cotisation mensuelle ({monthlyFees || 0} MAD) à tous les lots existants de l&apos;immeuble
+            </span>
           </label>
-          <input
-            type="number"
-            id="bld-monthly-fees"
-            value={monthlyFees}
-            onChange={(e) => setMonthlyFees(e.target.value)}
-            placeholder={t('buildings.modal.monthlyFeesPlaceholder')}
-            className={`mt-1 block w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm ${
-              errors.monthlyFees ? 'border-red-500' : 'border-gray-300'
-            }`}
-          />
-          {renderError('monthlyFees')}
+        )}
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label
+              htmlFor="bld-bank-name"
+              className="block text-xs font-semibold text-slate-700 mb-1"
+            >
+              Banque de la copropriété
+            </label>
+            <input
+              type="text"
+              id="bld-bank-name"
+              value={bankName}
+              onChange={(e) => setBankName(e.target.value)}
+              placeholder="Ex: Attijariwafa Bank, CIH, BCP..."
+              className="block w-full px-3 py-2 border border-slate-300 rounded-md text-sm"
+            />
+          </div>
+          <div>
+            <label
+              htmlFor="bld-bank-rib"
+              className="block text-xs font-semibold text-slate-700 mb-1"
+            >
+              RIB (24 chiffres)
+            </label>
+            <input
+              type="text"
+              id="bld-bank-rib"
+              value={bankRib}
+              onChange={(e) => setBankRib(e.target.value)}
+              placeholder="Ex: 007 780 0001234567890123 45"
+              className="block w-full px-3 py-2 border border-slate-300 rounded-md text-sm font-mono"
+            />
+          </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label
               htmlFor="bld-manager-name"
-              className="block text-sm font-medium text-gray-700"
+              className="block text-xs font-semibold text-slate-700 mb-1"
             >
-              {t('buildings.modal.managerName')}
+              {t('buildings.modal.managerName')} (Concierge / Responsable)
             </label>
             <input
               type="text"
@@ -273,13 +420,13 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
               value={managerName}
               onChange={(e) => setManagerName(e.target.value)}
               placeholder={t('buildings.modal.managerNamePlaceholder')}
-              className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+              className="block w-full px-3 py-2 border border-slate-300 rounded-md text-sm"
             />
           </div>
           <div>
             <label
               htmlFor="bld-manager-phone"
-              className="block text-sm font-medium text-gray-700"
+              className="block text-xs font-semibold text-slate-700 mb-1"
             >
               {t('buildings.modal.managerPhone')}
             </label>
@@ -289,16 +436,16 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
               value={managerPhone}
               onChange={(e) => setManagerPhone(e.target.value)}
               placeholder={t('buildings.modal.managerPhonePlaceholder')}
-              className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+              className="block w-full px-3 py-2 border border-slate-300 rounded-md text-sm"
             />
           </div>
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-700">
+          <label className="block text-xs font-semibold text-slate-700 mb-1">
             {t('buildings.modal.manager')}
           </label>
-          <p className="mt-1 text-sm text-gray-500 bg-gray-100 px-3 py-2 rounded-md">
+          <p className="text-xs text-slate-600 bg-slate-100 px-3 py-2 rounded-md">
             {syndicName}
           </p>
         </div>
@@ -373,9 +520,6 @@ const SubscriptionStatusCard: React.FC<{ syndic: Syndic }> = ({ syndic }) => {
               date: new Date(syndic.subscriptionExpiry).toLocaleDateString(),
             })}
           </p>
-          <Button variant="secondary" className="mt-2 text-xs px-3 py-1 h-8">
-            {t('subscription.upgrade')}
-          </Button>
         </div>
       </div>
       {isExpired && (
@@ -390,23 +534,28 @@ const SubscriptionStatusCard: React.FC<{ syndic: Syndic }> = ({ syndic }) => {
 const Buildings: React.FC<{
   syndic: Syndic;
   onAddBuilding: (
-    buildingData: Omit<
-      Building,
-      | 'id'
-      | 'residents'
-      | 'apartments'
-      | 'announcements'
-      | 'documents'
-      | 'financials'
-      | 'syndicId'
-    >,
+    buildingData: BuildingFormPayload,
     numApartments: number,
-    numberingSystem: 'numeric' | 'alphabetic'
+    numberingSystem: 'numeric' | 'alphabetic' | 'floor_numeric',
+    floorsCount?: number
   ) => void;
+  onUpdateBuilding?: (
+    buildingId: string,
+    updates: Partial<BuildingFormPayload> & { syncApartmentFees?: boolean }
+  ) => void;
+  onDeleteBuilding?: (buildingId: string) => void;
   onSelectBuilding: (building: Building) => void;
-}> = ({ syndic, onAddBuilding, onSelectBuilding }) => {
+}> = ({
+  syndic,
+  onAddBuilding,
+  onUpdateBuilding,
+  onDeleteBuilding,
+  onSelectBuilding,
+}) => {
   const { t } = useI18n();
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingBuilding, setEditingBuilding] = useState<Building | null>(null);
+  const [deletingBuilding, setDeletingBuilding] = useState<Building | null>(null);
 
   const planLimits: Record<SubscriptionPlan, number> = {
     starter: 4,
@@ -418,26 +567,83 @@ const Buildings: React.FC<{
   const isExpired = new Date(syndic.subscriptionExpiry) < new Date();
   const canAdd = !limitReached && !isExpired;
 
+  const handleOpenCreate = () => {
+    setEditingBuilding(null);
+    setIsModalOpen(true);
+  };
+
+  const handleOpenEdit = (e: React.MouseEvent, bld: Building) => {
+    e.stopPropagation();
+    setEditingBuilding(bld);
+    setIsModalOpen(true);
+  };
+
+  const handleOpenDelete = (e: React.MouseEvent, bld: Building) => {
+    e.stopPropagation();
+    setDeletingBuilding(bld);
+  };
+
+  const confirmDelete = () => {
+    if (deletingBuilding && onDeleteBuilding) {
+      onDeleteBuilding(deletingBuilding.id);
+    }
+    setDeletingBuilding(null);
+  };
+
   return (
     <div>
       <BuildingModal
         isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        onSave={onAddBuilding}
+        onClose={() => {
+          setIsModalOpen(false);
+          setEditingBuilding(null);
+        }}
+        onSaveCreate={onAddBuilding}
+        onSaveUpdate={onUpdateBuilding}
+        existingBuilding={editingBuilding}
         syndicName={syndic.name}
       />
 
-      <div className="flex justify-between items-center mb-6">
+      {/* Delete Building Confirmation Modal */}
+      <Modal
+        isOpen={!!deletingBuilding}
+        onClose={() => setDeletingBuilding(null)}
+        title="Confirmer la suppression de l'immeuble"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setDeletingBuilding(null)}>
+              Annuler
+            </Button>
+            <Button variant="danger" onClick={confirmDelete} className="ms-3">
+              Supprimer définitivement
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-3 text-sm text-slate-600">
+          <p>
+            Êtes-vous sûr de vouloir supprimer la résidence{' '}
+            <strong className="text-slate-900">{deletingBuilding?.name}</strong> ?
+          </p>
+          <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-800">
+            Cette action supprimera également les{' '}
+            <strong>{deletingBuilding?.apartments.length || 0} lots</strong> et{' '}
+            <strong>{deletingBuilding?.residents.length || 0} résidents</strong> rattachés à cet immeuble.
+          </div>
+        </div>
+      </Modal>
+
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 mb-6">
         <div>
-          <h1 className="text-3xl font-bold text-gray-800">
+          <h1 className="text-2xl sm:text-3xl font-bold text-slate-900">
             {t('buildings.title')}
           </h1>
-          <p className="text-gray-500 mt-1">{t('buildings.subtitle')}</p>
+          <p className="text-slate-500 text-sm mt-1">{t('buildings.subtitle')}</p>
         </div>
-        <div className="flex flex-col items-end">
+        <div className="flex flex-col sm:items-end">
           <Button
             icon={<PlusIcon />}
-            onClick={() => setIsModalOpen(true)}
+            onClick={handleOpenCreate}
             disabled={!canAdd}
             className={!canAdd ? 'opacity-50 cursor-not-allowed' : ''}
             title={
@@ -457,28 +663,80 @@ const Buildings: React.FC<{
 
       {syndic.buildings.length > 0 ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {syndic.buildings.map((building) => (
-            <Card
-              key={building.id}
-              className="cursor-pointer hover:shadow-lg hover:border-primary-500 border-transparent border transition-shadow"
-              onClick={() => onSelectBuilding(building)}
-            >
-              <h2 className="text-xl font-semibold text-gray-800">
-                {building.name}
-              </h2>
-              <p className="text-sm text-gray-500 mt-1">{`${building.address}, ${building.city}`}</p>
-              <div className="mt-4 pt-4 border-t border-gray-200 flex justify-between text-sm text-gray-600">
-                <span>
-                  {building.apartments.length}{' '}
-                  {t('apartments.summary.total')}
-                </span>
-                <span>
-                  {building.residents.length}{' '}
-                  {t('residents.title', { buildingName: '' }).trim()}
-                </span>
-              </div>
-            </Card>
-          ))}
+          {syndic.buildings.map((building) => {
+            const occupiedLots = building.apartments.filter(
+              (a) => a.ownerId || a.tenantId
+            ).length;
+            return (
+              <Card
+                key={building.id}
+                className="cursor-pointer hover:shadow-lg hover:border-teal-600 border-slate-200 border transition-all flex flex-col justify-between"
+                onClick={() => onSelectBuilding(building)}
+              >
+                <div>
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <h2 className="text-lg font-bold text-slate-900">
+                        {building.name}
+                      </h2>
+                      <p className="text-xs text-slate-500 mt-0.5">{`${building.address}, ${building.city}`}</p>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={(e) => handleOpenEdit(e, building)}
+                        className="p-2 text-slate-400 hover:text-teal-700 hover:bg-slate-100 rounded-lg transition-colors"
+                        title="Modifier l'immeuble"
+                      >
+                        <PencilIcon />
+                      </button>
+                      {onDeleteBuilding && (
+                        <button
+                          type="button"
+                          onClick={(e) => handleOpenDelete(e, building)}
+                          className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                          title="Supprimer l'immeuble"
+                        >
+                          <TrashIcon />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-2 gap-2 bg-slate-50 p-3 rounded-lg border border-slate-100 text-xs">
+                    <div>
+                      <span className="text-slate-400 block text-[11px]">Cotisation Syndic</span>
+                      <span className="font-mono font-bold text-slate-800">
+                        {building.monthlySyndicFees} MAD / mois
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[11px]">Fonds Réserve</span>
+                      <span className="font-mono font-bold text-teal-700">
+                        {building.reserveFundRate ?? 5}% (Loi 106-12)
+                      </span>
+                    </div>
+                  </div>
+
+                  {building.managerName && (
+                    <p className="text-xs text-slate-600 mt-3">
+                      <span className="font-semibold text-slate-700">Responsable / Gardien :</span>{' '}
+                      {building.managerName} {building.managerPhone ? `(${building.managerPhone})` : ''}
+                    </p>
+                  )}
+                </div>
+
+                <div className="mt-4 pt-3 border-t border-slate-200 flex items-center justify-between text-xs text-slate-600">
+                  <span className="font-medium">
+                    <strong className="text-slate-900">{building.apartments.length}</strong> lots ({occupiedLots} assignés)
+                  </span>
+                  <span className="font-medium">
+                    <strong className="text-slate-900">{building.residents.length}</strong> résidents
+                  </span>
+                </div>
+              </Card>
+            );
+          })}
         </div>
       ) : (
         <Card className="text-center py-16">
@@ -486,7 +744,7 @@ const Buildings: React.FC<{
             {t('buildings.noBuildings')}
           </h3>
           <Button
-            onClick={() => setIsModalOpen(true)}
+            onClick={handleOpenCreate}
             className="mt-4"
             disabled={!canAdd}
           >

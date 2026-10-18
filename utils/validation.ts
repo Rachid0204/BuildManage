@@ -8,8 +8,11 @@ export const ResidentSchema = z.object({
   isOwner: z.boolean(),
   syndicId: z.string(),
   buildingId: z.string(),
-  apartmentId: z.string().optional(),
+  apartmentId: z.string().nullable().optional(),
   cin: z.string().optional(),
+  hasAccount: z.boolean().optional(),
+  generatedPassword: z.string().optional(),
+  credentialsCreatedAt: z.string().optional(),
 });
 
 export const ApartmentSchema = z.object({

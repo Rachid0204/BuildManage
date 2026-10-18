@@ -195,10 +195,14 @@ export const addBuilding = async (
 
   if (isMock) {
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
-    const syndic = syndics.find((s) => s.id === syndicId);
+    const syndic = syndics.find((s) => s.id === syndicId) || syndics[0];
     if (!syndic) throw new Error('Syndic not found');
 
     const newBuildingId = `bld-${Date.now()}`;
+    const totalLots = apartments?.length || 0;
+    const baseTantiemes = totalLots > 0 ? Math.floor(1000 / totalLots) : 100;
+    const remainderTantiemes = totalLots > 0 ? 1000 - baseTantiemes * totalLots : 0;
+
     const generatedApts: Apartment[] = (apartments || []).map((apt, idx) => ({
       id: `apt-${Date.now()}-${idx}`,
       buildingId: newBuildingId,
@@ -206,7 +210,9 @@ export const addBuilding = async (
       floor: apt.floor,
       area: apt.area,
       monthlyFees: apt.monthlyFees || coreBuilding.monthlySyndicFees,
-      tantiemes: apt.tantiemes || Math.round(1000 / (apartments?.length || 10)),
+      tantiemes:
+        apt.tantiemes ||
+        (idx === 0 ? baseTantiemes + remainderTantiemes : baseTantiemes),
       coproType: apt.coproType || 'apartment',
       ownerId: null,
       tenantId: null,
@@ -214,13 +220,15 @@ export const addBuilding = async (
 
     const newBuilding: Building = {
       id: newBuildingId,
-      syndicId,
+      syndicId: syndic.id,
       name: coreBuilding.name,
       address: coreBuilding.address,
       city: coreBuilding.city,
       monthlySyndicFees: coreBuilding.monthlySyndicFees,
       totalTantiemes: 1000,
-      reserveFundRate: 5,
+      reserveFundRate: coreBuilding.reserveFundRate ?? 5,
+      bankName: coreBuilding.bankName,
+      bankRib: coreBuilding.bankRib,
       managerName: coreBuilding.managerName,
       managerPhone: coreBuilding.managerPhone,
       residents: [],
@@ -243,8 +251,73 @@ export const addBuilding = async (
   return { id: docRef.id, ...coreBuilding, syndicId };
 };
 
+export const updateBuilding = async (
+  buildingId: string,
+  updates: Partial<
+    Pick<
+      Building,
+      | 'name'
+      | 'address'
+      | 'city'
+      | 'monthlySyndicFees'
+      | 'reserveFundRate'
+      | 'bankName'
+      | 'bankRib'
+      | 'managerName'
+      | 'managerPhone'
+    >
+  > & { syncApartmentFees?: boolean }
+) => {
+  const { syncApartmentFees, ...buildingUpdates } = updates;
+  if (isMock) {
+    const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
+    for (const syndic of syndics) {
+      const idx = syndic.buildings.findIndex((b) => b.id === buildingId);
+      if (idx >= 0) {
+        const bld = syndic.buildings[idx];
+        const updatedBuilding: Building = {
+          ...bld,
+          ...buildingUpdates,
+        };
+        if (syncApartmentFees && typeof buildingUpdates.monthlySyndicFees === 'number') {
+          updatedBuilding.apartments = updatedBuilding.apartments.map((apt) => ({
+            ...apt,
+            monthlyFees: buildingUpdates.monthlySyndicFees!,
+          }));
+        }
+        syndic.buildings[idx] = updatedBuilding;
+        setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
+        return updatedBuilding;
+      }
+    }
+    throw new Error('Building not found');
+  }
+
+  const docRef = doc(db, BUILDINGS_COL, buildingId);
+  await updateDoc(docRef, buildingUpdates as any);
+  return { id: buildingId, ...buildingUpdates };
+};
+
+export const deleteBuilding = async (buildingId: string) => {
+  if (isMock) {
+    const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
+    for (const syndic of syndics) {
+      const idx = syndic.buildings.findIndex((b) => b.id === buildingId);
+      if (idx >= 0) {
+        syndic.buildings.splice(idx, 1);
+        setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
+        return true;
+      }
+    }
+    return true;
+  }
+
+  await deleteDoc(doc(db, BUILDINGS_COL, buildingId));
+  return true;
+};
+
 // ==========================================
-// 3. APARTMENTS & TANTIÈMES
+// 3. APARTMENTS & TANTIÈMES (SINGLE & BULK)
 // ==========================================
 
 export const addApartment = async (apartmentData: Omit<Apartment, 'id'>) => {
@@ -259,12 +332,23 @@ export const addApartment = async (apartmentData: Omit<Apartment, 'id'>) => {
       const bld = syndic.buildings.find((b) => b.id === apartmentData.buildingId);
       if (bld) {
         const newApt: Apartment = {
-          id: `apt-${Date.now()}`,
+          id: `apt-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
           ...apartmentData,
           tantiemes: apartmentData.tantiemes ?? 100,
           coproType: apartmentData.coproType ?? 'apartment',
         };
         bld.apartments.push(newApt);
+
+        // Sync resident apartmentId if ownerId or tenantId provided
+        if (newApt.ownerId) {
+          const owner = bld.residents.find((r) => r.id === newApt.ownerId);
+          if (owner) owner.apartmentId = newApt.id;
+        }
+        if (newApt.tenantId) {
+          const tenant = bld.residents.find((r) => r.id === newApt.tenantId);
+          if (tenant) tenant.apartmentId = newApt.id;
+        }
+
         setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
         return newApt;
       }
@@ -273,6 +357,84 @@ export const addApartment = async (apartmentData: Omit<Apartment, 'id'>) => {
 
   const docRef = await addDoc(collection(db, APARTMENTS_COL), apartmentData);
   return { id: docRef.id, ...apartmentData };
+};
+
+export const addApartmentsBulk = async (
+  buildingId: string,
+  apartmentsList: Omit<Apartment, 'id' | 'buildingId'>[]
+) => {
+  if (!apartmentsList.length) return [];
+
+  if (isMock) {
+    const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
+    for (const syndic of syndics) {
+      const bld = syndic.buildings.find((b) => b.id === buildingId);
+      if (bld) {
+        const existingNumbers = new Set(
+          bld.apartments.map((a) => a.number.trim().toLowerCase())
+        );
+        const createdApartments: Apartment[] = [];
+        const baseTimestamp = Date.now();
+
+        apartmentsList.forEach((aptData, idx) => {
+          const normalizedNum = aptData.number.trim().toLowerCase();
+          if (existingNumbers.has(normalizedNum)) return; // Skip duplicates
+          existingNumbers.add(normalizedNum);
+
+          const newApt: Apartment = {
+            id: `apt-${baseTimestamp}-${idx}`,
+            buildingId,
+            number: aptData.number.trim(),
+            floor: Number(aptData.floor) || 0,
+            area: Number(aptData.area) || 60,
+            monthlyFees: Number(aptData.monthlyFees) || bld.monthlySyndicFees,
+            tantiemes: Number(aptData.tantiemes) || 100,
+            coproType: aptData.coproType || 'apartment',
+            ownerId: aptData.ownerId || null,
+            tenantId: aptData.tenantId || null,
+          };
+          bld.apartments.push(newApt);
+          createdApartments.push(newApt);
+        });
+
+        setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
+        return createdApartments;
+      }
+    }
+    throw new Error('Building not found');
+  }
+
+  const created: Apartment[] = [];
+  for (const apt of apartmentsList) {
+    const payload = { ...apt, buildingId };
+    const docRef = await addDoc(collection(db, APARTMENTS_COL), payload);
+    created.push({ id: docRef.id, ...payload });
+  }
+  return created;
+};
+
+export const rebalanceBuildingTantiemes = async (buildingId: string) => {
+  if (isMock) {
+    const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
+    for (const syndic of syndics) {
+      const bld = syndic.buildings.find((b) => b.id === buildingId);
+      if (bld && bld.apartments.length > 0) {
+        const totalArea = bld.apartments.reduce((sum, a) => sum + (Number(a.area) || 1), 0);
+        let allocated = 0;
+        bld.apartments = bld.apartments.map((apt, idx) => {
+          if (idx === bld.apartments.length - 1) {
+            return { ...apt, tantiemes: Math.max(1, 1000 - allocated) };
+          }
+          const share = Math.max(1, Math.round(((Number(apt.area) || 1) / totalArea) * 1000));
+          allocated += share;
+          return { ...apt, tantiemes: share };
+        });
+        setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
+        return bld.apartments;
+      }
+    }
+  }
+  return [];
 };
 
 export const updateApartment = async (apartment: Apartment) => {
@@ -288,7 +450,37 @@ export const updateApartment = async (apartment: Apartment) => {
       if (bld) {
         const idx = bld.apartments.findIndex((a) => a.id === apartment.id);
         if (idx >= 0) {
-          bld.apartments[idx] = { ...bld.apartments[idx], ...apartment };
+          const prevApt = bld.apartments[idx];
+          bld.apartments[idx] = { ...prevApt, ...apartment };
+
+          // Bidirectional sync with residents
+          if (prevApt.ownerId && prevApt.ownerId !== apartment.ownerId) {
+            const oldOwner = bld.residents.find((r) => r.id === prevApt.ownerId);
+            if (oldOwner && oldOwner.apartmentId === apartment.id) {
+              const otherOwned = bld.apartments.find(
+                (a) => a.id !== apartment.id && (a.ownerId === oldOwner.id || a.tenantId === oldOwner.id)
+              );
+              oldOwner.apartmentId = otherOwned?.id || undefined;
+            }
+          }
+          if (prevApt.tenantId && prevApt.tenantId !== apartment.tenantId) {
+            const oldTenant = bld.residents.find((r) => r.id === prevApt.tenantId);
+            if (oldTenant && oldTenant.apartmentId === apartment.id) {
+              const otherRented = bld.apartments.find(
+                (a) => a.id !== apartment.id && (a.ownerId === oldTenant.id || a.tenantId === oldTenant.id)
+              );
+              oldTenant.apartmentId = otherRented?.id || undefined;
+            }
+          }
+          if (apartment.ownerId) {
+            const newOwner = bld.residents.find((r) => r.id === apartment.ownerId);
+            if (newOwner) newOwner.apartmentId = apartment.id;
+          }
+          if (apartment.tenantId) {
+            const newTenant = bld.residents.find((r) => r.id === apartment.tenantId);
+            if (newTenant) newTenant.apartmentId = apartment.id;
+          }
+
           setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
           return apartment;
         }
@@ -309,6 +501,15 @@ export const deleteApartment = async (apartmentId: string) => {
         const idx = bld.apartments.findIndex((a) => a.id === apartmentId);
         if (idx >= 0) {
           bld.apartments.splice(idx, 1);
+          // Unlink any resident pointing to this deleted apartment
+          bld.residents.forEach((res) => {
+            if (res.apartmentId === apartmentId) {
+              const fallbackApt = bld.apartments.find(
+                (a) => a.ownerId === res.id || a.tenantId === res.id
+              );
+              res.apartmentId = fallbackApt?.id || undefined;
+            }
+          });
           setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
           return true;
         }
@@ -322,11 +523,68 @@ export const deleteApartment = async (apartmentId: string) => {
 };
 
 // ==========================================
-// 4. RESIDENTS
+// 4. RESIDENTS & AUTOMATIC CREDENTIALS
 // ==========================================
 
-export const addResident = async (residentData: Omit<Resident, 'id'>, _generateCredentials?: boolean) => {
-  const validation = ResidentSchema.safeParse(residentData);
+export interface ResidentAccountRecord {
+  residentId: string;
+  email: string;
+  password: string;
+  name: string;
+  isOwner: boolean;
+  syndicId: string;
+  buildingId: string;
+  apartmentId?: string;
+  createdAt: string;
+}
+
+const RESIDENT_ACCOUNTS_KEY = 'syndik_resident_accounts_v1';
+
+function generateTempPassword(name: string): string {
+  const cleanPrefix =
+    name
+      .replace(/[^a-zA-Z]/g, '')
+      .slice(0, 4)
+      .toUpperCase() || 'RES';
+  const digits = Math.floor(1000 + Math.random() * 9000);
+  return `Syndik-${cleanPrefix}${digits}!`;
+}
+
+function saveResidentCredentialAccount(resident: Resident, password: string): ResidentAccountRecord {
+  const accounts = getLocalItem<ResidentAccountRecord[]>(RESIDENT_ACCOUNTS_KEY, []);
+  const record: ResidentAccountRecord = {
+    residentId: resident.id,
+    email: resident.email.trim(),
+    password,
+    name: resident.name,
+    isOwner: resident.isOwner,
+    syndicId: resident.syndicId,
+    buildingId: resident.buildingId,
+    apartmentId: resident.apartmentId,
+    createdAt: resident.credentialsCreatedAt || new Date().toISOString(),
+  };
+  const existingIdx = accounts.findIndex(
+    (a) => a.residentId === resident.id || a.email.toLowerCase() === resident.email.toLowerCase()
+  );
+  if (existingIdx >= 0) {
+    accounts[existingIdx] = record;
+  } else {
+    accounts.push(record);
+  }
+  setLocalItem(RESIDENT_ACCOUNTS_KEY, accounts);
+  return record;
+}
+
+export const addResident = async (
+  residentData: Omit<Resident, 'id'>,
+  generateCredentials: boolean = true
+): Promise<Resident> => {
+  const cleanedData = {
+    ...residentData,
+    apartmentId: residentData.apartmentId || undefined,
+    cin: residentData.cin?.trim() || undefined,
+  };
+  const validation = ResidentSchema.safeParse(cleanedData);
   if (!validation.success) {
     throw new Error('Invalid Resident Data: ' + validation.error.message);
   }
@@ -334,21 +592,33 @@ export const addResident = async (residentData: Omit<Resident, 'id'>, _generateC
   if (isMock) {
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
     for (const syndic of syndics) {
-      const bld = syndic.buildings.find((b) => b.id === residentData.buildingId);
+      const bld = syndic.buildings.find((b) => b.id === cleanedData.buildingId);
       if (bld) {
+        const nowIso = new Date().toISOString();
+        const password = generateCredentials ? generateTempPassword(cleanedData.name) : undefined;
         const newResident: Resident = {
           id: `res-${Date.now()}`,
-          ...residentData,
+          ...cleanedData,
+          hasAccount: !!generateCredentials,
+          generatedPassword: password,
+          credentialsCreatedAt: generateCredentials ? nowIso : undefined,
         };
         bld.residents.push(newResident);
 
         // Link resident to apartment if apartmentId provided
-        if (residentData.apartmentId) {
-          const apt = bld.apartments.find((a) => a.id === residentData.apartmentId);
+        if (newResident.apartmentId) {
+          const apt = bld.apartments.find((a) => a.id === newResident.apartmentId);
           if (apt) {
-            if (residentData.isOwner) apt.ownerId = newResident.id;
-            else apt.tenantId = newResident.id;
+            if (newResident.isOwner) {
+              apt.ownerId = newResident.id;
+            } else {
+              apt.tenantId = newResident.id;
+            }
           }
+        }
+
+        if (generateCredentials && password) {
+          saveResidentCredentialAccount(newResident, password);
         }
 
         setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
@@ -357,12 +627,17 @@ export const addResident = async (residentData: Omit<Resident, 'id'>, _generateC
     }
   }
 
-  const docRef = await addDoc(collection(db, RESIDENTS_COL), residentData);
-  return { id: docRef.id, ...residentData };
+  const docRef = await addDoc(collection(db, RESIDENTS_COL), cleanedData);
+  return { id: docRef.id, ...cleanedData };
 };
 
-export const updateResident = async (resident: Resident) => {
-  const validation = ResidentSchema.safeParse(resident);
+export const updateResident = async (resident: Resident): Promise<Resident> => {
+  const cleanedResident: Resident = {
+    ...resident,
+    apartmentId: resident.apartmentId || undefined,
+    cin: resident.cin?.trim() || undefined,
+  };
+  const validation = ResidentSchema.safeParse(cleanedResident);
   if (!validation.success) {
     throw new Error('Invalid Resident Data: ' + validation.error.message);
   }
@@ -370,21 +645,78 @@ export const updateResident = async (resident: Resident) => {
   if (isMock) {
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
     for (const syndic of syndics) {
-      const bld = syndic.buildings.find((b) => b.id === resident.buildingId);
+      const bld = syndic.buildings.find((b) => b.id === cleanedResident.buildingId);
       if (bld) {
-        const idx = bld.residents.findIndex((r) => r.id === resident.id);
+        const idx = bld.residents.findIndex((r) => r.id === cleanedResident.id);
         if (idx >= 0) {
-          bld.residents[idx] = { ...bld.residents[idx], ...resident };
+          const prevResident = bld.residents[idx];
+          const mergedResident: Resident = {
+            ...prevResident,
+            ...cleanedResident,
+          };
+          bld.residents[idx] = mergedResident;
+
+          // Bidirectional sync with apartments
+          bld.apartments.forEach((apt) => {
+            if (apt.id !== mergedResident.apartmentId) {
+              if (apt.ownerId === mergedResident.id) apt.ownerId = null;
+              if (apt.tenantId === mergedResident.id) apt.tenantId = null;
+            }
+          });
+
+          if (mergedResident.apartmentId) {
+            const targetApt = bld.apartments.find((a) => a.id === mergedResident.apartmentId);
+            if (targetApt) {
+              if (mergedResident.isOwner) {
+                targetApt.ownerId = mergedResident.id;
+                if (targetApt.tenantId === mergedResident.id) targetApt.tenantId = null;
+              } else {
+                targetApt.tenantId = mergedResident.id;
+                if (targetApt.ownerId === mergedResident.id) targetApt.ownerId = null;
+              }
+            }
+          }
+
+          if (mergedResident.hasAccount && mergedResident.generatedPassword) {
+            saveResidentCredentialAccount(mergedResident, mergedResident.generatedPassword);
+          }
+
           setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
-          return resident;
+          return mergedResident;
         }
       }
     }
   }
 
-  const docRef = doc(db, RESIDENTS_COL, resident.id);
-  await updateDoc(docRef, resident as any);
-  return resident;
+  const docRef = doc(db, RESIDENTS_COL, cleanedResident.id);
+  await updateDoc(docRef, cleanedResident as any);
+  return cleanedResident;
+};
+
+export const regenerateResidentCredentials = async (residentId: string): Promise<Resident> => {
+  if (isMock) {
+    const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
+    for (const syndic of syndics) {
+      for (const bld of syndic.buildings) {
+        const idx = bld.residents.findIndex((r) => r.id === residentId);
+        if (idx >= 0) {
+          const res = bld.residents[idx];
+          const newPassword = generateTempPassword(res.name);
+          const updated: Resident = {
+            ...res,
+            hasAccount: true,
+            generatedPassword: newPassword,
+            credentialsCreatedAt: new Date().toISOString(),
+          };
+          bld.residents[idx] = updated;
+          saveResidentCredentialAccount(updated, newPassword);
+          setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
+          return updated;
+        }
+      }
+    }
+  }
+  throw new Error('Resident not found');
 };
 
 export const deleteResident = async (residentId: string) => {
@@ -401,6 +733,13 @@ export const deleteResident = async (residentId: string) => {
             if (apt.tenantId === residentId) apt.tenantId = null;
           });
           setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
+
+          // Remove stored credentials
+          const accounts = getLocalItem<ResidentAccountRecord[]>(RESIDENT_ACCOUNTS_KEY, []);
+          setLocalItem(
+            RESIDENT_ACCOUNTS_KEY,
+            accounts.filter((a) => a.residentId !== residentId)
+          );
           return true;
         }
       }

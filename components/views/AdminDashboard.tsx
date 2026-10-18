@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import Modal from '../common/Modal';
-import { useAuth } from '../../contexts/AuthContext';
+import { useAuth, getHomeRouteForRole } from '../../contexts/AuthContext';
 import { getSyndics, saveSyndic } from '../../firebase/services';
 import type { Syndic, SubscriptionPlan, SubscriptionStatus } from '../../types';
 import { BuildingsIcon, ResidentsIcon, FinancialsIcon } from '../icons/IconComponents';
@@ -16,6 +17,7 @@ const PLAN_PRICES: Record<SubscriptionPlan, number> = {
 
 const AdminDashboard: React.FC = () => {
   const { userProfile, logout, loginWithEmail } = useAuth();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
 
   const [selectedSyndic, setSelectedSyndic] = useState<Syndic | null>(null);
@@ -67,6 +69,16 @@ const AdminDashboard: React.FC = () => {
     });
   };
 
+  const handleSimulateRole = async (email: string) => {
+    const profile = await loginWithEmail(email, 'password123');
+    navigate(getHomeRouteForRole(profile.role), { replace: true });
+  };
+
+  const handleLogout = async () => {
+    await logout();
+    navigate('/login', { replace: true });
+  };
+
   return (
     <div className="min-h-screen bg-slate-100">
       <nav className="bg-slate-900 text-white shadow-sm">
@@ -83,7 +95,8 @@ const AdminDashboard: React.FC = () => {
                 {userProfile?.email}
               </span>
               <button
-                onClick={() => logout()}
+                type="button"
+                onClick={handleLogout}
                 className="text-xs font-bold text-rose-400 hover:text-rose-200 transition-colors"
               >
                 Déconnexion
@@ -97,7 +110,7 @@ const AdminDashboard: React.FC = () => {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-3">
           <div>
             <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
-              Console d'Administration SaaS & Supervision Nationale
+              Console d&apos;Administration SaaS &amp; Supervision Nationale
             </h1>
             <p className="text-xs text-slate-500 mt-0.5">
               Gestion des cabinets de syndic, abonnements SaaS, conformité Loi 18-00 / 106-12 et simulation de rôles.
@@ -108,19 +121,29 @@ const AdminDashboard: React.FC = () => {
           <div className="flex items-center gap-2 flex-wrap bg-white p-2 rounded-xl border border-slate-200 shadow-2xs">
             <span className="text-[11px] font-bold text-slate-500 px-1">Simuler vue :</span>
             <button
-              onClick={() => loginWithEmail('syndic@syndik.ma', 'password123')}
+              type="button"
+              onClick={() => handleSimulateRole('contact@syndicpro.ma')}
               className="px-2.5 py-1 rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 font-bold text-xs"
             >
               🏢 Syndic Pro
             </button>
             <button
-              onClick={() => loginWithEmail('resident@syndik.ma', 'password123')}
+              type="button"
+              onClick={() => handleSimulateRole('fatima.zahra@email.com')}
               className="px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 font-bold text-xs"
             >
-              👤 Copropriétaire
+              🔑 Copropriétaire
             </button>
             <button
-              onClick={() => loginWithEmail('provider@syndik.ma', 'password123')}
+              type="button"
+              onClick={() => handleSimulateRole('youssef.benali@email.com')}
+              className="px-2.5 py-1 rounded-lg bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 font-bold text-xs"
+            >
+              🏠 Locataire
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSimulateRole('provider@syndik.ma')}
               className="px-2.5 py-1 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-bold text-xs"
             >
               🛠️ Prestataire Agréé

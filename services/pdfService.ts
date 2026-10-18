@@ -914,3 +914,505 @@ export const generateTransactionVoucherPDF = (
   doc.save(`Piece_Comptable_${trx.id}_${trx.date.split('T')[0]}.pdf`);
 };
 
+// Helper to trigger browser download of a UTF-8 CSV file (with BOM for Excel compatibility)
+const downloadCSVFile = (csvContent: string, fileName: string) => {
+  const bom = '\uFEFF';
+  const blob = new Blob([bom + csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.setAttribute('href', url);
+  link.setAttribute('download', fileName);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+};
+
+const escapeCSVCell = (value: string | number | undefined | null): string => {
+  if (value === null || value === undefined) return '""';
+  const str = String(value).replace(/"/g, '""');
+  return `"${str}"`;
+};
+
+const COPRO_TYPE_LABELS: Record<string, string> = {
+  apartment: 'Appartement',
+  duplex: 'Duplex / Penthouse',
+  commercial: 'Local Commercial',
+  parking: 'Parking',
+  box: 'Box / Garage',
+};
+
+// 6. EXPORT RESIDENT LIST AS CSV
+export const exportResidentsCSV = (building: Building) => {
+  const aptByResidentId = new Map<string, Apartment>();
+  building.apartments.forEach((apt) => {
+    if (apt.ownerId) aptByResidentId.set(apt.ownerId, apt);
+    if (apt.tenantId) aptByResidentId.set(apt.tenantId, apt);
+  });
+  building.residents.forEach((res) => {
+    if (res.apartmentId && !aptByResidentId.has(res.id)) {
+      const found = building.apartments.find((a) => a.id === res.apartmentId);
+      if (found) aptByResidentId.set(res.id, found);
+    }
+  });
+
+  const headers = [
+    'Immeuble',
+    'Ville',
+    'Nom Complet',
+    'N° CIN',
+    'Qualité / Rôle',
+    'Lot Assigné',
+    'Étage',
+    'Superficie (m²)',
+    'Tantièmes (/1000)',
+    'Cotisation Mensuelle (MAD)',
+    'Email',
+    'Téléphone',
+    'Accès Portail Actif',
+  ];
+
+  const rows = building.residents.map((res) => {
+    const apt = aptByResidentId.get(res.id);
+    return [
+      building.name,
+      building.city,
+      res.name,
+      res.cin || 'Non renseigné',
+      res.isOwner ? 'Copropriétaire' : 'Locataire',
+      apt ? `Lot ${apt.number}` : 'Non assigné',
+      apt ? String(apt.floor) : '-',
+      apt ? String(apt.area) : '-',
+      apt ? String(apt.tantiemes || 100) : '-',
+      apt ? String(apt.monthlyFees || building.monthlySyndicFees || 0) : '-',
+      res.email,
+      res.phone,
+      res.hasAccount ? 'Oui' : 'Non',
+    ].map(escapeCSVCell).join(';');
+  });
+
+  const csvContent = [headers.map(escapeCSVCell).join(';'), ...rows].join('\r\n');
+  const dateStr = new Date().toISOString().split('T')[0];
+  const safeName = building.name.replace(/[^a-zA-Z0-9_-]/g, '_');
+  downloadCSVFile(csvContent, `Registre_Residents_${safeName}_${dateStr}.csv`);
+};
+
+// 7. EXPORT RESIDENT LIST AS OFFICIAL PDF REPORT
+export const exportResidentsPDF = (building: Building, syndic?: Syndic) => {
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const pageWidth = 297;
+  const pageHeight = 210;
+
+  const aptByResidentId = new Map<string, Apartment>();
+  building.apartments.forEach((apt) => {
+    if (apt.ownerId) aptByResidentId.set(apt.ownerId, apt);
+    if (apt.tenantId) aptByResidentId.set(apt.tenantId, apt);
+  });
+  building.residents.forEach((res) => {
+    if (res.apartmentId && !aptByResidentId.has(res.id)) {
+      const found = building.apartments.find((a) => a.id === res.apartmentId);
+      if (found) aptByResidentId.set(res.id, found);
+    }
+  });
+
+  const totalResidents = building.residents.length;
+  const ownersCount = building.residents.filter((r) => r.isOwner).length;
+  const tenantsCount = totalResidents - ownersCount;
+  const assignedCount = building.residents.filter((r) => aptByResidentId.has(r.id)).length;
+  const issueDate = new Date().toLocaleDateString('fr-MA', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
+
+  const drawHeader = (pageNumber: number) => {
+    doc.setFillColor(15, 118, 110); // Teal 700
+    doc.rect(0, 0, pageWidth, 28, 'F');
+
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(14);
+    doc.text('REGISTRE OFFICIEL DES COPROPRIÉTAIRES ET RÉSIDENTS (LOI 18-00)', 14, 12);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.text(
+      `Copropriété : ${building.name} — ${building.address}, ${building.city}`,
+      14,
+      19
+    );
+    doc.text(
+      `Syndic : ${syndic?.name || building.managerName || 'Syndicat des Copropriétaires'}`,
+      14,
+      24
+    );
+
+    doc.setFont('helvetica', 'bold');
+    doc.text(`Édité le : ${issueDate}`, pageWidth - 14, 13, { align: 'right' });
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Page ${pageNumber}`, pageWidth - 14, 21, { align: 'right' });
+  };
+
+  drawHeader(1);
+
+  // Summary KPI Strip
+  let y = 34;
+  doc.setFillColor(241, 245, 249);
+  doc.setDrawColor(203, 213, 225);
+  doc.rect(14, y, pageWidth - 28, 14, 'FD');
+
+  doc.setTextColor(15, 23, 42);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text(`Total Résidents : ${totalResidents}`, 20, y + 8.5);
+  doc.text(`Copropriétaires : ${ownersCount}`, 80, y + 8.5);
+  doc.text(`Locataires : ${tenantsCount}`, 140, y + 8.5);
+  doc.text(`Lots rattachés : ${assignedCount} / ${totalResidents}`, 195, y + 8.5);
+
+  // Table Header
+  y += 20;
+  const drawTableHeader = (topY: number) => {
+    doc.setFillColor(30, 41, 59); // Slate 800
+    doc.rect(14, topY, pageWidth - 28, 9, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.text('N°', 17, topY + 6);
+    doc.text('NOM COMPLET', 28, topY + 6);
+    doc.text('CIN', 86, topY + 6);
+    doc.text('STATUT', 112, topY + 6);
+    doc.text('LOT / ÉTAGE', 142, topY + 6);
+    doc.text('TANTIÈMES', 176, topY + 6);
+    doc.text('TÉLÉPHONE', 204, topY + 6);
+    doc.text('EMAIL', 238, topY + 6);
+    return topY + 9;
+  };
+
+  y = drawTableHeader(y);
+  let pageNum = 1;
+
+  building.residents.forEach((res, idx) => {
+    if (y > pageHeight - 24) {
+      doc.addPage();
+      pageNum++;
+      drawHeader(pageNum);
+      y = drawTableHeader(34);
+    }
+
+    const apt = aptByResidentId.get(res.id);
+    if (idx % 2 === 1) {
+      doc.setFillColor(248, 250, 252);
+      doc.rect(14, y, pageWidth - 28, 8, 'F');
+    }
+
+    doc.setDrawColor(226, 232, 240);
+    doc.line(14, y + 8, pageWidth - 14, y + 8);
+
+    doc.setTextColor(30, 41, 59);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.text(String(idx + 1), 17, y + 5.5);
+
+    doc.setFont('helvetica', 'bold');
+    doc.text(res.name.slice(0, 30), 28, y + 5.5);
+
+    doc.setFont('helvetica', 'normal');
+    doc.text(res.cin || '-', 86, y + 5.5);
+
+    doc.setTextColor(res.isOwner ? 15 : 3, res.isOwner ? 118 : 105, res.isOwner ? 110 : 161);
+    doc.setFont('helvetica', 'bold');
+    doc.text(res.isOwner ? 'Copropriétaire' : 'Locataire', 112, y + 5.5);
+
+    doc.setTextColor(30, 41, 59);
+    doc.setFont('helvetica', 'bold');
+    doc.text(apt ? `Lot ${apt.number} (Ét. ${apt.floor})` : 'Non assigné', 142, y + 5.5);
+
+    doc.setFont('helvetica', 'normal');
+    doc.text(apt ? `${apt.tantiemes || 100} / 1000` : '-', 176, y + 5.5);
+    doc.text(res.phone || '-', 204, y + 5.5);
+    doc.text((res.email || '-').slice(0, 28), 238, y + 5.5);
+
+    y += 8;
+  });
+
+  // Footer
+  doc.setFontSize(7.5);
+  doc.setTextColor(100, 116, 139);
+  doc.text(
+    `Document officiel généré pour le reporting syndic — ${building.name} (${building.city}) — Loi n° 18-00 & 106-12`,
+    pageWidth / 2,
+    pageHeight - 8,
+    { align: 'center' }
+  );
+
+  const dateStr = new Date().toISOString().split('T')[0];
+  const safeName = building.name.replace(/[^a-zA-Z0-9_-]/g, '_');
+  doc.save(`Registre_Residents_${safeName}_${dateStr}.pdf`);
+};
+
+// 8. EXPORT APARTMENT INVENTORY AS CSV
+export const exportApartmentsCSV = (building: Building, residents?: Resident[]) => {
+  const allResidents = residents || building.residents || [];
+  const residentMap = new Map<string, Resident>(allResidents.map((r) => [r.id, r]));
+
+  const headers = [
+    'Immeuble',
+    'Ville',
+    'N° Lot',
+    'Type de Bien',
+    'Étage',
+    'Superficie (m²)',
+    'Quote-part Tantièmes (/1000)',
+    'Cotisation Mensuelle (MAD)',
+    'Statut Occupation',
+    'Copropriétaire',
+    'Téléphone Copropriétaire',
+    'CIN Copropriétaire',
+    'Locataire',
+    'Téléphone Locataire',
+  ];
+
+  const rows = building.apartments.map((apt) => {
+    const owner = apt.ownerId ? residentMap.get(apt.ownerId) : undefined;
+    const tenant = apt.tenantId ? residentMap.get(apt.tenantId) : undefined;
+    const isOccupied = Boolean(owner || tenant);
+
+    return [
+      building.name,
+      building.city,
+      apt.number,
+      COPRO_TYPE_LABELS[apt.coproType || 'apartment'] || 'Appartement',
+      String(apt.floor),
+      String(apt.area),
+      String(apt.tantiemes || 100),
+      String(apt.monthlyFees || building.monthlySyndicFees || 0),
+      isOccupied ? 'Assigné / Occupé' : 'Vacant / Non assigné',
+      owner ? owner.name : 'Non assigné',
+      owner ? owner.phone : '-',
+      owner?.cin || '-',
+      tenant ? tenant.name : '-',
+      tenant ? tenant.phone : '-',
+    ].map(escapeCSVCell).join(';');
+  });
+
+  // Add a summary footer row
+  const totalArea = building.apartments.reduce((s, a) => s + (a.area || 0), 0);
+  const totalTantiemes = building.apartments.reduce((s, a) => s + (a.tantiemes || 0), 0);
+  const totalMonthlyFees = building.apartments.reduce(
+    (s, a) => s + (a.monthlyFees || building.monthlySyndicFees || 0),
+    0
+  );
+
+  const summaryRow = [
+    'TOTAL IMMEUBLE',
+    building.city,
+    `${building.apartments.length} lots`,
+    '-',
+    '-',
+    `${totalArea} m²`,
+    `${totalTantiemes} / 1000`,
+    `${totalMonthlyFees} MAD`,
+    '-',
+    '-',
+    '-',
+    '-',
+    '-',
+    '-',
+  ].map(escapeCSVCell).join(';');
+
+  const csvContent = [headers.map(escapeCSVCell).join(';'), ...rows, summaryRow].join('\r\n');
+  const dateStr = new Date().toISOString().split('T')[0];
+  const safeName = building.name.replace(/[^a-zA-Z0-9_-]/g, '_');
+  downloadCSVFile(csvContent, `Inventaire_Lots_Tantiemes_${safeName}_${dateStr}.csv`);
+};
+
+// 9. EXPORT APARTMENT INVENTORY AS OFFICIAL PDF REPORT
+export const exportApartmentsPDF = (
+  building: Building,
+  residents?: Resident[],
+  syndic?: Syndic
+) => {
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const pageWidth = 297;
+  const pageHeight = 210;
+
+  const allResidents = residents || building.residents || [];
+  const residentMap = new Map<string, Resident>(allResidents.map((r) => [r.id, r]));
+
+  const totalLots = building.apartments.length;
+  const occupiedLots = building.apartments.filter((a) => a.ownerId || a.tenantId).length;
+  const totalArea = building.apartments.reduce((sum, a) => sum + (a.area || 0), 0);
+  const totalTantiemes = building.apartments.reduce((sum, a) => sum + (a.tantiemes || 0), 0);
+  const totalMonthlyFees = building.apartments.reduce(
+    (sum, a) => sum + (a.monthlyFees || building.monthlySyndicFees || 0),
+    0
+  );
+
+  const issueDate = new Date().toLocaleDateString('fr-MA', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
+
+  const drawHeader = (pageNumber: number) => {
+    doc.setFillColor(15, 118, 110); // Teal 700
+    doc.rect(0, 0, pageWidth, 28, 'F');
+
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(14);
+    doc.text(
+      'ÉTAT DESCRIPTIF DE DIVISION & INVENTAIRE DES LOTS DE COPROPRIÉTÉ (LOI 18-00)',
+      14,
+      12
+    );
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.text(
+      `Copropriété : ${building.name} — ${building.address}, ${building.city}`,
+      14,
+      19
+    );
+    doc.text(
+      `Syndic : ${syndic?.name || building.managerName || 'Syndicat des Copropriétaires'}`,
+      14,
+      24
+    );
+
+    doc.setFont('helvetica', 'bold');
+    doc.text(`Édité le : ${issueDate}`, pageWidth - 14, 13, { align: 'right' });
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Page ${pageNumber}`, pageWidth - 14, 21, { align: 'right' });
+  };
+
+  drawHeader(1);
+
+  // Summary KPI Strip
+  let y = 34;
+  doc.setFillColor(241, 245, 249);
+  doc.setDrawColor(203, 213, 225);
+  doc.rect(14, y, pageWidth - 28, 14, 'FD');
+
+  doc.setTextColor(15, 23, 42);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text(`Total Lots : ${totalLots} (${occupiedLots} occupés)`, 18, y + 8.5);
+  doc.text(`Superficie Totale : ${totalArea} m²`, 82, y + 8.5);
+  doc.text(`Total Tantièmes : ${totalTantiemes} / 1000`, 145, y + 8.5);
+  doc.text(
+    `Budget Mensuel Global : ${currencyFormatter.format(totalMonthlyFees)}`,
+    210,
+    y + 8.5
+  );
+
+  // Table Header
+  y += 20;
+  const drawTableHeader = (topY: number) => {
+    doc.setFillColor(30, 41, 59); // Slate 800
+    doc.rect(14, topY, pageWidth - 28, 9, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.text('N° LOT', 17, topY + 6);
+    doc.text('TYPE DE BIEN', 42, topY + 6);
+    doc.text('ÉTAGE', 80, topY + 6);
+    doc.text('SURFACE', 100, topY + 6);
+    doc.text('TANTIÈMES', 125, topY + 6);
+    doc.text('COTISATION', 154, topY + 6);
+    doc.text('COPROPRIÉTAIRE', 188, topY + 6);
+    doc.text('LOCATAIRE', 240, topY + 6);
+    return topY + 9;
+  };
+
+  y = drawTableHeader(y);
+  let pageNum = 1;
+
+  building.apartments.forEach((apt, idx) => {
+    if (y > pageHeight - 28) {
+      doc.addPage();
+      pageNum++;
+      drawHeader(pageNum);
+      y = drawTableHeader(34);
+    }
+
+    const owner = apt.ownerId ? residentMap.get(apt.ownerId) : undefined;
+    const tenant = apt.tenantId ? residentMap.get(apt.tenantId) : undefined;
+
+    if (idx % 2 === 1) {
+      doc.setFillColor(248, 250, 252);
+      doc.rect(14, y, pageWidth - 28, 8, 'F');
+    }
+
+    doc.setDrawColor(226, 232, 240);
+    doc.line(14, y + 8, pageWidth - 14, y + 8);
+
+    doc.setTextColor(15, 118, 110);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.text(`Lot ${apt.number}`, 17, y + 5.5);
+
+    doc.setTextColor(30, 41, 59);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.text(COPRO_TYPE_LABELS[apt.coproType || 'apartment'] || 'Appartement', 42, y + 5.5);
+    doc.text(apt.floor === 0 ? 'RDC' : `Étage ${apt.floor}`, 80, y + 5.5);
+    doc.text(`${apt.area} m²`, 100, y + 5.5);
+
+    doc.setFont('helvetica', 'bold');
+    doc.text(`${apt.tantiemes || 100} / 1000`, 125, y + 5.5);
+    doc.text(
+      currencyFormatter.format(apt.monthlyFees || building.monthlySyndicFees || 0),
+      154,
+      y + 5.5
+    );
+
+    doc.setFont('helvetica', owner ? 'bold' : 'normal');
+    doc.setTextColor(owner ? 15 : 148, owner ? 23 : 163, owner ? 42 : 184);
+    doc.text(owner ? owner.name.slice(0, 25) : 'Non assigné', 188, y + 5.5);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(71, 85, 105);
+    doc.text(tenant ? tenant.name.slice(0, 22) : '---', 240, y + 5.5);
+
+    y += 8;
+  });
+
+  // Totals Footer Row
+  if (y > pageHeight - 24) {
+    doc.addPage();
+    pageNum++;
+    drawHeader(pageNum);
+    y = 34;
+  }
+
+  doc.setFillColor(241, 245, 249);
+  doc.rect(14, y, pageWidth - 28, 9, 'F');
+  doc.setDrawColor(15, 118, 110);
+  doc.line(14, y, pageWidth - 14, y);
+  doc.line(14, y + 9, pageWidth - 14, y + 9);
+
+  doc.setTextColor(15, 118, 110);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.text(`TOTAL (${totalLots} LOTS)`, 17, y + 6);
+  doc.text(`${totalArea} m²`, 100, y + 6);
+  doc.text(`${totalTantiemes} / 1000`, 125, y + 6);
+  doc.text(currencyFormatter.format(totalMonthlyFees), 154, y + 6);
+
+  // Legal Footer
+  doc.setFontSize(7.5);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(100, 116, 139);
+  doc.text(
+    `Inventaire officiel des lots et quotes-parts d'indivision — ${building.name} (${building.city}) — Conforme Loi n° 18-00`,
+    pageWidth / 2,
+    pageHeight - 8,
+    { align: 'center' }
+  );
+
+  const dateStr = new Date().toISOString().split('T')[0];
+  const safeName = building.name.replace(/[^a-zA-Z0-9_-]/g, '_');
+  doc.save(`Inventaire_Lots_Tantiemes_${safeName}_${dateStr}.pdf`);
+};
+

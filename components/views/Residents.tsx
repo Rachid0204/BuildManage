@@ -1,214 +1,841 @@
-
-import React, { useState, useMemo } from 'react';
-import type { Building, Resident } from '../../types';
+import React, { useState, useMemo, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import type { Building, Resident, Apartment } from '../../types';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import Modal from '../common/Modal';
 import { useI18n } from '../../hooks/useI18n';
-import { PlusIcon, PencilIcon, TrashIcon } from '../icons/IconComponents';
+import { useAuth, getHomeRouteForRole } from '../../contexts/AuthContext';
+import { PlusIcon, PencilIcon, TrashIcon, DocumentsIcon } from '../icons/IconComponents';
+import { exportResidentsPDF, exportResidentsCSV } from '../../services/pdfService';
 
 type ResidentModalProps = {
-    isOpen: boolean;
-    onClose: () => void;
-    onSave: (resident: Omit<Resident, 'id' | 'syndicId' | 'buildingId'> | Resident, generateCredentials?: boolean) => void;
-    existingResident?: Resident | null;
+  isOpen: boolean;
+  onClose: () => void;
+  onSave: (
+    resident: Omit<Resident, 'id' | 'syndicId' | 'buildingId'> | Resident,
+    generateCredentials?: boolean
+  ) => void;
+  existingResident?: Resident | null;
+  apartments: Apartment[];
+  residents: Resident[];
 };
 
-const ResidentModal: React.FC<ResidentModalProps> = ({ isOpen, onClose, onSave, existingResident }) => {
-    const { t } = useI18n();
-    const [name, setName] = useState('');
-    const [email, setEmail] = useState('');
-    const [phone, setPhone] = useState('');
-    const [isOwner, setIsOwner] = useState(false);
-    const [generateCredentials, setGenerateCredentials] = useState(false);
+const ResidentModal: React.FC<ResidentModalProps> = ({
+  isOpen,
+  onClose,
+  onSave,
+  existingResident,
+  apartments,
+  residents,
+}) => {
+  const { t } = useI18n();
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [cin, setCin] = useState('');
+  const [isOwner, setIsOwner] = useState(true);
+  const [apartmentId, setApartmentId] = useState<string>('');
+  const [generateCredentials, setGenerateCredentials] = useState(true);
+  const [errors, setErrors] = useState<Record<string, string>>({});
 
-    React.useEffect(() => {
-        if (existingResident) {
-            setName(existingResident.name);
-            setEmail(existingResident.email);
-            setPhone(existingResident.phone);
-            setIsOwner(existingResident.isOwner);
-            setGenerateCredentials(false);
-        } else {
-            setName('');
-            setEmail('');
-            setPhone('');
-            setIsOwner(false);
-            setGenerateCredentials(true); // Default to true for new residents
-        }
-    }, [existingResident, isOpen]);
+  const residentMap = useMemo(
+    () => new Map(residents.map((r) => [r.id, r.name])),
+    [residents]
+  );
 
-    const handleSave = () => {
-        if (!name || !email || !phone) {
-            alert('Please fill all fields');
-            return;
-        }
-        const residentData = { name, email, phone, isOwner };
-        if (existingResident) {
-            onSave({ ...existingResident, ...residentData });
-        } else {
-            onSave(residentData, generateCredentials);
-        }
-        onClose();
+  useEffect(() => {
+    if (existingResident) {
+      setName(existingResident.name);
+      setEmail(existingResident.email);
+      setPhone(existingResident.phone);
+      setCin(existingResident.cin || '');
+      setIsOwner(existingResident.isOwner);
+      // Find linked apartment either via resident.apartmentId or apartment.ownerId / tenantId
+      const linkedApt =
+        apartments.find((a) => a.id === existingResident.apartmentId) ||
+        apartments.find(
+          (a) =>
+            a.ownerId === existingResident.id || a.tenantId === existingResident.id
+        );
+      setApartmentId(linkedApt ? linkedApt.id : '');
+      setGenerateCredentials(false);
+    } else {
+      setName('');
+      setEmail('');
+      setPhone('');
+      setCin('');
+      setIsOwner(true);
+      setApartmentId('');
+      setGenerateCredentials(true);
+    }
+    setErrors({});
+  }, [existingResident, isOpen, apartments]);
+
+  const validate = () => {
+    const newErrors: Record<string, string> = {};
+    if (!name.trim() || name.trim().length < 2) {
+      newErrors.name = 'Le nom complet est obligatoire (min. 2 caractères)';
+    }
+    if (!email.trim() || !email.includes('@')) {
+      newErrors.email = 'Une adresse email valide est obligatoire';
+    }
+    if (!phone.trim() || phone.trim().length < 6) {
+      newErrors.phone = 'Un numéro de téléphone valide est obligatoire';
+    }
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
+  const handleSave = () => {
+    if (!validate()) return;
+    const residentData = {
+      name: name.trim(),
+      email: email.trim(),
+      phone: phone.trim(),
+      cin: cin.trim() || undefined,
+      isOwner,
+      apartmentId: apartmentId || undefined,
     };
+    if (existingResident) {
+      onSave({ ...existingResident, ...residentData });
+    } else {
+      onSave(residentData, generateCredentials);
+    }
+    onClose();
+  };
 
-    return (
-        <Modal
-            isOpen={isOpen}
-            onClose={onClose}
-            title={existingResident ? t('residents.modal.editTitle') : t('residents.modal.addTitle')}
-            footer={
-                <>
-                    <Button variant="secondary" onClick={onClose}>{t('residents.modal.cancel')}</Button>
-                    <Button onClick={handleSave} className="ms-3">{t('residents.modal.save')}</Button>
-                </>
-            }
-        >
-            <div className="space-y-4">
-                <div>
-                    <label htmlFor="res-name" className="block text-sm font-medium text-gray-700">{t('residents.modal.name')}</label>
-                    <input type="text" id="res-name" value={name} onChange={e => setName(e.target.value)} placeholder={t('residents.modal.namePlaceholder')} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm" />
-                </div>
-                <div>
-                    <label htmlFor="res-email" className="block text-sm font-medium text-gray-700">{t('residents.modal.email')}</label>
-                    <input type="email" id="res-email" value={email} onChange={e => setEmail(e.target.value)} placeholder={t('residents.modal.emailPlaceholder')} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm" />
-                </div>
-                <div>
-                    <label htmlFor="res-phone" className="block text-sm font-medium text-gray-700">{t('residents.modal.phone')}</label>
-                    <input type="tel" id="res-phone" value={phone} onChange={e => setPhone(e.target.value)} placeholder={t('residents.modal.phonePlaceholder')} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm" />
-                </div>
-                <div>
-                    <label className="block text-sm font-medium text-gray-700">{t('residents.modal.role')}</label>
-                     <div className="mt-2 flex space-x-4">
-                        <label className="flex items-center">
-                            <input type="radio" value="owner" checked={isOwner} onChange={() => setIsOwner(true)} className="form-radio h-4 w-4 text-primary-600 border-gray-300 focus:ring-primary-500" />
-                            <span className="ms-2 text-sm text-gray-700">{t('residents.modal.owner')}</span>
-                        </label>
-                        <label className="flex items-center">
-                            <input type="radio" value="tenant" checked={!isOwner} onChange={() => setIsOwner(false)} className="form-radio h-4 w-4 text-primary-600 border-gray-300 focus:ring-primary-500" />
-                            <span className="ms-2 text-sm text-gray-700">{t('residents.modal.tenant')}</span>
-                        </label>
-                    </div>
-                </div>
-                {!existingResident && (
-                    <div className="mt-4 bg-blue-50 p-3 rounded-md">
-                        <label className="flex items-start">
-                            <input type="checkbox" checked={generateCredentials} onChange={e => setGenerateCredentials(e.target.checked)} className="mt-1 form-checkbox h-4 w-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500" />
-                            <div className="ms-2">
-                                <span className="text-sm font-medium text-gray-900">Generate Login Credentials automatically?</span>
-                                <p className="text-xs text-gray-500">This will create a user account for the resident and allow them to log in.</p>
-                            </div>
-                        </label>
-                    </div>
-                )}
-            </div>
-        </Modal>
-    );
+  return (
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={
+        existingResident
+          ? t('residents.modal.editTitle')
+          : t('residents.modal.addTitle')
+      }
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            {t('residents.modal.cancel')}
+          </Button>
+          <Button onClick={handleSave} className="ms-3">
+            {t('residents.modal.save')}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label
+              htmlFor="res-name"
+              className="block text-xs font-semibold text-slate-700 mb-1"
+            >
+              {t('residents.modal.name')}
+            </label>
+            <input
+              type="text"
+              id="res-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder={t('residents.modal.namePlaceholder')}
+              className={`block w-full px-3 py-2 border rounded-md text-sm ${
+                errors.name ? 'border-red-500' : 'border-slate-300'
+              }`}
+            />
+            {errors.name && (
+              <p className="text-xs text-red-600 mt-1">{errors.name}</p>
+            )}
+          </div>
+
+          <div>
+            <label
+              htmlFor="res-cin"
+              className="block text-xs font-semibold text-slate-700 mb-1"
+            >
+              N° CIN (Optionnel)
+            </label>
+            <input
+              type="text"
+              id="res-cin"
+              value={cin}
+              onChange={(e) => setCin(e.target.value)}
+              placeholder="Ex: BK123456"
+              className="block w-full px-3 py-2 border border-slate-300 rounded-md text-sm font-mono uppercase"
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label
+              htmlFor="res-email"
+              className="block text-xs font-semibold text-slate-700 mb-1"
+            >
+              {t('residents.modal.email')}
+            </label>
+            <input
+              type="email"
+              id="res-email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder={t('residents.modal.emailPlaceholder')}
+              className={`block w-full px-3 py-2 border rounded-md text-sm ${
+                errors.email ? 'border-red-500' : 'border-slate-300'
+              }`}
+            />
+            {errors.email && (
+              <p className="text-xs text-red-600 mt-1">{errors.email}</p>
+            )}
+          </div>
+
+          <div>
+            <label
+              htmlFor="res-phone"
+              className="block text-xs font-semibold text-slate-700 mb-1"
+            >
+              {t('residents.modal.phone')}
+            </label>
+            <input
+              type="tel"
+              id="res-phone"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              placeholder={t('residents.modal.phonePlaceholder')}
+              className={`block w-full px-3 py-2 border rounded-md text-sm ${
+                errors.phone ? 'border-red-500' : 'border-slate-300'
+              }`}
+            />
+            {errors.phone && (
+              <p className="text-xs text-red-600 mt-1">{errors.phone}</p>
+            )}
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+            {t('residents.modal.role')}
+          </label>
+          <div className="grid grid-cols-2 gap-3">
+            <label
+              className={`flex items-center p-2.5 border rounded-lg cursor-pointer transition-colors ${
+                isOwner
+                  ? 'border-teal-600 bg-teal-50/60 text-teal-900 font-semibold'
+                  : 'border-slate-200 bg-white text-slate-700'
+              }`}
+            >
+              <input
+                type="radio"
+                value="owner"
+                checked={isOwner}
+                onChange={() => setIsOwner(true)}
+                className="h-4 w-4 text-teal-600 border-slate-300 focus:ring-teal-500"
+              />
+              <span className="ms-2 text-xs sm:text-sm">
+                {t('residents.modal.owner')}
+              </span>
+            </label>
+            <label
+              className={`flex items-center p-2.5 border rounded-lg cursor-pointer transition-colors ${
+                !isOwner
+                  ? 'border-sky-600 bg-sky-50/60 text-sky-900 font-semibold'
+                  : 'border-slate-200 bg-white text-slate-700'
+              }`}
+            >
+              <input
+                type="radio"
+                value="tenant"
+                checked={!isOwner}
+                onChange={() => setIsOwner(false)}
+                className="h-4 w-4 text-sky-600 border-slate-300 focus:ring-sky-500"
+              />
+              <span className="ms-2 text-xs sm:text-sm">
+                {t('residents.modal.tenant')}
+              </span>
+            </label>
+          </div>
+        </div>
+
+        {/* Apartment Assignment */}
+        <div>
+          <label
+            htmlFor="res-apartment"
+            className="block text-xs font-semibold text-slate-700 mb-1"
+          >
+            Lot / Appartement assigné dans l&apos;immeuble
+          </label>
+          <select
+            id="res-apartment"
+            value={apartmentId}
+            onChange={(e) => setApartmentId(e.target.value)}
+            className="block w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
+          >
+            <option value="">-- Aucun lot assigné pour le moment --</option>
+            {apartments.map((apt) => {
+              const currentHolderId = isOwner ? apt.ownerId : apt.tenantId;
+              const currentHolderName = currentHolderId
+                ? residentMap.get(currentHolderId)
+                : null;
+              const statusText = currentHolderName
+                ? `${isOwner ? 'Propriétaire' : 'Locataire'} actuel : ${currentHolderName}`
+                : 'Libre';
+              return (
+                <option key={apt.id} value={apt.id}>
+                  Lot {apt.number} (Étage {apt.floor} · {apt.area}m²) — {statusText}
+                </option>
+              );
+            })}
+          </select>
+          <p className="text-[11px] text-slate-500 mt-1">
+            L&apos;assignation met automatiquement à jour le propriétaire ou locataire sur la fiche du lot choisi.
+          </p>
+        </div>
+
+        {!existingResident && (
+          <div className="bg-teal-50/80 border border-teal-200 p-3.5 rounded-xl">
+            <label className="flex items-start cursor-pointer">
+              <input
+                type="checkbox"
+                checked={generateCredentials}
+                onChange={(e) => setGenerateCredentials(e.target.checked)}
+                className="mt-0.5 h-4 w-4 text-teal-600 border-slate-300 rounded focus:ring-teal-500"
+              />
+              <div className="ms-2.5">
+                <span className="text-xs sm:text-sm font-bold text-teal-950 block">
+                  Générer automatiquement les identifiants d&apos;accès portail
+                </span>
+                <p className="text-xs text-teal-800 mt-0.5">
+                  Crée immédiatement un compte résident avec mot de passe temporaire et affiche la fiche d&apos;accès prête à partager (WhatsApp / Email).
+                </p>
+              </div>
+            </label>
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
 };
+
+// ==========================================
+// CREDENTIALS HANDOVER MODAL
+// ==========================================
+
+type CredentialsModalProps = {
+  resident: Resident | null;
+  buildingName: string;
+  apartmentNumber?: string;
+  onClose: () => void;
+  onRegenerate?: (residentId: string) => void;
+};
+
+const CredentialsModal: React.FC<CredentialsModalProps> = ({
+  resident,
+  buildingName,
+  apartmentNumber,
+  onClose,
+  onRegenerate,
+}) => {
+  const [copied, setCopied] = useState(false);
+  const { loginWithEmail } = useAuth();
+  const navigate = useNavigate();
+
+  if (!resident) return null;
+
+  const password = resident.generatedPassword || 'Syndik-Demo2026!';
+  const shareText = `Bonjour ${resident.name},\nVoici vos identifiants d'accès au Portail Copropriétaire (${buildingName}${
+    apartmentNumber ? ` - Lot ${apartmentNumber}` : ''
+  }) :\n• Identifiant (Email) : ${resident.email}\n• Mot de passe temporaire : ${password}\n• Rôle : ${
+    resident.isOwner ? 'Copropriétaire' : 'Locataire'
+  }`;
+
+  const handleCopy = () => {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(shareText);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    }
+  };
+
+  const handleSimulateResidentLogin = async () => {
+    const profile = await loginWithEmail(resident.email, password);
+    onClose();
+    navigate(getHomeRouteForRole(profile.role), { replace: true });
+  };
+
+  return (
+    <Modal
+      isOpen={!!resident}
+      onClose={onClose}
+      title="Fiche d'Identifiants d'Accès Résident"
+      footer={
+        <div className="flex flex-wrap items-center justify-between w-full gap-2">
+          {onRegenerate && (
+            <button
+              type="button"
+              onClick={() => onRegenerate(resident.id)}
+              className="text-xs font-semibold text-slate-600 hover:text-teal-700 underline"
+            >
+              Régénérer un nouveau mot de passe
+            </button>
+          )}
+          <div className="flex flex-wrap items-center gap-2 ms-auto">
+            <Button variant="secondary" onClick={onClose}>
+              Fermer
+            </Button>
+            <Button variant="secondary" onClick={handleCopy}>
+              {copied ? '✓ Copié !' : 'Copier la fiche'}
+            </Button>
+            <Button onClick={handleSimulateResidentLogin}>
+              Se connecter avec ce compte →
+            </Button>
+          </div>
+        </div>
+      }
+    >
+      <div className="space-y-4">
+        <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 flex items-start gap-3">
+          <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center font-bold text-sm shrink-0">
+            ✓
+          </div>
+          <div className="text-xs text-emerald-950">
+            <p className="font-bold text-sm">Compte résident actif</p>
+            <p className="mt-0.5 text-emerald-800">
+              Ces identifiants permettent à <strong>{resident.name}</strong> de se connecter immédiatement au Portail Résident (<code>/resident</code>).
+            </p>
+          </div>
+        </div>
+
+        <div className="p-4 rounded-xl bg-slate-900 text-white space-y-3 font-mono text-xs">
+          <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+            <span className="text-slate-400 font-sans">Résident :</span>
+            <span className="font-bold text-white font-sans">
+              {resident.name} ({resident.isOwner ? 'Copropriétaire' : 'Locataire'})
+            </span>
+          </div>
+          <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+            <span className="text-slate-400 font-sans">Immeuble / Lot :</span>
+            <span className="font-bold text-teal-300">
+              {buildingName} {apartmentNumber ? `• Lot ${apartmentNumber}` : '• Non assigné'}
+            </span>
+          </div>
+          <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+            <span className="text-slate-400 font-sans">Identifiant (Email / CIN) :</span>
+            <span className="font-bold text-amber-300 select-all">
+              {resident.email} {resident.cin ? `(${resident.cin})` : ''}
+            </span>
+          </div>
+          <div className="flex justify-between items-center">
+            <span className="text-slate-400 font-sans">Mot de passe généré :</span>
+            <span className="px-2.5 py-1 rounded bg-slate-800 text-emerald-300 font-bold text-sm tracking-wider select-all border border-slate-700">
+              {password}
+            </span>
+          </div>
+        </div>
+
+        <p className="text-xs text-slate-500">
+          Astuce : Cliquez sur <strong>« Se connecter avec ce compte → »</strong> pour basculer immédiatement vers l&apos;Espace Résident de <strong>{resident.name}</strong>, ou utilisez son email/CIN sur l&apos;écran de connexion.
+        </p>
+      </div>
+    </Modal>
+  );
+};
+
+// ==========================================
+// MAIN RESIDENTS VIEW
+// ==========================================
 
 const Residents: React.FC<{
-    building: Building;
-    onAddResident: (resident: Omit<Resident, 'id' | 'syndicId' | 'buildingId'>, generateCredentials?: boolean) => void;
-    onUpdateResident: (resident: Resident) => void;
-    onDeleteResident: (residentId: string) => void;
-}> = ({ building, onAddResident, onUpdateResident, onDeleteResident }) => {
-    const { t } = useI18n();
-    const [isModalOpen, setIsModalOpen] = useState(false);
-    const [selectedResident, setSelectedResident] = useState<Resident | null>(null);
+  building: Building;
+  onAddResident: (
+    resident: Omit<Resident, 'id' | 'syndicId' | 'buildingId'>,
+    generateCredentials?: boolean
+  ) => Promise<Resident> | void;
+  onUpdateResident: (resident: Resident) => void;
+  onDeleteResident: (residentId: string) => void;
+  onRegenerateCredentials?: (residentId: string) => Promise<Resident> | void;
+}> = ({
+  building,
+  onAddResident,
+  onUpdateResident,
+  onDeleteResident,
+  onRegenerateCredentials,
+}) => {
+  const { t } = useI18n();
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [selectedResident, setSelectedResident] = useState<Resident | null>(null);
+  const [credentialResidentId, setCredentialResidentId] = useState<string | null>(
+    null
+  );
+  const [deletingResident, setDeletingResident] = useState<Resident | null>(null);
 
-    const handleEdit = (resident: Resident) => {
-        setSelectedResident(resident);
-        setIsModalOpen(true);
-    };
+  // Map residentId -> Apartment for fast lookup
+  const residentApartmentMap = useMemo(() => {
+    const map = new Map<string, Apartment>();
+    building.apartments.forEach((apt) => {
+      if (apt.ownerId) map.set(apt.ownerId, apt);
+      if (apt.tenantId) map.set(apt.tenantId, apt);
+    });
+    building.residents.forEach((res) => {
+      if (res.apartmentId && !map.has(res.id)) {
+        const found = building.apartments.find((a) => a.id === res.apartmentId);
+        if (found) map.set(res.id, found);
+      }
+    });
+    return map;
+  }, [building.apartments, building.residents]);
 
-    const handleAdd = () => {
-        setSelectedResident(null);
-        setIsModalOpen(true);
-    };
+  const activeCredentialResident = useMemo(
+    () =>
+      building.residents.find((r) => r.id === credentialResidentId) || null,
+    [building.residents, credentialResidentId]
+  );
 
-    const handleDelete = (resident: Resident) => {
-        if (window.confirm(t('residents.deleteConfirm.message', { name: resident.name }))) {
-            onDeleteResident(resident.id);
+  const handleEdit = (resident: Resident) => {
+    setSelectedResident(resident);
+    setIsModalOpen(true);
+  };
+
+  const handleAdd = () => {
+    setSelectedResident(null);
+    setIsModalOpen(true);
+  };
+
+  const handleSaveResident = async (
+    residentPayload: Omit<Resident, 'id' | 'syndicId' | 'buildingId'> | Resident,
+    generateCredentials?: boolean
+  ) => {
+    if ('id' in residentPayload) {
+      onUpdateResident(residentPayload);
+    } else {
+      const created = await onAddResident(residentPayload, generateCredentials);
+      if (generateCredentials && created && typeof created === 'object' && 'id' in created) {
+        setCredentialResidentId(created.id);
+      }
+    }
+  };
+
+  const handleGenerateOrShowCredentials = async (resident: Resident) => {
+    if (resident.hasAccount && resident.generatedPassword) {
+      setCredentialResidentId(resident.id);
+    } else if (onRegenerateCredentials) {
+      const updated = await onRegenerateCredentials(resident.id);
+      if (updated && typeof updated === 'object' && 'id' in updated) {
+        setCredentialResidentId(updated.id);
+      } else {
+        setCredentialResidentId(resident.id);
+      }
+    } else {
+      setCredentialResidentId(resident.id);
+    }
+  };
+
+  const handleRegenerateInsideModal = async (residentId: string) => {
+    if (onRegenerateCredentials) {
+      await onRegenerateCredentials(residentId);
+    }
+  };
+
+  const confirmDelete = () => {
+    if (deletingResident) {
+      onDeleteResident(deletingResident.id);
+      setDeletingResident(null);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <ResidentModal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        onSave={handleSaveResident}
+        existingResident={selectedResident}
+        apartments={building.apartments}
+        residents={building.residents}
+      />
+
+      <CredentialsModal
+        resident={activeCredentialResident}
+        buildingName={building.name}
+        apartmentNumber={
+          activeCredentialResident
+            ? residentApartmentMap.get(activeCredentialResident.id)?.number
+            : undefined
         }
-    };
+        onClose={() => setCredentialResidentId(null)}
+        onRegenerate={handleRegenerateInsideModal}
+      />
 
-    return (
+      {/* Delete Confirmation Modal */}
+      <Modal
+        isOpen={!!deletingResident}
+        onClose={() => setDeletingResident(null)}
+        title="Supprimer le résident"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setDeletingResident(null)}>
+              Annuler
+            </Button>
+            <Button variant="danger" onClick={confirmDelete} className="ms-3">
+              Supprimer
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-slate-600">
+          {t('residents.deleteConfirm.message', {
+            name: deletingResident?.name || '',
+          })}
+        </p>
+      </Modal>
+
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
         <div>
-            <ResidentModal
-                isOpen={isModalOpen}
-                onClose={() => setIsModalOpen(false)}
-                onSave={selectedResident ? onUpdateResident : onAddResident}
-                existingResident={selectedResident}
-            />
-            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-6">
-                <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold text-slate-900">{t('residents.title', { buildingName: building.name })}</h1>
-                <Button icon={<PlusIcon />} onClick={handleAdd} className="w-full sm:w-auto justify-center">{t('residents.add')}</Button>
-            </div>
-
-            {/* Mobile Card List (< md) */}
-            <div className="md:hidden space-y-3">
-                {building.residents.map(resident => (
-                    <Card key={resident.id} className="p-4">
-                        <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                                <div className="flex items-center gap-2 flex-wrap">
-                                    <h3 className="text-sm font-bold text-slate-900 truncate">{resident.name}</h3>
-                                    <span className={`px-2 py-0.5 inline-flex text-[11px] font-semibold rounded-full ${resident.isOwner ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'}`}>
-                                        {resident.isOwner ? t('residents.role.owner') : t('residents.role.tenant')}
-                                    </span>
-                                </div>
-                                <p className="text-xs text-slate-500 mt-1 truncate">{resident.email}</p>
-                                <p className="text-xs text-slate-600 font-medium mt-0.5">{resident.phone}</p>
-                            </div>
-                            <div className="flex items-center gap-1.5 shrink-0">
-                                <Button variant="secondary" className="!p-2 min-w-[40px] min-h-[40px]" onClick={() => handleEdit(resident)} title={t('residents.modal.editTitle')}><PencilIcon /></Button>
-                                <Button variant="danger" className="!p-2 min-w-[40px] min-h-[40px]" onClick={() => handleDelete(resident)} title="Delete"><TrashIcon /></Button>
-                            </div>
-                        </div>
-                    </Card>
-                ))}
-                {building.residents.length === 0 && (
-                    <Card><p className="text-center py-8 text-gray-500">{t('residents.noResidents')}</p></Card>
-                )}
-            </div>
-
-            {/* Desktop Table (md+) */}
-            <Card className="hidden md:block">
-                <div className="overflow-x-auto">
-                    <table className="min-w-full divide-y divide-gray-200">
-                        <thead className="bg-gray-50">
-                            <tr>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('residents.table.name')}</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('residents.table.email')}</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('residents.table.phone')}</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('residents.table.role')}</th>
-                                <th className="relative px-6 py-3"><span className="sr-only">{t('residents.table.actions')}</span></th>
-                            </tr>
-                        </thead>
-                        <tbody className="bg-white divide-y divide-gray-200">
-                            {building.residents.map(resident => (
-                                <tr key={resident.id}>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{resident.name}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{resident.email}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{resident.phone}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm">
-                                        <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${resident.isOwner ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'}`}>
-                                            {resident.isOwner ? t('residents.role.owner') : t('residents.role.tenant')}
-                                        </span>
-                                    </td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">
-                                        <Button variant="secondary" className="!p-2" onClick={() => handleEdit(resident)} title={t('residents.modal.editTitle')}><PencilIcon /></Button>
-                                        <Button variant="danger" className="!p-2" onClick={() => handleDelete(resident)} title="Delete"><TrashIcon /></Button>
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-                {building.residents.length === 0 && <p className="text-center py-8 text-gray-500">{t('residents.noResidents')}</p>}
-            </Card>
+          <h1 className="text-xl sm:text-2xl font-bold text-slate-900">
+            {t('residents.title', { buildingName: building.name })}
+          </h1>
+          <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
+            Gestion des copropriétaires, locataires, affectation des lots et génération des accès portail
+          </p>
         </div>
-    );
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="secondary"
+            onClick={() => exportResidentsPDF(building)}
+            disabled={building.residents.length === 0}
+            className="flex items-center gap-1.5 text-xs sm:text-sm"
+            title="Exporter le registre officiel des résidents en PDF (Loi 18-00)"
+          >
+            <DocumentsIcon />
+            <span>Exporter PDF</span>
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={() => exportResidentsCSV(building)}
+            disabled={building.residents.length === 0}
+            className="flex items-center gap-1.5 text-xs sm:text-sm"
+            title="Exporter la liste des résidents au format CSV (Excel)"
+          >
+            <span>⬇ CSV</span>
+          </Button>
+          <Button
+            icon={<PlusIcon />}
+            onClick={handleAdd}
+            className="w-full sm:w-auto justify-center"
+          >
+            {t('residents.add')}
+          </Button>
+        </div>
+      </div>
+
+      {/* Mobile Card List (< md) */}
+      <div className="md:hidden space-y-3">
+        {building.residents.map((resident) => {
+          const assignedApt = residentApartmentMap.get(resident.id);
+          return (
+            <Card key={resident.id} className="p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-sm font-bold text-slate-900 truncate">
+                      {resident.name}
+                    </h3>
+                    <span
+                      className={`px-2 py-0.5 inline-flex text-[11px] font-semibold rounded-full ${
+                        resident.isOwner
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : 'bg-sky-100 text-sky-800'
+                      }`}
+                    >
+                      {resident.isOwner
+                        ? t('residents.role.owner')
+                        : t('residents.role.tenant')}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-1 truncate">
+                    {resident.email}
+                  </p>
+                  <p className="text-xs text-slate-600 font-medium mt-0.5">
+                    {resident.phone} {resident.cin ? `• CIN: ${resident.cin}` : ''}
+                  </p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    {assignedApt ? (
+                      <span className="px-2 py-0.5 rounded bg-teal-50 text-teal-800 border border-teal-200 font-mono text-xs font-bold">
+                        Lot {assignedApt.number} (Étage {assignedApt.floor})
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 text-xs">
+                        Lot non assigné
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleGenerateOrShowCredentials(resident)}
+                      className={`px-2.5 py-0.5 rounded text-xs font-semibold border transition-colors ${
+                        resident.hasAccount
+                          ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
+                          : 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200'
+                      }`}
+                    >
+                      {resident.hasAccount
+                        ? '🔑 Voir Identifiants'
+                        : '⚡ Générer Accès'}
+                    </button>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <Button
+                    variant="secondary"
+                    className="!p-2 min-w-[40px] min-h-[40px]"
+                    onClick={() => handleEdit(resident)}
+                    title={t('residents.modal.editTitle')}
+                  >
+                    <PencilIcon />
+                  </Button>
+                  <Button
+                    variant="danger"
+                    className="!p-2 min-w-[40px] min-h-[40px]"
+                    onClick={() => setDeletingResident(resident)}
+                    title="Supprimer"
+                  >
+                    <TrashIcon />
+                  </Button>
+                </div>
+              </div>
+            </Card>
+          );
+        })}
+        {building.residents.length === 0 && (
+          <Card>
+            <p className="text-center py-8 text-gray-500">
+              {t('residents.noResidents')}
+            </p>
+          </Card>
+        )}
+      </div>
+
+      {/* Desktop Table (md+) */}
+      <Card className="hidden md:block overflow-hidden border border-slate-200">
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-slate-200 text-sm">
+            <thead className="bg-slate-50">
+              <tr>
+                <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase">
+                  {t('residents.table.name')}
+                </th>
+                <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase">
+                  Lot Assigné
+                </th>
+                <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase">
+                  {t('residents.table.role')}
+                </th>
+                <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase">
+                  Contact
+                </th>
+                <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase">
+                  Accès Portail
+                </th>
+                <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500 uppercase">
+                  Actions
+                </th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-slate-100">
+              {building.residents.map((resident) => {
+                const assignedApt = residentApartmentMap.get(resident.id);
+                return (
+                  <tr key={resident.id} className="hover:bg-slate-50">
+                    <td className="px-5 py-3.5 whitespace-nowrap">
+                      <div className="font-semibold text-slate-900">
+                        {resident.name}
+                      </div>
+                      {resident.cin && (
+                        <div className="text-xs text-slate-400 font-mono">
+                          CIN: {resident.cin}
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-5 py-3.5 whitespace-nowrap">
+                      {assignedApt ? (
+                        <span className="px-2.5 py-1 rounded-md bg-teal-50 text-teal-900 border border-teal-200 font-mono text-xs font-bold">
+                          Lot {assignedApt.number} · Étage {assignedApt.floor}
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleEdit(resident)}
+                          className="text-xs text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-2.5 py-1 rounded-md font-medium"
+                        >
+                          + Assigner un lot
+                        </button>
+                      )}
+                    </td>
+                    <td className="px-5 py-3.5 whitespace-nowrap">
+                      <span
+                        className={`px-2.5 py-0.5 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                          resident.isOwner
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : 'bg-sky-100 text-sky-800'
+                        }`}
+                      >
+                        {resident.isOwner
+                          ? t('residents.role.owner')
+                          : t('residents.role.tenant')}
+                      </span>
+                    </td>
+                    <td className="px-5 py-3.5 whitespace-nowrap text-xs text-slate-600">
+                      <div>{resident.email}</div>
+                      <div className="font-mono text-slate-500 mt-0.5">
+                        {resident.phone}
+                      </div>
+                    </td>
+                    <td className="px-5 py-3.5 whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => handleGenerateOrShowCredentials(resident)}
+                        className={`px-3 py-1 rounded-lg text-xs font-semibold border transition-colors ${
+                          resident.hasAccount
+                            ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
+                            : 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200'
+                        }`}
+                      >
+                        {resident.hasAccount
+                          ? '🔑 Voir Identifiants'
+                          : '⚡ Générer Accès'}
+                      </button>
+                    </td>
+                    <td className="px-5 py-3.5 whitespace-nowrap text-right text-sm font-medium space-x-2">
+                      <Button
+                        variant="secondary"
+                        className="!p-2"
+                        onClick={() => handleEdit(resident)}
+                        title={t('residents.modal.editTitle')}
+                      >
+                        <PencilIcon />
+                      </Button>
+                      <Button
+                        variant="danger"
+                        className="!p-2"
+                        onClick={() => setDeletingResident(resident)}
+                        title="Supprimer"
+                      >
+                        <TrashIcon />
+                      </Button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        {building.residents.length === 0 && (
+          <p className="text-center py-8 text-gray-500">
+            {t('residents.noResidents')}
+          </p>
+        )}
+      </Card>
+    </div>
+  );
 };
 
 export default Residents;
