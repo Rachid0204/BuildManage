@@ -1,188 +1,162 @@
-# Syndik - Moroccan Syndic (Trustee) SaaS Platform Enhancement Roadmap
+# Syndik — B2B Syndic-Centric Authentication & Credential Provisioning Architecture
 
-A production-grade, multi-tenant SaaS platform tailored specifically to Moroccan co-ownership regulations (**Loi 18-00** modifiée par la **Loi 106-12** régissant la copropriété des immeubles bâtis), designed to provide professional property managers (*syndics professionnels*) and volunteer trustees (*syndics bénévoles*) with an end-to-end management suite.
+Replaces public self-registration with a secure, enterprise-grade B2B2C property management authentication model where **Syndics onboard by selecting a subscription plan on the Landing Page**, the **public Login screen is strictly for Sign-In**, and **Residents (`Copropriétaires` / `Locataires`) and Service Providers (`Prestataires Agréés`) receive official login credentials generated and managed exclusively by their Syndic**.
 
 ---
 
-### User Review & Critical Decisions
+## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> The roadmap below is structured strictly by business impact and legal urgency under Moroccan co-ownership law. Review the prioritized initiatives below and confirm or adjust the execution order.
+> The following architectural decisions incorporate your confirmed choices and establish a strict chain of trust across all four roles (`Admin`, `Syndic`, `Résident`, `Prestataire`).
 
-- **Priority 1 (Immediate)**: Moroccan Legal Compliance & Core Financial Engine (Tantièmes/millièmes calculation, official Quittances de paiement with ICE/IF, Appels de fonds, and Law 18-00 Mise en demeure for impayés).
-- **Priority 2**: Assemblée Générale (AG) Management (Convocations, tantième-weighted quorum calculator, resolution voting, and official PV generation).
-- **Priority 3**: Resident Self-Service Portal & Payment Proof Validation (Bank transfer slip upload, syndic approval queue, instant quittance issuance).
-- **Priority 4**: Service Provider & Maintenance Interventions (Directory of prestataires with ICE/RC, work orders, quotes, and invoice linkage).
-- **Priority 5**: Reactive Mock Persistence & Design System Elevation (Full state persistence in demo mode, tabular figures for MAD currency, seamless Arabic RTL / French localization).
-
----
-
-## 1. Overview & Business Logic Context
-
-In Morocco, co-ownership management is governed strictly by **Dahir n° 1-02-298 portant promulgation de la loi n° 18-00** (and Law 106-12). Key operational realities of a Moroccan syndic include:
-
-1. **Quote-Part & Tantièmes**: Operating fees cannot simply be flat charges; they must be apportioned according to each co-owner's fraction of common ownership (*tantièmes* or *millièmes*), typically calculated from apartment surface area and lot accessories.
-2. **Quittance de Syndic**: A legally recognized receipt proving a co-owner has cleared dues, essential for notary procedures during property sales (*attestation de non-dette / quittance*).
-3. **Appels de Fonds & Budget Séparé**: Distinction between *charges courantes* (operating budget: cleaning, concierge, elevator maintenance, common electricity) and *fonds de réserve / travaux exceptionnels* (mandatory reserve fund under Law 106-12).
-4. **Recouvrement & Impayés**: Escalation protocol for arrears: friendly reminder $\rightarrow$ formal notice (*mise en demeure avec accusé de réception*) $\rightarrow$ summary payment order (*injonction de payer*).
-5. **Assemblée Générale**: Annual legal obligation requiring strict quorum verification based on total copropriété voting shares, secret/open voting on resolutions, and signed minutes (*procès-verbal*).
+- **Confirmed Decision 1 — Sign-In Only on `/login` & Plan-Driven Syndic Onboarding**:
+  - The public `/login` screen is dedicated strictly to **Sign-In** (Authentication) for existing accounts (plus quick Demo Role Sandboxes for testing). Public self-registration tabs for Residents and Prestataires are completely removed.
+  - Selecting a subscription tier on the Landing Page (*Essentiel — 200 MAD/mois*, *Pro — 350 MAD/mois*, or *Entreprise — 500 MAD/mois*) launches the dedicated **Syndic Account & Cabinet Registration** flow pre-configured with the chosen plan.
+- **Confirmed Decision 2 — Printable PDF Access Sheet & Copyable Credentials Modal**:
+  - When the Syndic creates or manages a **Resident** or **Prestataire** from the Syndic Dashboard, the platform generates a unique login email + temporary password (`Syn-XXXX-MA`) and presents a **Fiche d'Accès Officielle** modal with one-click copy and a downloadable, formatted **PDF Access Sheet (Fiche d'Identifiants de Connexion)** ready to print or hand over.
+- **Confirmed Decision 3 — Mandatory First-Login Password Update**:
+  - Accounts provisioned by the Syndic carry a `mustChangePassword: true` security flag. Upon their very first sign-in, the Resident or Prestataire is prompted by a dedicated security screen to set their personal password before entering their portal.
 
 ---
 
-## 2. Prioritized Improvement & Feature Roadmap
+## 1. Overview & Core Concept
+
+- **What It Does**: Establishes the Syndic as the single administrative authority for every building they manage. Only a Syndic can subscribe to a SaaS plan and provision access for the co-owners, tenants, and approved maintenance vendors of their buildings.
+- **Target Audience / Persona**:
+  - **Syndics Professionnels & Bénévoles**: Subscribe to a plan on the Landing Page, set up their cabinet and first residence, and issue official access credentials to residents and vendors.
+  - **Copropriétaires & Locataires**: Sign in using the official credentials issued by their Syndic, customize their password on first login, and access their personal Resident Portal (`/my-portal`).
+  - **Prestataires Agréés**: Sign in using the vendor credentials issued by the Syndic, update their password on first login, and manage assigned work orders in the Provider Portal (`/provider`).
+- **Key Value**: Eliminates unauthorized self-signups, guarantees every Resident is accurately linked to a verified apartment lot (`tantièmes`) and building, and ensures every Prestataire in the directory is vetted by the Syndic.
+
+---
+
+## 2. User Experience & Visual Design
+
+### Key User Flows
+
+1. **Flow A — Syndic Plan Selection & Account Creation (Landing Page $\rightarrow$ Syndic Workspace)**:
+   - On the public Landing Page, the visitor reviews the 3 subscription plans (*Essentiel 200 MAD*, *Pro 350 MAD*, *Entreprise 500 MAD*).
+   - Clicking **« Choisir ce plan »** navigates to the **Syndic Onboarding Flow** with the selected plan badge, price, and building limit pre-selected.
+   - The Syndic enters their full name, cabinet/agency name, professional email, phone, password, and initial residence details (or default setup).
+   - Upon submission, the Syndic account and subscription tier are persisted, and the user is redirected straight into the **Syndic Dashboard (`/dashboard`)**.
+
+2. **Flow B — Clean Sign-In Screen (`/login`)**:
+   - Displays a streamlined, single-purpose **Connexion à votre espace** interface (French & Arabic RTL support) with email/password authentication and role-aware redirection.
+   - Includes a subtle footer link for new property managers (*« Vous êtes un syndic ? Découvrez nos offres et créez votre cabinet »* $\rightarrow$ scrolls to Landing Page pricing tiers).
+   - Retains the 1-click Demo Sandbox bar (*Admin*, *Syndic*, *Copropriétaire*, *Prestataire*) for instant evaluation.
+
+3. **Flow C — Resident Account & Credential Provisioning (Syndic Dashboard $\rightarrow$ Résidents)**:
+   - In **Résidents & Copropriétaires (`/residents`)**, when the Syndic clicks **« Ajouter un résident »**, the modal includes the toggle **« Générer un compte d'accès Résident (Email + Mot de passe temporaire) »** (enabled by default).
+   - Saving the resident creates their directory record, links their apartment lot, registers their login credentials in the authentication store with `mustChangePassword: true`, and immediately opens the **Fiche d'Accès Résident** modal.
+   - From this modal (or anytime from the Resident table via **« Identifiants » / « Régénérer »**), the Syndic can:
+     - Copy the formatted login summary to clipboard.
+     - Download an official **PDF Access Sheet (`Fiche_Acces_Resident.pdf`)** bearing the Syndic's header, building name, apartment number, login URL, email, and temporary password.
+
+4. **Flow D — Prestataire Account & Credential Provisioning (Syndic Dashboard $\rightarrow$ Prestataires)**:
+   - In **Annuaire des Prestataires (`/prestataires`)**, the **« Ajouter un prestataire »** modal is upgraded with a matching **« Créer un compte Portail Prestataire & générer les identifiants »** toggle (enabled by default) and status badges in the vendor cards showing whether portal access is active (`Accès Portail Actif` vs `Sans compte`).
+   - Saving the provider creates their vendor record, provisions their `/provider` login credentials (`mustChangePassword: true`), and opens the **Fiche d'Accès Prestataire** modal with **Copy Credentials** and **Download Official PDF Access Sheet (`Fiche_Acces_Prestataire.pdf`)**.
+   - Existing providers without credentials can have their portal account generated or reset in one click via **« Générer / Réinitialiser l'accès »**.
+
+5. **Flow E — Mandatory First-Login Password Change (Resident & Prestataire)**:
+   - When a Resident or Prestataire logs in with a Syndic-generated temporary password (`mustChangePassword === true`), an intercepting **Sécurisation de votre compte (Changement de mot de passe obligatoire)** view prompts them to enter and confirm a new personal password.
+   - Once confirmed, `mustChangePassword` is cleared in both their profile and persistent credential store, and they proceed to `/my-portal` or `/provider`.
+
+### Visual Identity & Theme
+- **Aesthetic Direction**: Authoritative Moroccan PropTech SaaS — crisp corporate slate surfaces, deep emerald/teal institutional accents (`--primary`: `#0F766E`), and tabular monospace credential blocks.
+- **Color Palette & Mood**:
+  - **60% Neutral Canvas**: Cool alabaster (`bg-slate-50`) and crisp white (`bg-white`) workspace containers.
+  - **30% Structural Surfaces**: Deep slate (`bg-slate-900`) auth side-panel and hairline borders (`border-slate-200`).
+  - **10% Accent Budget**: Emerald teal (`bg-teal-600`, `text-teal-700`) for primary CTAs and verified access states; amber (`text-amber-700`) for temporary password notices.
+- **Typography & Hierarchy**:
+  - Clean geometric headings paired with high-legibility body copy and full Arabic RTL support (`dir="rtl"`).
+  - All generated passwords, CIN codes, ICE numbers, and MAD prices use `font-mono tabular-nums` for unmistakable character clarity.
+
+---
+
+## 3. Key Product Decisions & Trade-Offs
+
+- **Decision 1 — Removing Public Self-Registration for Residents & Vendors**:
+  - *Chosen Approach*: Restrict public sign-up exclusively to Syndics subscribing via a pricing plan; all Resident and Prestataire accounts are provisioned inside the Syndic's authenticated workspace.
+  - *Why*: Prevents unauthorized users from joining arbitrary buildings, eliminates duplicate/unlinked resident records, and mirrors real-world Moroccan co-ownership governance (Loi 18-00).
+  - *Alternatives Considered*: Public registration with Syndic approval queues — rejected because it still exposes the building list publicly and creates unnecessary administrative friction compared to direct credential issuance by the Syndic.
+
+- **Decision 2 — Dual-Format Credential Handover (Copyable Modal + Official Printable PDF)**:
+  - *Chosen Approach*: Provide both an instant copyable summary and a formal `jsPDF`-generated **Fiche d'Accès Individuelle** for both Residents and Prestataires.
+  - *Why*: In Morocco, Syndics frequently distribute access notices either as printed letters slipped under apartment doors / handed over at General Meetings (AG) or pasted into digital messages.
+
+- **Decision 3 — First-Login Password Enforcement (`mustChangePassword`)**:
+  - *Chosen Approach*: Automatically flag Syndic-generated credentials with `mustChangePassword: true` and require the Resident or Prestataire to choose a personal password on first sign-in.
+  - *Why*: Ensures privacy so that once the Resident or Prestataire activates their account, their personal password is known only to them, while still allowing the Syndic to issue a fresh temporary password if the user ever forgets theirs.
+
+---
+
+## 4. Technical Architecture & Data Strategy *(Technical Reference)*
+
+### Architecture & Component Diagram
 
 ```
-┌────────────────────────────────────────────────────────────────────────┐
-│                        PRIORITY ROADMAP OVERVIEW                       │
-├─────────────┬──────────────────────────────────────────────────────────┤
-│ Priority 1  │ Moroccan Legal Financials: Tantièmes, Quittances & Relance│
-├─────────────┼──────────────────────────────────────────────────────────┤
-│ Priority 2  │ Assemblée Générale (AG) & Quorum Voting Engine           │
-├─────────────┼──────────────────────────────────────────────────────────┤
-│ Priority 3  │ Resident Portal & Payment Proof Verification Flow        │
-├─────────────┼──────────────────────────────────────────────────────────┤
-│ Priority 4  │ Prestataires / Service Providers & Work Order Tracking  │
-├─────────────┼──────────────────────────────────────────────────────────┤
-│ Priority 5  │ Reactive Persistence & Modern FinTech SaaS Interface     │
-└─────────────┴──────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────┐
+│                        PUBLIC MARKETING & AUTH LAYER                       │
+│                                                                            │
+│  ┌───────────────────────────────┐      ┌───────────────────────────────┐  │
+│  │         Landing Page          │      │      Sign-In Screen (/login)  │  │
+│  │  • Essentiel (200 MAD/mois)   │─────▶│  • Email + Password Sign-In   │  │
+│  │  • Pro (350 MAD/mois)         │ Plan │  • Syndic Plan Onboarding     │  │
+│  │  • Entreprise (500 MAD/mois)  │ Flow │    (when ?plan= selected)     │  │
+│  └───────────────────────────────┘      └───────────────┬───────────────┘  │
+└─────────────────────────────────────────────────────────┼──────────────────┘
+                                                          │
+                                                          ▼
+┌────────────────────────────────────────────────────────────────────────────┐
+│                   AUTHENTICATION & FIRST-LOGIN SECURITY GATE               │
+│                                                                            │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │  AuthContext (Session + Credential Registry + Role Router)           │  │
+│  │  • Checks mustChangePassword flag on Resident / Prestataire login    │  │
+│  │  • Enforces First-Login Password Update Modal before portal access   │  │
+│  └──────────┬───────────────────────────┬───────────────────────┬───────┘  │
+└─────────────┼───────────────────────────┼───────────────────────┼──────────┘
+              │                           │                       │
+              ▼                           ▼                       ▼
+┌──────────────────────────┐ ┌─────────────────────────┐ ┌───────────────────┐
+│    SYNDIC WORKSPACE      │ │    RESIDENT PORTAL      │ │  PROVIDER PORTAL  │
+│      (/dashboard)        │ │      (/my-portal)       │ │    (/provider)    │
+│                          │ │                         │ │                   │
+│  ┌────────────────────┐  │ │  • Lot & Tantièmes      │ │  • Assigned Work  │
+│  │ Residents Module   │  │ │  • Unpaid Charges &     │ │    Orders         │
+│  │ • Create Resident  │  │ │    Payment Proofs       │ │  • Status Updates │
+│  │ • Generate/Reset   │  │ │  • Official Quittances  │ │    & Tech Notes   │
+│  │   Login & PDF Card │  │ │  • AG Digital Voting    │ │  • Building Info  │
+│  └────────────────────┘  │ │  • Claims & Community   │ └───────────────────┘
+│  ┌────────────────────┐  │ └─────────────────────────┘
+│  │ Prestataires Mod.  │  │
+│  │ • Create Vendor    │  │
+│  │ • Generate/Reset   │  │
+│  │   Login & PDF Card │  │
+│  └────────────────────┘  │
+└──────────────────────────┘
 ```
 
-### Priority 1: Moroccan Legal Financials & Compliance Engine
+### Data Model & State
+- **`Syndic` & Plan Onboarding**:
+  - Maps selected pricing tier (`starter` = Essentiel 200 MAD / 4 buildings, `professional` = Pro 350 MAD / 8 buildings, `enterprise` = Entreprise 500 MAD / Unlimited) directly into `Syndic.subscriptionPlan` during Syndic registration.
+- **`Resident` Credential Fields**:
+  - `hasAccount?: boolean`, `generatedPassword?: string`, `credentialsCreatedAt?: string`, `mustChangePassword?: boolean`.
+- **`Prestataire` Credential Fields**:
+  - Extended with `hasAccount?: boolean`, `generatedPassword?: string`, `credentialsCreatedAt?: string`, `mustChangePassword?: boolean` so service providers have full parity with residents for account generation, viewing, and password regeneration.
+- **Persistent Credential Store (`syndik_registered_users_v1` & Firestore sync)**:
+  - Stores provisioned credentials keyed by normalized email (`email`, `password`, `profile` including `role`, `syndicId`, `buildingId`, `apartmentId`, `mustChangePassword`).
+  - Updating or regenerating credentials from the Syndic Dashboard immediately synchronizes with the credential registry so the Resident or Prestataire can log in right away.
 
-#### Existing Gaps
-- Currently, monthly charges are generated with a flat fee per apartment (`monthlySyndicFees`), which does not comply with co-ownership agreements based on surface or tantièmes.
-- Invoices are generic and lack Moroccan legal identifiers (ICE, IF, RC, Patente).
-- No formal **Quittance de paiement** (with official legal mentions and syndic stamp) is delivered to the co-owner upon payment.
-- Overdue tracking lacks structured recovery letters (*relance amiable* and legal *mise en demeure*).
-
-#### Planned Enhancements
-1. **Tantième / Surface-Based Fee Allocation**:
-   - Calculate each apartment's share: $\text{Fee}_i = \text{Total Annual Budget} \times \frac{\text{Tantièmes}_i}{1000}$ (or proportional square meter ratio).
-   - Support both fixed per-apartment and tantième-based apportionment schemes.
-2. **Official Quittances de Paiement (PDF & Printable)**:
-   - Generate bilingual (FR/AR) official receipts bearing the Syndic's name, ICE, IF, apartment number, co-owner name, payment method (virement, chèque, versement, CMI), date, and remaining balance.
-3. **Appels de Fonds (Budget Call Notices)**:
-   - Automated quarterly or monthly call notices breaking down *Budget de fonctionnement* vs *Fonds de réserve travaux*.
-4. **Moroccan Law 18-00 Debt Recovery (Gestion des Impayés)**:
-   - Dashboard widget showing aging debt (30 days, 60 days, 90+ days).
-   - 1-click generation of the formal **Mise en Demeure** notice complying with Article 25 of Law 18-00.
-
----
-
-### Priority 2: Assemblée Générale (AG) Management Module
-
-#### Existing Gaps
-- No module exists for managing annual or extraordinary general meetings, which are the cornerstone of Moroccan syndic governance.
-
-#### Planned Enhancements
-1. **AG Scheduler & Convocations**:
-   - Create AG sessions (Ordinaire AGO / Extraordinaire AGE) with date, location, and Agenda (*Ordre du jour*).
-   - Export printable/downloadable formal Convocation notices with statutory notice period tracking (15 days minimum).
-2. **Live Quorum Calculator**:
-   - Interactive attendee register (*Feuille de présence*).
-   - Dynamic real-time calculation of present/represented co-owners in tantièmes. Displays statutory status: *Quorum atteint* (> 500/1000 for 1st assembly, or Law 106-12 second convocation rules).
-3. **Resolution Voting**:
-   - Agenda resolutions (e.g., *Approbation des comptes*, *Quitus au syndic*, *Vote du budget prévisionnel*, *Élection du conseil syndical*).
-   - Voting mechanisms: Pour, Contre, Abstention with automatic vote tallying weighted by tantièmes.
-4. **Certified Procès-Verbal (PV) Generator**:
-   - Export official AG minutes in French and Arabic, ready for archiving and distribution to all co-owners.
-
----
-
-### Priority 3: Resident Portal & Payment Proof Validation Workflow
-
-#### Existing Gaps
-- Co-owners cannot upload payment receipts (e.g. CIH, Attijariwafa, BMCE bank transfer slips or ATM deposit receipts).
-- Syndic has no verification inbox to inspect proofs before validating charges.
-
-#### Planned Enhancements
-1. **Resident Self-Service Payment Proof Submission**:
-   - Resident dashboard allows selecting pending charges and submitting proof of payment: transaction reference, date, payment channel (Virement bancaire, Versement en agence, Chèque), and file/receipt attachment.
-2. **Syndic Verification & Approval Queue**:
-   - Dedicated "Pending Verifications" tab in Financials.
-   - Syndic can review the receipt preview, verify with bank statement, and click **Approuver** or **Rejeter** with a reason.
-   - Upon approval: charge is marked as paid, income transaction is automatically logged in the building ledger, and a Quittance PDF is issued immediately to the resident's account.
-
----
-
-### Priority 4: Service Providers (Prestataires) & Maintenance Tracking
-
-#### Existing Gaps
-- `provider` role exists in types but has no UI or workflow.
-- Maintenance requests have a simple text photo URL and no quote/contract tracking.
-
-#### Planned Enhancements
-1. **Prestataire Directory**:
-   - Management of vendors: Plumber, Electrician, Elevator maintenance (*Ascensoriste*), Cleaning company, Concierge/Security, Insurance company.
-   - Tracking contracts, contact details, ICE, and expiry dates.
-2. **Structured Work Orders (Bons d'intervention)**:
-   - Assign maintenance tickets to specific providers with estimated cost, approved quote (*Devis*), and final invoice (*Facture*).
-   - Expense automatically bridges into building financial expenses once marked as completed.
-
----
-
-### Priority 5: Reactive Persistence & Modern FinTech SaaS Interface
-
-#### Existing Gaps
-- Demo mode loses custom additions when refreshing if not stored in localStorage.
-- Visuals use generic cards and inconsistent fonts; some dialogs have hardcoded English text.
-
-#### Planned Enhancements
-1. **Reactive Local Storage Persistence Layer**:
-   - Full reactive CRUD in mock mode so that newly created buildings, apartments, residents, transactions, payment proofs, and AG sessions persist seamlessly in the browser.
-2. **FinTech Visual System & Anti-Slop Discipline**:
-   - High-density data tables ($36\text{px}$–$44\text{px}$ row heights), subtle 1px dividers, tabular monospace figures for MAD currency (`font-variant-numeric: tabular-nums`).
-   - Clean unboxed metadata with typographic separators (`·`).
-   - Cohesive emerald (`#0F766E`), slate (`#0F172A`), and neutral palette.
-3. **Trilingual Moroccan Localization (FR, AR, EN)**:
-   - Complete French & Arabic translations across all views, forms, and PDF templates.
-   - Flawless RTL layout mirroring when Arabic is selected.
-
----
-
-## 3. System Architecture & Data Flow
-
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                        SYSTEM ARCHITECTURE                             │
-├────────────────────────────────────────────────────────────────────────┤
-│                                                                        │
-│  ┌────────────────────┐   ┌────────────────────┐   ┌────────────────┐  │
-│  │   Syndic Admin     │   │   Resident Portal  │   │  Super Admin   │  │
-│  │  (Property Mgr)    │   │  (Copropriétaire)  │   │  (SaaS Owner)  │  │
-│  └─────────┬──────────┘   └─────────┬──────────┘   └────────┬───────┘  │
-│            │                        │                       │          │
-│  ──────────┼────────────────────────┼───────────────────────┼────────  │
-│            ▼                        ▼                       ▼          │
-│  ┌──────────────────────────────────────────────────────────────────┐  │
-│  │                      APPLICATION CORE                            │  │
-│  │  ┌─────────────────┐  ┌──────────────────┐  ┌─────────────────┐  │  │
-│  │  │ Financials &    │  │ Assemblée        │  │ Maintenance &   │  │  │
-│  │  │ Tantièmes Engine│  │ Générale (AG)    │  │ Prestataires    │  │  │
-│  │  └─────────────────┘  └──────────────────┘  └─────────────────┘  │  │
-│  │  ┌─────────────────┐  ┌──────────────────┐  ┌─────────────────┐  │  │
-│  │  │ Proof Approval  │  │ PDF Generator    │  │ Gemini AI       │  │  │
-│  │  │ Queue           │  │ (Quittances/PVs) │  │ Announcements   │  │  │
-│  │  └─────────────────┘  └──────────────────┘  └─────────────────┘  │  │
-│  └──────────────────────────────────┬───────────────────────────────┘  │
-│                                     │                                  │
-│  ───────────────────────────────────┼────────────────────────────────  │
-│                                     ▼                                  │
-│  ┌──────────────────────────────────────────────────────────────────┐  │
-│  │                     DATA & PERSISTENCE LAYER                     │  │
-│  │   • Reactive LocalStorage Store (Demo / Zero-Setup Mode)         │  │
-│  │   • Firebase Firestore & Storage (Production Mode)               │  │
-│  └──────────────────────────────────────────────────────────────────┘  │
-└────────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 4. Verification & Testing Strategy
-
-- **Compilation Verification**: Run `compile_applet` after each cohesive change set to guarantee clean TypeScript builds.
-- **Workflow Testing**:
-  - Test tantième calculation: generate monthly charges and verify amounts match surface/tantième ratios.
-  - Test payment flow: resident submits transfer slip $\rightarrow$ syndic verifies in queue $\rightarrow$ quittance PDF downloads with correct ICE/IF/amount.
-  - Test AG module: create agenda items, mark attendees, verify quorum computation, record votes, and export PV.
-  - Test language toggle: verify French, English, and Arabic RTL transitions.
+### Interactive Component & State Mapping
+1. **Landing Page Pricing Selection $\rightarrow$ Syndic Registration**:
+   - Clicking any of the 3 pricing buttons passes the selected tier (`starter`, `professional`, `enterprise`) to `/login?mode=syndic-signup&plan=<tier>`.
+   - When `mode=syndic-signup` is active, the screen renders the **Création de Cabinet Syndic** wizard displaying the chosen plan summary (with option to switch tiers), cabinet details, and initial building configuration.
+2. **Sign-In Only Default on `/login`**:
+   - Navigating to `/login` directly renders only the **Connexion** form (no public Resident or Prestataire registration tabs).
+3. **Syndic Credential Provisioning for Residents & Prestataires**:
+   - Adding or regenerating credentials for a Resident or Prestataire invokes a unified credential generator (`Syn-XXXX-MA`), updates the entity and auth registry, and opens the **Credential Access Modal** with:
+     - Copyable credentials block
+     - **Télécharger la Fiche d'Accès PDF** (powered by `jsPDF` with official Moroccan Syndic layout, instructions for first login, and security notice).
+4. **First-Login Password Update Gate**:
+   - When `userProfile.mustChangePassword === true`, a dedicated modal/screen intercepts navigation and validates the new password (minimum 6 characters, confirmation match, different from temporary password). Submitting updates the stored password, sets `mustChangePassword: false`, and unlocks the user's portal.

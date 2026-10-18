@@ -20,6 +20,7 @@ interface ServiceProvidersDirectoryProps {
   apartmentNumber?: string;
   residentId?: string;
   isResidentPortal?: boolean;
+  onManageCredentials?: (prestataire: Prestataire) => void;
 }
 
 export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps> = ({
@@ -27,6 +28,8 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
   residentName = 'Résident',
   apartmentNumber = 'Lot A-102',
   residentId = 'res-2',
+  isResidentPortal = true,
+  onManageCredentials,
 }) => {
   const { tr } = useI18n();
   const queryClient = useQueryClient();
@@ -430,6 +433,29 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
                     {tr('Demander une intervention', 'طلب تدخل تقني')}
                   </button>
                 </div>
+
+                {!isResidentPortal && onManageCredentials && (
+                  <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
+                    <span className="text-[11px] text-slate-500 font-medium">
+                      {p.hasAccount
+                        ? tr('Portail Prestataire : Actif', 'بوابة المزود : مفعلة')
+                        : tr('Portail Prestataire : Non activé', 'بوابة المزود : غير مفعلة')}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onManageCredentials(p)}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
+                        p.hasAccount
+                          ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
+                          : 'bg-teal-50 text-teal-800 border-teal-200 hover:bg-teal-100'
+                      }`}
+                    >
+                      {p.hasAccount
+                        ? tr('🔑 Voir Identifiants', '🔑 عرض بيانات الولوج')
+                        : tr('⚡ Générer Accès', '⚡ توليد حساب ولوج')}
+                    </button>
+                  </div>
+                )}
               </div>
             </Card>
           );

@@ -10,8 +10,8 @@ import {
 } from 'firebase/auth';
 import { auth, db, isMock } from '../firebase/config';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
-import type { UserProfile, UserRole, Syndic, Prestataire } from '../types';
-import { getSyndics, saveSyndic, updateResident } from '../firebase/services';
+import type { UserProfile, UserRole, Syndic, Prestataire, SubscriptionPlan, Apartment } from '../types';
+import { getSyndics, saveSyndic, addBuilding, addResident, updateResident, savePrestataire } from '../firebase/services';
 import { mockPrestataires } from '../data/mockData';
 
 export const getHomeRouteForRole = (role?: UserRole): string => {
@@ -40,7 +40,24 @@ interface AuthContextType {
     pass: string,
     name: string,
     role: UserRole,
-    extra?: { phone?: string; cin?: string; companyName?: string }
+    extra?: {
+      phone?: string;
+      cin?: string;
+      companyName?: string;
+      city?: string;
+      subscriptionPlan?: SubscriptionPlan;
+      initialBuildingName?: string;
+      initialBuildingAddress?: string;
+      initialBuildingFees?: number;
+      initialApartmentsCount?: number;
+      buildingId?: string;
+      apartmentId?: string;
+      isOwner?: boolean;
+      category?: Prestataire['category'];
+      ice?: string;
+      rc?: string;
+      hourlyRate?: string;
+    }
   ) => Promise<UserProfile>;
   changePassword: (newPassword: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -255,7 +272,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         });
       }
 
-      // 3. Check Demo Provider / Prestataire Accounts
+      // 3. Check Demo & Syndic-Provisioned Provider / Prestataire Accounts
       let storedProviders: Prestataire[] = mockPrestataires;
       try {
         const rawProviders = localStorage.getItem('syndik_reactive_prestataires_v2');
@@ -266,25 +283,72 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         // fallback to mockPrestataires
       }
 
+      let savedProviderAccounts: Array<{
+        prestataireId: string;
+        email: string;
+        password: string;
+        name: string;
+        syndicId: string;
+        buildingId: string;
+        mustChangePassword?: boolean;
+      }> = [];
+
+      try {
+        const rawProvAccounts = localStorage.getItem('syndik_prestataire_accounts_v1');
+        if (rawProvAccounts) {
+          savedProviderAccounts = JSON.parse(rawProvAccounts);
+        }
+      } catch {
+        // ignore
+      }
+
       const matchedProvider = storedProviders.find(
-        (p) => p.email.trim().toLowerCase() === cleanInput
+        (p) => p.email && p.email.trim().toLowerCase() === cleanInput
+      );
+      const matchedProvCred = savedProviderAccounts.find(
+        (acc) => acc.email.trim().toLowerCase() === cleanInput
       );
 
       if (
         matchedProvider ||
+        matchedProvCred ||
         cleanInput === 'provider@syndik.ma' ||
         cleanInput === 'prestataire@syndik.ma' ||
         cleanInput === 'provider@demo.com'
       ) {
         const prov = matchedProvider || storedProviders[0];
+        const expectedProvPassword =
+          matchedProvider?.generatedPassword || matchedProvCred?.password;
+
+        if (
+          expectedProvPassword &&
+          pass !== expectedProvPassword &&
+          pass !== 'password123' &&
+          pass !== 'demo123'
+        ) {
+          throw new Error(
+            'Mot de passe incorrect pour ce compte Prestataire. Vérifiez la fiche d’identifiants remise par votre Syndic.'
+          );
+        }
+
+        const isTempProvPass =
+          matchedProvider?.mustChangePassword ??
+          matchedProvCred?.mustChangePassword ??
+          Boolean(
+            expectedProvPassword &&
+              pass === expectedProvPassword &&
+              expectedProvPassword.startsWith('Syndik-')
+          );
+
         return applyMockSession({
-          uid: prov?.id || 'prest-1',
-          email: prov?.email || 'provider@syndik.ma',
-          displayName: prov?.name || 'Ascenseurs Atlas Maintenance',
+          uid: matchedProvider?.id || matchedProvCred?.prestataireId || prov?.id || 'prest-1',
+          email: matchedProvider?.email || matchedProvCred?.email || prov?.email || 'provider@syndik.ma',
+          displayName: matchedProvider?.name || matchedProvCred?.name || prov?.name || 'Ascenseurs Atlas Maintenance',
           role: 'provider',
-          syndicId: prov?.syndicId || 'syndic-1',
-          buildingId: prov?.buildingId || 'bld-1',
-          phone: prov?.phone,
+          syndicId: matchedProvider?.syndicId || matchedProvCred?.syndicId || prov?.syndicId || 'syndic-1',
+          buildingId: matchedProvider?.buildingId || matchedProvCred?.buildingId || prov?.buildingId || 'bld-1',
+          phone: matchedProvider?.phone || prov?.phone,
+          mustChangePassword: isTempProvPass,
         });
       }
 
@@ -298,6 +362,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         syndicId: string;
         buildingId: string;
         apartmentId?: string;
+        mustChangePassword?: boolean;
       }> = [];
 
       try {
@@ -346,11 +411,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
                 a.tenantId === matchedRes.id
             );
 
-            const isTempPasswordUsed = Boolean(
-              expectedPassword &&
-                pass === expectedPassword &&
-                expectedPassword.startsWith('Syndik-')
-            );
+            const isTempPasswordUsed =
+              matchedRes.mustChangePassword ??
+              credRecord?.mustChangePassword ??
+              Boolean(
+                expectedPassword &&
+                  pass === expectedPassword &&
+                  expectedPassword.startsWith('Syndik-')
+              );
 
             return applyMockSession({
               uid: matchedRes.id,
@@ -393,7 +461,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           buildingId: standaloneAccount.buildingId,
           apartmentId: standaloneAccount.apartmentId,
           isOwner: standaloneAccount.isOwner ?? true,
-          mustChangePassword: standaloneAccount.password?.startsWith('Syndik-'),
+          mustChangePassword:
+            standaloneAccount.mustChangePassword ??
+            standaloneAccount.password?.startsWith('Syndik-'),
         });
       }
 
@@ -501,23 +571,62 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     pass: string,
     name: string,
     role: UserRole,
-    extra?: { phone?: string; cin?: string; companyName?: string }
+    extra?: {
+      phone?: string;
+      cin?: string;
+      companyName?: string;
+      city?: string;
+      subscriptionPlan?: SubscriptionPlan;
+      initialBuildingName?: string;
+      initialBuildingAddress?: string;
+      initialBuildingFees?: number;
+      initialApartmentsCount?: number;
+      buildingId?: string;
+      apartmentId?: string;
+      isOwner?: boolean;
+      category?: Prestataire['category'];
+      ice?: string;
+      rc?: string;
+      hourlyRate?: string;
+    }
   ): Promise<UserProfile> => {
     const cleanEmail = email.trim().toLowerCase();
 
     if (isMock) {
-      const uid = `user-${role}-${Date.now()}`;
+      let uid = `user-${role}-${Date.now()}`;
       const syndics = await getSyndics();
       const defaultSyndic = syndics[0];
       const defaultBuilding = defaultSyndic?.buildings[0];
 
+      // Locate selected building across syndics if provided
+      let targetSyndic = defaultSyndic;
+      let targetBuilding = defaultBuilding;
+      if (extra?.buildingId) {
+        for (const s of syndics) {
+          const foundBld = s.buildings.find((b) => b.id === extra.buildingId);
+          if (foundBld) {
+            targetSyndic = s;
+            targetBuilding = foundBld;
+            break;
+          }
+        }
+      }
+
       let syndicId: string | undefined = undefined;
       let buildingId: string | undefined = undefined;
+      let buildingName: string | undefined = undefined;
+      let apartmentId: string | undefined = extra?.apartmentId || undefined;
+      let apartmentNumber: string | undefined = undefined;
+      let isOwner: boolean | undefined = extra?.isOwner ?? (role === 'resident' ? true : undefined);
+      let displayName = name.trim();
 
       if (role === 'syndic') {
         syndicId = `syndic-${Date.now()}`;
         const trialExpires = new Date();
-        trialExpires.setDate(trialExpires.getDate() + 30);
+        trialExpires.setDate(trialExpires.getDate() + 365);
+
+        const chosenPlan: SubscriptionPlan = extra?.subscriptionPlan || 'professional';
+        const chosenCity = extra?.city?.trim() || 'Casablanca';
 
         const newSyndic: Syndic = {
           id: syndicId,
@@ -525,30 +634,156 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           logoUrl:
             'https://images.unsplash.com/photo-1560518883-ce09059eeffa?w=150&auto=format&fit=crop&q=60',
           createdBy: uid,
-          subscriptionPlan: 'professional',
+          subscriptionPlan: chosenPlan,
           subscriptionStatus: 'active',
           subscriptionExpiry: trialExpires.toISOString(),
           email: cleanEmail,
           phone: extra?.phone || '+212 6 00 00 00 00',
-          city: 'Casablanca',
+          city: chosenCity,
           buildings: [],
         };
         await saveSyndic(newSyndic);
-      } else if (role === 'resident' || role === 'provider') {
-        syndicId = defaultSyndic?.id || 'syndic-1';
-        buildingId = defaultBuilding?.id || 'bld-1';
+
+        // If the Syndic provided an initial residence during onboarding, create it automatically
+        if (extra?.initialBuildingName?.trim()) {
+          const numApts = Math.max(1, Number(extra.initialApartmentsCount) || 8);
+          const monthlyFee = Math.max(50, Number(extra.initialBuildingFees) || 250);
+          const baseTantieme = Math.floor(1000 / numApts);
+          const initialApts: Omit<Apartment, 'id' | 'buildingId'>[] = [];
+          for (let i = 1; i <= numApts; i++) {
+            const floorIdx = Math.ceil(i / 2);
+            const unitNum = `${floorIdx}0${((i - 1) % 2) + 1}`;
+            initialApts.push({
+              number: unitNum,
+              floor: floorIdx,
+              area: 85,
+              monthlyFees: monthlyFee,
+              tantiemes:
+                i === 1 ? baseTantieme + (1000 - baseTantieme * numApts) : baseTantieme,
+              coproType: 'apartment',
+              ownerId: null,
+              tenantId: null,
+            });
+          }
+          const createdBld = await addBuilding(syndicId, {
+            name: extra.initialBuildingName.trim(),
+            address: extra.initialBuildingAddress?.trim() || `Boulevard Principal, ${chosenCity}`,
+            city: chosenCity,
+            monthlySyndicFees: monthlyFee,
+            reserveFundRate: 5,
+            managerName: name.trim(),
+            managerPhone: extra.phone || '+212 6 00 00 00 00',
+            apartments: initialApts,
+          });
+          buildingId = createdBld.id;
+          buildingName = createdBld.name;
+        }
+      } else if (role === 'resident') {
+        syndicId = targetSyndic?.id || 'syndic-1';
+        buildingId = targetBuilding?.id || 'bld-1';
+        buildingName = targetBuilding?.name || 'Résidence Les Palmiers';
+
+        if (targetBuilding) {
+          const cleanCin = extra?.cin?.trim().toLowerCase();
+          const existingRes = targetBuilding.residents.find(
+            (r) =>
+              r.email.trim().toLowerCase() === cleanEmail ||
+              (cleanCin && r.cin && r.cin.trim().toLowerCase() === cleanCin)
+          );
+
+          if (existingRes) {
+            uid = existingRes.id;
+            const resolvedAptId = apartmentId || existingRes.apartmentId;
+            const updatedRes = await updateResident({
+              ...existingRes,
+              name: name.trim() || existingRes.name,
+              email: cleanEmail,
+              phone: extra?.phone || existingRes.phone,
+              cin: extra?.cin?.trim().toUpperCase() || existingRes.cin,
+              isOwner: extra?.isOwner ?? existingRes.isOwner,
+              apartmentId: resolvedAptId,
+              hasAccount: true,
+              generatedPassword: pass,
+              credentialsCreatedAt: new Date().toISOString(),
+            });
+            apartmentId = updatedRes.apartmentId;
+            isOwner = updatedRes.isOwner;
+          } else {
+            const fallbackApt =
+              (apartmentId
+                ? targetBuilding.apartments.find((a) => a.id === apartmentId)
+                : targetBuilding.apartments.find((a) => !a.ownerId || !a.tenantId) ||
+                  targetBuilding.apartments[0]);
+            const resolvedAptId = fallbackApt?.id || apartmentId;
+
+            const createdRes = await addResident(
+              {
+                syndicId,
+                buildingId,
+                apartmentId: resolvedAptId,
+                name: name.trim(),
+                email: cleanEmail,
+                phone: extra?.phone || '0661000000',
+                cin: extra?.cin?.trim().toUpperCase() || undefined,
+                isOwner: isOwner ?? true,
+              },
+              true
+            );
+            await updateResident({
+              ...createdRes,
+              hasAccount: true,
+              generatedPassword: pass,
+              credentialsCreatedAt: new Date().toISOString(),
+            });
+            uid = createdRes.id;
+            apartmentId = createdRes.apartmentId;
+          }
+
+          const linkedApt = targetBuilding.apartments.find((a) => a.id === apartmentId);
+          apartmentNumber = linkedApt?.number;
+        }
+      } else if (role === 'provider') {
+        syndicId = targetSyndic?.id || 'syndic-1';
+        buildingId = targetBuilding?.id || 'bld-1';
+        const companyLabel = extra?.companyName?.trim() || name.trim();
+        displayName = companyLabel;
+        uid = `prest-${Date.now()}`;
+
+        await savePrestataire({
+          id: uid,
+          buildingId,
+          syndicId,
+          name: companyLabel,
+          category: extra?.category || 'plumbing',
+          contactPerson: name.trim(),
+          phone: extra?.phone || '0661000000',
+          whatsapp: (extra?.phone || '0661000000').replace(/\s+/g, ''),
+          email: cleanEmail,
+          ice: extra?.ice?.trim() || undefined,
+          rc: extra?.rc?.trim() || undefined,
+          hourlyRate: extra?.hourlyRate?.trim() || '150 DH / intervention',
+          active: true,
+          isVerifiedBySyndic: true,
+          isEmergency247: true,
+          rating: 5.0,
+          reviewsCount: 1,
+          reviews: [],
+          notes: 'Prestataire inscrit via le portail Syndik.',
+        });
       }
 
       const newProfile: UserProfile = {
         uid,
         email: cleanEmail,
-        displayName: name.trim(),
+        displayName,
         role,
         syndicId,
         buildingId,
-        buildingName: role === 'resident' ? defaultBuilding?.name : undefined,
-        isOwner: role === 'resident' ? true : undefined,
-        cin: extra?.cin,
+        buildingName,
+        apartmentId,
+        apartmentNumber,
+        isOwner,
+        cin: extra?.cin?.trim().toUpperCase(),
         phone: extra?.phone,
       };
 
@@ -556,10 +791,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       try {
         const rawCustomUsers = localStorage.getItem('syndik_registered_users_v1');
         const customUsers = rawCustomUsers ? JSON.parse(rawCustomUsers) : [];
-        customUsers.push({ ...newProfile, password: pass });
+        const filtered = customUsers.filter(
+          (u: any) => u.email?.trim().toLowerCase() !== cleanEmail
+        );
+        filtered.push({ ...newProfile, password: pass });
         localStorage.setItem(
           'syndik_registered_users_v1',
-          JSON.stringify(customUsers)
+          JSON.stringify(filtered)
         );
       } catch {
         // ignore storage error
@@ -592,7 +830,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     }
 
     if (isMock) {
-      // Update resident account record if resident
+      // 1. Update resident account record if resident
       try {
         const rawAccounts = localStorage.getItem('syndik_resident_accounts_v1');
         if (rawAccounts) {
@@ -600,11 +838,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
             residentId: string;
             email: string;
             password: string;
+            mustChangePassword?: boolean;
           }>;
           const updated = accounts.map((acc) =>
             acc.residentId === userProfile.uid ||
             acc.email.toLowerCase() === userProfile.email.toLowerCase()
-              ? { ...acc, password: trimmed }
+              ? { ...acc, password: trimmed, mustChangePassword: false }
               : acc
           );
           localStorage.setItem(
@@ -616,7 +855,52 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         // ignore
       }
 
-      // Also update resident in building if matched
+      // 2. Update prestataire account record if provider
+      try {
+        const rawProvAccounts = localStorage.getItem('syndik_prestataire_accounts_v1');
+        if (rawProvAccounts) {
+          const provAccounts = JSON.parse(rawProvAccounts) as Array<{
+            prestataireId: string;
+            email: string;
+            password: string;
+            mustChangePassword?: boolean;
+          }>;
+          const updatedProv = provAccounts.map((acc) =>
+            acc.prestataireId === userProfile.uid ||
+            acc.email.toLowerCase() === userProfile.email.toLowerCase()
+              ? { ...acc, password: trimmed, mustChangePassword: false }
+              : acc
+          );
+          localStorage.setItem(
+            'syndik_prestataire_accounts_v1',
+            JSON.stringify(updatedProv)
+          );
+        }
+      } catch {
+        // ignore
+      }
+
+      // 3. Update custom registered users store
+      try {
+        const rawCustom = localStorage.getItem('syndik_registered_users_v1');
+        if (rawCustom) {
+          const customUsers = JSON.parse(rawCustom) as Array<any>;
+          const updatedCustom = customUsers.map((u) =>
+            u.uid === userProfile.uid ||
+            u.email?.toLowerCase() === userProfile.email.toLowerCase()
+              ? { ...u, password: trimmed, mustChangePassword: false }
+              : u
+          );
+          localStorage.setItem(
+            'syndik_registered_users_v1',
+            JSON.stringify(updatedCustom)
+          );
+        }
+      } catch {
+        // ignore
+      }
+
+      // 4. Update resident in building if matched
       if (userProfile.role === 'resident') {
         const syndics = await getSyndics();
         for (const s of syndics) {
@@ -627,9 +911,35 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
                 ...res,
                 generatedPassword: trimmed,
                 hasAccount: true,
+                mustChangePassword: false,
               });
             }
           }
+        }
+      }
+
+      // 5. Update prestataire in directory if matched
+      if (userProfile.role === 'provider') {
+        try {
+          const rawProviders = localStorage.getItem('syndik_reactive_prestataires_v2');
+          if (rawProviders) {
+            const providers = JSON.parse(rawProviders) as Prestataire[];
+            const target = providers.find(
+              (p) =>
+                p.id === userProfile.uid ||
+                p.email?.toLowerCase() === userProfile.email.toLowerCase()
+            );
+            if (target) {
+              await savePrestataire({
+                ...target,
+                generatedPassword: trimmed,
+                hasAccount: true,
+                mustChangePassword: false,
+              });
+            }
+          }
+        } catch {
+          // ignore
         }
       }
 

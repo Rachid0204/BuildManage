@@ -322,6 +322,184 @@ const SyndicDataProvider: React.FC<{ children: React.ReactNode }> = ({
   return <>{children}</>;
 };
 
+const FirstLoginPasswordGate: React.FC = () => {
+  const { userProfile, changePassword, logout } = useAuth();
+  const { tr, language } = useI18n();
+  const navigate = useNavigate();
+
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+
+    if (newPassword.trim().length < 6) {
+      setError(
+        tr(
+          'Votre nouveau mot de passe doit contenir au moins 6 caractères.',
+          'يجب أن تتكون كلمة المرور الجديدة من 6 أحرف على الأقل.'
+        )
+      );
+      return;
+    }
+
+    if (newPassword.trim() !== confirmPassword.trim()) {
+      setError(
+        tr(
+          'La confirmation du mot de passe ne correspond pas.',
+          'تأكيد كلمة المرور غير مطابق.'
+        )
+      );
+      return;
+    }
+
+    if (newPassword.trim().startsWith('Syn-') && newPassword.trim().endsWith('-MA')) {
+      setError(
+        tr(
+          'Veuillez choisir un mot de passe personnel différent du mot de passe temporaire généré par le Syndic.',
+          'يرجى اختيار كلمة مرور شخصية مختلفة عن كلمة المرور المؤقتة المُولدة من طرف السنديك.'
+        )
+      );
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      await changePassword(newPassword.trim());
+    } catch (err: any) {
+      setError(
+        err?.message ||
+          tr(
+            'Une erreur est survenue lors de la mise à jour du mot de passe.',
+            'حدث خطأ أثناء تحديث كلمة المرور.'
+          )
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleCancelAndLogout = async () => {
+    await logout();
+    navigate('/login', { replace: true });
+  };
+
+  const roleBadge =
+    userProfile?.role === 'provider'
+      ? tr('Portail Prestataire Agréé', 'بوابة مقدم الخدمة المعتمد')
+      : userProfile?.isOwner
+      ? tr('Portail Copropriétaire', 'بوابة المالك المشترك')
+      : tr('Portail Locataire', 'بوابة المكتري');
+
+  return (
+    <div
+      className="min-h-screen bg-slate-900 flex flex-col justify-center items-center p-4"
+      dir={language === 'ar' ? 'rtl' : 'ltr'}
+    >
+      <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden">
+        <div className="bg-slate-950 text-white p-6 border-b border-slate-800">
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/20 text-amber-300 border border-amber-400/30">
+              {tr('Sécurité 1ère Connexion', 'حماية أول تسجيل دخول')}
+            </span>
+            <LanguageToggle variant="dark" />
+          </div>
+          <h1 className="text-xl font-extrabold tracking-tight">
+            {tr('Définissez votre mot de passe personnel', 'تعيين كلمة المرور الشخصية الخاصة بكم')}
+          </h1>
+          <p className="text-xs text-slate-400 mt-1">
+            {tr(
+              `Bienvenue ${userProfile?.displayName || ''}. Votre compte (${roleBadge}) a été créé par votre Syndic avec un mot de passe temporaire.`,
+              `مرحباً ${userProfile?.displayName || ''}. تم إنشاء حسابكم (${roleBadge}) من طرف السنديك بكلمة مرور مؤقتة.`
+            )}
+          </p>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900">
+            <p className="font-bold">
+              {tr(
+                'Activation sécurisée de votre espace',
+                'تفعيل آمن لفضائكم الشخصي'
+              )}
+            </p>
+            <p className="mt-0.5 text-amber-800">
+              {tr(
+                "Pour garantir la confidentialité de vos accès, veuillez choisir un nouveau mot de passe personnel que vous seul connaissez avant d'accéder à votre portail.",
+                'لضمان سرية ولوجكم، يرجى اختيار كلمة مرور شخصية جديدة لا يعرفها سواكم قبل الدخول إلى البوابة.'
+              )}
+            </p>
+          </div>
+
+          {error && (
+            <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs font-medium text-red-700">
+              {error}
+            </div>
+          )}
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              {tr('Identifiant de connexion', 'معرف الاتصال')}
+            </label>
+            <input
+              type="text"
+              disabled
+              value={userProfile?.email || ''}
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-slate-100 text-slate-600 font-mono"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              {tr('Nouveau mot de passe personnel *', 'كلمة المرور الشخصية الجديدة *')}
+            </label>
+            <input
+              type="password"
+              required
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              placeholder={tr('Minimum 6 caractères', '6 أحرف على الأقل')}
+              className="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 focus:border-teal-500"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              {tr('Confirmer le nouveau mot de passe *', 'تأكيد كلمة المرور الجديدة *')}
+            </label>
+            <input
+              type="password"
+              required
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              placeholder={tr('Retapez votre nouveau mot de passe', 'أعد إدخال كلمة المرور الجديدة')}
+              className="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 focus:border-teal-500"
+            />
+          </div>
+
+          <div className="pt-2 flex flex-col gap-2">
+            <Button type="submit" disabled={submitting} className="w-full justify-center py-2.5">
+              {submitting
+                ? tr('Sécurisation en cours...', 'جاري تأمين الحساب...')
+                : tr('Enregistrer et accéder à mon portail', 'حفظ والدخول إلى البوابة')}
+            </Button>
+            <button
+              type="button"
+              onClick={handleCancelAndLogout}
+              className="text-xs text-slate-500 hover:text-slate-700 font-medium py-1.5"
+            >
+              {tr('Se déconnecter', 'تسجيل الخروج')}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
+
 const ProtectedRoute: React.FC<{
   children: React.ReactNode;
   roles?: UserRole[];
@@ -338,6 +516,13 @@ const ProtectedRoute: React.FC<{
   if (roles && !roles.includes(userProfile.role)) {
     const correctHome = getHomeRouteForRole(userProfile.role);
     return <Navigate to={correctHome} replace />;
+  }
+
+  if (
+    userProfile.mustChangePassword &&
+    (userProfile.role === 'resident' || userProfile.role === 'provider')
+  ) {
+    return <FirstLoginPasswordGate />;
   }
 
   return <>{children}</>;
@@ -361,11 +546,27 @@ const VIEW_TO_ROUTE: Record<View, string> = {
 };
 
 const AppContent: React.FC = () => {
-  const { userProfile } = useAuth();
+  const { userProfile, registerOrUpdateUserCredentials } = useAuth();
   const { selectedBuilding, setSelectedBuilding, syndic } = useBuilding();
   const { tr } = useI18n();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+
+  const syncResidentToAuthRegistry = (res: Resident) => {
+    if (res.email && res.generatedPassword) {
+      registerOrUpdateUserCredentials(res.email, res.generatedPassword, {
+        uid: `res-${res.id}`,
+        email: res.email.trim().toLowerCase(),
+        displayName: res.name,
+        role: 'resident',
+        syndicId: res.syndicId,
+        buildingId: res.buildingId,
+        apartmentId: res.apartmentId,
+        isOwner: res.isOwner,
+        mustChangePassword: res.mustChangePassword ?? true,
+      });
+    }
+  };
 
   // --- Global Mutations ---
 
@@ -409,7 +610,12 @@ const AppContent: React.FC = () => {
       resident: Omit<Resident, 'id'>;
       generateCredentials: boolean;
     }) => addResident(data.resident, data.generateCredentials),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['syndics'] }),
+    onSuccess: (created) => {
+      queryClient.invalidateQueries({ queryKey: ['syndics'] });
+      if (created && created.hasAccount && created.generatedPassword) {
+        syncResidentToAuthRegistry(created);
+      }
+    },
   });
 
   const updateResidentMutation = useMutation({
@@ -424,7 +630,12 @@ const AppContent: React.FC = () => {
 
   const regenerateCredentialsMutation = useMutation({
     mutationFn: regenerateResidentCredentials,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['syndics'] }),
+    onSuccess: (updated) => {
+      queryClient.invalidateQueries({ queryKey: ['syndics'] });
+      if (updated && updated.hasAccount && updated.generatedPassword) {
+        syncResidentToAuthRegistry(updated);
+      }
+    },
   });
 
   const addApartmentMutation = useMutation({
@@ -834,6 +1045,10 @@ const LandingRouteWrapper: React.FC<{ onDone: () => void }> = ({ onDone }) => {
       onLoginClick={() => {
         onDone();
         navigate('/login');
+      }}
+      onSelectPlan={(plan: SubscriptionPlan) => {
+        onDone();
+        navigate(`/login?mode=syndic-signup&plan=${plan}`);
       }}
     />
   );

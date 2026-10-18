@@ -536,6 +536,7 @@ export interface ResidentAccountRecord {
   buildingId: string;
   apartmentId?: string;
   createdAt: string;
+  mustChangePassword?: boolean;
 }
 
 const RESIDENT_ACCOUNTS_KEY = 'syndik_resident_accounts_v1';
@@ -562,6 +563,7 @@ function saveResidentCredentialAccount(resident: Resident, password: string): Re
     buildingId: resident.buildingId,
     apartmentId: resident.apartmentId,
     createdAt: resident.credentialsCreatedAt || new Date().toISOString(),
+    mustChangePassword: resident.mustChangePassword ?? true,
   };
   const existingIdx = accounts.findIndex(
     (a) => a.residentId === resident.id || a.email.toLowerCase() === resident.email.toLowerCase()
@@ -602,6 +604,7 @@ export const addResident = async (
           hasAccount: !!generateCredentials,
           generatedPassword: password,
           credentialsCreatedAt: generateCredentials ? nowIso : undefined,
+          mustChangePassword: generateCredentials ? true : undefined,
         };
         bld.residents.push(newResident);
 
@@ -707,6 +710,7 @@ export const regenerateResidentCredentials = async (residentId: string): Promise
             hasAccount: true,
             generatedPassword: newPassword,
             credentialsCreatedAt: new Date().toISOString(),
+            mustChangePassword: true,
           };
           bld.residents[idx] = updated;
           saveResidentCredentialAccount(updated, newPassword);
@@ -1400,8 +1404,54 @@ export const updateAGAttendee = async (
 };
 
 // ==========================================
-// 9. PRESTATAIRES (SERVICE PROVIDERS)
+// 9. PRESTATAIRES (SERVICE PROVIDERS) & CREDENTIALS
 // ==========================================
+
+export interface PrestataireAccountRecord {
+  prestataireId: string;
+  email: string;
+  password: string;
+  name: string;
+  contactPerson: string;
+  category: Prestataire['category'];
+  syndicId: string;
+  buildingId: string;
+  createdAt: string;
+  mustChangePassword?: boolean;
+}
+
+const PRESTATAIRE_ACCOUNTS_KEY = 'syndik_prestataire_accounts_v1';
+
+function savePrestataireCredentialAccount(
+  prestataire: Prestataire,
+  password: string
+): PrestataireAccountRecord {
+  const accounts = getLocalItem<PrestataireAccountRecord[]>(PRESTATAIRE_ACCOUNTS_KEY, []);
+  const record: PrestataireAccountRecord = {
+    prestataireId: prestataire.id,
+    email: prestataire.email.trim(),
+    password,
+    name: prestataire.name,
+    contactPerson: prestataire.contactPerson,
+    category: prestataire.category,
+    syndicId: prestataire.syndicId,
+    buildingId: prestataire.buildingId,
+    createdAt: prestataire.credentialsCreatedAt || new Date().toISOString(),
+    mustChangePassword: prestataire.mustChangePassword ?? true,
+  };
+  const existingIdx = accounts.findIndex(
+    (a) =>
+      a.prestataireId === prestataire.id ||
+      (prestataire.email && a.email.toLowerCase() === prestataire.email.toLowerCase())
+  );
+  if (existingIdx >= 0) {
+    accounts[existingIdx] = record;
+  } else {
+    accounts.push(record);
+  }
+  setLocalItem(PRESTATAIRE_ACCOUNTS_KEY, accounts);
+  return record;
+}
 
 export const getPrestatairesForBuilding = async (buildingId: string): Promise<Prestataire[]> => {
   if (isMock) {
@@ -1414,17 +1464,43 @@ export const getPrestatairesForBuilding = async (buildingId: string): Promise<Pr
   return snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Prestataire));
 };
 
-export const savePrestataire = async (prestataire: Prestataire): Promise<Prestataire> => {
+export const savePrestataire = async (
+  prestataire: Prestataire,
+  generateCredentials?: boolean
+): Promise<Prestataire> => {
   if (isMock) {
     const list = getLocalItem<Prestataire[]>(STORAGE_KEYS.PRESTATAIRES, mockPrestataires);
     const index = list.findIndex((p) => p.id === prestataire.id);
+    const prev = index >= 0 ? list[index] : undefined;
+
+    let finalPrestataire: Prestataire = {
+      ...prev,
+      ...prestataire,
+    };
+
+    if (generateCredentials && finalPrestataire.email) {
+      const nowIso = new Date().toISOString();
+      const newPassword =
+        finalPrestataire.generatedPassword || generateTempPassword(finalPrestataire.name);
+      finalPrestataire = {
+        ...finalPrestataire,
+        hasAccount: true,
+        generatedPassword: newPassword,
+        credentialsCreatedAt: finalPrestataire.credentialsCreatedAt || nowIso,
+        mustChangePassword: finalPrestataire.mustChangePassword ?? true,
+      };
+      savePrestataireCredentialAccount(finalPrestataire, newPassword);
+    } else if (finalPrestataire.hasAccount && finalPrestataire.generatedPassword && finalPrestataire.email) {
+      savePrestataireCredentialAccount(finalPrestataire, finalPrestataire.generatedPassword);
+    }
+
     if (index >= 0) {
-      list[index] = prestataire;
+      list[index] = finalPrestataire;
     } else {
-      list.unshift(prestataire);
+      list.unshift(finalPrestataire);
     }
     setLocalItem(STORAGE_KEYS.PRESTATAIRES, list);
-    return prestataire;
+    return finalPrestataire;
   }
 
   const docRef = doc(db, PRESTATAIRES_COL, prestataire.id);
@@ -1432,11 +1508,51 @@ export const savePrestataire = async (prestataire: Prestataire): Promise<Prestat
   return prestataire;
 };
 
+export const regeneratePrestataireCredentials = async (
+  prestataireId: string
+): Promise<Prestataire> => {
+  if (isMock) {
+    const list = getLocalItem<Prestataire[]>(STORAGE_KEYS.PRESTATAIRES, mockPrestataires);
+    const idx = list.findIndex((p) => p.id === prestataireId);
+    if (idx >= 0) {
+      const prest = list[idx];
+      const fallbackEmail =
+        prest.email?.trim() ||
+        `contact@${
+          prest.name
+            .toLowerCase()
+            .replace(/[^a-z0-9]/g, '')
+            .slice(0, 12) || 'prestataire'
+        }.ma`;
+      const newPassword = generateTempPassword(prest.name);
+      const updated: Prestataire = {
+        ...prest,
+        email: fallbackEmail,
+        hasAccount: true,
+        generatedPassword: newPassword,
+        credentialsCreatedAt: new Date().toISOString(),
+        mustChangePassword: true,
+      };
+      list[idx] = updated;
+      savePrestataireCredentialAccount(updated, newPassword);
+      setLocalItem(STORAGE_KEYS.PRESTATAIRES, list);
+      return updated;
+    }
+  }
+  throw new Error('Prestataire introuvable');
+};
+
 export const deletePrestataire = async (prestataireId: string): Promise<boolean> => {
   if (isMock) {
     const list = getLocalItem<Prestataire[]>(STORAGE_KEYS.PRESTATAIRES, mockPrestataires);
     const filtered = list.filter((p) => p.id !== prestataireId);
     setLocalItem(STORAGE_KEYS.PRESTATAIRES, filtered);
+
+    const accounts = getLocalItem<PrestataireAccountRecord[]>(PRESTATAIRE_ACCOUNTS_KEY, []);
+    setLocalItem(
+      PRESTATAIRE_ACCOUNTS_KEY,
+      accounts.filter((a) => a.prestataireId !== prestataireId)
+    );
     return true;
   }
 

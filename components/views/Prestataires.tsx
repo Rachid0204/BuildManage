@@ -4,8 +4,21 @@ import type { Building, Prestataire } from '../../types';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import Modal from '../common/Modal';
-import { PrestatairesIcon, PlusIcon, PencilIcon, TrashIcon } from '../icons/IconComponents';
-import { getPrestatairesForBuilding, savePrestataire, deletePrestataire } from '../../firebase/services';
+import {
+  PrestatairesIcon,
+  PlusIcon,
+  PencilIcon,
+  TrashIcon,
+  DocumentsIcon,
+} from '../icons/IconComponents';
+import {
+  getPrestatairesForBuilding,
+  savePrestataire,
+  deletePrestataire,
+  regeneratePrestataireCredentials,
+} from '../../firebase/services';
+import { exportPrestataireCredentialsPDF } from '../../services/pdfService';
+import { useAuth } from '../../contexts/AuthContext';
 import Loading from '../common/Loading';
 import ServiceProvidersDirectory from './ServiceProvidersDirectory';
 import { useI18n } from '../../hooks/useI18n';
@@ -14,12 +27,164 @@ interface PrestatairesProps {
   building: Building;
 }
 
+const PrestataireCredentialsModal: React.FC<{
+  prestataire: Prestataire | null;
+  building: Building;
+  categoryLabel: string;
+  onClose: () => void;
+  onRegenerate: (prestataireId: string) => void;
+}> = ({ prestataire, building, categoryLabel, onClose, onRegenerate }) => {
+  const { tr } = useI18n();
+  const [copied, setCopied] = useState(false);
+
+  if (!prestataire) return null;
+
+  const password = prestataire.generatedPassword || 'Syn-2026-MA';
+  const portalUrl =
+    typeof window !== 'undefined' ? `${window.location.origin}/login` : 'https://syndik.ma/login';
+
+  const shareText = tr(
+    `Bonjour ${prestataire.contactPerson || prestataire.name},\nVoici vos identifiants officiels d'accès au Portail Prestataire Agréé (${building.name}) :\n• Lien de connexion : ${portalUrl}\n• Entreprise : ${prestataire.name} (${categoryLabel})\n• Identifiant (Email) : ${prestataire.email}\n• Mot de passe temporaire : ${password}\nNote : Lors de votre première connexion, il vous sera demandé de définir un mot de passe personnel.`,
+    `مرحباً ${prestataire.contactPerson || prestataire.name}،\nإليكم بيانات الولوج الرسمية إلى بوابة مقدمي الخدمات المعتمدين (${building.name}) :\n• رابط الدخول : ${portalUrl}\n• المقاولة : ${prestataire.name} (${categoryLabel})\n• المعرف (البريد الإلكتروني) : ${prestataire.email}\n• كلمة المرور المؤقتة : ${password}\nملاحظة : عند أول تسجيل دخول، سيُطلب منكم تعيين كلمة مرور شخصية جديدة.`
+  );
+
+  const handleCopy = () => {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(shareText);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    }
+  };
+
+  const handleDownloadPDF = () => {
+    exportPrestataireCredentialsPDF(prestataire, building);
+  };
+
+  return (
+    <Modal
+      isOpen={!!prestataire}
+      onClose={onClose}
+      title={tr("Fiche Officielle d'Accès Prestataire Agréé", 'بطاقة الولوج الرسمية لمقدم الخدمة المعتمد')}
+      footer={
+        <div className="flex flex-wrap items-center justify-between w-full gap-2">
+          <button
+            type="button"
+            onClick={() => onRegenerate(prestataire.id)}
+            className="text-xs font-semibold text-slate-600 hover:text-teal-700 underline"
+          >
+            {tr('🔄 Régénérer un mot de passe temporaire', '🔄 إعادة توليد كلمة مرور مؤقتة')}
+          </button>
+          <div className="flex flex-wrap items-center gap-2 ms-auto">
+            <Button variant="secondary" onClick={onClose}>
+              {tr('Fermer', 'إغلاق')}
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={handleDownloadPDF}
+              className="flex items-center gap-1.5 border-teal-200 text-teal-800 hover:bg-teal-50"
+            >
+              <DocumentsIcon />
+              <span>{tr("Fiche d'Accès PDF", 'تحميل بطاقة PDF')}</span>
+            </Button>
+            <Button onClick={handleCopy}>
+              {copied
+                ? tr('✓ Identifiants copiés !', '✓ تم نسخ البيانات!')
+                : tr('Copier les identifiants', 'نسخ بيانات الولوج')}
+            </Button>
+          </div>
+        </div>
+      }
+    >
+      <div className="space-y-4">
+        <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 flex items-start gap-3">
+          <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center font-bold text-sm shrink-0">
+            ✓
+          </div>
+          <div className="text-xs text-emerald-950 flex-1">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <p className="font-bold text-sm">
+                {tr('Compte Portail Prestataire Actif', 'حساب بوابة مقدم الخدمة مفعل')}
+              </p>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                {prestataire.mustChangePassword !== false
+                  ? tr('Changement MDP requis au 1er login', 'تغيير كلمة المرور إلزامي عند أول دخول')
+                  : tr('Mot de passe personnalisé actif', 'كلمة مرور شخصية مفعلة')}
+              </span>
+            </div>
+            <p className="mt-1 text-emerald-800">
+              {tr(
+                `Remettez cette fiche PDF officielle ou copiez ces identifiants à ${prestataire.name} pour lui donner accès à ses ordres de mission (/provider).`,
+                `سلموا بطاقة PDF الرسمية أو انسخوا هذه البيانات لـ ${prestataire.name} لتمكينه من متابعة أوامر التدخل (/provider).`
+              )}
+            </p>
+          </div>
+        </div>
+
+        <div className="p-4 rounded-xl bg-slate-900 text-white space-y-3 font-mono text-xs">
+          <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+            <span className="text-slate-400 font-sans">
+              {tr('Entreprise / Artisan :', 'المقاولة / الحرفي :')}
+            </span>
+            <span className="font-bold text-white font-sans">
+              {prestataire.name} ({categoryLabel})
+            </span>
+          </div>
+          <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+            <span className="text-slate-400 font-sans">
+              {tr('Immeuble rattaché :', 'الإقامة المرتبطة :')}
+            </span>
+            <span className="font-bold text-teal-300">{building.name}</span>
+          </div>
+          <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+            <span className="text-slate-400 font-sans">
+              {tr('Identifiant (Email) :', 'المعرف (البريد الإلكتروني) :')}
+            </span>
+            <span className="font-bold text-amber-300 select-all">{prestataire.email}</span>
+          </div>
+          <div className="flex justify-between items-center">
+            <span className="text-slate-400 font-sans">
+              {tr('Mot de passe temporaire :', 'كلمة المرور المؤقتة :')}
+            </span>
+            <span className="px-2.5 py-1 rounded bg-slate-800 text-emerald-300 font-bold text-sm tracking-wider select-all border border-slate-700 tabular-nums">
+              {password}
+            </span>
+          </div>
+        </div>
+
+        <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-center justify-between gap-3">
+          <div>
+            <p className="font-bold">
+              {tr('Sécurité 1ère connexion activée', 'حماية أول تسجيل دخول مفعلة')}
+            </p>
+            <p className="text-[11px] text-amber-800 mt-0.5">
+              {tr(
+                "Lors de sa première connexion sur /login, le prestataire devra obligatoirement choisir un mot de passe personnel.",
+                'عند أول تسجيل دخول عبر /login، سيتعين على مقدم الخدمة اختيار كلمة مرور شخصية.'
+              )}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleDownloadPDF}
+            className="shrink-0 px-3 py-1.5 rounded-lg bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold text-xs transition-colors"
+          >
+            {tr('📄 Télécharger PDF', '📄 تحميل PDF')}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+};
+
 const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
   const { tr } = useI18n();
+  const { registerOrUpdateUserCredentials } = useAuth();
   const queryClient = useQueryClient();
   const [activeViewMode, setActiveViewMode] = useState<'directory' | 'legal'>('directory');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingPrestataire, setEditingPrestataire] = useState<Prestataire | null>(null);
+  const [credentialPrestataireId, setCredentialPrestataireId] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
 
   const [name, setName] = useState('');
   const [category, setCategory] = useState<Prestataire['category']>('plumbing');
@@ -33,18 +198,60 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
   const [hourlyRate, setHourlyRate] = useState('');
   const [isEmergency247, setIsEmergency247] = useState(false);
   const [isVerifiedBySyndic, setIsVerifiedBySyndic] = useState(true);
+  const [generateCredentials, setGenerateCredentials] = useState(true);
 
   const { data: prestataires = [], isLoading } = useQuery({
     queryKey: ['prestataires', building.id],
     queryFn: () => getPrestatairesForBuilding(building.id),
   });
 
+  const activeCredentialPrestataire =
+    prestataires.find((p) => p.id === credentialPrestataireId) || null;
+
+  const syncProviderToAuthRegistry = (saved: Prestataire) => {
+    if (saved.email && saved.generatedPassword) {
+      registerOrUpdateUserCredentials(saved.email, saved.generatedPassword, {
+        uid: `prov-${saved.id}`,
+        email: saved.email.trim().toLowerCase(),
+        displayName: saved.name,
+        role: 'provider',
+        syndicId: saved.syndicId,
+        buildingId: saved.buildingId,
+        providerCategory: saved.category,
+        mustChangePassword: saved.mustChangePassword ?? true,
+      });
+    }
+  };
+
   const saveMutation = useMutation({
-    mutationFn: savePrestataire,
-    onSuccess: () => {
+    mutationFn: ({
+      prestataire,
+      shouldGenerate,
+    }: {
+      prestataire: Prestataire;
+      shouldGenerate: boolean;
+    }) => savePrestataire(prestataire, shouldGenerate),
+    onSuccess: (saved, variables) => {
       queryClient.invalidateQueries({ queryKey: ['prestataires', building.id] });
       setIsModalOpen(false);
       resetForm();
+      if (saved && saved.hasAccount && saved.generatedPassword) {
+        syncProviderToAuthRegistry(saved);
+        if (variables.shouldGenerate) {
+          setCredentialPrestataireId(saved.id);
+        }
+      }
+    },
+  });
+
+  const regenerateMutation = useMutation({
+    mutationFn: (prestataireId: string) => regeneratePrestataireCredentials(prestataireId),
+    onSuccess: (updated) => {
+      queryClient.invalidateQueries({ queryKey: ['prestataires', building.id] });
+      if (updated) {
+        syncProviderToAuthRegistry(updated);
+        setCredentialPrestataireId(updated.id);
+      }
     },
   });
 
@@ -66,7 +273,9 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
     setHourlyRate('');
     setIsEmergency247(false);
     setIsVerifiedBySyndic(true);
+    setGenerateCredentials(true);
     setEditingPrestataire(null);
+    setFormError(null);
   };
 
   const handleOpenEdit = (p: Prestataire) => {
@@ -83,41 +292,80 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
     setHourlyRate(p.hourlyRate || '');
     setIsEmergency247(!!p.isEmergency247);
     setIsVerifiedBySyndic(p.isVerifiedBySyndic ?? true);
+    setGenerateCredentials(false);
+    setFormError(null);
     setIsModalOpen(true);
   };
 
+  const handleManageCredentials = (p: Prestataire) => {
+    if (p.hasAccount && p.generatedPassword) {
+      setCredentialPrestataireId(p.id);
+    } else {
+      if (!p.email || !p.email.includes('@')) {
+        handleOpenEdit(p);
+        setGenerateCredentials(true);
+        setFormError(
+          tr(
+            "Veuillez renseigner une adresse email professionnelle pour générer les identifiants d'accès de ce prestataire.",
+            'يرجى إدخال بريد إلكتروني مهني لتوليد بيانات الولوج الخاصة بمقدم الخدمة هذا.'
+          )
+        );
+        return;
+      }
+      regenerateMutation.mutate(p.id);
+    }
+  };
+
   const handleSave = () => {
-    if (!name || !phone)
-      return alert(
+    setFormError(null);
+    if (!name.trim() || !phone.trim()) {
+      setFormError(
         tr(
           "Le nom de l'entreprise et le téléphone sont obligatoires.",
           'اسم الشركة ورقم الهاتف إلزاميان.'
         )
       );
+      return;
+    }
+
+    const shouldGenerate = !editingPrestataire ? generateCredentials : generateCredentials;
+    if (shouldGenerate && (!email.trim() || !email.includes('@'))) {
+      setFormError(
+        tr(
+          "Une adresse email valide est obligatoire pour créer le compte d'accès Portail Prestataire.",
+          'عنوان بريد إلكتروني صالح إلزامي لإنشاء حساب الولوج إلى بوابة مقدم الخدمة.'
+        )
+      );
+      return;
+    }
 
     const payload: Prestataire = {
       id: editingPrestataire?.id || `prest-${Date.now()}`,
       buildingId: building.id,
       syndicId: building.syndicId,
-      name,
+      name: name.trim(),
       category,
-      contactPerson,
-      phone,
-      whatsapp: whatsapp || phone.replace(/\s+/g, ''),
-      email,
-      ice,
-      rc,
+      contactPerson: contactPerson.trim(),
+      phone: phone.trim(),
+      whatsapp: whatsapp.trim() || phone.replace(/\s+/g, ''),
+      email: email.trim().toLowerCase(),
+      ice: ice.trim(),
+      rc: rc.trim(),
       active: true,
-      notes,
-      hourlyRate,
+      notes: notes.trim(),
+      hourlyRate: hourlyRate.trim(),
       isEmergency247,
       isVerifiedBySyndic,
       rating: editingPrestataire?.rating || 4.8,
       reviewsCount: editingPrestataire?.reviewsCount || (editingPrestataire?.reviews?.length || 1),
       reviews: editingPrestataire?.reviews || [],
+      hasAccount: editingPrestataire?.hasAccount,
+      generatedPassword: editingPrestataire?.generatedPassword,
+      credentialsCreatedAt: editingPrestataire?.credentialsCreatedAt,
+      mustChangePassword: editingPrestataire?.mustChangePassword,
     };
 
-    saveMutation.mutate(payload);
+    saveMutation.mutate({ prestataire: payload, shouldGenerate });
   };
 
   const categoryLabels: Record<Prestataire['category'], string> = {
@@ -139,6 +387,19 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
 
   return (
     <div className="space-y-6">
+      <PrestataireCredentialsModal
+        prestataire={activeCredentialPrestataire}
+        building={building}
+        categoryLabel={
+          activeCredentialPrestataire
+            ? categoryLabels[activeCredentialPrestataire.category] ||
+              activeCredentialPrestataire.category
+            : ''
+        }
+        onClose={() => setCredentialPrestataireId(null)}
+        onRegenerate={(id) => regenerateMutation.mutate(id)}
+      />
+
       {/* View Mode Toggle Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-slate-200">
         <div>
@@ -150,13 +411,13 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
           </h1>
           <p className="text-sm text-slate-500 mt-0.5">
             {tr(
-              `Répertoire des artisans, dépannages d'urgence et contrats officiels pour ${building.name}`,
-              `دليل الحرفيين، تدخلات الطوارئ والعقود الرسمية لإقامة ${building.name}`
+              `Répertoire des artisans agréés, création des comptes Portail Prestataire et suivi des contrats pour ${building.name}`,
+              `دليل الحرفيين المعتمدين، إنشاء حسابات بوابة مقدمي الخدمات وتتبع العقود لإقامة ${building.name}`
             )}
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200">
             <button
               onClick={() => setActiveViewMode('directory')}
@@ -176,7 +437,7 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              📑 {tr('Gestion Contrats & ICE/RC', 'تدبير العقود و ICE/RC')}
+              📑 {tr('Contrats, ICE & Accès Portail', 'العقود وبيانات ولوج البوابة')}
             </button>
           </div>
 
@@ -188,7 +449,7 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
             className="flex items-center gap-2 text-xs font-bold"
           >
             <PlusIcon />
-            <span>{tr('Ajouter', 'إضافة')}</span>
+            <span>{tr('Ajouter un prestataire', 'إضافة مقدم خدمة')}</span>
           </Button>
         </div>
       </div>
@@ -200,10 +461,11 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
           isResidentPortal={false}
           residentName={tr('Syndic Gestionnaire', 'وكيل الاتحاد (السنديك)')}
           apartmentNumber={tr('Bureau Syndic', 'مكتب السنديك')}
+          onManageCredentials={handleManageCredentials}
         />
       )}
 
-      {/* VIEW MODE 2: LEGAL & CONTRACTS VIEW */}
+      {/* VIEW MODE 2: LEGAL, CONTRACTS & PORTAL CREDENTIALS VIEW */}
       {activeViewMode === 'legal' && (
         <div className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
@@ -220,7 +482,8 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
                       </span>
                       <h3 className="font-bold text-slate-900 text-base mt-2">{p.name}</h3>
                       <p className="text-xs text-slate-500">
-                        {tr('Contact :', 'المسؤول :')} {p.contactPerson || tr('Non spécifié', 'غير محدد')}
+                        {tr('Contact :', 'المسؤول :')}{' '}
+                        {p.contactPerson || tr('Non spécifié', 'غير محدد')}
                       </p>
                     </div>
                     <div className="flex items-center gap-1">
@@ -256,14 +519,20 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
                   <div className="mt-4 space-y-1.5 text-xs text-slate-600 bg-slate-50 p-2.5 rounded border border-slate-100">
                     <div className="flex justify-between">
                       <span className="text-slate-400">{tr('Tél :', 'الهاتف :')}</span>
-                      <a href={`tel:${p.phone}`} className="font-semibold text-teal-700 hover:underline">
+                      <a
+                        href={`tel:${p.phone}`}
+                        className="font-semibold text-teal-700 hover:underline font-mono"
+                      >
                         {p.phone}
                       </a>
                     </div>
                     {p.email && (
                       <div className="flex justify-between">
                         <span className="text-slate-400">{tr('Email :', 'البريد :')}</span>
-                        <a href={`mailto:${p.email}`} className="text-slate-700 truncate max-w-[180px]">
+                        <a
+                          href={`mailto:${p.email}`}
+                          className="text-slate-700 truncate max-w-[180px] font-mono"
+                        >
                           {p.email}
                         </a>
                       </div>
@@ -287,17 +556,32 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
                   )}
                 </div>
 
-                <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
+                <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between gap-2 text-xs">
                   <span className="text-emerald-700 font-medium flex items-center gap-1">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
                     {tr('Contrat actif', 'عقد ساري المفعول')}
                   </span>
-                  <a
-                    href={`tel:${p.phone}`}
-                    className="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded font-medium transition-colors"
-                  >
-                    {tr('Appeler', 'اتصال')}
-                  </a>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => handleManageCredentials(p)}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-colors ${
+                        p.hasAccount
+                          ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
+                          : 'bg-teal-50 text-teal-800 border-teal-200 hover:bg-teal-100'
+                      }`}
+                    >
+                      {p.hasAccount
+                        ? tr('🔑 Voir Identifiants', '🔑 عرض بيانات الولوج')
+                        : tr('⚡ Générer Accès', '⚡ توليد حساب ولوج')}
+                    </button>
+                    <a
+                      href={`tel:${p.phone}`}
+                      className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg font-medium transition-colors"
+                    >
+                      {tr('Appeler', 'اتصال')}
+                    </a>
+                  </div>
                 </div>
               </Card>
             ))}
@@ -324,7 +608,7 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
         title={
           editingPrestataire
             ? tr('Modifier le prestataire', 'تعديل مقدم الخدمة')
-            : tr('Ajouter un prestataire sous contrat', 'إضافة مقدم خدمة متعاقد')
+            : tr('Ajouter un prestataire & générer son accès', 'إضافة مقدم خدمة وتوليد حساب الولوج')
         }
         footer={
           <div className="flex justify-end gap-2">
@@ -342,6 +626,12 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
         }
       >
         <div className="space-y-4">
+          {formError && (
+            <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs font-medium text-red-700">
+              {formError}
+            </div>
+          )}
+
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
               {tr("Nom de l'Entreprise / Artisan *", 'اسم الشركة / الحرفي *')}
@@ -402,7 +692,7 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
                 placeholder="Ex: 0522 34 56 78"
-                className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
+                className="w-full px-3 py-2 border border-slate-300 rounded text-sm font-mono"
               />
             </div>
             <div>
@@ -414,7 +704,7 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
                 value={whatsapp}
                 onChange={(e) => setWhatsapp(e.target.value)}
                 placeholder="Ex: 0661 88 99 00"
-                className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
+                className="w-full px-3 py-2 border border-slate-300 rounded text-sm font-mono"
               />
             </div>
           </div>
@@ -422,13 +712,13 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
-                {tr('Email', 'البريد الإلكتروني')}
+                {tr('Email de connexion *', 'البريد الإلكتروني للولوج *')}
               </label>
               <input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="Ex: contact@atlas.ma"
+                placeholder="Ex: contact@atlas-ascenseurs.ma"
                 className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
               />
             </div>
@@ -508,6 +798,36 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
               )}
               className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
             />
+          </div>
+
+          <div className="bg-teal-50/80 border border-teal-200 p-3.5 rounded-xl">
+            <label className="flex items-start cursor-pointer">
+              <input
+                type="checkbox"
+                checked={generateCredentials}
+                onChange={(e) => setGenerateCredentials(e.target.checked)}
+                className="mt-0.5 h-4 w-4 text-teal-600 border-slate-300 rounded focus:ring-teal-500"
+              />
+              <div className="ms-2.5">
+                <span className="text-xs sm:text-sm font-bold text-teal-950 block">
+                  {editingPrestataire
+                    ? tr(
+                        'Générer / réinitialiser les identifiants du Portail Prestataire',
+                        'توليد / إعادة تعيين بيانات ولوج بوابة مقدم الخدمة'
+                      )
+                    : tr(
+                        "Créer un compte Portail Prestataire & générer les identifiants d'accès",
+                        'إنشاء حساب بوابة مقدم الخدمة وتوليد بيانات الولوج'
+                      )}
+                </span>
+                <p className="text-xs text-teal-800 mt-0.5">
+                  {tr(
+                    "Génère un mot de passe temporaire (Syn-XXXX-MA) et ouvre la fiche d'accès officielle (copiable + PDF imprimable) pour permettre à ce prestataire de suivre ses interventions.",
+                    'يولد كلمة مرور مؤقتة (Syn-XXXX-MA) ويفتح بطاقة الولوج الرسمية (قابلة للنسخ + PDF للطباعة) لتمكين مقدم الخدمة من تتبع تدخلاته.'
+                  )}
+                </p>
+              </div>
+            </label>
           </div>
         </div>
       </Modal>

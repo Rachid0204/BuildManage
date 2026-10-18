@@ -1,5 +1,5 @@
 import { jsPDF } from "jspdf";
-import type { Invoice, Building, Resident, Syndic, Quittance, AssembleeGenerale, Apartment, Transaction } from "../types";
+import type { Invoice, Building, Resident, Syndic, Quittance, AssembleeGenerale, Apartment, Transaction, Prestataire } from "../types";
 
 const currencyFormatter = new Intl.NumberFormat('fr-MA', {
   style: 'currency',
@@ -1415,4 +1415,425 @@ export const exportApartmentsPDF = (
   const safeName = building.name.replace(/[^a-zA-Z0-9_-]/g, '_');
   doc.save(`Inventaire_Lots_Tantiemes_${safeName}_${dateStr}.pdf`);
 };
+
+/**
+ * Generates an official printable PDF Access Sheet (Fiche d'Identifiants d'Accès)
+ * for a Resident (Copropriétaire or Locataire), issued by the Syndic.
+ */
+export const exportResidentCredentialsPDF = (
+  resident: Resident,
+  building: Building,
+  apartmentNumber?: string,
+  syndic?: Syndic | null
+) => {
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4',
+  });
+
+  const issueDate = new Date().toLocaleDateString('fr-MA', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
+
+  // Top Header Banner
+  doc.setFillColor(15, 118, 110); // Teal 700
+  doc.rect(0, 0, 210, 42, 'F');
+  doc.setFillColor(245, 158, 11); // Amber 500 accent line
+  doc.rect(0, 42, 210, 2, 'F');
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text(
+    'ROYAUME DU MAROC · SYNDICAT DES COPROPRIÉTAIRES (LOI N° 18-00 & 106-12)',
+    105,
+    13,
+    { align: 'center' }
+  );
+
+  doc.setFontSize(17);
+  doc.text("FICHE OFFICIELLE D'IDENTIFIANTS D'ACCÈS", 105, 24, { align: 'center' });
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+  doc.text('Portail Numérique Copropriétaire & Résident — Syndik Maroc', 105, 32, {
+    align: 'center',
+  });
+  doc.setFontSize(8.5);
+  doc.text(`Document confidentiel émis le ${issueDate}`, 105, 38, { align: 'center' });
+
+  let y = 54;
+
+  // Building & Syndic Info Box
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(203, 213, 225);
+  doc.rect(14, y, 182, 34, 'FD');
+
+  doc.setFillColor(241, 245, 249);
+  doc.rect(14, y, 182, 8, 'F');
+  doc.setTextColor(15, 118, 110);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text('1. IDENTIFICATION DE LA COPROPRIÉTÉ & DU SYNDIC GESTIONNAIRE', 18, y + 5.5);
+
+  doc.setTextColor(15, 23, 42);
+  doc.setFontSize(9.5);
+  doc.text(`Résidence / Immeuble : ${building.name}`, 18, y + 14);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.text(`Adresse : ${building.address}, ${building.city}`, 18, y + 20);
+  doc.text(
+    `Cabinet Syndic : ${syndic?.name || building.managerName || 'Syndic de la Copropriété'}`,
+    18,
+    y + 26
+  );
+  if (syndic?.phone || building.managerPhone) {
+    doc.text(
+      `Contact Syndic : ${syndic?.phone || building.managerPhone}`,
+      120,
+      y + 26
+    );
+  }
+
+  y += 42;
+
+  // Resident & Lot Details Box
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(203, 213, 225);
+  doc.rect(14, y, 182, 36, 'FD');
+
+  doc.setFillColor(241, 245, 249);
+  doc.rect(14, y, 182, 8, 'F');
+  doc.setTextColor(15, 118, 110);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text('2. TITULAIRE DU COMPTE & LOT RATTACHÉ', 18, y + 5.5);
+
+  doc.setTextColor(15, 23, 42);
+  doc.setFontSize(10);
+  doc.text(`Nom & Prénom : ${resident.name}`, 18, y + 15);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.text(
+    `Qualité : ${resident.isOwner ? 'Copropriétaire Titulaire' : 'Locataire Occupant'}`,
+    18,
+    y + 22
+  );
+  doc.text(`Téléphone GSM : ${resident.phone || 'Non renseigné'}`, 18, y + 29);
+
+  doc.setFont('helvetica', 'bold');
+  doc.text(
+    `Lot / Appartement : ${apartmentNumber ? `Lot ${apartmentNumber}` : 'Rattaché à la résidence'}`,
+    115,
+    y + 15
+  );
+  doc.setFont('helvetica', 'normal');
+  doc.text(`N° CIN : ${resident.cin || 'Non renseigné'}`, 115, y + 22);
+  doc.text(`Email : ${resident.email}`, 115, y + 29);
+
+  y += 44;
+
+  // Credentials Block (Highlighted Dark Slate / Emerald Accent)
+  doc.setFillColor(15, 23, 42); // Slate 900
+  doc.rect(14, y, 182, 48, 'F');
+  doc.setDrawColor(15, 118, 110);
+  doc.setLineWidth(0.6);
+  doc.rect(14, y, 182, 48, 'S');
+  doc.setLineWidth(0.2);
+
+  doc.setTextColor(45, 212, 191); // Teal 400
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.text('3. VOS IDENTIFIANTS DE CONNEXION PERSONNELS (ESPACE RÉSIDENT)', 20, y + 9);
+
+  doc.setTextColor(203, 213, 225);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.text('Adresse du Portail :', 20, y + 18);
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('courier', 'bold');
+  doc.text(`${window.location.origin}/login`, 78, y + 18);
+
+  doc.setTextColor(203, 213, 225);
+  doc.setFont('helvetica', 'normal');
+  doc.text('Identifiant (Email ou CIN) :', 20, y + 27);
+  doc.setTextColor(253, 224, 71); // Amber 300
+  doc.setFont('courier', 'bold');
+  doc.setFontSize(10.5);
+  doc.text(
+    `${resident.email}${resident.cin ? `  (ou CIN : ${resident.cin})` : ''}`,
+    78,
+    y + 27
+  );
+
+  doc.setTextColor(203, 213, 225);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.text('Mot de passe temporaire :', 20, y + 38);
+
+  // Password Pill Box
+  doc.setFillColor(30, 41, 59);
+  doc.setDrawColor(52, 211, 153);
+  doc.rect(78, y + 32, 75, 9, 'FD');
+  doc.setTextColor(110, 231, 183);
+  doc.setFont('courier', 'bold');
+  doc.setFontSize(12);
+  doc.text(resident.generatedPassword || 'Syndik-Demo2026!', 83, y + 38);
+
+  y += 56;
+
+  // Mandatory First-Login Security Notice
+  doc.setFillColor(255, 251, 235); // Amber 50
+  doc.setDrawColor(251, 191, 36); // Amber 400
+  doc.rect(14, y, 182, 24, 'FD');
+
+  doc.setTextColor(180, 83, 9);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text(
+    'IMPORTANT — SÉCURISATION DE VOTRE COMPTE À LA PREMIÈRE CONNEXION :',
+    18,
+    y + 7
+  );
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(120, 53, 15);
+  doc.setFontSize(8.5);
+  doc.text(
+    "1. Lors de votre première connexion avec ce mot de passe temporaire, la plateforme vous demandera",
+    18,
+    y + 13.5
+  );
+  doc.text(
+    "   obligatoirement de choisir un nouveau mot de passe personnel et confidentiel.",
+    18,
+    y + 18.5
+  );
+
+  y += 32;
+
+  // Services Available in Resident Portal
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(203, 213, 225);
+  doc.rect(14, y, 182, 34, 'FD');
+
+  doc.setTextColor(15, 118, 110);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text('SERVICES DISPONIBLES SUR VOTRE ESPACE COPROPRIÉTAIRE :', 18, y + 7);
+
+  doc.setTextColor(51, 65, 85);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.text('• Consultation de vos appels de charges et envoi de justificatifs de virement.', 18, y + 14);
+  doc.text('• Téléchargement immédiat de vos Quittances Officielles de Copropriété (Loi 18-00).', 18, y + 20);
+  doc.text('• Vote numérique pondéré par tantièmes aux Assemblées Générales (AGO / AGE).', 18, y + 26);
+  doc.text('• Déclaration et suivi photo des incidents de maintenance & messagerie de l’immeuble.', 18, y + 31);
+
+  // Footer
+  doc.setFontSize(7.5);
+  doc.setTextColor(100, 116, 139);
+  doc.text(
+    `Fiche d'accès individuelle générée par le Syndic — ${building.name} (${building.city}) — Syndik Maroc`,
+    105,
+    286,
+    { align: 'center' }
+  );
+
+  const safeName = resident.name.replace(/[^a-zA-Z0-9_-]/g, '_');
+  doc.save(`Fiche_Acces_Resident_${safeName}.pdf`);
+};
+
+/**
+ * Generates an official printable PDF Access Sheet (Fiche d'Identifiants d'Accès Prestataire)
+ * for a Service Provider (Prestataire Agréé), issued by the Syndic.
+ */
+export const exportPrestataireCredentialsPDF = (
+  prestataire: Prestataire,
+  building: Building,
+  syndic?: Syndic | null
+) => {
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4',
+  });
+
+  const issueDate = new Date().toLocaleDateString('fr-MA', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
+
+  // Top Header Banner
+  doc.setFillColor(15, 23, 42); // Slate 900
+  doc.rect(0, 0, 210, 42, 'F');
+  doc.setFillColor(245, 158, 11); // Amber 500
+  doc.rect(0, 42, 210, 2.5, 'F');
+
+  doc.setTextColor(253, 224, 71);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text(
+    'ROYAUME DU MAROC · GESTION TECHNIQUE DE COPROPRIÉTÉ (LOI N° 18-00)',
+    105,
+    13,
+    { align: 'center' }
+  );
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(16.5);
+  doc.text("FICHE D'ACCÈS — PORTAIL PRESTATAIRE AGRÉÉ", 105, 24, { align: 'center' });
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+  doc.text('Espace Partenaire Technique & Suivi des Bons d’Intervention', 105, 32, {
+    align: 'center',
+  });
+  doc.setFontSize(8.5);
+  doc.text(`Accréditation délivrée le ${issueDate}`, 105, 38, { align: 'center' });
+
+  let y = 54;
+
+  // Box 1: Syndic & Copropriété
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(203, 213, 225);
+  doc.rect(14, y, 182, 32, 'FD');
+
+  doc.setFillColor(241, 245, 249);
+  doc.rect(14, y, 182, 8, 'F');
+  doc.setTextColor(15, 118, 110);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text('1. CABINET SYNDIC DONNEUR D’ORDRE & RÉSIDENCE RATTACHÉE', 18, y + 5.5);
+
+  doc.setTextColor(15, 23, 42);
+  doc.setFontSize(9.5);
+  doc.text(`Résidence / Immeuble : ${building.name} (${building.city})`, 18, y + 14);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.text(`Adresse du site : ${building.address}, ${building.city}`, 18, y + 20);
+  doc.text(
+    `Syndic Gestionnaire : ${syndic?.name || building.managerName || 'Bureau du Syndic'}`,
+    18,
+    y + 26
+  );
+
+  y += 40;
+
+  // Box 2: Prestataire Details
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(203, 213, 225);
+  doc.rect(14, y, 182, 36, 'FD');
+
+  doc.setFillColor(241, 245, 249);
+  doc.rect(14, y, 182, 8, 'F');
+  doc.setTextColor(15, 118, 110);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text('2. IDENTIFICATION DE L’ENTREPRISE / ARTISAN AGRÉÉ', 18, y + 5.5);
+
+  doc.setTextColor(15, 23, 42);
+  doc.setFontSize(10);
+  doc.text(`Raison Sociale : ${prestataire.name}`, 18, y + 15);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.text(`Responsable Technique : ${prestataire.contactPerson || 'Non spécifié'}`, 18, y + 22);
+  doc.text(`Téléphone / Astreinte : ${prestataire.phone}`, 18, y + 29);
+
+  doc.setFont('helvetica', 'bold');
+  doc.text(`Spécialité : ${prestataire.category.toUpperCase()}`, 115, y + 15);
+  doc.setFont('helvetica', 'normal');
+  doc.text(`N° ICE : ${prestataire.ice || 'Enregistré'}`, 115, y + 22);
+  doc.text(`N° RC : ${prestataire.rc || 'Enregistré'}`, 115, y + 29);
+
+  y += 44;
+
+  // Box 3: Credentials Block
+  doc.setFillColor(15, 23, 42);
+  doc.rect(14, y, 182, 48, 'F');
+  doc.setDrawColor(245, 158, 11);
+  doc.setLineWidth(0.6);
+  doc.rect(14, y, 182, 48, 'S');
+  doc.setLineWidth(0.2);
+
+  doc.setTextColor(253, 224, 71);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.text('3. VOS IDENTIFIANTS DE CONNEXION AU PORTAIL PRESTATAIRE (/provider)', 20, y + 9);
+
+  doc.setTextColor(203, 213, 225);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.text('URL de connexion :', 20, y + 18);
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('courier', 'bold');
+  doc.text(`${window.location.origin}/login`, 78, y + 18);
+
+  doc.setTextColor(203, 213, 225);
+  doc.setFont('helvetica', 'normal');
+  doc.text('Email Professionnel (Login) :', 20, y + 27);
+  doc.setTextColor(253, 224, 71);
+  doc.setFont('courier', 'bold');
+  doc.setFontSize(10.5);
+  doc.text(prestataire.email || 'contact@prestataire.ma', 78, y + 27);
+
+  doc.setTextColor(203, 213, 225);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.text('Mot de passe temporaire :', 20, y + 38);
+
+  doc.setFillColor(30, 41, 59);
+  doc.setDrawColor(251, 191, 36);
+  doc.rect(78, y + 32, 75, 9, 'FD');
+  doc.setTextColor(110, 231, 183);
+  doc.setFont('courier', 'bold');
+  doc.setFontSize(12);
+  doc.text(prestataire.generatedPassword || 'Syndik-PREST2026!', 83, y + 38);
+
+  y += 56;
+
+  // Security & Usage Notice
+  doc.setFillColor(255, 251, 235);
+  doc.setDrawColor(251, 191, 36);
+  doc.rect(14, y, 182, 26, 'FD');
+
+  doc.setTextColor(180, 83, 9);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text('INSTRUCTIONS DE PREMIÈRE CONNEXION & SUIVI DES INTERVENTIONS :', 18, y + 7);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(120, 53, 15);
+  doc.setFontSize(8.5);
+  doc.text(
+    "• À votre première connexion, il vous sera demandé de définir votre propre mot de passe sécurisé.",
+    18,
+    y + 13.5
+  );
+  doc.text(
+    "• Depuis votre portail (/provider), consultez vos ordres de travail, mettez à jour l'avancement",
+    18,
+    y + 18.5
+  );
+  doc.text(
+    "  technique et transmettez vos comptes-rendus d'intervention directement au Syndic.",
+    18,
+    y + 23.5
+  );
+
+  doc.setFontSize(7.5);
+  doc.setTextColor(100, 116, 139);
+  doc.text(
+    `Accréditation Prestataire émise par le Syndic — ${building.name} — Syndik Maroc`,
+    105,
+    286,
+    { align: 'center' }
+  );
+
+  const safeName = prestataire.name.replace(/[^a-zA-Z0-9_-]/g, '_');
+  doc.save(`Fiche_Acces_Prestataire_${safeName}.pdf`);
+};
+
 

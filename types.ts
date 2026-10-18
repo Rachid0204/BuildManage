@@ -236,6 +236,10 @@ export interface Prestataire {
   city?: string;
   specialties?: string[];
   reviews?: PrestataireReview[];
+  hasAccount?: boolean;
+  generatedPassword?: string;
+  credentialsCreatedAt?: string;
+  mustChangePassword?: boolean;
 }
 
 export interface Resident {
@@ -251,6 +255,7 @@ export interface Resident {
   hasAccount?: boolean;
   generatedPassword?: string;
   credentialsCreatedAt?: string;
+  mustChangePassword?: boolean;
 }
 
 export interface Apartment {

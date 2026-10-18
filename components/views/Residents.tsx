@@ -5,7 +5,11 @@ import Button from '../common/Button';
 import Modal from '../common/Modal';
 import { useI18n } from '../../hooks/useI18n';
 import { PlusIcon, PencilIcon, TrashIcon, DocumentsIcon } from '../icons/IconComponents';
-import { exportResidentsPDF, exportResidentsCSV } from '../../services/pdfService';
+import {
+  exportResidentsPDF,
+  exportResidentsCSV,
+  exportResidentCredentialsPDF,
+} from '../../services/pdfService';
 
 type ResidentModalProps = {
   isOpen: boolean;
@@ -340,7 +344,7 @@ const ResidentModal: React.FC<ResidentModalProps> = ({
 
 type CredentialsModalProps = {
   resident: Resident | null;
-  buildingName: string;
+  building: Building;
   apartmentNumber?: string;
   onClose: () => void;
   onRegenerate?: (residentId: string) => void;
@@ -348,7 +352,7 @@ type CredentialsModalProps = {
 
 const CredentialsModal: React.FC<CredentialsModalProps> = ({
   resident,
-  buildingName,
+  building,
   apartmentNumber,
   onClose,
   onRegenerate,
@@ -358,18 +362,26 @@ const CredentialsModal: React.FC<CredentialsModalProps> = ({
 
   if (!resident) return null;
 
-  const password = resident.generatedPassword || 'Syndik-Demo2026!';
+  const buildingName = building.name;
+  const password = resident.generatedPassword || 'Syn-2026-MA';
+  const portalUrl =
+    typeof window !== 'undefined' ? `${window.location.origin}/login` : 'https://syndik.ma/login';
+
   const shareText = tr(
-    `Bonjour ${resident.name},\nVoici vos identifiants d'accès au Portail Copropriétaire (${buildingName}${
+    `Bonjour ${resident.name},\nVoici vos identifiants officiels d'accès au Portail Copropriétaire (${buildingName}${
       apartmentNumber ? ` - Lot ${apartmentNumber}` : ''
-    }) :\n• Identifiant (Email) : ${resident.email}\n• Mot de passe temporaire : ${password}\n• Rôle : ${
+    }) :\n• Lien de connexion : ${portalUrl}\n• Identifiant (Email) : ${resident.email}${
+      resident.cin ? ` (ou CIN : ${resident.cin})` : ''
+    }\n• Mot de passe temporaire : ${password}\n• Statut : ${
       resident.isOwner ? 'Copropriétaire' : 'Locataire'
-    }`,
-    `مرحباً ${resident.name}،\nإليكم بيانات الولوج إلى بوابة الملكية المشتركة (${buildingName}${
+    }\nNote : Lors de votre première connexion, il vous sera demandé de choisir un mot de passe personnel.`,
+    `مرحباً ${resident.name}،\nإليكم بيانات الولوج الرسمية إلى بوابة الملكية المشتركة (${buildingName}${
       apartmentNumber ? ` - شقة ${apartmentNumber}` : ''
-    }) :\n• المعرف (البريد الإلكتروني) : ${resident.email}\n• كلمة المرور المؤقتة : ${password}\n• الصفة : ${
+    }) :\n• رابط الدخول : ${portalUrl}\n• المعرف (البريد الإلكتروني) : ${resident.email}${
+      resident.cin ? ` (أو CIN : ${resident.cin})` : ''
+    }\n• كلمة المرور المؤقتة : ${password}\n• الصفة : ${
       resident.isOwner ? 'مالك مشترك' : 'مكتري'
-    }`
+    }\nملاحظة : عند أول تسجيل دخول، سيُطلب منكم تعيين كلمة مرور شخصية جديدة.`
   );
 
   const handleCopy = () => {
@@ -380,11 +392,15 @@ const CredentialsModal: React.FC<CredentialsModalProps> = ({
     }
   };
 
+  const handleDownloadPDF = () => {
+    exportResidentCredentialsPDF(resident, building, apartmentNumber);
+  };
+
   return (
     <Modal
       isOpen={!!resident}
       onClose={onClose}
-      title={tr("Fiche d'Identifiants d'Accès Résident", 'بطاقة بيانات ولوج الساكن')}
+      title={tr("Fiche Officielle d'Accès Résident", 'بطاقة الولوج الرسمية للساكن')}
       footer={
         <div className="flex flex-wrap items-center justify-between w-full gap-2">
           {onRegenerate && (
@@ -393,17 +409,25 @@ const CredentialsModal: React.FC<CredentialsModalProps> = ({
               onClick={() => onRegenerate(resident.id)}
               className="text-xs font-semibold text-slate-600 hover:text-teal-700 underline"
             >
-              {tr('Régénérer un nouveau mot de passe', 'إعادة توليد كلمة مرور جديدة')}
+              {tr('🔄 Régénérer un mot de passe temporaire', '🔄 إعادة توليد كلمة مرور مؤقتة')}
             </button>
           )}
           <div className="flex flex-wrap items-center gap-2 ms-auto">
             <Button variant="secondary" onClick={onClose}>
               {tr('Fermer', 'إغلاق')}
             </Button>
+            <Button
+              variant="secondary"
+              onClick={handleDownloadPDF}
+              className="flex items-center gap-1.5 border-teal-200 text-teal-800 hover:bg-teal-50"
+            >
+              <DocumentsIcon />
+              <span>{tr("Fiche d'Accès PDF", 'تحميل بطاقة PDF')}</span>
+            </Button>
             <Button onClick={handleCopy}>
               {copied
-                ? tr('✓ Copié dans le presse-papiers !', '✓ تم النسخ إلى الحافظة!')
-                : tr('Copier la fiche d’identifiants', 'نسخ بطاقة بيانات الولوج')}
+                ? tr('✓ Identifiants copiés !', '✓ تم نسخ البيانات!')
+                : tr('Copier les identifiants', 'نسخ بيانات الولوج')}
             </Button>
           </div>
         </div>
@@ -414,14 +438,21 @@ const CredentialsModal: React.FC<CredentialsModalProps> = ({
           <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center font-bold text-sm shrink-0">
             ✓
           </div>
-          <div className="text-xs text-emerald-950">
-            <p className="font-bold text-sm">
-              {tr('Compte résident actif', 'حساب الساكن مفعل')}
-            </p>
-            <p className="mt-0.5 text-emerald-800">
+          <div className="text-xs text-emerald-950 flex-1">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <p className="font-bold text-sm">
+                {tr('Compte Portail Résident Actif', 'حساب بوابة الساكن مفعل')}
+              </p>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                {resident.mustChangePassword !== false
+                  ? tr('Changement MDP requis au 1er login', 'تغيير كلمة المرور إلزامي عند أول دخول')
+                  : tr('Mot de passe personnalisé actif', 'كلمة مرور شخصية مفعلة')}
+              </span>
+            </div>
+            <p className="mt-1 text-emerald-800">
               {tr(
-                `Transmettez cette fiche à ${resident.name} afin qu'il puisse se connecter à son Portail Résident (/resident).`,
-                `شاركوا هذه البطاقة مع ${resident.name} لكي يتمكن من تسجيل الدخول إلى بوابة الساكن (/resident).`
+                `Imprimez la Fiche PDF officielle ou copiez ces identifiants pour les remettre à ${resident.name}.`,
+                `اطبعوا بطاقة PDF الرسمية أو انسخوا هذه البيانات لتسليمها إلى ${resident.name}.`
               )}
             </p>
           </div>
@@ -461,20 +492,34 @@ const CredentialsModal: React.FC<CredentialsModalProps> = ({
           </div>
           <div className="flex justify-between items-center">
             <span className="text-slate-400 font-sans">
-              {tr('Mot de passe généré :', 'كلمة المرور المُولدة :')}
+              {tr('Mot de passe temporaire :', 'كلمة المرور المؤقتة :')}
             </span>
-            <span className="px-2.5 py-1 rounded bg-slate-800 text-emerald-300 font-bold text-sm tracking-wider select-all border border-slate-700">
+            <span className="px-2.5 py-1 rounded bg-slate-800 text-emerald-300 font-bold text-sm tracking-wider select-all border border-slate-700 tabular-nums">
               {password}
             </span>
           </div>
         </div>
 
-        <p className="text-xs text-slate-500">
-          {tr(
-            "Note : Pour tester ce compte résident, déconnectez-vous d'abord de votre session Syndic puis connectez-vous sur la page de connexion avec l'email ou le numéro CIN ci-dessus.",
-            'ملاحظة : لتجربة حساب الساكن هذا، قم أولاً بتسجيل الخروج من جلسة السنديك ثم سجل الدخول في صفحة الاتصال باستخدام البريد الإلكتروني أو رقم CIN أعلاه.'
-          )}
-        </p>
+        <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-center justify-between gap-3">
+          <div>
+            <p className="font-bold">
+              {tr('Sécurité 1ère connexion activée', 'حماية أول تسجيل دخول مفعلة')}
+            </p>
+            <p className="text-[11px] text-amber-800 mt-0.5">
+              {tr(
+                "Dès sa première connexion sur /login, le résident sera invité à définir son propre mot de passe confidentiel.",
+                'عند أول تسجيل دخول عبر /login، سيُطلب من الساكن اختيار كلمة مرور خاصة وسرية.'
+              )}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleDownloadPDF}
+            className="shrink-0 px-3 py-1.5 rounded-lg bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold text-xs transition-colors"
+          >
+            {tr('📄 Télécharger PDF', '📄 تحميل PDF')}
+          </button>
+        </div>
       </div>
     </Modal>
   );
@@ -595,7 +640,7 @@ const Residents: React.FC<{
 
       <CredentialsModal
         resident={activeCredentialResident}
-        buildingName={building.name}
+        building={building}
         apartmentNumber={
           activeCredentialResident
             ? residentApartmentMap.get(activeCredentialResident.id)?.number
