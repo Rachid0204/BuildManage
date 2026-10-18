@@ -1,58 +1,87 @@
+import { initializeApp } from 'firebase/app';
+import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
+import { getFunctions } from 'firebase/functions';
+import { getAuth } from 'firebase/auth';
+import firebaseAppletConfig from '../firebase-applet-config.json';
 
-import { initializeApp } from "firebase/app";
-import { getFirestore, connectFirestoreEmulator } from "firebase/firestore";
-import { getAuth, connectAuthEmulator } from "firebase/auth";
-import { getStorage, connectStorageEmulator } from "firebase/storage";
-import { getFunctions, connectFunctionsEmulator } from "firebase/functions";
-
-// Helper to get environment variables compatibly (Vite vs CRA/Webpack)
-const getEnv = (key: string): string => {
-  // Check import.meta.env (Vite standard)
-  // @ts-ignore
-  if (typeof import.meta !== 'undefined' && import.meta.env) {
-    // @ts-ignore
-    const val = import.meta.env[`VITE_${key}`] || import.meta.env[`REACT_APP_${key}`];
-    if (val) return val;
-  }
-  
-  // Check process.env (Standard/CRA) - Ensure process exists before accessing
-  // @ts-ignore
-  if (typeof process !== 'undefined' && process.env) {
-    // @ts-ignore
-    return process.env[`VITE_${key}`] || process.env[`REACT_APP_${key}`] || '';
-  }
-  
-  return '';
+export const firebaseConfig = {
+  apiKey: firebaseAppletConfig.apiKey,
+  authDomain: firebaseAppletConfig.authDomain,
+  projectId: firebaseAppletConfig.projectId,
+  storageBucket: firebaseAppletConfig.storageBucket,
+  messagingSenderId: firebaseAppletConfig.messagingSenderId,
+  appId: firebaseAppletConfig.appId,
+  firestoreDatabaseId: firebaseAppletConfig.firestoreDatabaseId,
 };
 
-const firebaseConfig = {
-  apiKey: getEnv('FIREBASE_API_KEY') || "mock-key",
-  authDomain: getEnv('FIREBASE_AUTH_DOMAIN') || "mock-project.firebaseapp.com",
-  projectId: getEnv('FIREBASE_PROJECT_ID') || "mock-project",
-  storageBucket: getEnv('FIREBASE_STORAGE_BUCKET') || "mock-project.appspot.com",
-  messagingSenderId: getEnv('FIREBASE_SENDER_ID') || "123456789",
-  appId: getEnv('FIREBASE_APP_ID') || "1:123456789:web:abcdef"
-};
-
-// Determine if we are in mock mode
-export const isMock = firebaseConfig.apiKey === "mock-key" || !firebaseConfig.apiKey;
-
-// Initialize Firebase
 const app = initializeApp(firebaseConfig);
 
-export const db = getFirestore(app);
-export const auth = getAuth(app);
-export const storage = getStorage(app);
+export const db = getFirestore(app, firebaseAppletConfig.firestoreDatabaseId);
 export const functions = getFunctions(app);
+export const auth = getAuth(app);
 
-// Connect to emulators if in local dev environment and not using mock mode
-// @ts-ignore
-if (!isMock && typeof location !== 'undefined' && (location.hostname === "localhost" || location.hostname === "127.0.0.1") && getEnv('USE_EMULATORS') === 'true') {
-    // Note: Uncomment these lines to use local emulators
-    // connectAuthEmulator(auth, "http://127.0.0.1:9099");
-    // connectFirestoreEmulator(db, '127.0.0.1', 8080);
-    // connectFunctionsEmulator(functions, '127.0.0.1', 5001);
-    // connectStorageEmulator(storage, '127.0.0.1', 9199);
+export const isMock = false;
+
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
 }
 
-export default app;
+export interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  };
+}
+
+export function handleFirestoreError(
+  error: unknown,
+  operationType: OperationType,
+  path: string | null
+): never {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo:
+        auth.currentUser?.providerData?.map((provider) => ({
+          providerId: provider.providerId,
+          email: provider.email,
+        })) || [],
+    },
+    operationType,
+    path,
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
+async function testConnection() {
+  try {
+    await getDocFromServer(doc(db, 'test', 'connection'));
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.error('Please check your Firebase configuration.');
+    }
+  }
+}
+
+testConnection();

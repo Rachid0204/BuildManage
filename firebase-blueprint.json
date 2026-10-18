@@ -1,0 +1,186 @@
+{
+  "entities": {
+    "Syndic": {
+      "title": "Syndic",
+      "description": "Represents a Moroccan Syndic cabinet managing one or more condominium buildings along with its SaaS subscription.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of the Syndic cabinet",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Cabinet or Syndic display name",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Primary contact email of the Syndic cabinet",
+          "minLength": 3,
+          "maxLength": 254
+        },
+        "phone": {
+          "type": "string",
+          "description": "Primary phone number of the Syndic cabinet",
+          "minLength": 0,
+          "maxLength": 40
+        },
+        "subscriptionPlan": {
+          "type": "string",
+          "description": "Selected SaaS subscription tier",
+          "enum": ["starter", "professional", "enterprise"],
+          "maxLength": 32
+        },
+        "subscriptionStatus": {
+          "type": "string",
+          "description": "Current subscription status",
+          "enum": ["active", "expired", "cancelled"],
+          "maxLength": 32
+        },
+        "subscriptionExpiresAt": {
+          "type": "string",
+          "description": "ISO date when the subscription expires",
+          "maxLength": 64
+        },
+        "createdBy": {
+          "type": "string",
+          "description": "UID of the user who created the Syndic cabinet",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "buildings": {
+          "type": "array",
+          "description": "List of managed buildings and copropriétés (bounded <= 50)"
+        }
+      },
+      "required": ["id", "name", "email", "subscriptionPlan", "subscriptionStatus", "createdBy", "buildings"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile record mapping authenticated users to their role and Syndic/Building context.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Authenticated user UID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "User email address",
+          "minLength": 3,
+          "maxLength": 254
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Full name of the user",
+          "minLength": 1,
+          "maxLength": 150
+        },
+        "role": {
+          "type": "string",
+          "description": "Role within the platform",
+          "enum": ["admin", "syndic", "resident", "provider"],
+          "maxLength": 32
+        },
+        "syndicId": {
+          "type": "string",
+          "description": "Associated Syndic cabinet ID",
+          "maxLength": 128
+        },
+        "buildingId": {
+          "type": "string",
+          "description": "Associated Building ID for residents and providers",
+          "maxLength": 128
+        },
+        "apartmentId": {
+          "type": "string",
+          "description": "Associated Apartment ID for residents",
+          "maxLength": 128
+        },
+        "mustChangePassword": {
+          "type": "boolean",
+          "description": "Whether the user must update their temporary password on first login"
+        }
+      },
+      "required": ["uid", "email", "displayName", "role"]
+    },
+    "Prestataire": {
+      "title": "Prestataire",
+      "description": "Approved service provider (prestataire) managed by a Syndic cabinet.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique Prestataire identifier",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "syndicId": {
+          "type": "string",
+          "description": "Owning Syndic cabinet ID",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "buildingId": {
+          "type": "string",
+          "description": "Assigned building ID",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "name": {
+          "type": "string",
+          "description": "Company or provider name",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "category": {
+          "type": "string",
+          "description": "Service category",
+          "maxLength": 64
+        },
+        "contactPerson": {
+          "type": "string",
+          "description": "Contact person name",
+          "maxLength": 150
+        },
+        "phone": {
+          "type": "string",
+          "description": "Phone number",
+          "maxLength": 40
+        },
+        "email": {
+          "type": "string",
+          "description": "Email address for portal access",
+          "maxLength": 254
+        }
+      },
+      "required": ["id", "syndicId", "buildingId", "name", "category"]
+    }
+  },
+  "firestore": {
+    "/syndics/{syndicId}": {
+      "schema": "Syndic",
+      "description": "Stores Syndic cabinets and their managed buildings, apartments, and residents."
+    },
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Stores authenticated user profiles and role mappings."
+    },
+    "/prestataires/{prestataireId}": {
+      "schema": "Prestataire",
+      "description": "Stores approved service providers and their portal credential metadata."
+    }
+  }
+}

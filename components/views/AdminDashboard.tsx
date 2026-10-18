@@ -7,9 +7,15 @@ import Modal from '../common/Modal';
 import LanguageToggle from '../common/LanguageToggle';
 import { useAuth, getHomeRouteForRole } from '../../contexts/AuthContext';
 import { useI18n } from '../../hooks/useI18n';
-import { getSyndics, saveSyndic } from '../../firebase/services';
-import type { Syndic, SubscriptionPlan, SubscriptionStatus } from '../../types';
-import { BuildingsIcon, ResidentsIcon, FinancialsIcon } from '../icons/IconComponents';
+import {
+  getSyndics,
+  saveSyndic,
+  addBuilding,
+  STORAGE_KEYS,
+  pushKeyToSharedServer,
+} from '../../firebase/services';
+import type { Syndic, SubscriptionPlan, SubscriptionStatus, Apartment } from '../../types';
+import { BuildingsIcon, ResidentsIcon, FinancialsIcon, PlusIcon } from '../icons/IconComponents';
 
 const PLAN_PRICES: Record<SubscriptionPlan, number> = {
   starter: 200,
@@ -28,16 +34,148 @@ const AdminDashboard: React.FC = () => {
   const [editStatus, setEditStatus] = useState<SubscriptionStatus>('active');
   const [editExpiry, setEditExpiry] = useState('');
 
-  const { data: syndics = [] } = useQuery({
+  // Create New Syndic Cabinet Modal State
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [newCabinetName, setNewCabinetName] = useState('');
+  const [newManagerName, setNewManagerName] = useState('');
+  const [newEmail, setNewEmail] = useState('');
+  const [newPassword, setNewPassword] = useState('Syndik-2026');
+  const [newPhone, setNewPhone] = useState('+212 6 00 00 00 00');
+  const [newCity, setNewCity] = useState('Casablanca');
+  const [newPlan, setNewPlan] = useState<SubscriptionPlan>('professional');
+  const [newBuildingName, setNewBuildingName] = useState('');
+  const [newApartmentsCount, setNewApartmentsCount] = useState(8);
+  const [newMonthlyFees, setNewMonthlyFees] = useState(250);
+  const [createError, setCreateError] = useState('');
+
+  const {
+    data: syndics = [],
+    isFetching,
+    refetch,
+  } = useQuery({
     queryKey: ['syndics'],
     queryFn: getSyndics,
+    staleTime: 0,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: true,
+    refetchInterval: 4000,
   });
 
   const updateSyndicMutation = useMutation({
     mutationFn: saveSyndic,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['syndics'] });
+      void queryClient.invalidateQueries({ queryKey: ['syndics'] });
       setSelectedSyndic(null);
+    },
+  });
+
+  const createSyndicMutation = useMutation({
+    mutationFn: async () => {
+      const cleanName = newCabinetName.trim();
+      const cleanEmail = newEmail.trim().toLowerCase();
+      if (!cleanName || !cleanEmail) {
+        throw new Error(
+          tr(
+            'Veuillez renseigner le nom du cabinet et son adresse e-mail.',
+            'يرجى إدخال اسم المكتب والبريد الإلكتروني.'
+          )
+        );
+      }
+
+      const syndicId = `syndic-${Date.now()}`;
+      const uid = `user-syndic-${Date.now()}`;
+      const expiryDate = new Date();
+      expiryDate.setDate(expiryDate.getDate() + 365);
+
+      const createdSyndic: Syndic = {
+        id: syndicId,
+        name: cleanName,
+        logoUrl:
+          'https://images.unsplash.com/photo-1560518883-ce09059eeffa?w=150&auto=format&fit=crop&q=60',
+        createdBy: uid,
+        subscriptionPlan: newPlan,
+        subscriptionStatus: 'active',
+        subscriptionExpiry: expiryDate.toISOString(),
+        email: cleanEmail,
+        phone: newPhone.trim() || '+212 6 00 00 00 00',
+        city: newCity.trim() || 'Casablanca',
+        ice: `00${Math.floor(1000000000000 + Math.random() * 8999999999999)}`,
+        rc: `${Math.floor(100000 + Math.random() * 899999)}`,
+        buildings: [],
+      };
+
+      await saveSyndic(createdSyndic);
+
+      const bldName = newBuildingName.trim() || `Résidence ${cleanName}`;
+      const numApts = Math.max(1, Number(newApartmentsCount) || 8);
+      const fee = Math.max(50, Number(newMonthlyFees) || 250);
+      const baseTantieme = Math.floor(1000 / numApts);
+      const initialApts: Omit<Apartment, 'id' | 'buildingId'>[] = [];
+
+      for (let i = 1; i <= numApts; i++) {
+        const floorIdx = Math.ceil(i / 2);
+        const unitNum = `${floorIdx}0${((i - 1) % 2) + 1}`;
+        initialApts.push({
+          number: unitNum,
+          floor: floorIdx,
+          area: 85,
+          monthlyFees: fee,
+          tantiemes:
+            i === 1 ? baseTantieme + (1000 - baseTantieme * numApts) : baseTantieme,
+          coproType: 'apartment',
+          ownerId: null,
+          tenantId: null,
+        });
+      }
+
+      const createdBuilding = await addBuilding(syndicId, {
+        name: bldName,
+        address: `Boulevard Principal, ${newCity.trim() || 'Casablanca'}`,
+        city: newCity.trim() || 'Casablanca',
+        monthlySyndicFees: fee,
+        reserveFundRate: 5,
+        managerName: newManagerName.trim() || cleanName,
+        managerPhone: newPhone.trim() || '+212 6 00 00 00 00',
+        apartments: initialApts,
+      });
+
+      // Register login credentials for this Syndic cabinet so they can sign in immediately
+      try {
+        const rawUsers = localStorage.getItem(STORAGE_KEYS.REGISTERED_USERS);
+        const existingUsers = rawUsers ? JSON.parse(rawUsers) : [];
+        const filtered = existingUsers.filter(
+          (u: any) => u.email?.trim().toLowerCase() !== cleanEmail
+        );
+        filtered.push({
+          uid,
+          email: cleanEmail,
+          displayName: newManagerName.trim() || cleanName,
+          role: 'syndic',
+          syndicId,
+          buildingId: createdBuilding.id,
+          buildingName: createdBuilding.name,
+          phone: newPhone.trim(),
+          password: newPassword.trim() || 'password123',
+        });
+        localStorage.setItem(STORAGE_KEYS.REGISTERED_USERS, JSON.stringify(filtered));
+        await pushKeyToSharedServer(STORAGE_KEYS.REGISTERED_USERS, filtered);
+      } catch {
+        // ignore
+      }
+
+      return createdSyndic;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['syndics'] });
+      setIsCreateModalOpen(false);
+      setNewCabinetName('');
+      setNewManagerName('');
+      setNewEmail('');
+      setNewBuildingName('');
+      setCreateError('');
+    },
+    onError: (err: any) => {
+      setCreateError(err?.message || 'Erreur lors de la création du cabinet.');
     },
   });
 
@@ -59,7 +197,7 @@ const AdminDashboard: React.FC = () => {
     setSelectedSyndic(syndic);
     setEditPlan(syndic.subscriptionPlan);
     setEditStatus(syndic.subscriptionStatus);
-    setEditExpiry(syndic.subscriptionExpiry.split('T')[0]);
+    setEditExpiry((syndic.subscriptionExpiry || new Date().toISOString()).split('T')[0]);
   };
 
   const handleSaveSyndic = () => {
@@ -111,7 +249,7 @@ const AdminDashboard: React.FC = () => {
       </nav>
 
       <main className="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8 space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-4">
           <div>
             <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
               {t('adminPortal.title')}
@@ -119,6 +257,26 @@ const AdminDashboard: React.FC = () => {
             <p className="text-xs text-slate-500 mt-0.5">
               {t('adminPortal.subtitle')}
             </p>
+          </div>
+          <div className="flex items-center gap-2.5">
+            <button
+              type="button"
+              onClick={() => void refetch()}
+              className="px-3.5 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 font-bold text-xs transition-colors flex items-center gap-1.5"
+            >
+              <span>{isFetching ? '⟳' : '↻'}</span>
+              <span>{tr('Actualiser', 'تحديث')}</span>
+            </button>
+            <Button
+              onClick={() => {
+                setCreateError('');
+                setIsCreateModalOpen(true);
+              }}
+              leftIcon={<PlusIcon />}
+              className="bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs"
+            >
+              {tr('Nouveau Cabinet Syndic', 'إضافة مكتب سنديك جديد')}
+            </Button>
           </div>
         </div>
 
@@ -129,7 +287,9 @@ const AdminDashboard: React.FC = () => {
               <ResidentsIcon />
             </div>
             <div>
-              <p className="text-xs font-semibold uppercase text-slate-500">{t('adminPortal.activeCabinets')}</p>
+              <p className="text-xs font-semibold uppercase text-slate-500">
+                {t('adminPortal.activeCabinets')}
+              </p>
               <p className="text-2xl font-bold font-mono text-slate-900">{syndics.length}</p>
             </div>
           </Card>
@@ -139,7 +299,9 @@ const AdminDashboard: React.FC = () => {
               <BuildingsIcon />
             </div>
             <div>
-              <p className="text-xs font-semibold uppercase text-slate-500">{t('adminPortal.managedBuildings')}</p>
+              <p className="text-xs font-semibold uppercase text-slate-500">
+                {t('adminPortal.managedBuildings')}
+              </p>
               <p className="text-2xl font-bold font-mono text-slate-900">{totalBuildings}</p>
             </div>
           </Card>
@@ -149,7 +311,9 @@ const AdminDashboard: React.FC = () => {
               <ResidentsIcon />
             </div>
             <div>
-              <p className="text-xs font-semibold uppercase text-slate-500">{t('adminPortal.connectedResidents')}</p>
+              <p className="text-xs font-semibold uppercase text-slate-500">
+                {t('adminPortal.connectedResidents')}
+              </p>
               <p className="text-2xl font-bold font-mono text-slate-900">{totalResidents}</p>
             </div>
           </Card>
@@ -159,7 +323,9 @@ const AdminDashboard: React.FC = () => {
               <FinancialsIcon />
             </div>
             <div>
-              <p className="text-xs font-semibold uppercase text-slate-500">{t('adminPortal.estimatedMrr')}</p>
+              <p className="text-xs font-semibold uppercase text-slate-500">
+                {t('adminPortal.estimatedMrr')}
+              </p>
               <p className="text-2xl font-bold font-mono text-slate-900">{totalMrr} MAD</p>
             </div>
           </Card>
@@ -168,12 +334,18 @@ const AdminDashboard: React.FC = () => {
         {/* Registered Syndics Table */}
         <Card className="p-5 border border-slate-200">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-base font-bold text-slate-900">
-              {t('adminPortal.tableTitle')}
-            </h2>
-            <span className="text-xs text-slate-500 font-mono">
-              18-00 / 106-12
-            </span>
+            <div>
+              <h2 className="text-base font-bold text-slate-900">
+                {t('adminPortal.tableTitle')} ({syndics.length})
+              </h2>
+              <p className="text-xs text-slate-500">
+                {tr(
+                  'Synchronisation temps réel des cabinets inscrits via la page Tarifs ou créés par l’administrateur',
+                  'مزامنة فورية لمكاتب السنديك المسجلة عبر صفحة الباقات أو المنشأة من طرف المدير'
+                )}
+              </p>
+            </div>
+            <span className="text-xs text-slate-500 font-mono">18-00 / 106-12</span>
           </div>
 
           <div className="overflow-x-auto">
@@ -182,6 +354,9 @@ const AdminDashboard: React.FC = () => {
                 <tr>
                   <th className="px-4 py-3 text-start font-bold text-slate-500 uppercase text-xs">
                     {t('adminPortal.colCompany')}
+                  </th>
+                  <th className="px-4 py-3 text-start font-bold text-slate-500 uppercase text-xs">
+                    {tr('Contact / Email', 'البريد والهاتف')}
                   </th>
                   <th className="px-4 py-3 text-start font-bold text-slate-500 uppercase text-xs">
                     ICE / RC
@@ -205,7 +380,13 @@ const AdminDashboard: React.FC = () => {
                   <tr key={s.id} className="hover:bg-slate-50">
                     <td className="px-4 py-3.5 whitespace-nowrap">
                       <div className="font-bold text-slate-900">{s.name}</div>
-                      <div className="text-xs text-slate-500">{s.city || tr('Casablanca', 'الدار البيضاء')}</div>
+                      <div className="text-xs text-slate-500">
+                        {s.city || tr('Casablanca', 'الدار البيضاء')}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3.5 whitespace-nowrap text-xs text-slate-600">
+                      <div className="font-semibold text-slate-800">{s.email || '—'}</div>
+                      <div className="text-[11px] text-slate-400 font-mono">{s.phone || '—'}</div>
                     </td>
                     <td className="px-4 py-3.5 whitespace-nowrap font-mono text-xs text-slate-600">
                       <div>ICE : {s.ice || '001524367000089'}</div>
@@ -224,7 +405,8 @@ const AdminDashboard: React.FC = () => {
                             : 'bg-slate-100 text-slate-800'
                         }`}
                       >
-                        {t(`subscription.plans.${s.subscriptionPlan}` as any)} ({PLAN_PRICES[s.subscriptionPlan]} DH)
+                        {t(`subscription.plans.${s.subscriptionPlan}` as any)} (
+                        {PLAN_PRICES[s.subscriptionPlan]} DH)
                       </span>
                     </td>
                     <td className="px-4 py-3.5 whitespace-nowrap">
@@ -242,7 +424,9 @@ const AdminDashboard: React.FC = () => {
                           : tr('Expiré', 'منتهي الصلاحية')}
                       </span>
                       <span className="ms-2 font-mono text-xs text-slate-400">
-                        {new Date(s.subscriptionExpiry).toLocaleDateString(language === 'ar' ? 'ar-MA' : 'fr-MA')}
+                        {new Date(s.subscriptionExpiry || Date.now()).toLocaleDateString(
+                          language === 'ar' ? 'ar-MA' : 'fr-MA'
+                        )}
                       </span>
                     </td>
                     <td className="px-4 py-3.5 whitespace-nowrap text-end">
@@ -261,6 +445,186 @@ const AdminDashboard: React.FC = () => {
           </div>
         </Card>
       </main>
+
+      {/* Create New Syndic Cabinet Modal */}
+      {isCreateModalOpen && (
+        <Modal
+          isOpen={isCreateModalOpen}
+          onClose={() => setIsCreateModalOpen(false)}
+          title={tr('Créer un Nouveau Cabinet Syndic', 'إنشاء مكتب سنديك جديد')}
+          footer={
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => setIsCreateModalOpen(false)}>
+                {tr('Annuler', 'إلغاء')}
+              </Button>
+              <Button
+                onClick={() => createSyndicMutation.mutate()}
+                disabled={createSyndicMutation.isPending}
+                className="bg-teal-700 hover:bg-teal-800 text-white font-bold"
+              >
+                {createSyndicMutation.isPending
+                  ? tr('Création...', 'جاري الإنشاء...')
+                  : tr('Créer le Cabinet Syndic', 'إنشاء مكتب السنديك')}
+              </Button>
+            </div>
+          }
+        >
+          <div className="space-y-3.5 text-xs">
+            {createError && (
+              <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 font-semibold">
+                {createError}
+              </div>
+            )}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  {tr('Nom du Cabinet Syndic *', 'اسم مكتب السنديك *')}
+                </label>
+                <input
+                  type="text"
+                  value={newCabinetName}
+                  onChange={(e) => setNewCabinetName(e.target.value)}
+                  placeholder="Ex: Atlas Copro Gestion"
+                  className="w-full p-2.5 rounded-lg border border-slate-300"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  {tr('Nom du Gérant / Syndic', 'اسم المسير / السنديك')}
+                </label>
+                <input
+                  type="text"
+                  value={newManagerName}
+                  onChange={(e) => setNewManagerName(e.target.value)}
+                  placeholder="Ex: Karim Tazi"
+                  className="w-full p-2.5 rounded-lg border border-slate-300"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  {tr('Email de connexion *', 'البريد الإلكتروني للدخول *')}
+                </label>
+                <input
+                  type="email"
+                  value={newEmail}
+                  onChange={(e) => setNewEmail(e.target.value)}
+                  placeholder="contact@atlascopro.ma"
+                  className="w-full p-2.5 rounded-lg border border-slate-300"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  {tr('Mot de passe initial', 'كلمة المرور الأولية')}
+                </label>
+                <input
+                  type="text"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  className="w-full p-2.5 rounded-lg border border-slate-300 font-mono"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  {tr('Téléphone', 'الهاتف')}
+                </label>
+                <input
+                  type="text"
+                  value={newPhone}
+                  onChange={(e) => setNewPhone(e.target.value)}
+                  className="w-full p-2.5 rounded-lg border border-slate-300"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  {tr('Ville', 'المدينة')}
+                </label>
+                <input
+                  type="text"
+                  value={newCity}
+                  onChange={(e) => setNewCity(e.target.value)}
+                  className="w-full p-2.5 rounded-lg border border-slate-300"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">
+                {tr('Forfait SaaS :', 'باقة الاشتراك SaaS :')}
+              </label>
+              <select
+                value={newPlan}
+                onChange={(e) => setNewPlan(e.target.value as SubscriptionPlan)}
+                className="w-full p-2.5 rounded-lg border border-slate-300 bg-white font-semibold"
+              >
+                <option value="starter">
+                  {tr(
+                    "Starter — 200 MAD/mois (Jusqu'à 4 résidences)",
+                    'مبتدئ (Starter) — 200 درهم/شهر (حتى 4 إقامات)'
+                  )}
+                </option>
+                <option value="professional">
+                  {tr(
+                    "Professional — 350 MAD/mois (Jusqu'à 8 résidences)",
+                    'محترف (Professional) — 350 درهم/شهر (حتى 8 إقامات)'
+                  )}
+                </option>
+                <option value="enterprise">
+                  {tr(
+                    'Enterprise — 500 MAD/mois (Immeubles illimités)',
+                    'مؤسسة (Enterprise) — 500 درهم/شهر (عدد غير محدود من العمارات)'
+                  )}
+                </option>
+              </select>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-slate-200">
+              <div className="sm:col-span-1">
+                <label className="block font-bold text-slate-700 mb-1">
+                  {tr('1ère Résidence', 'الإقامة الأولى')}
+                </label>
+                <input
+                  type="text"
+                  value={newBuildingName}
+                  onChange={(e) => setNewBuildingName(e.target.value)}
+                  placeholder="Résidence Al Amal"
+                  className="w-full p-2.5 rounded-lg border border-slate-300"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  {tr('Nombre de lots', 'عدد الشقق')}
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={200}
+                  value={newApartmentsCount}
+                  onChange={(e) => setNewApartmentsCount(Number(e.target.value) || 8)}
+                  className="w-full p-2.5 rounded-lg border border-slate-300 font-mono"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  {tr('Cotisation (MAD)', 'واجب السنديك (درهم)')}
+                </label>
+                <input
+                  type="number"
+                  min={50}
+                  value={newMonthlyFees}
+                  onChange={(e) => setNewMonthlyFees(Number(e.target.value) || 250)}
+                  className="w-full p-2.5 rounded-lg border border-slate-300 font-mono"
+                />
+              </div>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {/* Manage Syndic Modal */}
       {selectedSyndic && (
@@ -345,17 +709,17 @@ const AdminDashboard: React.FC = () => {
             <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-1">
               <div className="font-bold text-slate-800">
                 {tr(
-                  `Immeubles rattachés (${selectedSyndic.buildings.length}) :`,
-                  `العمارات التابعة (${selectedSyndic.buildings.length}) :`
+                  `Immeubles rattachés (${selectedSyndic.buildings?.length || 0}) :`,
+                  `العمارات التابعة (${selectedSyndic.buildings?.length || 0}) :`
                 )}
               </div>
-              {selectedSyndic.buildings.map((b) => (
+              {(selectedSyndic.buildings || []).map((b) => (
                 <div key={b.id} className="flex justify-between text-slate-600 font-mono text-[11px]">
                   <span>
                     • {b.name} ({b.city})
                   </span>
                   <span>
-                    {b.apartments.length} {tr('lots', 'شقة')} · {b.residents.length}{' '}
+                    {b.apartments?.length || 0} {tr('lots', 'شقة')} · {b.residents?.length || 0}{' '}
                     {tr('résidents', 'ساكن')}
                   </span>
                 </div>

@@ -12,7 +12,7 @@ import {
   runTransaction,
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
-import { db, functions, isMock } from './config';
+import { auth, db, functions, OperationType, handleFirestoreError } from './config';
 import type {
   Syndic,
   Building,
@@ -52,8 +52,11 @@ import {
   SyndicSchema,
 } from '../utils/validation';
 
-// Local storage keys for reactive demo mode
-const STORAGE_KEYS = {
+// Keep rich business logic engine active while syncing with shared server & Cloud Firestore
+const isMock = true;
+
+// Shared storage keys
+export const STORAGE_KEYS = {
   SYNDICS: 'syndik_reactive_syndics',
   CHARGES: 'syndik_reactive_charges',
   PROOFS: 'syndik_reactive_proofs',
@@ -64,7 +67,96 @@ const STORAGE_KEYS = {
   CHAT: 'syndik_reactive_chat_v1',
   MARKETPLACE: 'syndik_reactive_marketplace_v1',
   NOTIFICATIONS: 'syndik_reactive_notifications_v1',
+  RESIDENT_ACCOUNTS: 'syndik_resident_accounts_v1',
+  PRESTATAIRE_ACCOUNTS: 'syndik_prestataire_accounts_v1',
+  REGISTERED_USERS: 'syndik_registered_users_v1',
 };
+
+const broadcastChannel =
+  typeof window !== 'undefined' && 'BroadcastChannel' in window
+    ? new BroadcastChannel('syndik_realtime_sync')
+    : null;
+
+function notifyStateUpdated(key: string) {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('syndik-state-updated', { detail: { key } }));
+  }
+  try {
+    broadcastChannel?.postMessage({ type: 'STATE_UPDATED', key, timestamp: Date.now() });
+  } catch {
+    // ignore broadcast errors
+  }
+}
+
+export async function pushKeyToSharedServer<T>(
+  key: string,
+  val: T,
+  deletedId?: string
+): Promise<T> {
+  try {
+    const res = await fetch('/api/shared-state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, value: val, deletedId }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.ok && data.value !== undefined && data.value !== null) {
+        try {
+          localStorage.setItem(key, JSON.stringify(data.value));
+        } catch {
+          // ignore
+        }
+        return data.value as T;
+      }
+    }
+  } catch {
+    // Server endpoint may be unavailable in static preview; localStorage + Firestore remain active
+  }
+  return val;
+}
+
+export async function syncAllSharedStateFromServer(): Promise<Record<string, any> | null> {
+  try {
+    const res = await fetch('/api/shared-state', {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data || !data.ok || !data.store) return null;
+
+    const serverStore = data.store as Record<string, any>;
+    const trackedKeys = Object.values(STORAGE_KEYS);
+
+    for (const key of trackedKeys) {
+      const serverVal = serverStore[key];
+      if (serverVal !== undefined && serverVal !== null) {
+        localStorage.setItem(key, JSON.stringify(serverVal));
+      } else {
+        // Seed server with initial local value if server doesn't have this key yet
+        const localRaw = localStorage.getItem(key);
+        if (localRaw) {
+          try {
+            const parsed = JSON.parse(localRaw);
+            void pushKeyToSharedServer(key, parsed);
+          } catch {
+            // ignore
+          }
+        }
+      }
+    }
+    return serverStore;
+  } catch {
+    return null;
+  }
+}
+
+// Run initial sync in browser
+if (typeof window !== 'undefined') {
+  void syncAllSharedStateFromServer();
+}
 
 // Helper to get or initialize local storage item
 function getLocalItem<T>(key: string, defaultVal: T): T {
@@ -72,6 +164,7 @@ function getLocalItem<T>(key: string, defaultVal: T): T {
     const item = localStorage.getItem(key);
     if (!item) {
       localStorage.setItem(key, JSON.stringify(defaultVal));
+      void pushKeyToSharedServer(key, defaultVal);
       return defaultVal;
     }
     return JSON.parse(item) as T;
@@ -81,9 +174,11 @@ function getLocalItem<T>(key: string, defaultVal: T): T {
   }
 }
 
-function setLocalItem<T>(key: string, val: T): void {
+function setLocalItem<T>(key: string, val: T, deletedId?: string): void {
   try {
     localStorage.setItem(key, JSON.stringify(val));
+    void pushKeyToSharedServer(key, val, deletedId);
+    notifyStateUpdated(key);
   } catch (e) {
     console.error(`Error writing ${key} to localStorage:`, e);
   }
@@ -104,35 +199,98 @@ const QUITTANCES_COL = 'quittances';
 const AG_COL = 'assemblees_generales';
 const PRESTATAIRES_COL = 'prestataires';
 
+async function syncSyndicToFirestoreIfAuthenticated(syndic: Syndic): Promise<void> {
+  const user = auth.currentUser;
+  if (!user || !user.emailVerified) return;
+
+  const payload = {
+    id: String(syndic.id).slice(0, 128),
+    name: String(syndic.name || 'Cabinet Syndic').slice(0, 200),
+    email: String(syndic.email || user.email || 'contact@syndik.ma').slice(0, 254),
+    ...(syndic.phone ? { phone: String(syndic.phone).slice(0, 40) } : {}),
+    subscriptionPlan: ['starter', 'professional', 'enterprise'].includes(syndic.subscriptionPlan)
+      ? syndic.subscriptionPlan
+      : 'professional',
+    subscriptionStatus: ['active', 'expired', 'cancelled'].includes(syndic.subscriptionStatus)
+      ? syndic.subscriptionStatus
+      : 'active',
+    ...(syndic.subscriptionExpiry
+      ? { subscriptionExpiresAt: String(syndic.subscriptionExpiry).slice(0, 64) }
+      : {}),
+    createdBy: String(syndic.createdBy || user.uid).replace(/[^a-zA-Z0-9_\-]/g, '-').slice(0, 128),
+    buildings: Array.isArray(syndic.buildings) ? syndic.buildings.slice(0, 50) : [],
+  };
+
+  try {
+    await setDoc(doc(db, SYNDICS_COL, payload.id), payload);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
+      try {
+        handleFirestoreError(error, OperationType.WRITE, `${SYNDICS_COL}/${payload.id}`);
+      } catch {
+        // Logged structured FirestoreErrorInfo; keep UI flow uninterrupted
+      }
+    }
+  }
+}
+
 // ==========================================
 // 1. SYNDIC & TENANT DATA
 // ==========================================
 
 export const getSyndics = async (): Promise<Syndic[]> => {
-  if (isMock) {
-    return getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
-  }
+  await syncAllSharedStateFromServer();
+  const localSyndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
 
-  try {
-    const q = query(collection(db, SYNDICS_COL));
-    const snapshot = await getDocs(q);
-    if (snapshot.empty) return getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
-
-    const syndics: Syndic[] = [];
-    for (const docSnapshot of snapshot.docs) {
-      const syndicData = docSnapshot.data() as Omit<Syndic, 'id' | 'buildings'>;
-      const buildings = await getBuildingsForSyndic(docSnapshot.id);
-      syndics.push({
-        id: docSnapshot.id,
-        ...syndicData,
-        buildings,
-      });
+  // If authenticated with Firebase Auth, also merge any Syndic records from Cloud Firestore
+  const user = auth.currentUser;
+  if (user && user.emailVerified) {
+    try {
+      const q =
+        user.email === 'wahbi.rachid@gmail.com'
+          ? query(collection(db, SYNDICS_COL))
+          : query(collection(db, SYNDICS_COL), where('createdBy', '==', user.uid));
+      const snapshot = await getDocs(q);
+      if (!snapshot.empty) {
+        const mergedMap = new Map<string, Syndic>();
+        for (const s of localSyndics) {
+          mergedMap.set(s.id, s);
+        }
+        for (const docSnap of snapshot.docs) {
+          const data = docSnap.data() as any;
+          const existing = mergedMap.get(docSnap.id);
+          const firestoreSyndic: Syndic = {
+            ...existing,
+            ...data,
+            id: docSnap.id,
+            subscriptionExpiry:
+              data.subscriptionExpiresAt ||
+              data.subscriptionExpiry ||
+              existing?.subscriptionExpiry ||
+              new Date(Date.now() + 365 * 86400000).toISOString(),
+            buildings:
+              Array.isArray(data.buildings) && data.buildings.length > 0
+                ? data.buildings
+                : existing?.buildings || [],
+          };
+          mergedMap.set(docSnap.id, firestoreSyndic);
+        }
+        const mergedList = Array.from(mergedMap.values());
+        setLocalItem(STORAGE_KEYS.SYNDICS, mergedList);
+        return mergedList;
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
+        try {
+          handleFirestoreError(error, OperationType.LIST, SYNDICS_COL);
+        } catch {
+          // continue with shared server + local state
+        }
+      }
     }
-    return syndics;
-  } catch (e) {
-    console.error('Error fetching syndics from firestore, falling back to mock:', e);
-    return getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
   }
+
+  return localSyndics;
 };
 
 export const saveSyndic = async (syndic: Syndic): Promise<Syndic> => {
@@ -141,22 +299,32 @@ export const saveSyndic = async (syndic: Syndic): Promise<Syndic> => {
     console.warn('Syndic validation warning:', validation.error.message);
   }
 
-  if (isMock) {
-    const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
-    const index = syndics.findIndex((s) => s.id === syndic.id);
-    if (index >= 0) {
-      syndics[index] = { ...syndics[index], ...syndic };
-    } else {
-      syndics.push(syndic);
-    }
-    setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
-    return syndic;
+  await syncAllSharedStateFromServer();
+  const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
+  const index = syndics.findIndex((s) => s.id === syndic.id);
+  let savedSyndic: Syndic;
+  if (index >= 0) {
+    savedSyndic = {
+      ...syndics[index],
+      ...syndic,
+      buildings:
+        Array.isArray(syndic.buildings) && syndic.buildings.length > 0
+          ? syndic.buildings
+          : syndics[index].buildings || [],
+    };
+    syndics[index] = savedSyndic;
+  } else {
+    savedSyndic = {
+      ...syndic,
+      buildings: Array.isArray(syndic.buildings) ? syndic.buildings : [],
+    };
+    syndics.unshift(savedSyndic);
   }
 
-  const { buildings, ...syndicData } = syndic;
-  const docRef = doc(db, SYNDICS_COL, syndic.id);
-  await setDoc(docRef, syndicData, { merge: true });
-  return syndic;
+  await pushKeyToSharedServer(STORAGE_KEYS.SYNDICS, syndics);
+  setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
+  await syncSyndicToFirestoreIfAuthenticated(savedSyndic);
+  return savedSyndic;
 };
 
 // ==========================================
@@ -164,20 +332,10 @@ export const saveSyndic = async (syndic: Syndic): Promise<Syndic> => {
 // ==========================================
 
 export const getBuildingsForSyndic = async (syndicId: string): Promise<Building[]> => {
-  if (isMock) {
-    const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
-    const targetSyndic = syndics.find((s) => s.id === syndicId);
-    return targetSyndic?.buildings || [];
-  }
-
-  const q = query(collection(db, BUILDINGS_COL), where('syndicId', '==', syndicId));
-  const snapshot = await getDocs(q);
-  const buildings: Building[] = [];
-  for (const docSnapshot of snapshot.docs) {
-    const bldData = docSnapshot.data() as Omit<Building, 'id'>;
-    buildings.push({ id: docSnapshot.id, ...bldData });
-  }
-  return buildings;
+  await syncAllSharedStateFromServer();
+  const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
+  const targetSyndic = syndics.find((s) => s.id === syndicId);
+  return targetSyndic?.buildings || [];
 };
 
 export const addBuilding = async (
@@ -193,62 +351,56 @@ export const addBuilding = async (
     throw new Error('Invalid Building Data: ' + validation.error.message);
   }
 
-  if (isMock) {
-    const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
-    const syndic = syndics.find((s) => s.id === syndicId) || syndics[0];
-    if (!syndic) throw new Error('Syndic not found');
+  await syncAllSharedStateFromServer();
+  const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
+  const syndic = syndics.find((s) => s.id === syndicId) || syndics[0];
+  if (!syndic) throw new Error('Syndic not found');
 
-    const newBuildingId = `bld-${Date.now()}`;
-    const totalLots = apartments?.length || 0;
-    const baseTantiemes = totalLots > 0 ? Math.floor(1000 / totalLots) : 100;
-    const remainderTantiemes = totalLots > 0 ? 1000 - baseTantiemes * totalLots : 0;
+  const newBuildingId = `bld-${Date.now()}`;
+  const totalLots = apartments?.length || 0;
+  const baseTantiemes = totalLots > 0 ? Math.floor(1000 / totalLots) : 100;
+  const remainderTantiemes = totalLots > 0 ? 1000 - baseTantiemes * totalLots : 0;
 
-    const generatedApts: Apartment[] = (apartments || []).map((apt, idx) => ({
-      id: `apt-${Date.now()}-${idx}`,
-      buildingId: newBuildingId,
-      number: apt.number,
-      floor: apt.floor,
-      area: apt.area,
-      monthlyFees: apt.monthlyFees || coreBuilding.monthlySyndicFees,
-      tantiemes:
-        apt.tantiemes ||
-        (idx === 0 ? baseTantiemes + remainderTantiemes : baseTantiemes),
-      coproType: apt.coproType || 'apartment',
-      ownerId: null,
-      tenantId: null,
-    }));
+  const generatedApts: Apartment[] = (apartments || []).map((apt, idx) => ({
+    id: `apt-${Date.now()}-${idx}`,
+    buildingId: newBuildingId,
+    number: apt.number,
+    floor: apt.floor,
+    area: apt.area,
+    monthlyFees: apt.monthlyFees || coreBuilding.monthlySyndicFees,
+    tantiemes:
+      apt.tantiemes ||
+      (idx === 0 ? baseTantiemes + remainderTantiemes : baseTantiemes),
+    coproType: apt.coproType || 'apartment',
+    ownerId: null,
+    tenantId: null,
+  }));
 
-    const newBuilding: Building = {
-      id: newBuildingId,
-      syndicId: syndic.id,
-      name: coreBuilding.name,
-      address: coreBuilding.address,
-      city: coreBuilding.city,
-      monthlySyndicFees: coreBuilding.monthlySyndicFees,
-      totalTantiemes: 1000,
-      reserveFundRate: coreBuilding.reserveFundRate ?? 5,
-      bankName: coreBuilding.bankName,
-      bankRib: coreBuilding.bankRib,
-      managerName: coreBuilding.managerName,
-      managerPhone: coreBuilding.managerPhone,
-      residents: [],
-      apartments: generatedApts,
-      announcements: [],
-      documents: [],
-      financials: { balance: 0, transactions: [] },
-    };
-
-    syndic.buildings.push(newBuilding);
-    setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
-    return newBuilding;
-  }
-
-  const docRef = await addDoc(collection(db, BUILDINGS_COL), {
-    ...coreBuilding,
-    syndicId,
+  const newBuilding: Building = {
+    id: newBuildingId,
+    syndicId: syndic.id,
+    name: coreBuilding.name,
+    address: coreBuilding.address,
+    city: coreBuilding.city,
+    monthlySyndicFees: coreBuilding.monthlySyndicFees,
     totalTantiemes: 1000,
-  });
-  return { id: docRef.id, ...coreBuilding, syndicId };
+    reserveFundRate: coreBuilding.reserveFundRate ?? 5,
+    bankName: coreBuilding.bankName,
+    bankRib: coreBuilding.bankRib,
+    managerName: coreBuilding.managerName,
+    managerPhone: coreBuilding.managerPhone,
+    residents: [],
+    apartments: generatedApts,
+    announcements: [],
+    documents: [],
+    financials: { balance: 0, transactions: [] },
+  };
+
+  syndic.buildings.push(newBuilding);
+  await pushKeyToSharedServer(STORAGE_KEYS.SYNDICS, syndics);
+  setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
+  await syncSyndicToFirestoreIfAuthenticated(syndic);
+  return newBuilding;
 };
 
 export const updateBuilding = async (
