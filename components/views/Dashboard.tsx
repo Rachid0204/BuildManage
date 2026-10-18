@@ -8,22 +8,7 @@ import {
   FinancialsIcon,
   AGIcon,
   PrestatairesIcon,
-  QuittanceIcon,
-  ShieldAlertIcon,
 } from '../icons/IconComponents';
-
-type View =
-  | 'dashboard'
-  | 'residents'
-  | 'apartments'
-  | 'announcements'
-  | 'documents'
-  | 'financials'
-  | 'buildings'
-  | 'ag'
-  | 'prestataires'
-  | 'maintenance'
-  | 'analytics';
 
 const StatCard: React.FC<{
   icon: React.ReactNode;
@@ -56,8 +41,8 @@ const Dashboard: React.FC<{ building: Building; onNavigate: (view: any) => void 
   building,
   onNavigate,
 }) => {
-  const { t } = useI18n();
-  const currencyFormatter = new Intl.NumberFormat('fr-MA', {
+  const { t, language } = useI18n();
+  const currencyFormatter = new Intl.NumberFormat(language === 'ar' ? 'ar-MA' : 'fr-MA', {
     style: 'currency',
     currency: 'MAD',
     minimumFractionDigits: 2,
@@ -68,6 +53,7 @@ const Dashboard: React.FC<{ building: Building; onNavigate: (view: any) => void 
     .slice(0, 3);
 
   const totalTantiemes = building.apartments.reduce((sum, a) => sum + (a.tantiemes || 0), 0);
+  const ownersCount = building.residents.filter((r) => r.isOwner).length;
 
   return (
     <div className="space-y-6">
@@ -78,12 +64,12 @@ const Dashboard: React.FC<{ building: Building; onNavigate: (view: any) => void 
             {building.name}
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            {building.address}, {building.city} · Copropriété régie par la Loi n° 18-00
+            {building.address}, {building.city} · {t('dashboard.coproprieteLaw')}
           </p>
         </div>
         <div className="flex items-center gap-2 text-xs">
           <span className="font-mono bg-teal-50 text-teal-800 border border-teal-200 px-2.5 py-1 rounded font-semibold">
-            Quote-part totale : {totalTantiemes} / 1000 tantièmes
+            {t('dashboard.totalShare', { total: String(totalTantiemes) })}
           </span>
         </div>
       </div>
@@ -92,33 +78,33 @@ const Dashboard: React.FC<{ building: Building; onNavigate: (view: any) => void 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           icon={<FinancialsIcon />}
-          label="Solde Copropriété"
+          label={t('dashboard.balanceLabel')}
           value={currencyFormatter.format(building.financials.balance)}
-          subtitle="Compte bancaire syndicat"
+          subtitle={t('dashboard.balanceSubtitle')}
           color="bg-teal-700"
           onClick={() => onNavigate('financials')}
         />
         <StatCard
           icon={<ApartmentsIcon />}
-          label="Lots & Tantièmes"
-          value={`${building.apartments.length} lots`}
-          subtitle={`${totalTantiemes}/1000 millièmes`}
+          label={t('dashboard.lotsLabel')}
+          value={t('dashboard.lotsCount', { count: String(building.apartments.length) })}
+          subtitle={t('dashboard.lotsSubtitle', { total: String(totalTantiemes) })}
           color="bg-slate-800"
           onClick={() => onNavigate('apartments')}
         />
         <StatCard
           icon={<ResidentsIcon />}
-          label="Copropriétaires"
+          label={t('dashboard.ownersLabel')}
           value={building.residents.length}
-          subtitle={`${building.residents.filter((r) => r.isOwner).length} propriétaires`}
+          subtitle={t('dashboard.ownersSubtitle', { count: String(ownersCount) })}
           color="bg-indigo-600"
           onClick={() => onNavigate('residents')}
         />
         <StatCard
           icon={<AGIcon />}
-          label="Assemblée Générale"
-          value="AGO 2026"
-          subtitle="Quorum légal atteint (>50%)"
+          label={t('dashboard.agLabel')}
+          value={t('dashboard.agValue')}
+          subtitle={t('dashboard.agSubtitle')}
           color="bg-emerald-600"
           onClick={() => onNavigate('ag')}
         />
@@ -134,7 +120,7 @@ const Dashboard: React.FC<{ building: Building; onNavigate: (view: any) => void 
               onClick={() => onNavigate('announcements')}
               className="text-xs text-teal-700 hover:text-teal-900 font-semibold"
             >
-              Voir tout
+              {t('dashboard.viewAll')}
             </button>
           </div>
           <div className="space-y-3.5 mt-3">
@@ -143,7 +129,7 @@ const Dashboard: React.FC<{ building: Building; onNavigate: (view: any) => void 
                 <div key={ann.id} className="border-b border-slate-100 pb-3 last:border-b-0 last:pb-0">
                   <p className="font-semibold text-slate-900 text-xs sm:text-sm">{ann.title}</p>
                   <p className="text-[11px] text-slate-400 font-mono mt-0.5">
-                    {new Date(ann.date).toLocaleDateString('fr-MA')}
+                    {new Date(ann.date).toLocaleDateString(language === 'ar' ? 'ar-MA' : 'fr-MA')}
                   </p>
                   <p className="text-xs text-slate-600 mt-1 line-clamp-2">{ann.content}</p>
                 </div>
@@ -159,58 +145,58 @@ const Dashboard: React.FC<{ building: Building; onNavigate: (view: any) => void 
         {/* Quick Actions & Legal Modules */}
         <Card className="p-5 border border-slate-200">
           <h2 className="font-bold text-slate-900 text-sm pb-3 border-b border-slate-200">
-            Actions Rapides & Modules Réglementaires
+            {t('dashboard.quickActionsTitle')}
           </h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
             <button
               onClick={() => onNavigate('financials')}
-              className="p-3 rounded-lg border border-slate-200 hover:border-teal-300 hover:bg-slate-50 text-left transition-colors flex items-start gap-2.5"
+              className="p-3 rounded-lg border border-slate-200 hover:border-teal-300 hover:bg-slate-50 text-start transition-colors flex items-start gap-2.5"
             >
               <div className="p-2 rounded bg-teal-50 text-teal-700">
                 <FinancialsIcon />
               </div>
               <div>
-                <p className="font-bold text-slate-900 text-xs">Vérifier les Virements</p>
-                <p className="text-[11px] text-slate-500">Valider les justificatifs des résidents</p>
+                <p className="font-bold text-slate-900 text-xs">{t('dashboard.verifyTransfersTitle')}</p>
+                <p className="text-[11px] text-slate-500">{t('dashboard.verifyTransfersDesc')}</p>
               </div>
             </button>
 
             <button
               onClick={() => onNavigate('ag')}
-              className="p-3 rounded-lg border border-slate-200 hover:border-teal-300 hover:bg-slate-50 text-left transition-colors flex items-start gap-2.5"
+              className="p-3 rounded-lg border border-slate-200 hover:border-teal-300 hover:bg-slate-50 text-start transition-colors flex items-start gap-2.5"
             >
               <div className="p-2 rounded bg-emerald-50 text-emerald-700">
                 <AGIcon />
               </div>
               <div>
-                <p className="font-bold text-slate-900 text-xs">Assemblée Générale</p>
-                <p className="text-[11px] text-slate-500">Feuille de présence & votes</p>
+                <p className="font-bold text-slate-900 text-xs">{t('dashboard.agActionTitle')}</p>
+                <p className="text-[11px] text-slate-500">{t('dashboard.agActionDesc')}</p>
               </div>
             </button>
 
             <button
               onClick={() => onNavigate('prestataires')}
-              className="p-3 rounded-lg border border-slate-200 hover:border-teal-300 hover:bg-slate-50 text-left transition-colors flex items-start gap-2.5"
+              className="p-3 rounded-lg border border-slate-200 hover:border-teal-300 hover:bg-slate-50 text-start transition-colors flex items-start gap-2.5"
             >
               <div className="p-2 rounded bg-indigo-50 text-indigo-700">
                 <PrestatairesIcon />
               </div>
               <div>
-                <p className="font-bold text-slate-900 text-xs">Prestataires & Contrats</p>
-                <p className="text-[11px] text-slate-500">Ascenseur, nettoyage, sécurité</p>
+                <p className="font-bold text-slate-900 text-xs">{t('dashboard.providersActionTitle')}</p>
+                <p className="text-[11px] text-slate-500">{t('dashboard.providersActionDesc')}</p>
               </div>
             </button>
 
             <button
               onClick={() => onNavigate('apartments')}
-              className="p-3 rounded-lg border border-slate-200 hover:border-teal-300 hover:bg-slate-50 text-left transition-colors flex items-start gap-2.5"
+              className="p-3 rounded-lg border border-slate-200 hover:border-teal-300 hover:bg-slate-50 text-start transition-colors flex items-start gap-2.5"
             >
               <div className="p-2 rounded bg-slate-100 text-slate-700">
                 <ApartmentsIcon />
               </div>
               <div>
-                <p className="font-bold text-slate-900 text-xs">Grille des Tantièmes</p>
-                <p className="text-[11px] text-slate-500">Quotes-parts et répartition</p>
+                <p className="font-bold text-slate-900 text-xs">{t('dashboard.tantiemesActionTitle')}</p>
+                <p className="text-[11px] text-slate-500">{t('dashboard.tantiemesActionDesc')}</p>
               </div>
             </button>
           </div>

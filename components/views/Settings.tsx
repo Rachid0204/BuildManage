@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import type { Syndic } from '../../types';
 import Card from '../common/Card';
@@ -11,7 +10,7 @@ interface SettingsProps {
 }
 
 const Settings: React.FC<SettingsProps> = ({ syndic, onUpdate }) => {
-    const { t } = useI18n();
+    const { t, tr } = useI18n();
     const [name, setName] = useState(syndic.name);
     const [logoUrl, setLogoUrl] = useState(syndic.logoUrl);
     const [ice, setIce] = useState(syndic.ice || '');
@@ -42,7 +41,6 @@ const Settings: React.FC<SettingsProps> = ({ syndic, onUpdate }) => {
 
         setIsLoading(true);
         
-        // Simulate async update
         setTimeout(() => {
             onUpdate({
                 ...syndic,
@@ -63,7 +61,6 @@ const Settings: React.FC<SettingsProps> = ({ syndic, onUpdate }) => {
             <h1 className="text-3xl font-bold text-gray-800 mb-6">{t('settings.title')}</h1>
             
             <div className="grid grid-cols-1 gap-8">
-                {/* Profile Settings */}
                 <Card>
                     <h2 className="text-xl font-semibold text-gray-800 mb-4 border-b border-gray-200 pb-2">{t('settings.profile')}</h2>
                     
@@ -98,7 +95,7 @@ const Settings: React.FC<SettingsProps> = ({ syndic, onUpdate }) => {
                                 />
                                 {logoUrl && (
                                     <div className="mt-2">
-                                        <p className="text-xs text-gray-500 mb-1">Preview:</p>
+                                        <p className="text-xs text-gray-500 mb-1">{tr('Aperçu :', 'معاينة :')}</p>
                                         <img src={logoUrl} alt="Logo Preview" className="h-12 object-contain border border-gray-200 rounded p-1 bg-white" onError={(e) => (e.currentTarget.style.display = 'none')} />
                                     </div>
                                 )}
@@ -153,7 +150,7 @@ const Settings: React.FC<SettingsProps> = ({ syndic, onUpdate }) => {
 
                         <div className="flex justify-end pt-4">
                             <Button type="submit" disabled={isLoading}>
-                                {isLoading ? 'Saving...' : t('settings.save')}
+                                {isLoading ? tr('Enregistrement...', 'جاري الحفظ...') : t('settings.save')}
                             </Button>
                         </div>
                     </form>

@@ -22,6 +22,8 @@ import MarketplaceView from './MarketplaceView';
 import ResidentAGVoting from './ResidentAGVoting';
 import Maintenance from './Maintenance';
 import NotificationBell from '../common/NotificationBell';
+import LanguageToggle from '../common/LanguageToggle';
+import { useI18n } from '../../hooks/useI18n';
 import {
   getMaintenanceRequestsForResident,
   addMaintenanceRequest,
@@ -35,10 +37,8 @@ import {
 } from '../../firebase/services';
 import type {
   MaintenanceRequest,
-  PaymentProof,
   PaymentMethod,
   Quittance,
-  AssembleeGenerale,
   Syndic,
   Building,
   Resident,
@@ -46,16 +46,21 @@ import type {
 import { generateQuittancePDF } from '../../services/pdfService';
 import Loading from '../common/Loading';
 
-const currencyFormatter = new Intl.NumberFormat('fr-MA', {
-  style: 'currency',
-  currency: 'MAD',
-  minimumFractionDigits: 2,
-});
-
 const ResidentDashboard: React.FC = () => {
-  const { userProfile, logout, loginWithEmail, changePassword } = useAuth();
+  const { userProfile, logout, changePassword } = useAuth();
+  const { t, tr, language } = useI18n();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+
+  const currencyFormatter = useMemo(
+    () =>
+      new Intl.NumberFormat(language === 'ar' ? 'ar-MA' : 'fr-MA', {
+        style: 'currency',
+        currency: 'MAD',
+        minimumFractionDigits: 2,
+      }),
+    [language]
+  );
 
   const [activeTab, setActiveTab] = useState<
     'overview' | 'voting' | 'maintenance' | 'chat' | 'providers' | 'marketplace'
@@ -63,7 +68,8 @@ const ResidentDashboard: React.FC = () => {
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [isProofModalOpen, setIsProofModalOpen] = useState(false);
   const [selectedChargeId, setSelectedChargeId] = useState<string>('');
-  const [selectedResidentQuittanceForPreview, setSelectedResidentQuittanceForPreview] = useState<Quittance | null>(null);
+  const [selectedResidentQuittanceForPreview, setSelectedResidentQuittanceForPreview] =
+    useState<Quittance | null>(null);
   const [isDownloadingChargeQuit, setIsDownloadingChargeQuit] = useState<string | null>(null);
   const [previewDocName, setPreviewDocName] = useState<string | null>(null);
 
@@ -71,7 +77,9 @@ const ResidentDashboard: React.FC = () => {
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [passwordMsg, setPasswordMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [passwordMsg, setPasswordMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(
+    null
+  );
 
   // Maintenance Form State
   const [maintCategory, setMaintCategory] = useState<MaintenanceRequest['category']>('plumbing');
@@ -189,9 +197,10 @@ const ResidentDashboard: React.FC = () => {
   });
 
   const activeAGSession = agSessions[0];
-  const unvotedResolutionsCount = activeAGSession?.resolutions.filter(
-    (r) => !r.voters?.some((v) => v.residentId === currentResident?.id)
-  ).length || 0;
+  const unvotedResolutionsCount =
+    activeAGSession?.resolutions.filter(
+      (r) => !r.voters?.some((v) => v.residentId === currentResident?.id)
+    ).length || 0;
 
   const proofMutation = useMutation({
     mutationFn: submitPaymentProof,
@@ -220,11 +229,6 @@ const ResidentDashboard: React.FC = () => {
     },
   });
 
-  const handleQuickRoleSwitch = async (targetEmail: string) => {
-    const profile = await loginWithEmail(targetEmail, 'password123');
-    navigate(getHomeRouteForRole(profile.role), { replace: true });
-  };
-
   const handleLogout = async () => {
     await logout();
     navigate('/login', { replace: true });
@@ -235,14 +239,17 @@ const ResidentDashboard: React.FC = () => {
     if (newPassword.trim().length < 6) {
       setPasswordMsg({
         type: 'error',
-        text: 'Le nouveau mot de passe doit comporter au moins 6 caractères.',
+        text: tr(
+          'Le nouveau mot de passe doit comporter au moins 6 caractères.',
+          'يجب أن تتكون كلمة المرور الجديدة من 6 أحرف على الأقل.'
+        ),
       });
       return;
     }
     if (newPassword.trim() !== confirmPassword.trim()) {
       setPasswordMsg({
         type: 'error',
-        text: 'Les deux mots de passe ne correspondent pas.',
+        text: tr('Les deux mots de passe ne correspondent pas.', 'كلمتا المرور غير متطابقتين.'),
       });
       return;
     }
@@ -250,7 +257,10 @@ const ResidentDashboard: React.FC = () => {
       await changePassword(newPassword.trim());
       setPasswordMsg({
         type: 'success',
-        text: 'Votre mot de passe personnel a été enregistré avec succès.',
+        text: tr(
+          'Votre mot de passe personnel a été enregistré avec succès.',
+          'تم حفظ كلمة المرور الشخصية الخاصة بكم بنجاح.'
+        ),
       });
       setNewPassword('');
       setConfirmPassword('');
@@ -261,7 +271,12 @@ const ResidentDashboard: React.FC = () => {
     } catch (e: any) {
       setPasswordMsg({
         type: 'error',
-        text: e?.message || 'Erreur lors de la mise à jour du mot de passe.',
+        text:
+          e?.message ||
+          tr(
+            'Erreur lors de la mise à jour du mot de passe.',
+            'حدث خطأ أثناء تحديث كلمة المرور.'
+          ),
       });
     }
   };
@@ -269,10 +284,22 @@ const ResidentDashboard: React.FC = () => {
   const pendingCharges = myCharges.filter((c) => c.status === 'pending' || c.status === 'overdue');
   const totalPendingAmount = pendingCharges.reduce((sum, c) => sum + c.amount, 0);
 
-  if (loadingCharges) return <Loading message="Chargement de votre espace résident..." />;
+  if (userProfile && userProfile.role !== 'resident') {
+    navigate(getHomeRouteForRole(userProfile.role), { replace: true });
+    return null;
+  }
+
+  if (loadingCharges)
+    return (
+      <Loading
+        message={tr('Chargement de votre espace résident...', 'جاري تحميل فضاء الساكن الخاص بكم...')}
+      />
+    );
+
+  const dateLocale = language === 'ar' ? 'ar-MA' : 'fr-MA';
 
   return (
-    <div className="min-h-screen bg-slate-100">
+    <div className="min-h-screen bg-slate-100" dir={language === 'ar' ? 'rtl' : 'ltr'}>
       {/* Top Navbar */}
       <nav className="bg-slate-900 text-white shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -286,49 +313,19 @@ const ResidentDashboard: React.FC = () => {
                     : 'bg-sky-600/30 text-sky-200 border border-sky-500/40'
                 }`}
               >
-                {isOwnerResident ? 'Espace Copropriétaire' : 'Espace Locataire'}
+                {isOwnerResident ? t('residentPortal.ownerBadge') : t('residentPortal.tenantBadge')}
               </span>
               {activeBuilding && (
                 <span className="text-xs text-slate-300 font-medium hidden md:inline">
                   • {activeBuilding.name}
-                  {currentApartment ? ` (Lot ${currentApartment.number})` : ''}
+                  {currentApartment
+                    ? ` (${t('residentPortal.lotLabel', { number: currentApartment.number })})`
+                    : ''}
                 </span>
               )}
             </div>
 
             <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
-              {/* Quick Role Switcher for Smooth Demo Testing */}
-              <div className="hidden lg:flex items-center gap-1.5 bg-slate-800 px-2 py-1 rounded-lg border border-slate-700">
-                <span className="text-[10px] text-slate-400 font-semibold uppercase me-1">
-                  Basculer :
-                </span>
-                <button
-                  type="button"
-                  onClick={() => handleQuickRoleSwitch('contact@syndicpro.ma')}
-                  className="px-2 py-0.5 rounded bg-teal-500/20 hover:bg-teal-500/30 text-teal-200 text-[11px] font-semibold"
-                >
-                  🏢 Syndic
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    handleQuickRoleSwitch(
-                      isOwnerResident ? 'youssef.benali@email.com' : 'fatima.zahra@email.com'
-                    )
-                  }
-                  className="px-2 py-0.5 rounded bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-200 text-[11px] font-semibold"
-                >
-                  {isOwnerResident ? '🏠 Vue Locataire' : '🔑 Vue Copropriétaire'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleQuickRoleSwitch('provider@syndik.ma')}
-                  className="px-2 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 text-[11px] font-semibold"
-                >
-                  🛠️ Prestataire
-                </button>
-              </div>
-
               <span className="text-xs sm:text-sm text-slate-300 hidden sm:inline">
                 <strong>{currentResident?.name || userProfile?.displayName}</strong>
               </span>
@@ -340,19 +337,21 @@ const ResidentDashboard: React.FC = () => {
                   setIsPasswordModalOpen(true);
                 }}
                 className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 px-2.5 py-1.5 rounded-lg border border-slate-700 font-medium"
-                title="Modifier mon mot de passe"
+                title={t('residentPortal.passwordBtn')}
               >
-                🔑 Mot de passe
+                🔑 {t('residentPortal.passwordBtn')}
               </button>
 
               <NotificationBell />
+
+              <LanguageToggle variant="dark" />
 
               <button
                 type="button"
                 onClick={handleLogout}
                 className="text-xs text-rose-400 hover:text-rose-200 transition-colors font-semibold px-2 py-1"
               >
-                Déconnexion
+                {t('header.logout')}
               </button>
             </div>
           </div>
@@ -364,8 +363,8 @@ const ResidentDashboard: React.FC = () => {
         <div className="bg-amber-50 border-b border-amber-200 px-4 py-3">
           <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
             <div className="text-xs text-amber-950">
-              <span className="font-bold">🔐 Première connexion avec mot de passe temporaire :</span>{' '}
-              Vous utilisez actuellement le mot de passe généré par votre Syndic. Pour sécuriser votre compte, définissez votre mot de passe personnel.
+              <span className="font-bold">🔐 {t('residentPortal.tempPasswordTitle')}</span>{' '}
+              {t('residentPortal.tempPasswordDesc')}
             </div>
             <button
               type="button"
@@ -375,7 +374,7 @@ const ResidentDashboard: React.FC = () => {
               }}
               className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shrink-0"
             >
-              Personnaliser mon mot de passe
+              {t('residentPortal.customizePasswordBtn')}
             </button>
           </div>
         </div>
@@ -384,7 +383,7 @@ const ResidentDashboard: React.FC = () => {
       {/* Sub Navigation Bar for Resident Features */}
       <div className="bg-white border-b border-slate-200 sticky top-0 z-10 shadow-xs">
         <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
-          <div className="flex items-center space-x-1.5 sm:space-x-3 overflow-x-auto no-scrollbar py-2.5">
+          <div className="flex items-center gap-1.5 sm:gap-3 overflow-x-auto no-scrollbar py-2.5">
             <button
               onClick={() => setActiveTab('overview')}
               className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap ${
@@ -394,7 +393,7 @@ const ResidentDashboard: React.FC = () => {
               }`}
             >
               <span>🏠</span>
-              <span>Mon Logement & Finances</span>
+              <span>{t('residentPortal.tabOverview')}</span>
             </button>
 
             <button
@@ -406,14 +405,14 @@ const ResidentDashboard: React.FC = () => {
               }`}
             >
               <span>🗳️</span>
-              <span>Assemblée & Votes</span>
+              <span>{t('residentPortal.tabAg')}</span>
               {unvotedResolutionsCount > 0 ? (
                 <span className="text-[10px] bg-emerald-500 text-white px-2 py-0.5 rounded-full font-bold animate-pulse">
-                  {unvotedResolutionsCount} à voter
+                  {unvotedResolutionsCount}
                 </span>
               ) : (
                 <span className="text-[10px] bg-teal-100 text-teal-800 px-1.5 py-0.2 rounded font-bold">
-                  Loi 18-00
+                  18-00
                 </span>
               )}
             </button>
@@ -427,7 +426,7 @@ const ResidentDashboard: React.FC = () => {
               }`}
             >
               <span>🔧</span>
-              <span>Suivi Incidents & Travaux</span>
+              <span>{t('residentPortal.tabMaintenance')}</span>
               <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.2 rounded font-bold">
                 {myRequests.length}
               </span>
@@ -442,7 +441,7 @@ const ResidentDashboard: React.FC = () => {
               }`}
             >
               <span>💬</span>
-              <span>Messagerie & Chat</span>
+              <span>{t('residentPortal.tabChat')}</span>
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
             </button>
 
@@ -455,7 +454,7 @@ const ResidentDashboard: React.FC = () => {
               }`}
             >
               <span>🛠️</span>
-              <span>Artisans & Dépannage</span>
+              <span>{t('sidebar.prestataires')}</span>
               <span className="text-[10px] bg-rose-100 text-rose-700 px-1.5 py-0.2 rounded font-bold">
                 24/7
               </span>
@@ -470,10 +469,7 @@ const ResidentDashboard: React.FC = () => {
               }`}
             >
               <span>🛍️</span>
-              <span>Souk des Résidents</span>
-              <span className="text-[10px] bg-teal-100 text-teal-800 px-1.5 py-0.2 rounded font-bold">
-                Annonces
-              </span>
+              <span>{t('residentPortal.tabMarketplace')}</span>
             </button>
           </div>
         </div>
@@ -487,7 +483,7 @@ const ResidentDashboard: React.FC = () => {
             isResidentPortal={true}
             currentResidentId={currentResident?.id}
             currentResidentName={currentResident?.name}
-            currentApartmentNumber={`Apt ${currentApartment?.number || 'A-102'}`}
+            currentApartmentNumber={`${tr('Lot', 'شقة')} ${currentApartment?.number || 'A-102'}`}
           />
         )}
 
@@ -496,7 +492,7 @@ const ResidentDashboard: React.FC = () => {
             building={activeBuilding}
             residentId={currentResident?.id}
             residentName={currentResident?.name}
-            apartmentNumber={`Apt ${currentApartment?.number || 'A-102'}`}
+            apartmentNumber={`${tr('Lot', 'شقة')} ${currentApartment?.number || 'A-102'}`}
             isResidentPortal={true}
           />
         )}
@@ -506,7 +502,7 @@ const ResidentDashboard: React.FC = () => {
             building={activeBuilding}
             currentResidentId={currentResident?.id}
             currentResidentName={currentResident?.name}
-            currentApartmentNumber={`Apt ${currentApartment?.number || 'A-102'}`}
+            currentApartmentNumber={`${tr('Lot', 'شقة')} ${currentApartment?.number || 'A-102'}`}
             currentPhone={currentResident?.phone || '0661 22 33 44'}
             isResidentPortal={true}
           />
@@ -527,7 +523,7 @@ const ResidentDashboard: React.FC = () => {
             isResidentPortal={true}
             currentResidentId={currentResident?.id}
             currentResidentName={currentResident?.name}
-            currentApartmentNumber={`Lot ${currentApartment?.number || 'A-102'}`}
+            currentApartmentNumber={`${tr('Lot', 'شقة')} ${currentApartment?.number || 'A-102'}`}
           />
         )}
 
@@ -542,23 +538,30 @@ const ResidentDashboard: React.FC = () => {
                       🗳️
                     </div>
                     <div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-[10px] font-bold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full border border-emerald-500/30">
-                          Scrutin en cours · Loi 18-00
+                          {tr('Scrutin en cours · Loi 18-00', 'تصويت جاري · قانون 18-00')}
                         </span>
-                        <span className="text-xs text-teal-200">
-                          {activeAGSession.title}
-                        </span>
+                        <span className="text-xs text-teal-200">{activeAGSession.title}</span>
                       </div>
                       <p className="text-xs text-teal-100 mt-1">
-                        Vous disposez de <strong>{currentApartment?.tantiemes || 260} tantièmes</strong> de copropriété pour voter.
+                        {tr('Vous disposez de', 'تتوفرون على')}{' '}
+                        <strong>
+                          {currentApartment?.tantiemes || 260} {tr('tantièmes', 'جزءاً عقارياً')}
+                        </strong>{' '}
+                        {tr('de copropriété pour voter.', 'من الملكية المشتركة للتصويت.')}
                         {unvotedResolutionsCount > 0 ? (
                           <span className="text-amber-300 font-semibold ms-1">
-                            ({unvotedResolutionsCount} délibération{unvotedResolutionsCount > 1 ? 's' : ''} en attente de votre vote)
+                            (
+                            {tr(
+                              `${unvotedResolutionsCount} délibération(s) en attente de votre vote`,
+                              `${unvotedResolutionsCount} قرار(ات) في انتظار تصويتكم`
+                            )}
+                            )
                           </span>
                         ) : (
                           <span className="text-emerald-300 font-semibold ms-1">
-                            (Tous vos votes ont été enregistrés ✓)
+                            ({tr('Tous vos votes ont été enregistrés ✓', 'تم تسجيل جميع أصواتكم ✓')})
                           </span>
                         )}
                       </p>
@@ -569,7 +572,7 @@ const ResidentDashboard: React.FC = () => {
                     onClick={() => setActiveTab('voting')}
                     className="text-xs bg-white text-teal-900 hover:bg-teal-50 font-bold shrink-0 shadow-xs"
                   >
-                    Accéder au Scrutin Numérique →
+                    {tr('Accéder au Scrutin Numérique →', 'الولوج إلى التصويت الرقمي ←')}
                   </Button>
                 </div>
               </Card>
@@ -577,398 +580,515 @@ const ResidentDashboard: React.FC = () => {
 
             {/* KPI Row */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-          {/* My Lot Card */}
-          <Card className="p-5 border-l-4 border-l-teal-600 bg-white">
-            <div className="flex justify-between items-start">
-              <div>
-                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Mon Logement</p>
-                <h3 className="text-xl font-bold text-slate-900 mt-1">{activeBuilding?.name || 'Résidence'}</h3>
-                <p className="text-sm text-teal-800 font-semibold mt-0.5">
-                  Appartement Lot {currentApartment?.number || 'A-102'} (Étage {currentApartment?.floor ?? 1})
-                </p>
-              </div>
-              <span className="text-xs font-mono font-bold text-teal-700 bg-teal-50 px-2.5 py-1 rounded">
-                {currentApartment?.tantiemes || 260} / 1000èmes
-              </span>
-            </div>
-            <div className="mt-4 pt-3 border-t border-slate-100 flex justify-between text-xs text-slate-600 font-mono">
-              <span>Superficie : {currentApartment?.area || 110} m²</span>
-              <span>Statut : {currentResident?.isOwner ? 'Propriétaire' : 'Locataire'}</span>
-            </div>
-          </Card>
-
-          {/* Pending Charges Card */}
-          <Card className="p-5 border-l-4 border-l-amber-500 bg-white">
-            <div className="flex justify-between items-start">
-              <div>
-                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Charges en Attente</p>
-                <p className="text-2xl font-bold font-mono text-slate-900 mt-1 tabular-nums">
-                  {currencyFormatter.format(totalPendingAmount)}
-                </p>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  {pendingCharges.length} appel(s) de fonds à régulariser
-                </p>
-              </div>
-              <div className="p-2.5 rounded-lg bg-amber-50 text-amber-700">
-                <FinancialsIcon />
-              </div>
-            </div>
-            <div className="mt-4 pt-3 border-t border-slate-100 flex justify-between items-center text-xs">
-              <span className="text-slate-500">Par virement bancaire :</span>
-              <button
-                onClick={() => {
-                  if (pendingCharges.length > 0) {
-                    setSelectedChargeId(pendingCharges[0].id);
-                    setIsProofModalOpen(true);
-                  } else {
-                    alert('Aucune charge en attente.');
-                  }
-                }}
-                className="text-xs font-semibold text-teal-700 hover:text-teal-900 underline"
-              >
-                Déposer un reçu de virement
-              </button>
-            </div>
-          </Card>
-
-          {/* Quittances Certified Card */}
-          <Card className="p-5 border-l-4 border-l-emerald-600 bg-white">
-            <div className="flex justify-between items-start">
-              <div>
-                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Quittances Certifiées</p>
-                <p className="text-2xl font-bold font-mono text-emerald-800 mt-1 tabular-nums">
-                  {myQuittances.length}
-                </p>
-                <p className="text-xs text-slate-500 mt-0.5">Attestations officielles (Loi 18-00)</p>
-              </div>
-              <div className="p-2.5 rounded-lg bg-emerald-50 text-emerald-700">
-                <QuittanceIcon />
-              </div>
-            </div>
-            <div className="mt-4 pt-3 border-t border-slate-100 text-xs text-emerald-700 font-medium">
-              Téléchargeables pour notaire ou archivage
-            </div>
-          </Card>
-        </div>
-
-        {/* Bank Details for Wire Transfers */}
-        <Card className="p-4 bg-teal-50 border border-teal-200">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-            <div>
-              <span className="font-bold text-teal-950 uppercase tracking-wider block">
-                Coordonnées Bancaires de la Copropriété (Pour vos virements)
-              </span>
-              <p className="text-teal-800 mt-0.5">
-                Banque : <strong>{activeBuilding?.bankName || 'Attijariwafa Bank - Agence Gauthier'}</strong>
-              </p>
-            </div>
-            <div className="bg-white px-3 py-1.5 rounded border border-teal-300 font-mono font-bold text-teal-900 text-sm select-all">
-              RIB : {activeBuilding?.bankRib || '007 780 0001234567890123 45'}
-            </div>
-          </div>
-        </Card>
-
-        {/* Section: Pending Charges & Proofs */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          <div className="lg:col-span-7 space-y-4">
-            <Card className="p-5">
-              <div className="flex justify-between items-center pb-3 border-b border-slate-200">
-                <div>
-                  <h3 className="font-bold text-slate-900 text-sm">Cotisations & Appels de Fonds</h3>
-                  <p className="text-xs text-slate-500">Réglez vos charges par virement et transmettez votre bordereau</p>
-                </div>
-              </div>
-
-              <div className="divide-y divide-slate-100 mt-3">
-                {myCharges.map((charge) => {
-                  const proof = myProofs.find((p) => p.chargeId === charge.id);
-
-                  return (
-                    <div key={charge.id} className="py-3 flex items-center justify-between gap-3 text-xs sm:text-sm">
-                      <div>
-                        <div className="font-semibold text-slate-900">{charge.description}</div>
-                        <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
-                          <span>Échéance : {new Date(charge.dueDate).toLocaleDateString('fr-MA')}</span>
-                          {proof && (
-                            <span className="text-amber-700 bg-amber-50 px-2 py-0.5 rounded font-medium">
-                              Virement en cours de validation (Réf: {proof.referenceNumber})
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-3 shrink-0">
-                        <span className="font-mono font-bold text-slate-900">
-                          {currencyFormatter.format(charge.amount)}
-                        </span>
-
-                        {charge.status === 'paid' ? (
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">
-                              ✓ Réglé
-                            </span>
-                            <button
-                              onClick={async () => {
-                                try {
-                                  setIsDownloadingChargeQuit(charge.id);
-                                  const matchingQuit = myQuittances.find((q) => q.chargeId === charge.id);
-                                  if (matchingQuit) {
-                                    generateQuittancePDF(matchingQuit, activeBuilding!, activeSyndic, currentApartment, currentResident);
-                                  } else if (activeBuilding) {
-                                    const generated = await generateQuittanceForCharge(charge.id, activeBuilding.id);
-                                    queryClient.invalidateQueries({ queryKey: ['quittances', currentResident?.id] });
-                                    generateQuittancePDF(generated, activeBuilding, activeSyndic, currentApartment, currentResident);
-                                  }
-                                } finally {
-                                  setIsDownloadingChargeQuit(null);
-                                }
-                              }}
-                              disabled={isDownloadingChargeQuit === charge.id}
-                              className="px-2.5 py-1 text-xs bg-teal-50 hover:bg-teal-100 text-teal-700 font-semibold rounded transition-colors flex items-center gap-1"
-                              title="Télécharger la quittance libératoire officielle (Loi 18-00)"
-                            >
-                              <QuittanceIcon />
-                              <span>{isDownloadingChargeQuit === charge.id ? 'Génération...' : 'Quittance PDF'}</span>
-                            </button>
-                          </div>
-                        ) : proof ? (
-                          <span className="text-xs font-semibold text-amber-700 bg-amber-50 px-2 py-1 rounded">
-                            Vérification en cours
-                          </span>
-                        ) : (
-                          <button
-                            onClick={() => {
-                              setSelectedChargeId(charge.id);
-                              setIsProofModalOpen(true);
-                            }}
-                            className="px-3 py-1 bg-teal-600 hover:bg-teal-700 text-white font-medium rounded text-xs transition-colors"
-                          >
-                            Transmettre Justificatif
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-
-                {myCharges.length === 0 && (
-                  <p className="text-center text-slate-500 text-xs py-4">Aucune charge enregistrée pour ce lot.</p>
-                )}
-              </div>
-            </Card>
-
-            {/* Maintenance Tickets Section with Live Progress Preview */}
-            <Card className="p-5">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-200">
-                <div>
-                  <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
-                    <WrenchIcon />
-                    <span>Suivi de mes Incidents & Réparations</span>
-                  </h3>
-                  <p className="text-xs text-slate-500">
-                    Consultez l'avancement, les notes du Syndic et les photos d'intervention
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('maintenance')}
-                    className="px-3 py-1.5 rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 font-bold text-xs transition-colors"
-                  >
-                    Suivi détaillé & photos →
-                  </button>
-                  <Button
-                    onClick={() => setIsReportModalOpen(true)}
-                    className="text-xs flex items-center gap-1"
-                  >
-                    <PlusIcon />
-                    <span>Signaler</span>
-                  </Button>
-                </div>
-              </div>
-
-              <div className="divide-y divide-slate-100 mt-3">
-                {myRequests.map((req) => {
-                  const stage =
-                    req.status === 'completed'
-                      ? 4
-                      : req.status === 'in_progress'
-                      ? (req.updates?.length || 0) >= 2
-                        ? 3
-                        : 2
-                      : 1;
-                  return (
-                    <div key={req.id} className="py-3.5 space-y-2">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="space-y-0.5">
-                          <div className="flex items-center gap-2 text-xs">
-                            <span className="font-bold text-slate-900">
-                              {req.title || req.description}
-                            </span>
-                            <span className="text-slate-400 font-mono text-[11px]">
-                              · {new Date(req.createdAt).toLocaleDateString('fr-MA')}
-                            </span>
-                          </div>
-                          <p className="text-xs text-slate-600 line-clamp-2">{req.description}</p>
-                        </div>
-                        <span
-                          className={`text-xs px-2.5 py-0.5 rounded-full font-bold shrink-0 ${
-                            req.status === 'completed'
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : req.status === 'in_progress'
-                              ? 'bg-blue-100 text-blue-800'
-                              : 'bg-amber-100 text-amber-800'
-                          }`}
-                        >
-                          {req.status === 'completed'
-                            ? '✓ Résolu'
-                            : req.status === 'in_progress'
-                            ? '🔧 En cours'
-                            : '⏳ Reçu'}
-                        </span>
-                      </div>
-
-                      {/* Mini Progress Bar */}
-                      <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200/80 space-y-1.5">
-                        <div className="flex items-center justify-between text-[11px]">
-                          <span className="text-slate-600 font-medium">
-                            {req.assignedTo
-                              ? `Prestataire : ${req.assignedTo}`
-                              : 'En attente d\'assignation prestataire'}
-                          </span>
-                          <span className="font-mono font-bold text-teal-800">
-                            Étape {stage}/4
-                          </span>
-                        </div>
-                        <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full rounded-full ${
-                              req.status === 'completed'
-                                ? 'bg-emerald-600'
-                                : req.status === 'in_progress'
-                                ? 'bg-teal-600'
-                                : 'bg-amber-500'
-                            }`}
-                            style={{ width: `${(stage / 4) * 100}%` }}
-                          />
-                        </div>
-                        {req.syndicNotes && (
-                          <p className="text-[11px] text-slate-700 italic">
-                            🏢 Note Syndic : « {req.syndicNotes} »
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-
-                {myRequests.length === 0 && (
-                  <p className="text-center text-slate-500 text-xs py-4">Aucun incident en cours.</p>
-                )}
-              </div>
-            </Card>
-          </div>
-
-          {/* Right Column: Quittances & Announcements */}
-          <div className="lg:col-span-5 space-y-4">
-            {/* Quittances Box */}
-            <Card className="p-5">
-              <div className="flex justify-between items-center pb-3 border-b border-slate-200">
-                <h3 className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
-                  <QuittanceIcon />
-                  <span>Mes Quittances Certifiées (Loi 18-00)</span>
-                </h3>
-              </div>
-
-              <div className="divide-y divide-slate-100 mt-3">
-                {myQuittances.map((quit) => (
-                  <div key={quit.id} className="py-2.5 flex items-center justify-between gap-2">
-                    <div>
-                      <div className="font-mono font-bold text-teal-800 text-xs">{quit.quittanceNumber}</div>
-                      <div className="text-[11px] text-slate-500">
-                        {quit.periodCovered} · {currencyFormatter.format(quit.amount)}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <button
-                        onClick={() => setSelectedResidentQuittanceForPreview(quit)}
-                        className="px-2 py-1 text-xs text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded border border-slate-200 font-medium transition-colors"
-                        title="Consulter l'attestation libératoire"
-                      >
-                        Aperçu
-                      </button>
-                      <button
-                        onClick={() => generateQuittancePDF(quit, activeBuilding!, activeSyndic, currentApartment, currentResident)}
-                        className="px-2.5 py-1 text-xs bg-teal-50 hover:bg-teal-100 text-teal-700 font-semibold rounded transition-colors flex items-center gap-1"
-                      >
-                        <QuittanceIcon />
-                        <span>PDF</span>
-                      </button>
-                    </div>
-                  </div>
-                ))}
-
-                {myQuittances.length === 0 && (
-                  <p className="text-center text-slate-500 text-xs py-4">
-                    Aucune quittance disponible pour l'instant. Dès validation de vos virements, vos quittances
-                    apparaîtront ici.
-                  </p>
-                )}
-              </div>
-            </Card>
-
-            {/* Announcements Box */}
-            <Card className="p-5">
-              <h3 className="font-bold text-slate-900 text-sm flex items-center gap-1.5 pb-3 border-b border-slate-200">
-                <AnnouncementsIcon />
-                <span>Annonces de la Résidence</span>
-              </h3>
-
-              <div className="space-y-3 mt-3">
-                {(activeBuilding?.announcements || []).map((ann) => (
-                  <div key={ann.id} className="border-b border-slate-100 pb-3 last:border-b-0">
-                    <p className="font-semibold text-slate-900 text-xs">{ann.title}</p>
-                    <p className="text-[11px] text-slate-400 font-mono">
-                      {new Date(ann.date).toLocaleDateString('fr-MA')}
+              {/* My Lot Card */}
+              <Card className="p-5 border-s-4 border-s-teal-600 bg-white">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                      {tr('Mon Logement', 'وحدتي السكنية')}
                     </p>
-                    <p className="text-xs text-slate-600 mt-1 whitespace-pre-line">{ann.content}</p>
+                    <h3 className="text-xl font-bold text-slate-900 mt-1">
+                      {activeBuilding?.name || tr('Résidence', 'الإقامة')}
+                    </h3>
+                    <p className="text-sm text-teal-800 font-semibold mt-0.5">
+                      {tr('Appartement Lot', 'شقة رقم')} {currentApartment?.number || 'A-102'} (
+                      {tr('Étage', 'الطابق')} {currentApartment?.floor ?? 1})
+                    </p>
                   </div>
-                ))}
+                  <span className="text-xs font-mono font-bold text-teal-700 bg-teal-50 px-2.5 py-1 rounded">
+                    {currentApartment?.tantiemes || 260} / 1000
+                  </span>
+                </div>
+                <div className="mt-4 pt-3 border-t border-slate-100 flex justify-between text-xs text-slate-600 font-mono">
+                  <span>
+                    {tr('Superficie :', 'المساحة :')} {currentApartment?.area || 110} m²
+                  </span>
+                  <span>
+                    {tr('Statut :', 'الصفة :')}{' '}
+                    {currentResident?.isOwner
+                      ? tr('Propriétaire', 'مالك مشترك')
+                      : tr('Locataire', 'مكتري')}
+                  </span>
+                </div>
+              </Card>
+
+              {/* Pending Charges Card */}
+              <Card className="p-5 border-s-4 border-s-amber-500 bg-white">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                      {tr('Charges en Attente', 'المساهمات قيد الأداء')}
+                    </p>
+                    <p className="text-2xl font-bold font-mono text-slate-900 mt-1 tabular-nums">
+                      {currencyFormatter.format(totalPendingAmount)}
+                    </p>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      {pendingCharges.length}{' '}
+                      {tr('appel(s) de fonds à régulariser', 'طلب(ات) أداء للتسوية')}
+                    </p>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-amber-50 text-amber-700">
+                    <FinancialsIcon />
+                  </div>
+                </div>
+                <div className="mt-4 pt-3 border-t border-slate-100 flex justify-between items-center text-xs">
+                  <span className="text-slate-500">
+                    {tr('Par virement bancaire :', 'عبر تحويل بنكي :')}
+                  </span>
+                  <button
+                    onClick={() => {
+                      if (pendingCharges.length > 0) {
+                        setSelectedChargeId(pendingCharges[0].id);
+                        setIsProofModalOpen(true);
+                      } else {
+                        alert(
+                          tr(
+                            'Aucune charge en attente.',
+                            'لا توجد أي مساهمات عالقة حالياً.'
+                          )
+                        );
+                      }
+                    }}
+                    className="text-xs font-semibold text-teal-700 hover:text-teal-900 underline"
+                  >
+                    {tr('Déposer un reçu de virement', 'إيداع وصل التحويل البنكي')}
+                  </button>
+                </div>
+              </Card>
+
+              {/* Quittances Certified Card */}
+              <Card className="p-5 border-s-4 border-s-emerald-600 bg-white">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                      {tr('Quittances Certifiées', 'وصولات الأداء المعتمدة')}
+                    </p>
+                    <p className="text-2xl font-bold font-mono text-emerald-800 mt-1 tabular-nums">
+                      {myQuittances.length}
+                    </p>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      {tr('Attestations officielles (Loi 18-00)', 'شهادات إبراء رسمية (قانون 18-00)')}
+                    </p>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-emerald-50 text-emerald-700">
+                    <QuittanceIcon />
+                  </div>
+                </div>
+                <div className="mt-4 pt-3 border-t border-slate-100 text-xs text-emerald-700 font-medium">
+                  {tr(
+                    'Téléchargeables pour notaire ou archivage',
+                    'قابلة للتحميل بصيغة PDF للتوثيق أو الأرشفة'
+                  )}
+                </div>
+              </Card>
+            </div>
+
+            {/* Bank Details for Wire Transfers */}
+            <Card className="p-4 bg-teal-50 border border-teal-200">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                <div>
+                  <span className="font-bold text-teal-950 uppercase tracking-wider block">
+                    {tr(
+                      'Coordonnées Bancaires de la Copropriété (Pour vos virements)',
+                      'المعلومات البنكية للملكية المشتركة (لتحويلاتكم البنكية)'
+                    )}
+                  </span>
+                  <p className="text-teal-800 mt-0.5">
+                    {tr('Banque :', 'البنك :')}{' '}
+                    <strong>{activeBuilding?.bankName || 'Attijariwafa Bank - Agence Gauthier'}</strong>
+                  </p>
+                </div>
+                <div className="bg-white px-3 py-1.5 rounded border border-teal-300 font-mono font-bold text-teal-900 text-sm select-all">
+                  RIB : {activeBuilding?.bankRib || '007 780 0001234567890123 45'}
+                </div>
               </div>
             </Card>
 
-            {/* Official Co-ownership Documents Box */}
-            <Card className="p-5">
-              <h3 className="font-bold text-slate-900 text-sm flex items-center gap-1.5 pb-3 border-b border-slate-200">
-                <DocumentsIcon />
-                <span>Documents Officiels de la Copropriété</span>
-              </h3>
-              <div className="divide-y divide-slate-100 mt-2">
-                {(activeBuilding?.documents || []).map((docItem) => (
-                  <div key={docItem.id} className="py-2.5 flex items-center justify-between gap-2 text-xs">
-                    <div className="min-w-0">
-                      <p className="font-semibold text-slate-800 truncate">{docItem.name}</p>
-                      <p className="text-[11px] text-slate-400 font-mono">
-                        {docItem.size} · {new Date(docItem.uploadedAt).toLocaleDateString('fr-MA')}
+            {/* Section: Pending Charges & Proofs */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+              <div className="lg:col-span-7 space-y-4">
+                <Card className="p-5">
+                  <div className="flex justify-between items-center pb-3 border-b border-slate-200">
+                    <div>
+                      <h3 className="font-bold text-slate-900 text-sm">
+                        {tr('Cotisations & Appels de Fonds', 'المساهمات وطلبات الأداء الشهرية')}
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        {tr(
+                          'Réglez vos charges par virement et transmettez votre bordereau',
+                          'أدّوا مساهماتكم عبر تحويل بنكي وأرسلوا إثبات الأداء'
+                        )}
                       </p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setPreviewDocName(docItem.name)}
-                      className="px-2.5 py-1 rounded bg-slate-100 hover:bg-teal-50 hover:text-teal-800 text-slate-700 font-semibold text-xs shrink-0 transition-colors"
-                    >
-                      Consulter
-                    </button>
                   </div>
-                ))}
-                {(!activeBuilding?.documents || activeBuilding.documents.length === 0) && (
-                  <p className="text-xs text-slate-500 py-3 text-center">Aucun document publié.</p>
-                )}
+
+                  <div className="divide-y divide-slate-100 mt-3">
+                    {myCharges.map((charge) => {
+                      const proof = myProofs.find((p) => p.chargeId === charge.id);
+
+                      return (
+                        <div
+                          key={charge.id}
+                          className="py-3 flex items-center justify-between gap-3 text-xs sm:text-sm"
+                        >
+                          <div>
+                            <div className="font-semibold text-slate-900">{charge.description}</div>
+                            <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5 flex-wrap">
+                              <span>
+                                {tr('Échéance :', 'تاريخ الاستحقاق :')}{' '}
+                                {new Date(charge.dueDate).toLocaleDateString(dateLocale)}
+                              </span>
+                              {proof && (
+                                <span className="text-amber-700 bg-amber-50 px-2 py-0.5 rounded font-medium">
+                                  {tr(
+                                    `Virement en cours de validation (Réf: ${proof.referenceNumber})`,
+                                    `تحويل قيد التحقق (مرجع: ${proof.referenceNumber})`
+                                  )}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-3 shrink-0">
+                            <span className="font-mono font-bold text-slate-900">
+                              {currencyFormatter.format(charge.amount)}
+                            </span>
+
+                            {charge.status === 'paid' ? (
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">
+                                  {tr('✓ Réglé', '✓ مؤدى')}
+                                </span>
+                                <button
+                                  onClick={async () => {
+                                    try {
+                                      setIsDownloadingChargeQuit(charge.id);
+                                      const matchingQuit = myQuittances.find(
+                                        (q) => q.chargeId === charge.id
+                                      );
+                                      if (matchingQuit) {
+                                        generateQuittancePDF(
+                                          matchingQuit,
+                                          activeBuilding!,
+                                          activeSyndic,
+                                          currentApartment,
+                                          currentResident
+                                        );
+                                      } else if (activeBuilding) {
+                                        const generated = await generateQuittanceForCharge(
+                                          charge.id,
+                                          activeBuilding.id
+                                        );
+                                        queryClient.invalidateQueries({
+                                          queryKey: ['quittances', currentResident?.id],
+                                        });
+                                        generateQuittancePDF(
+                                          generated,
+                                          activeBuilding,
+                                          activeSyndic,
+                                          currentApartment,
+                                          currentResident
+                                        );
+                                      }
+                                    } finally {
+                                      setIsDownloadingChargeQuit(null);
+                                    }
+                                  }}
+                                  disabled={isDownloadingChargeQuit === charge.id}
+                                  className="px-2.5 py-1 text-xs bg-teal-50 hover:bg-teal-100 text-teal-700 font-semibold rounded transition-colors flex items-center gap-1"
+                                  title={tr(
+                                    'Télécharger la quittance libératoire officielle (Loi 18-00)',
+                                    'تحميل وصل الإبراء الرسمي بصيغة PDF (قانون 18-00)'
+                                  )}
+                                >
+                                  <QuittanceIcon />
+                                  <span>
+                                    {isDownloadingChargeQuit === charge.id
+                                      ? tr('Génération...', 'جاري الإنشاء...')
+                                      : tr('Quittance PDF', 'وصل PDF')}
+                                  </span>
+                                </button>
+                              </div>
+                            ) : proof ? (
+                              <span className="text-xs font-semibold text-amber-700 bg-amber-50 px-2 py-1 rounded">
+                                {tr('Vérification en cours', 'قيد التحقق')}
+                              </span>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  setSelectedChargeId(charge.id);
+                                  setIsProofModalOpen(true);
+                                }}
+                                className="px-3 py-1 bg-teal-600 hover:bg-teal-700 text-white font-medium rounded text-xs transition-colors"
+                              >
+                                {tr('Transmettre Justificatif', 'إرسال إثبات الأداء')}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {myCharges.length === 0 && (
+                      <p className="text-center text-slate-500 text-xs py-4">
+                        {tr('Aucune charge enregistrée pour ce lot.', 'لا توجد أي مساهمات مسجلة لهذه الشقة.')}
+                      </p>
+                    )}
+                  </div>
+                </Card>
+
+                {/* Maintenance Tickets Section with Live Progress Preview */}
+                <Card className="p-5">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-200">
+                    <div>
+                      <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                        <WrenchIcon />
+                        <span>
+                          {tr('Suivi de mes Incidents & Réparations', 'تتبع الأعطاب وطلبات الإصلاح')}
+                        </span>
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        {tr(
+                          "Consultez l'avancement, les notes du Syndic et les photos d'intervention",
+                          'اطلعوا على مراحل التقدم، ملاحظات السنديك وصور التدخل التقني'
+                        )}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('maintenance')}
+                        className="px-3 py-1.5 rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 font-bold text-xs transition-colors"
+                      >
+                        {tr('Suivi détaillé & photos →', 'تتبع مفصل وصور ←')}
+                      </button>
+                      <Button
+                        onClick={() => setIsReportModalOpen(true)}
+                        className="text-xs flex items-center gap-1"
+                      >
+                        <PlusIcon />
+                        <span>{tr('Signaler', 'تبليغ')}</span>
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="divide-y divide-slate-100 mt-3">
+                    {myRequests.map((req) => {
+                      const stage =
+                        req.status === 'completed'
+                          ? 4
+                          : req.status === 'in_progress'
+                          ? (req.updates?.length || 0) >= 2
+                            ? 3
+                            : 2
+                          : 1;
+                      return (
+                        <div key={req.id} className="py-3.5 space-y-2">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="space-y-0.5">
+                              <div className="flex items-center gap-2 text-xs">
+                                <span className="font-bold text-slate-900">
+                                  {req.title || req.description}
+                                </span>
+                                <span className="text-slate-400 font-mono text-[11px]">
+                                  · {new Date(req.createdAt).toLocaleDateString(dateLocale)}
+                                </span>
+                              </div>
+                              <p className="text-xs text-slate-600 line-clamp-2">{req.description}</p>
+                            </div>
+                            <span
+                              className={`text-xs px-2.5 py-0.5 rounded-full font-bold shrink-0 ${
+                                req.status === 'completed'
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : req.status === 'in_progress'
+                                  ? 'bg-blue-100 text-blue-800'
+                                  : 'bg-amber-100 text-amber-800'
+                              }`}
+                            >
+                              {req.status === 'completed'
+                                ? tr('✓ Résolu', '✓ منجز')
+                                : req.status === 'in_progress'
+                                ? tr('🔧 En cours', '🔧 قيد الإنجاز')
+                                : tr('⏳ Reçu', '⏳ تم الاستلام')}
+                            </span>
+                          </div>
+
+                          {/* Mini Progress Bar */}
+                          <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200/80 space-y-1.5">
+                            <div className="flex items-center justify-between text-[11px]">
+                              <span className="text-slate-600 font-medium">
+                                {req.assignedTo
+                                  ? `${tr('Prestataire :', 'مقدم الخدمة :')} ${req.assignedTo}`
+                                  : tr(
+                                      "En attente d'assignation prestataire",
+                                      'في انتظار تعيين تقني مختص'
+                                    )}
+                              </span>
+                              <span className="font-mono font-bold text-teal-800">
+                                {tr(`Étape ${stage}/4`, `مرحلة ${stage}/4`)}
+                              </span>
+                            </div>
+                            <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full rounded-full ${
+                                  req.status === 'completed'
+                                    ? 'bg-emerald-600'
+                                    : req.status === 'in_progress'
+                                    ? 'bg-teal-600'
+                                    : 'bg-amber-500'
+                                }`}
+                                style={{ width: `${(stage / 4) * 100}%` }}
+                              />
+                            </div>
+                            {req.syndicNotes && (
+                              <p className="text-[11px] text-slate-700 italic">
+                                🏢 {tr('Note Syndic :', 'ملاحظة السنديك :')} « {req.syndicNotes} »
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {myRequests.length === 0 && (
+                      <p className="text-center text-slate-500 text-xs py-4">
+                        {tr('Aucun incident en cours.', 'لا يوجد أي عطب مسجل حالياً.')}
+                      </p>
+                    )}
+                  </div>
+                </Card>
               </div>
-            </Card>
-          </div>
-        </div>
-        </>
+
+              {/* Right Column: Quittances & Announcements */}
+              <div className="lg:col-span-5 space-y-4">
+                {/* Quittances Box */}
+                <Card className="p-5">
+                  <div className="flex justify-between items-center pb-3 border-b border-slate-200">
+                    <h3 className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
+                      <QuittanceIcon />
+                      <span>
+                        {tr('Mes Quittances Certifiées (Loi 18-00)', 'وصولات الأداء المعتمدة (قانون 18-00)')}
+                      </span>
+                    </h3>
+                  </div>
+
+                  <div className="divide-y divide-slate-100 mt-3">
+                    {myQuittances.map((quit) => (
+                      <div
+                        key={quit.id}
+                        className="py-2.5 flex items-center justify-between gap-2"
+                      >
+                        <div>
+                          <div className="font-mono font-bold text-teal-800 text-xs">
+                            {quit.quittanceNumber}
+                          </div>
+                          <div className="text-[11px] text-slate-500">
+                            {quit.periodCovered} · {currencyFormatter.format(quit.amount)}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            onClick={() => setSelectedResidentQuittanceForPreview(quit)}
+                            className="px-2 py-1 text-xs text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded border border-slate-200 font-medium transition-colors"
+                            title={tr("Consulter l'attestation libératoire", 'معاينة شهادة الإبراء')}
+                          >
+                            {tr('Aperçu', 'معاينة')}
+                          </button>
+                          <button
+                            onClick={() =>
+                              generateQuittancePDF(
+                                quit,
+                                activeBuilding!,
+                                activeSyndic,
+                                currentApartment,
+                                currentResident
+                              )
+                            }
+                            className="px-2.5 py-1 text-xs bg-teal-50 hover:bg-teal-100 text-teal-700 font-semibold rounded transition-colors flex items-center gap-1"
+                          >
+                            <QuittanceIcon />
+                            <span>PDF</span>
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+
+                    {myQuittances.length === 0 && (
+                      <p className="text-center text-slate-500 text-xs py-4">
+                        {tr(
+                          "Aucune quittance disponible pour l'instant. Dès validation de vos virements, vos quittances apparaîtront ici.",
+                          'لا يوجد أي وصل متاح حالياً. بمجرد المصادقة على تحويلاتكم البنكية، ستظهر وصولاتكم المعتمدة هنا.'
+                        )}
+                      </p>
+                    )}
+                  </div>
+                </Card>
+
+                {/* Announcements Box */}
+                <Card className="p-5">
+                  <h3 className="font-bold text-slate-900 text-sm flex items-center gap-1.5 pb-3 border-b border-slate-200">
+                    <AnnouncementsIcon />
+                    <span>{tr('Annonces de la Résidence', 'إعلانات وبلاغات الإقامة')}</span>
+                  </h3>
+
+                  <div className="space-y-3 mt-3">
+                    {(activeBuilding?.announcements || []).map((ann) => (
+                      <div key={ann.id} className="border-b border-slate-100 pb-3 last:border-b-0">
+                        <p className="font-semibold text-slate-900 text-xs">{ann.title}</p>
+                        <p className="text-[11px] text-slate-400 font-mono">
+                          {new Date(ann.date).toLocaleDateString(dateLocale)}
+                        </p>
+                        <p className="text-xs text-slate-600 mt-1 whitespace-pre-line">
+                          {ann.content}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+
+                {/* Official Co-ownership Documents Box */}
+                <Card className="p-5">
+                  <h3 className="font-bold text-slate-900 text-sm flex items-center gap-1.5 pb-3 border-b border-slate-200">
+                    <DocumentsIcon />
+                    <span>
+                      {tr(
+                        'Documents Officiels de la Copropriété',
+                        'الوثائق الرسمية للملكية المشتركة'
+                      )}
+                    </span>
+                  </h3>
+                  <div className="divide-y divide-slate-100 mt-2">
+                    {(activeBuilding?.documents || []).map((docItem) => (
+                      <div
+                        key={docItem.id}
+                        className="py-2.5 flex items-center justify-between gap-2 text-xs"
+                      >
+                        <div className="min-w-0">
+                          <p className="font-semibold text-slate-800 truncate">{docItem.name}</p>
+                          <p className="text-[11px] text-slate-400 font-mono">
+                            {docItem.size} ·{' '}
+                            {new Date(docItem.uploadedAt).toLocaleDateString(dateLocale)}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setPreviewDocName(docItem.name)}
+                          className="px-2.5 py-1 rounded bg-slate-100 hover:bg-teal-50 hover:text-teal-800 text-slate-700 font-semibold text-xs shrink-0 transition-colors"
+                        >
+                          {tr('Consulter', 'اطلاع')}
+                        </button>
+                      </div>
+                    ))}
+                    {(!activeBuilding?.documents || activeBuilding.documents.length === 0) && (
+                      <p className="text-xs text-slate-500 py-3 text-center">
+                        {tr('Aucun document publié.', 'لا توجد أي وثيقة منشورة.')}
+                      </p>
+                    )}
+                  </div>
+                </Card>
+              </div>
+            </div>
+          </>
         )}
       </main>
 
@@ -977,11 +1097,11 @@ const ResidentDashboard: React.FC = () => {
         <Modal
           isOpen={!!previewDocName}
           onClose={() => setPreviewDocName(null)}
-          title={`Consultation Document Officiel — ${previewDocName}`}
+          title={`${tr('Consultation Document Officiel', 'معاينة وثيقة رسمية')} — ${previewDocName}`}
           footer={
             <div className="flex justify-end">
               <Button variant="secondary" onClick={() => setPreviewDocName(null)}>
-                Fermer
+                {tr('Fermer', 'إغلاق')}
               </Button>
             </div>
           }
@@ -991,23 +1111,35 @@ const ResidentDashboard: React.FC = () => {
               <div>
                 <div className="font-bold text-slate-900 text-sm">{previewDocName}</div>
                 <div className="text-[11px] text-slate-500">
-                  {activeBuilding?.name} · Archive officielle certifiée par {activeSyndic?.name}
+                  {activeBuilding?.name} ·{' '}
+                  {tr(
+                    `Archive officielle certifiée par ${activeSyndic?.name}`,
+                    `أرشيف رسمي معتمد من طرف ${activeSyndic?.name}`
+                  )}
                 </div>
               </div>
               <span className="px-2.5 py-1 rounded bg-teal-100 text-teal-800 font-mono font-bold text-[11px]">
-                Loi n° 18-00
+                {tr('Loi n° 18-00', 'قانون رقم 18-00')}
               </span>
             </div>
             <p className="leading-relaxed">
-              Ce document fait partie intégrante du registre légal de la copropriété{' '}
-              <strong>{activeBuilding?.name}</strong> ({activeBuilding?.address}, {activeBuilding?.city}).
-              Il est mis à la disposition de l'ensemble des copropriétaires conformément aux dispositions
-              de la Loi n° 18-00 telle que modifiée et complétée par la Loi n° 106-12.
+              {tr(
+                `Ce document fait partie intégrante du registre légal de la copropriété ${activeBuilding?.name} (${activeBuilding?.address}, ${activeBuilding?.city}). Il est mis à la disposition de l'ensemble des copropriétaires conformément aux dispositions de la Loi n° 18-00 telle que modifiée et complétée par la Loi n° 106-12.`,
+                `تعتبر هذه الوثيقة جزءاً لا يتجزأ من السجل القانوني للملكية المشتركة ${activeBuilding?.name} (${activeBuilding?.address}، ${activeBuilding?.city}). وهي موضوعة رهن إشارة جميع الملاك المشتركين طبقا لمقتضيات القانون رقم 18-00 كما تم تغييره وتتميمه بالقانون رقم 106-12.`
+              )}
             </p>
             <div className="p-3 bg-white rounded-lg border border-slate-200 font-mono text-[11px] text-slate-600 space-y-1">
-              <div>• Syndic Gestionnaire : {activeSyndic?.name}</div>
+              <div>
+                • {tr('Syndic Gestionnaire :', 'السنديك المسير :')} {activeSyndic?.name}
+              </div>
               <div>• ICE : {activeSyndic?.ice || '001524367000089'}</div>
-              <div>• Statut : Document vérifié et archivé numériquement</div>
+              <div>
+                •{' '}
+                {tr(
+                  'Statut : Document vérifié et archivé numériquement',
+                  'الحالة : وثيقة محققة ومؤرشفة رقمياً'
+                )}
+              </div>
             </div>
           </div>
         </Modal>
@@ -1017,22 +1149,32 @@ const ResidentDashboard: React.FC = () => {
       <Modal
         isOpen={isProofModalOpen}
         onClose={() => setIsProofModalOpen(false)}
-        title="Transmettre un justificatif de virement bancaire"
+        title={tr(
+          'Transmettre un justificatif de virement bancaire',
+          'إرسال إثبات التحويل البنكي'
+        )}
         footer={
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setIsProofModalOpen(false)}>
-              Annuler
+              {tr('Annuler', 'إلغاء')}
             </Button>
             <Button
               onClick={() => {
-                if (!refNumber) return alert('Veuillez saisir le numéro de référence du virement.');
-                const targetCharge = myCharges.find((c) => c.id === selectedChargeId) || myCharges[0];
+                if (!refNumber)
+                  return alert(
+                    tr(
+                      'Veuillez saisir le numéro de référence du virement.',
+                      'يرجى إدخال الرقم المرجعي لعملية التحويل.'
+                    )
+                  );
+                const targetCharge =
+                  myCharges.find((c) => c.id === selectedChargeId) || myCharges[0];
                 if (!targetCharge) return;
 
                 proofMutation.mutate({
                   chargeId: targetCharge.id,
                   residentId: currentResident?.id || 'res-2',
-                  residentName: currentResident?.name || 'Copropriétaire',
+                  residentName: currentResident?.name || tr('Copropriétaire', 'مالك مشترك'),
                   apartmentId: currentApartment?.id || 'apt-2',
                   apartmentNumber: currentApartment?.number || 'A-102',
                   buildingId: activeBuilding?.id || 'bld-1',
@@ -1044,19 +1186,23 @@ const ResidentDashboard: React.FC = () => {
                 });
               }}
             >
-              Envoyer pour validation
+              {tr('Envoyer pour validation', 'إرسال للمصادقة')}
             </Button>
           </div>
         }
       >
         <div className="space-y-4">
           <p className="text-xs text-slate-600">
-            Une fois votre justificatif vérifié par le syndic, votre compte de charges sera crédité et votre
-            <strong> quittance officielle conforme à la Loi 18-00</strong> sera générée automatiquement.
+            {tr(
+              'Une fois votre justificatif vérifié par le syndic, votre compte de charges sera crédité et votre quittance officielle conforme à la Loi 18-00 sera générée automatiquement.',
+              'بمجرد التحقق من وصل الأداء من طرف السنديك، سيتم تحديث حساب مساهماتكم وإصدار وصل الإبراء الرسمي المطابق للقانون 18-00 تلقائياً.'
+            )}
           </p>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Banque émettrice</label>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              {tr('Banque émettrice', 'البنك المصدر للتحويل')}
+            </label>
             <select
               value={bankName}
               onChange={(e) => setBankName(e.target.value)}
@@ -1069,26 +1215,34 @@ const ResidentDashboard: React.FC = () => {
               <option value="Société Générale Maroc">Société Générale Maroc</option>
               <option value="CFG Bank">CFG Bank</option>
               <option value="Al Barid Bank">Al Barid Bank</option>
-              <option value="Autre banque">Autre banque marocaine</option>
+              <option value="Autre banque">
+                {tr('Autre banque marocaine', 'بنك مغربي آخر')}
+              </option>
             </select>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Mode de règlement</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                {tr('Mode de règlement', 'طريقة الأداء')}
+              </label>
               <select
                 value={paymentMethod}
                 onChange={(e) => setPaymentMethod(e.target.value as any)}
                 className="w-full px-3 py-2 border border-slate-300 rounded text-sm bg-white"
               >
-                <option value="virement">Virement bancaire (Application / Web)</option>
-                <option value="versement">Versement espèces en agence</option>
-                <option value="cheque">Chèque bancaire</option>
+                <option value="virement">
+                  {tr('Virement bancaire (Application / Web)', 'تحويل بنكي (تطبيق / ويب)')}
+                </option>
+                <option value="versement">
+                  {tr('Versement espèces en agence', 'إيداع نقدي بالوكالة')}
+                </option>
+                <option value="cheque">{tr('Chèque bancaire', 'شيك بنكي')}</option>
               </select>
             </div>
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
-                N° Référence / Numéro d'opération
+                {tr("N° Référence / Numéro d'opération", 'رقم المرجع / رقم العملية')}
               </label>
               <input
                 type="text"
@@ -1101,12 +1255,17 @@ const ResidentDashboard: React.FC = () => {
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Note pour le syndic</label>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              {tr('Note pour le syndic', 'ملاحظة للسنديك')}
+            </label>
             <textarea
               rows={2}
               value={proofNote}
               onChange={(e) => setProofNote(e.target.value)}
-              placeholder="Ex: Virement effectué depuis mon compte CIH Mobile ce matin..."
+              placeholder={tr(
+                'Ex: Virement effectué depuis mon compte CIH Mobile ce matin...',
+                'مثال: تم التحويل من حسابي البنكي هذا الصباح...'
+              )}
               className="w-full px-3 py-2 border border-slate-300 rounded text-xs"
             />
           </div>
@@ -1117,15 +1276,16 @@ const ResidentDashboard: React.FC = () => {
       <Modal
         isOpen={isReportModalOpen}
         onClose={() => setIsReportModalOpen(false)}
-        title="Signaler un incident ou une réparation"
+        title={tr('Signaler un incident ou une réparation', 'التبليغ عن عطب أو طلب إصلاح')}
         footer={
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setIsReportModalOpen(false)}>
-              Annuler
+              {tr('Annuler', 'إلغاء')}
             </Button>
             <Button
               onClick={() => {
-                if (!maintDesc) return alert('Description obligatoire.');
+                if (!maintDesc)
+                  return alert(tr('Description obligatoire.', 'يرجى إدخال وصف العطب.'));
                 reportMutation.mutate({
                   category: maintCategory,
                   description: maintDesc,
@@ -1133,7 +1293,7 @@ const ResidentDashboard: React.FC = () => {
                 });
               }}
             >
-              Envoyer au syndic
+              {tr('Envoyer au syndic', 'إرسال إلى السنديك')}
             </Button>
           </div>
         }
@@ -1141,41 +1301,50 @@ const ResidentDashboard: React.FC = () => {
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Catégorie</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                {tr('Catégorie', 'التصنيف')}
+              </label>
               <select
                 value={maintCategory}
                 onChange={(e) => setMaintCategory(e.target.value as any)}
                 className="w-full px-3 py-2 border border-slate-300 rounded text-sm bg-white"
               >
-                <option value="plumbing">Plomberie</option>
-                <option value="electrical">Électricité</option>
-                <option value="elevator">Ascenseur</option>
-                <option value="common_area">Parties Communes</option>
-                <option value="cleaning">Propreté / Hygiène</option>
-                <option value="other">Autre</option>
+                <option value="plumbing">{tr('Plomberie', 'السباكة')}</option>
+                <option value="electrical">{tr('Électricité', 'الكهرباء')}</option>
+                <option value="elevator">{tr('Ascenseur', 'المصعد')}</option>
+                <option value="common_area">{tr('Parties Communes', 'الأجزاء المشتركة')}</option>
+                <option value="cleaning">{tr('Propreté / Hygiène', 'النظافة')}</option>
+                <option value="other">{tr('Autre', 'أخرى')}</option>
               </select>
             </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Urgence</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                {tr('Urgence', 'درجة الاستعجال')}
+              </label>
               <select
                 value={maintPriority}
                 onChange={(e) => setMaintPriority(e.target.value as any)}
                 className="w-full px-3 py-2 border border-slate-300 rounded text-sm bg-white"
               >
-                <option value="low">Normale</option>
-                <option value="medium">Moyenne</option>
-                <option value="high">Urgente</option>
+                <option value="low">{tr('Normale', 'عادية')}</option>
+                <option value="medium">{tr('Moyenne', 'متوسطة')}</option>
+                <option value="high">{tr('Urgente', 'مستعجلة')}</option>
               </select>
             </div>
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Description détaillée</label>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              {tr('Description détaillée', 'وصف مفصل للعطب')}
+            </label>
             <textarea
               rows={3}
               value={maintDesc}
               onChange={(e) => setMaintDesc(e.target.value)}
-              placeholder="Décrivez l'emplacement précis et la nature de la panne..."
+              placeholder={tr(
+                "Décrivez l'emplacement précis et la nature de la panne...",
+                'اذكروا المكان الدقيق وطبيعة العطب...'
+              )}
               className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
             />
           </div>
@@ -1187,15 +1356,23 @@ const ResidentDashboard: React.FC = () => {
         <Modal
           isOpen={!!selectedResidentQuittanceForPreview}
           onClose={() => setSelectedResidentQuittanceForPreview(null)}
-          title={`Attestation de Quittance — ${selectedResidentQuittanceForPreview.quittanceNumber}`}
+          title={`${tr('Attestation de Quittance', 'شهادة وصل الأداء')} — ${
+            selectedResidentQuittanceForPreview.quittanceNumber
+          }`}
           footer={
             <div className="flex justify-between items-center w-full">
               <span className="text-xs text-slate-500 font-mono hidden sm:inline">
-                Reçu officiel certifié conforme (Loi n° 18-00 & 106-12)
+                {tr(
+                  'Reçu officiel certifié conforme (Loi n° 18-00 & 106-12)',
+                  'وصل رسمي مطابق للقانون (قانون رقم 18-00 و 106-12)'
+                )}
               </span>
               <div className="flex gap-2">
-                <Button variant="secondary" onClick={() => setSelectedResidentQuittanceForPreview(null)}>
-                  Fermer
+                <Button
+                  variant="secondary"
+                  onClick={() => setSelectedResidentQuittanceForPreview(null)}
+                >
+                  {tr('Fermer', 'إغلاق')}
                 </Button>
                 <Button
                   onClick={() =>
@@ -1210,7 +1387,7 @@ const ResidentDashboard: React.FC = () => {
                   className="bg-teal-700 hover:bg-teal-800 text-white flex items-center gap-1.5"
                 >
                   <QuittanceIcon />
-                  <span>Télécharger le PDF</span>
+                  <span>{tr('Télécharger le PDF', 'تحميل PDF')}</span>
                 </Button>
               </div>
             </div>
@@ -1220,13 +1397,22 @@ const ResidentDashboard: React.FC = () => {
             {/* Header */}
             <div className="text-center pb-3 border-b-2 border-teal-800/20">
               <p className="text-[10px] font-bold tracking-widest text-teal-900 uppercase">
-                ROYAUME DU MAROC  ·  SYNDICAT DES COPROPRIÉTAIRES
+                {tr(
+                  'ROYAUME DU MAROC  ·  SYNDICAT DES COPROPRIÉTAIRES',
+                  'المملكة المغربية  ·  اتحاد الملاك المشتركين'
+                )}
               </p>
               <h3 className="text-sm sm:text-base font-extrabold text-teal-950 mt-1 uppercase">
-                Quittance de Paiement des Charges de Copropriété
+                {tr(
+                  'Quittance de Paiement des Charges de Copropriété',
+                  'وصل أداء مساهمات الملكية المشتركة'
+                )}
               </h3>
               <p className="text-[10px] text-slate-500">
-                Loi n° 18-00 modifiée par la Loi n° 106-12 · Reçu libératoire officiel
+                {tr(
+                  'Loi n° 18-00 modifiée par la Loi n° 106-12 · Reçu libératoire officiel',
+                  'القانون رقم 18-00 المعدل بالقانون رقم 106-12 · وصل إبراء رسمي'
+                )}
               </p>
               <div className="inline-block bg-teal-100/70 border border-teal-300 text-teal-900 font-mono text-xs px-2.5 py-0.5 rounded font-bold mt-1.5">
                 {selectedResidentQuittanceForPreview.quittanceNumber}
@@ -1236,41 +1422,73 @@ const ResidentDashboard: React.FC = () => {
             {/* Entity Dual Info */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
               <div className="p-3 bg-white rounded border border-slate-200 space-y-1">
-                <span className="font-bold text-teal-800 block text-[10px] uppercase">Copropriété & Syndic</span>
-                <p className="font-bold text-slate-900">{activeBuilding?.name || selectedResidentQuittanceForPreview.buildingName}</p>
-                <p className="text-slate-600">{activeBuilding?.address || 'Adresse copropriété'}</p>
-                <p className="text-slate-500 font-mono text-[11px]">Syndic : {activeSyndic?.name || selectedResidentQuittanceForPreview.syndicName}</p>
+                <span className="font-bold text-teal-800 block text-[10px] uppercase">
+                  {tr('Copropriété & Syndic', 'الإقامة والسنديك')}
+                </span>
+                <p className="font-bold text-slate-900">
+                  {activeBuilding?.name || selectedResidentQuittanceForPreview.buildingName}
+                </p>
+                <p className="text-slate-600">
+                  {activeBuilding?.address || tr('Adresse copropriété', 'عنوان الإقامة')}
+                </p>
+                <p className="text-slate-500 font-mono text-[11px]">
+                  {tr('Syndic :', 'السنديك :')}{' '}
+                  {activeSyndic?.name || selectedResidentQuittanceForPreview.syndicName}
+                </p>
               </div>
 
               <div className="p-3 bg-white rounded border border-slate-200 space-y-1">
-                <span className="font-bold text-teal-800 block text-[10px] uppercase">Copropriétaire</span>
-                <p className="font-bold text-slate-900">{selectedResidentQuittanceForPreview.residentName}</p>
-                <p className="text-slate-600 font-mono">Lot {selectedResidentQuittanceForPreview.apartmentNumber} · {selectedResidentQuittanceForPreview.tantiemes} / 1000 tantièmes</p>
-                <p className="text-slate-500 font-mono text-[11px]">CIN : {selectedResidentQuittanceForPreview.residentCin || currentResident?.cin || 'CIN vérifiée'}</p>
+                <span className="font-bold text-teal-800 block text-[10px] uppercase">
+                  {tr('Copropriétaire', 'المالك المشترك')}
+                </span>
+                <p className="font-bold text-slate-900">
+                  {selectedResidentQuittanceForPreview.residentName}
+                </p>
+                <p className="text-slate-600 font-mono">
+                  {tr('Lot', 'شقة')} {selectedResidentQuittanceForPreview.apartmentNumber} ·{' '}
+                  {selectedResidentQuittanceForPreview.tantiemes} / 1000{' '}
+                  {tr('tantièmes', 'جزء')}
+                </p>
+                <p className="text-slate-500 font-mono text-[11px]">
+                  CIN :{' '}
+                  {selectedResidentQuittanceForPreview.residentCin ||
+                    currentResident?.cin ||
+                    tr('CIN vérifiée', 'بطاقة محققة')}
+                </p>
               </div>
             </div>
 
             {/* Financial Detail */}
             <div className="bg-white rounded border border-slate-200 p-3 space-y-2 text-xs">
               <div className="flex justify-between items-center text-slate-700">
-                <span>Charges courantes ({selectedResidentQuittanceForPreview.periodCovered})</span>
+                <span>
+                  {tr('Charges courantes', 'التكاليف الجارية')} (
+                  {selectedResidentQuittanceForPreview.periodCovered})
+                </span>
                 <span className="font-mono font-medium">
                   {currencyFormatter.format(
                     selectedResidentQuittanceForPreview.chargesCourantesAmount ??
-                      (selectedResidentQuittanceForPreview.amount - Math.round(selectedResidentQuittanceForPreview.amount * 0.15))
+                      selectedResidentQuittanceForPreview.amount -
+                        Math.round(selectedResidentQuittanceForPreview.amount * 0.15)
                   )}
                 </span>
               </div>
               <div className="flex justify-between items-center text-emerald-800">
-                <span>Provision obligatoire Fonds de Réserve (Loi 106-12)</span>
+                <span>
+                  {tr(
+                    'Provision obligatoire Fonds de Réserve (Loi 106-12)',
+                    'مساهمة صندوق الاحتياط الإلزامية (قانون 106-12)'
+                  )}
+                </span>
                 <span className="font-mono font-semibold">
                   {currencyFormatter.format(
-                    selectedResidentQuittanceForPreview.reserveFundAmount ?? Math.round(selectedResidentQuittanceForPreview.amount * 0.15)
+                    selectedResidentQuittanceForPreview.reserveFundAmount ??
+                      Math.round(selectedResidentQuittanceForPreview.amount * 0.15)
                   )}
                 </span>
               </div>
               <div className="pt-2 border-t border-slate-200 flex justify-between items-center font-bold text-slate-900 text-sm">
-                <span>TOTAL RÉGLÉ :</span>
+                <span>{tr('TOTAL RÉGLÉ :', 'المجموع المؤدى :')}</span>
                 <span className="font-mono text-teal-900 text-base">
                   {currencyFormatter.format(selectedResidentQuittanceForPreview.amount)}
                 </span>
@@ -1279,15 +1497,25 @@ const ResidentDashboard: React.FC = () => {
 
             {/* Release Mention */}
             <p className="text-[11px] text-slate-600 italic bg-teal-50/60 p-2.5 rounded border border-teal-200">
-              « Le Syndic soussigné certifie avoir reçu ladite somme et délivre la présente quittance libératoire
-              pour la période concernée. Situation comptable du lot : À JOUR. »
+              {tr(
+                '« Le Syndic soussigné certifie avoir reçu ladite somme et délivre la présente quittance libératoire pour la période concernée. Situation comptable du lot : À JOUR. »',
+                '« يشهد وكيل الاتحاد (السنديك) الموقع أسفله بتوصل الاتحاد بالمبلغ المذكور ويسلم هذا الوصل المبرئ للذمة عن الفترة المعنية. الوضعية المحاسبية للشقة : مُسوّاة. »'
+              )}
             </p>
 
             {/* Official seal & Date */}
             <div className="flex justify-between items-end pt-1">
               <div className="text-[10px] text-slate-400 font-mono">
-                <div>Hash de certification : {selectedResidentQuittanceForPreview.id}</div>
-                <div>Date : {new Date(selectedResidentQuittanceForPreview.createdAt).toLocaleDateString('fr-MA')}</div>
+                <div>
+                  {tr('Hash de certification :', 'رمز المصادقة :')}{' '}
+                  {selectedResidentQuittanceForPreview.id}
+                </div>
+                <div>
+                  {tr('Date :', 'التاريخ :')}{' '}
+                  {new Date(selectedResidentQuittanceForPreview.createdAt).toLocaleDateString(
+                    dateLocale
+                  )}
+                </div>
               </div>
 
               <div className="w-20 h-20 rounded-full border-2 border-dashed border-teal-700 flex flex-col items-center justify-center text-teal-800 font-mono text-[7px] text-center p-1 bg-teal-50/40">
@@ -1305,14 +1533,17 @@ const ResidentDashboard: React.FC = () => {
       <Modal
         isOpen={isPasswordModalOpen}
         onClose={() => setIsPasswordModalOpen(false)}
-        title="Sécurité du compte & Mot de passe personnel"
+        title={tr(
+          'Sécurité du compte & Mot de passe personnel',
+          'أمان الحساب وكلمة المرور الشخصية'
+        )}
         footer={
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setIsPasswordModalOpen(false)}>
-              Annuler
+              {tr('Annuler', 'إلغاء')}
             </Button>
             <Button onClick={handlePasswordSubmit}>
-              Enregistrer le mot de passe
+              {tr('Enregistrer le mot de passe', 'حفظ كلمة المرور')}
             </Button>
           </div>
         }
@@ -1320,18 +1551,22 @@ const ResidentDashboard: React.FC = () => {
         <div className="space-y-4">
           <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-700">
             <div>
-              Compte : <strong>{currentResident?.name || userProfile?.displayName}</strong> (
-              {isOwnerResident ? 'Copropriétaire' : 'Locataire'})
+              {tr('Compte :', 'الحساب :')}{' '}
+              <strong>{currentResident?.name || userProfile?.displayName}</strong> (
+              {isOwnerResident ? tr('Copropriétaire', 'مالك مشترك') : tr('Locataire', 'مكتري')})
             </div>
             <div className="font-mono text-slate-500 mt-0.5">
-              Identifiant : {currentResident?.email || userProfile?.email}
+              {tr('Identifiant :', 'المعرف :')} {currentResident?.email || userProfile?.email}
               {currentResident?.cin ? ` • CIN : ${currentResident.cin}` : ''}
             </div>
           </div>
 
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
-              Nouveau mot de passe (min. 6 caractères)
+              {tr(
+                'Nouveau mot de passe (min. 6 caractères)',
+                'كلمة المرور الجديدة (6 أحرف على الأقل)'
+              )}
             </label>
             <input
               type="password"
@@ -1344,7 +1579,7 @@ const ResidentDashboard: React.FC = () => {
 
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
-              Confirmer le nouveau mot de passe
+              {tr('Confirmer le nouveau mot de passe', 'تأكيد كلمة المرور الجديدة')}
             </label>
             <input
               type="password"
@@ -1371,7 +1606,7 @@ const ResidentDashboard: React.FC = () => {
 
       {/* Fixed Mobile Bottom Navigation Bar (< md) */}
       <nav
-        aria-label="Navigation mobile copropriétaire"
+        aria-label={tr('Navigation mobile copropriétaire', 'تنقل الجوال للمالك المشترك')}
         className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-white border-t border-slate-200 shadow-lg pb-safe"
       >
         <div className="grid grid-cols-6 h-16">
@@ -1383,7 +1618,7 @@ const ResidentDashboard: React.FC = () => {
             }`}
           >
             <span className="text-base leading-none">🏠</span>
-            <span className="truncate max-w-[54px]">Logement</span>
+            <span className="truncate max-w-[54px]">{t('residentPortal.mobileHome')}</span>
           </button>
 
           <button
@@ -1394,7 +1629,7 @@ const ResidentDashboard: React.FC = () => {
             }`}
           >
             <span className="text-base leading-none">🗳️</span>
-            <span className="truncate max-w-[54px]">Votes AG</span>
+            <span className="truncate max-w-[54px]">{t('residentPortal.mobileAg')}</span>
             {unvotedResolutionsCount > 0 && (
               <span className="absolute top-1.5 right-2.5 w-2 h-2 rounded-full bg-emerald-500"></span>
             )}
@@ -1408,7 +1643,7 @@ const ResidentDashboard: React.FC = () => {
             }`}
           >
             <span className="text-base leading-none">🔧</span>
-            <span className="truncate max-w-[54px]">Incidents</span>
+            <span className="truncate max-w-[54px]">{t('residentPortal.mobileMaintenance')}</span>
           </button>
 
           <button
@@ -1419,7 +1654,7 @@ const ResidentDashboard: React.FC = () => {
             }`}
           >
             <span className="text-base leading-none">💬</span>
-            <span className="truncate max-w-[54px]">Chat</span>
+            <span className="truncate max-w-[54px]">{t('residentPortal.mobileChat')}</span>
           </button>
 
           <button
@@ -1430,7 +1665,7 @@ const ResidentDashboard: React.FC = () => {
             }`}
           >
             <span className="text-base leading-none">🛍️</span>
-            <span className="truncate max-w-[54px]">Souk</span>
+            <span className="truncate max-w-[54px]">{t('residentPortal.mobileMarketplace')}</span>
           </button>
 
           <button
@@ -1441,7 +1676,7 @@ const ResidentDashboard: React.FC = () => {
             }`}
           >
             <span className="text-base leading-none">🛠️</span>
-            <span className="truncate max-w-[54px]">Artisans</span>
+            <span className="truncate max-w-[54px]">{t('sidebar.prestataires')}</span>
           </button>
         </div>
       </nav>

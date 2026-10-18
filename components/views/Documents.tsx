@@ -14,7 +14,7 @@ const Documents: React.FC<{
   onAddDocument?: () => void;
   onDeleteDocument?: (docId: string) => void;
 }> = ({ building, documents }) => {
-  const { t } = useI18n();
+  const { t, tr } = useI18n();
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -56,7 +56,14 @@ const Documents: React.FC<{
   };
 
   const handleDelete = (docItem: Document) => {
-    if (confirm(`Voulez-vous vraiment supprimer le document « ${docItem.name} » ?`)) {
+    if (
+      confirm(
+        tr(
+          `Voulez-vous vraiment supprimer le document « ${docItem.name} » ?`,
+          `هل تريدون فعلاً حذف الوثيقة « ${docItem.name} » ؟`
+        )
+      )
+    ) {
       deleteMutation.mutate(docItem);
     }
   };
@@ -72,7 +79,10 @@ const Documents: React.FC<{
             <span>{t('documents.title', { buildingName: building.name })}</span>
           </h1>
           <p className="text-xs text-slate-500 mt-1">
-            Archives légales de la copropriété (Règlement de copropriété, PV d'AG, contrats et assurances — Loi 18-00)
+            {tr(
+              "Archives légales de la copropriété (Règlement de copropriété, PV d'AG, contrats et assurances — Loi 18-00)",
+              'الأرشيف القانوني للملكية المشتركة (نظام الملكية المشتركة، محاضر الجموع العامة، العقود والتأمينات — قانون 18-00)'
+            )}
           </p>
         </div>
 
@@ -90,7 +100,7 @@ const Documents: React.FC<{
             disabled={isUploading}
             className="bg-teal-700 hover:bg-teal-800 text-white text-xs sm:text-sm font-bold"
           >
-            {isUploading ? 'Téléversement...' : t('documents.add')}
+            {isUploading ? tr('Téléversement...', 'جاري الرفع...') : t('documents.add')}
           </Button>
         </div>
       </div>
@@ -110,7 +120,7 @@ const Documents: React.FC<{
                   {t('documents.table.uploadedAt')}
                 </th>
                 <th className="px-6 py-3 text-end text-xs font-bold text-slate-500 uppercase tracking-wider">
-                  Actions
+                  {tr('Actions', 'إجراءات')}
                 </th>
               </tr>
             </thead>
@@ -121,7 +131,7 @@ const Documents: React.FC<{
                     <button
                       type="button"
                       onClick={() => setPreviewDoc(docItem)}
-                      className="flex items-center hover:underline text-left"
+                      className="flex items-center hover:underline text-start"
                     >
                       <svg className="w-4 h-4 me-2 text-teal-600 shrink-0" fill="currentColor" viewBox="0 0 20 20">
                         <path d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" />
@@ -141,14 +151,14 @@ const Documents: React.FC<{
                       onClick={() => setPreviewDoc(docItem)}
                       className="px-2.5 py-1 rounded bg-teal-50 hover:bg-teal-100 text-teal-800 font-bold text-xs transition-colors"
                     >
-                      Consulter
+                      {tr('Consulter', 'اطلاع')}
                     </button>
                     <Button
                       variant="danger"
                       className="!p-1.5"
                       onClick={() => handleDelete(docItem)}
-                      aria-label="Delete"
-                      title="Supprimer"
+                      aria-label={tr('Supprimer', 'حذف')}
+                      title={tr('Supprimer', 'حذف')}
                     >
                       <TrashIcon />
                     </Button>
@@ -167,11 +177,11 @@ const Documents: React.FC<{
         <Modal
           isOpen={!!previewDoc}
           onClose={() => setPreviewDoc(null)}
-          title={`Archive Documentaire — ${previewDoc.name}`}
+          title={`${tr('Archive Documentaire', 'الأرشيف الوثائقي')} — ${previewDoc.name}`}
           footer={
             <div className="flex justify-end gap-2">
               <Button variant="secondary" onClick={() => setPreviewDoc(null)}>
-                Fermer
+                {tr('Fermer', 'إغلاق')}
               </Button>
             </div>
           }
@@ -181,17 +191,19 @@ const Documents: React.FC<{
               <div>
                 <h4 className="font-bold text-slate-900 text-sm">{previewDoc.name}</h4>
                 <p className="text-[11px] text-slate-500 font-mono mt-0.5">
-                  Taille : {previewDoc.size} · Déposé le{' '}
+                  {tr('Taille :', 'الحجم :')} {previewDoc.size} · {tr('Déposé le', 'أودع بتاريخ')}{' '}
                   {new Date(previewDoc.uploadedAt).toLocaleDateString('fr-MA')}
                 </p>
               </div>
               <span className="px-2.5 py-1 rounded bg-teal-100 text-teal-800 font-mono font-bold text-[11px]">
-                Certifié Loi 18-00
+                {tr('Certifié Loi 18-00', 'معتمد قانون 18-00')}
               </span>
             </div>
             <p className="leading-relaxed">
-              Ce document officiel de la résidence <strong>{building.name}</strong> ({building.address},{' '}
-              {building.city}) est partagé automatiquement dans l'espace numérique de tous les copropriétaires.
+              {tr(
+                `Ce document officiel de la résidence ${building.name} (${building.address}, ${building.city}) est partagé automatiquement dans l'espace numérique de tous les copropriétaires.`,
+                `هذه الوثيقة الرسمية الخاصة بإقامة ${building.name} (${building.address}، ${building.city}) متاحة تلقائياً في الفضاء الرقمي لجميع الملاك المشتركين.`
+              )}
             </p>
           </div>
         </Modal>

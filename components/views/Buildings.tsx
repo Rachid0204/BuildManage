@@ -42,7 +42,7 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
   existingBuilding,
   syndicName,
 }) => {
-  const { t } = useI18n();
+  const { t, tr } = useI18n();
   const [name, setName] = useState('');
   const [address, setAddress] = useState('');
   const [city, setCity] = useState('');
@@ -169,7 +169,7 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
       onClose={onClose}
       title={
         existingBuilding
-          ? `Modifier l'immeuble : ${existingBuilding.name}`
+          ? `${tr("Modifier l'immeuble :", 'تعديل العمارة :')} ${existingBuilding.name}`
           : t('buildings.modal.addTitle')
       }
       footer={
@@ -178,7 +178,9 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
             {t('buildings.modal.cancel')}
           </Button>
           <Button onClick={handleSave} className="ms-3">
-            {existingBuilding ? 'Enregistrer les modifications' : t('buildings.modal.save')}
+            {existingBuilding
+              ? tr('Enregistrer les modifications', 'حفظ التعديلات')
+              : t('buildings.modal.save')}
           </Button>
         </>
       }
@@ -248,7 +250,7 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
         {!existingBuilding && (
           <div className="p-3.5 bg-slate-50 rounded-lg border border-slate-200 space-y-3">
             <p className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-              Génération initiale des lots (Optionnel)
+              {tr('Génération initiale des lots (Optionnel)', 'الإنشاء الأولي للشقق والوحدات (اختياري)')}
             </p>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
@@ -256,7 +258,7 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
                   htmlFor="bld-num-apartments"
                   className="block text-xs font-medium text-slate-700 mb-1"
                 >
-                  Nombre de lots
+                  {tr('Nombre de lots', 'عدد الشقق / الوحدات')}
                 </label>
                 <input
                   type="number"
@@ -276,7 +278,7 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
                   htmlFor="bld-floors"
                   className="block text-xs font-medium text-slate-700 mb-1"
                 >
-                  Nombre d&apos;étages
+                  {tr("Nombre d'étages", 'عدد الطوابق')}
                 </label>
                 <input
                   type="number"
@@ -293,7 +295,7 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
                   htmlFor="bld-numbering"
                   className="block text-xs font-medium text-slate-700 mb-1"
                 >
-                  Format de numérotation
+                  {tr('Format de numérotation', 'صيغة الترقيم')}
                 </label>
                 <select
                   id="bld-numbering"
@@ -305,14 +307,23 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
                   }
                   className="block w-full px-3 py-2 border border-slate-300 bg-white rounded-md text-sm"
                 >
-                  <option value="floor_numeric">Par étage (101, 102, 201...)</option>
-                  <option value="numeric">Numérique (1, 2, 3...)</option>
-                  <option value="alphabetic">Alphabétique (A, B, C...)</option>
+                  <option value="floor_numeric">
+                    {tr('Par étage (101, 102, 201...)', 'حسب الطابق (101، 102، 201...)')}
+                  </option>
+                  <option value="numeric">
+                    {tr('Numérique (1, 2, 3...)', 'رقمي تسلسلي (1، 2، 3...)')}
+                  </option>
+                  <option value="alphabetic">
+                    {tr('Alphabétique (A, B, C...)', 'أبجدي (A, B, C...)')}
+                  </option>
                 </select>
               </div>
             </div>
             <p className="text-[11px] text-slate-500">
-              Vous pourrez aussi générer ou personnaliser des lots par bloc/étage via l&apos;outil de création en masse dans le module Lots &amp; Appartements.
+              {tr(
+                "Vous pourrez aussi générer ou personnaliser des lots par bloc/étage via l'outil de création en masse dans le module Lots & Appartements.",
+                'يمكنكم أيضاً إنشاء أو تخصيص الشقق حسب العمارة أو الطابق عبر أداة الإنشاء الجماعي في قسم الشقق والوحدات.'
+              )}
             </p>
           </div>
         )}
@@ -342,7 +353,7 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
               htmlFor="bld-reserve-rate"
               className="block text-xs font-semibold text-slate-700 mb-1"
             >
-              Fonds de réserve Loi 106-12 (%)
+              {tr('Fonds de réserve Loi 106-12 (%)', 'صندوق الاحتياط قانون 106-12 (%)')}
             </label>
             <input
               type="number"
@@ -366,7 +377,10 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
               className="rounded border-slate-300 text-teal-600 focus:ring-teal-500"
             />
             <span>
-              Appliquer cette nouvelle cotisation mensuelle ({monthlyFees || 0} MAD) à tous les lots existants de l&apos;immeuble
+              {tr(
+                `Appliquer cette nouvelle cotisation mensuelle (${monthlyFees || 0} MAD) à tous les lots existants de l'immeuble`,
+                `تطبيق هذه المساهمة الشهرية الجديدة (${monthlyFees || 0} درهم) على جميع الشقق الحالية في العمارة`
+              )}
             </span>
           </label>
         )}
@@ -377,7 +391,7 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
               htmlFor="bld-bank-name"
               className="block text-xs font-semibold text-slate-700 mb-1"
             >
-              Banque de la copropriété
+              {tr('Banque de la copropriété', 'بنك اتحاد الملاك')}
             </label>
             <input
               type="text"
@@ -393,7 +407,7 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
               htmlFor="bld-bank-rib"
               className="block text-xs font-semibold text-slate-700 mb-1"
             >
-              RIB (24 chiffres)
+              {tr('RIB (24 chiffres)', 'رقم الحساب البنكي RIB (24 رقماً)')}
             </label>
             <input
               type="text"
@@ -412,7 +426,7 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
               htmlFor="bld-manager-name"
               className="block text-xs font-semibold text-slate-700 mb-1"
             >
-              {t('buildings.modal.managerName')} (Concierge / Responsable)
+              {t('buildings.modal.managerName')} ({tr('Concierge / Responsable', 'الحارس / المسؤول')})
             </label>
             <input
               type="text"
@@ -455,7 +469,7 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
 };
 
 const SubscriptionStatusCard: React.FC<{ syndic: Syndic }> = ({ syndic }) => {
-  const { t } = useI18n();
+  const { t, tr } = useI18n();
   const planLimits: Record<SubscriptionPlan, number> = {
     starter: 4,
     professional: 8,
@@ -490,7 +504,7 @@ const SubscriptionStatusCard: React.FC<{ syndic: Syndic }> = ({ syndic }) => {
                   : 'bg-green-100 text-green-800'
               }`}
             >
-              {isExpired ? 'Expired' : 'Active'}
+              {isExpired ? tr('Expiré', 'منتهي الصلاحية') : tr('Actif', 'نشط')}
             </span>
           </div>
         </div>
@@ -552,7 +566,7 @@ const Buildings: React.FC<{
   onDeleteBuilding,
   onSelectBuilding,
 }) => {
-  const { t } = useI18n();
+  const { t, tr } = useI18n();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingBuilding, setEditingBuilding] = useState<Building | null>(null);
   const [deletingBuilding, setDeletingBuilding] = useState<Building | null>(null);
@@ -608,27 +622,28 @@ const Buildings: React.FC<{
       <Modal
         isOpen={!!deletingBuilding}
         onClose={() => setDeletingBuilding(null)}
-        title="Confirmer la suppression de l'immeuble"
+        title={tr("Confirmer la suppression de l'immeuble", 'تأكيد حذف العمارة')}
         footer={
           <>
             <Button variant="secondary" onClick={() => setDeletingBuilding(null)}>
-              Annuler
+              {tr('Annuler', 'إلغاء')}
             </Button>
             <Button variant="danger" onClick={confirmDelete} className="ms-3">
-              Supprimer définitivement
+              {tr('Supprimer définitivement', 'حذف نهائي')}
             </Button>
           </>
         }
       >
         <div className="space-y-3 text-sm text-slate-600">
           <p>
-            Êtes-vous sûr de vouloir supprimer la résidence{' '}
+            {tr('Êtes-vous sûr de vouloir supprimer la résidence', 'هل أنت متأكد من رغبتك في حذف الإقامة')}{' '}
             <strong className="text-slate-900">{deletingBuilding?.name}</strong> ?
           </p>
           <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-800">
-            Cette action supprimera également les{' '}
-            <strong>{deletingBuilding?.apartments.length || 0} lots</strong> et{' '}
-            <strong>{deletingBuilding?.residents.length || 0} résidents</strong> rattachés à cet immeuble.
+            {tr(
+              `Cette action supprimera également les ${deletingBuilding?.apartments.length || 0} lots et ${deletingBuilding?.residents.length || 0} résidents rattachés à cet immeuble.`,
+              `سيؤدي هذا الإجراء أيضاً إلى حذف ${deletingBuilding?.apartments.length || 0} شقة و ${deletingBuilding?.residents.length || 0} ساكن مرتبطين بهذه العمارة.`
+            )}
           </div>
         </div>
       </Modal>
@@ -686,7 +701,7 @@ const Buildings: React.FC<{
                         type="button"
                         onClick={(e) => handleOpenEdit(e, building)}
                         className="p-2 text-slate-400 hover:text-teal-700 hover:bg-slate-100 rounded-lg transition-colors"
-                        title="Modifier l'immeuble"
+                        title={tr("Modifier l'immeuble", 'تعديل العمارة')}
                       >
                         <PencilIcon />
                       </button>
@@ -695,7 +710,7 @@ const Buildings: React.FC<{
                           type="button"
                           onClick={(e) => handleOpenDelete(e, building)}
                           className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-                          title="Supprimer l'immeuble"
+                          title={tr("Supprimer l'immeuble", 'حذف العمارة')}
                         >
                           <TrashIcon />
                         </button>
@@ -705,22 +720,28 @@ const Buildings: React.FC<{
 
                   <div className="mt-4 grid grid-cols-2 gap-2 bg-slate-50 p-3 rounded-lg border border-slate-100 text-xs">
                     <div>
-                      <span className="text-slate-400 block text-[11px]">Cotisation Syndic</span>
+                      <span className="text-slate-400 block text-[11px]">
+                        {tr('Cotisation Syndic', 'واجب السنديك الشهري')}
+                      </span>
                       <span className="font-mono font-bold text-slate-800">
-                        {building.monthlySyndicFees} MAD / mois
+                        {building.monthlySyndicFees} {tr('MAD / mois', 'درهم / شهر')}
                       </span>
                     </div>
                     <div>
-                      <span className="text-slate-400 block text-[11px]">Fonds Réserve</span>
+                      <span className="text-slate-400 block text-[11px]">
+                        {tr('Fonds Réserve', 'صندوق الاحتياط')}
+                      </span>
                       <span className="font-mono font-bold text-teal-700">
-                        {building.reserveFundRate ?? 5}% (Loi 106-12)
+                        {building.reserveFundRate ?? 5}% ({tr('Loi 106-12', 'قانون 106-12')})
                       </span>
                     </div>
                   </div>
 
                   {building.managerName && (
                     <p className="text-xs text-slate-600 mt-3">
-                      <span className="font-semibold text-slate-700">Responsable / Gardien :</span>{' '}
+                      <span className="font-semibold text-slate-700">
+                        {tr('Responsable / Gardien :', 'المسؤول / الحارس :')}
+                      </span>{' '}
                       {building.managerName} {building.managerPhone ? `(${building.managerPhone})` : ''}
                     </p>
                   )}
@@ -728,10 +749,12 @@ const Buildings: React.FC<{
 
                 <div className="mt-4 pt-3 border-t border-slate-200 flex items-center justify-between text-xs text-slate-600">
                   <span className="font-medium">
-                    <strong className="text-slate-900">{building.apartments.length}</strong> lots ({occupiedLots} assignés)
+                    <strong className="text-slate-900">{building.apartments.length}</strong>{' '}
+                    {tr('lots', 'شقق')} ({occupiedLots} {tr('assignés', 'مُعيّنة')})
                   </span>
                   <span className="font-medium">
-                    <strong className="text-slate-900">{building.residents.length}</strong> résidents
+                    <strong className="text-slate-900">{building.residents.length}</strong>{' '}
+                    {tr('résidents', 'سكان')}
                   </span>
                 </div>
               </Card>

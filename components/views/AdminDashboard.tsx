@@ -4,7 +4,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import Modal from '../common/Modal';
+import LanguageToggle from '../common/LanguageToggle';
 import { useAuth, getHomeRouteForRole } from '../../contexts/AuthContext';
+import { useI18n } from '../../hooks/useI18n';
 import { getSyndics, saveSyndic } from '../../firebase/services';
 import type { Syndic, SubscriptionPlan, SubscriptionStatus } from '../../types';
 import { BuildingsIcon, ResidentsIcon, FinancialsIcon } from '../icons/IconComponents';
@@ -16,7 +18,8 @@ const PLAN_PRICES: Record<SubscriptionPlan, number> = {
 };
 
 const AdminDashboard: React.FC = () => {
-  const { userProfile, logout, loginWithEmail } = useAuth();
+  const { userProfile, logout } = useAuth();
+  const { t, tr, language } = useI18n();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -69,37 +72,38 @@ const AdminDashboard: React.FC = () => {
     });
   };
 
-  const handleSimulateRole = async (email: string) => {
-    const profile = await loginWithEmail(email, 'password123');
-    navigate(getHomeRouteForRole(profile.role), { replace: true });
-  };
-
   const handleLogout = async () => {
     await logout();
     navigate('/login', { replace: true });
   };
 
+  if (userProfile && userProfile.role !== 'admin') {
+    navigate(getHomeRouteForRole(userProfile.role), { replace: true });
+    return null;
+  }
+
   return (
-    <div className="min-h-screen bg-slate-100">
+    <div className="min-h-screen bg-slate-100" dir={language === 'ar' ? 'rtl' : 'ltr'}>
       <nav className="bg-slate-900 text-white shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16 items-center">
             <div className="flex items-center gap-2.5">
               <span className="text-xl font-bold text-white tracking-tight">Syndik Admin</span>
               <span className="px-2.5 py-0.5 bg-rose-600 text-xs font-bold rounded-full text-white">
-                Superuser SaaS
+                {t('adminPortal.badge')}
               </span>
             </div>
-            <div className="flex items-center gap-4">
-              <span className="text-xs sm:text-sm text-slate-300 font-mono">
+            <div className="flex items-center gap-3">
+              <span className="text-xs sm:text-sm text-slate-300 font-mono hidden sm:inline">
                 {userProfile?.email}
               </span>
+              <LanguageToggle variant="dark" />
               <button
                 type="button"
                 onClick={handleLogout}
                 className="text-xs font-bold text-rose-400 hover:text-rose-200 transition-colors"
               >
-                Déconnexion
+                {t('header.logout')}
               </button>
             </div>
           </div>
@@ -110,44 +114,11 @@ const AdminDashboard: React.FC = () => {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-3">
           <div>
             <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
-              Console d&apos;Administration SaaS &amp; Supervision Nationale
+              {t('adminPortal.title')}
             </h1>
             <p className="text-xs text-slate-500 mt-0.5">
-              Gestion des cabinets de syndic, abonnements SaaS, conformité Loi 18-00 / 106-12 et simulation de rôles.
+              {t('adminPortal.subtitle')}
             </p>
-          </div>
-
-          {/* Quick Role Switcher for Testing All User Types */}
-          <div className="flex items-center gap-2 flex-wrap bg-white p-2 rounded-xl border border-slate-200 shadow-2xs">
-            <span className="text-[11px] font-bold text-slate-500 px-1">Simuler vue :</span>
-            <button
-              type="button"
-              onClick={() => handleSimulateRole('contact@syndicpro.ma')}
-              className="px-2.5 py-1 rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 font-bold text-xs"
-            >
-              🏢 Syndic Pro
-            </button>
-            <button
-              type="button"
-              onClick={() => handleSimulateRole('fatima.zahra@email.com')}
-              className="px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 font-bold text-xs"
-            >
-              🔑 Copropriétaire
-            </button>
-            <button
-              type="button"
-              onClick={() => handleSimulateRole('youssef.benali@email.com')}
-              className="px-2.5 py-1 rounded-lg bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 font-bold text-xs"
-            >
-              🏠 Locataire
-            </button>
-            <button
-              type="button"
-              onClick={() => handleSimulateRole('provider@syndik.ma')}
-              className="px-2.5 py-1 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-bold text-xs"
-            >
-              🛠️ Prestataire Agréé
-            </button>
           </div>
         </div>
 
@@ -158,7 +129,7 @@ const AdminDashboard: React.FC = () => {
               <ResidentsIcon />
             </div>
             <div>
-              <p className="text-xs font-semibold uppercase text-slate-500">Cabinets Syndics</p>
+              <p className="text-xs font-semibold uppercase text-slate-500">{t('adminPortal.activeCabinets')}</p>
               <p className="text-2xl font-bold font-mono text-slate-900">{syndics.length}</p>
             </div>
           </Card>
@@ -168,7 +139,7 @@ const AdminDashboard: React.FC = () => {
               <BuildingsIcon />
             </div>
             <div>
-              <p className="text-xs font-semibold uppercase text-slate-500">Résidences Gérées</p>
+              <p className="text-xs font-semibold uppercase text-slate-500">{t('adminPortal.managedBuildings')}</p>
               <p className="text-2xl font-bold font-mono text-slate-900">{totalBuildings}</p>
             </div>
           </Card>
@@ -178,7 +149,7 @@ const AdminDashboard: React.FC = () => {
               <ResidentsIcon />
             </div>
             <div>
-              <p className="text-xs font-semibold uppercase text-slate-500">Copropriétaires</p>
+              <p className="text-xs font-semibold uppercase text-slate-500">{t('adminPortal.connectedResidents')}</p>
               <p className="text-2xl font-bold font-mono text-slate-900">{totalResidents}</p>
             </div>
           </Card>
@@ -188,7 +159,7 @@ const AdminDashboard: React.FC = () => {
               <FinancialsIcon />
             </div>
             <div>
-              <p className="text-xs font-semibold uppercase text-slate-500">Revenu Mensuel (MRR)</p>
+              <p className="text-xs font-semibold uppercase text-slate-500">{t('adminPortal.estimatedMrr')}</p>
               <p className="text-2xl font-bold font-mono text-slate-900">{totalMrr} MAD</p>
             </div>
           </Card>
@@ -198,10 +169,10 @@ const AdminDashboard: React.FC = () => {
         <Card className="p-5 border border-slate-200">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-base font-bold text-slate-900">
-              Cabinets de Syndic & Copropriétés Enregistrés
+              {t('adminPortal.tableTitle')}
             </h2>
             <span className="text-xs text-slate-500 font-mono">
-              Conformité Loi 18-00 & 106-12 vérifiée
+              18-00 / 106-12
             </span>
           </div>
 
@@ -209,23 +180,23 @@ const AdminDashboard: React.FC = () => {
             <table className="min-w-full divide-y divide-slate-200 text-xs sm:text-sm">
               <thead className="bg-slate-50">
                 <tr>
-                  <th className="px-4 py-3 text-left font-bold text-slate-500 uppercase text-xs">
-                    Cabinet / Syndic
+                  <th className="px-4 py-3 text-start font-bold text-slate-500 uppercase text-xs">
+                    {t('adminPortal.colCompany')}
                   </th>
-                  <th className="px-4 py-3 text-left font-bold text-slate-500 uppercase text-xs">
-                    Identifiants Légaux (ICE / RC)
+                  <th className="px-4 py-3 text-start font-bold text-slate-500 uppercase text-xs">
+                    ICE / RC
                   </th>
                   <th className="px-4 py-3 text-center font-bold text-slate-500 uppercase text-xs">
-                    Immeubles
+                    {t('adminPortal.colBuildings')}
                   </th>
-                  <th className="px-4 py-3 text-left font-bold text-slate-500 uppercase text-xs">
-                    Forfait SaaS
+                  <th className="px-4 py-3 text-start font-bold text-slate-500 uppercase text-xs">
+                    {t('adminPortal.colPlan')}
                   </th>
-                  <th className="px-4 py-3 text-left font-bold text-slate-500 uppercase text-xs">
-                    Statut & Échéance
+                  <th className="px-4 py-3 text-start font-bold text-slate-500 uppercase text-xs">
+                    {t('adminPortal.colStatus')}
                   </th>
-                  <th className="px-4 py-3 text-right font-bold text-slate-500 uppercase text-xs">
-                    Actions
+                  <th className="px-4 py-3 text-end font-bold text-slate-500 uppercase text-xs">
+                    {t('adminPortal.colActions')}
                   </th>
                 </tr>
               </thead>
@@ -234,7 +205,7 @@ const AdminDashboard: React.FC = () => {
                   <tr key={s.id} className="hover:bg-slate-50">
                     <td className="px-4 py-3.5 whitespace-nowrap">
                       <div className="font-bold text-slate-900">{s.name}</div>
-                      <div className="text-xs text-slate-500">{s.city || 'Casablanca'}</div>
+                      <div className="text-xs text-slate-500">{s.city || tr('Casablanca', 'الدار البيضاء')}</div>
                     </td>
                     <td className="px-4 py-3.5 whitespace-nowrap font-mono text-xs text-slate-600">
                       <div>ICE : {s.ice || '001524367000089'}</div>
@@ -253,7 +224,7 @@ const AdminDashboard: React.FC = () => {
                             : 'bg-slate-100 text-slate-800'
                         }`}
                       >
-                        {s.subscriptionPlan} ({PLAN_PRICES[s.subscriptionPlan]} DH/mois)
+                        {t(`subscription.plans.${s.subscriptionPlan}` as any)} ({PLAN_PRICES[s.subscriptionPlan]} DH)
                       </span>
                     </td>
                     <td className="px-4 py-3.5 whitespace-nowrap">
@@ -264,19 +235,23 @@ const AdminDashboard: React.FC = () => {
                             : 'bg-rose-100 text-rose-800'
                         }`}
                       >
-                        {s.subscriptionStatus === 'active' ? 'Actif' : 'Expiré'}
+                        {s.subscriptionStatus === 'active'
+                          ? tr('Actif', 'نشط')
+                          : s.subscriptionStatus === 'cancelled'
+                          ? tr('Suspendu', 'معلق')
+                          : tr('Expiré', 'منتهي الصلاحية')}
                       </span>
                       <span className="ms-2 font-mono text-xs text-slate-400">
-                        exp. {new Date(s.subscriptionExpiry).toLocaleDateString('fr-MA')}
+                        {new Date(s.subscriptionExpiry).toLocaleDateString(language === 'ar' ? 'ar-MA' : 'fr-MA')}
                       </span>
                     </td>
-                    <td className="px-4 py-3.5 whitespace-nowrap text-right">
+                    <td className="px-4 py-3.5 whitespace-nowrap text-end">
                       <button
                         type="button"
                         onClick={() => handleOpenManage(s)}
                         className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs transition-colors"
                       >
-                        Gérer l'abonnement
+                        {t('adminPortal.manageBtn')}
                       </button>
                     </td>
                   </tr>
@@ -292,51 +267,72 @@ const AdminDashboard: React.FC = () => {
         <Modal
           isOpen={!!selectedSyndic}
           onClose={() => setSelectedSyndic(null)}
-          title={`Gérer le Cabinet : ${selectedSyndic.name}`}
+          title={`${tr('Gérer le Cabinet :', 'إدارة المكتب :')} ${selectedSyndic.name}`}
           footer={
             <div className="flex justify-end gap-2">
               <Button variant="secondary" onClick={() => setSelectedSyndic(null)}>
-                Annuler
+                {tr('Annuler', 'إلغاء')}
               </Button>
               <Button
                 onClick={handleSaveSyndic}
                 disabled={updateSyndicMutation.isPending}
                 className="bg-teal-700 hover:bg-teal-800 text-white font-bold"
               >
-                Enregistrer les modifications
+                {tr('Enregistrer les modifications', 'حفظ التعديلات')}
               </Button>
             </div>
           }
         >
           <div className="space-y-4 text-xs">
             <div>
-              <label className="block font-bold text-slate-700 mb-1">Forfait SaaS :</label>
+              <label className="block font-bold text-slate-700 mb-1">
+                {tr('Forfait SaaS :', 'باقة الاشتراك SaaS :')}
+              </label>
               <select
                 value={editPlan}
                 onChange={(e) => setEditPlan(e.target.value as SubscriptionPlan)}
                 className="w-full p-2.5 rounded-lg border border-slate-300 bg-white font-semibold"
               >
-                <option value="starter">Starter — 200 MAD/mois (Jusqu'à 4 résidences)</option>
-                <option value="professional">Professional — 350 MAD/mois (Jusqu'à 8 résidences)</option>
-                <option value="enterprise">Enterprise — 500 MAD/mois (Immeubles illimités)</option>
+                <option value="starter">
+                  {tr(
+                    "Starter — 200 MAD/mois (Jusqu'à 4 résidences)",
+                    'مبتدئ (Starter) — 200 درهم/شهر (حتى 4 إقامات)'
+                  )}
+                </option>
+                <option value="professional">
+                  {tr(
+                    "Professional — 350 MAD/mois (Jusqu'à 8 résidences)",
+                    'محترف (Professional) — 350 درهم/شهر (حتى 8 إقامات)'
+                  )}
+                </option>
+                <option value="enterprise">
+                  {tr(
+                    'Enterprise — 500 MAD/mois (Immeubles illimités)',
+                    'مؤسسة (Enterprise) — 500 درهم/شهر (عدد غير محدود من العمارات)'
+                  )}
+                </option>
               </select>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block font-bold text-slate-700 mb-1">Statut du compte :</label>
+                <label className="block font-bold text-slate-700 mb-1">
+                  {tr('Statut du compte :', 'حالة الحساب :')}
+                </label>
                 <select
                   value={editStatus}
                   onChange={(e) => setEditStatus(e.target.value as SubscriptionStatus)}
                   className="w-full p-2.5 rounded-lg border border-slate-300 bg-white font-semibold"
                 >
-                  <option value="active">Actif</option>
-                  <option value="expired">Expiré</option>
-                  <option value="cancelled">Suspendu</option>
+                  <option value="active">{tr('Actif', 'نشط')}</option>
+                  <option value="expired">{tr('Expiré', 'منتهي الصلاحية')}</option>
+                  <option value="cancelled">{tr('Suspendu', 'معلق')}</option>
                 </select>
               </div>
               <div>
-                <label className="block font-bold text-slate-700 mb-1">Date d'échéance :</label>
+                <label className="block font-bold text-slate-700 mb-1">
+                  {tr("Date d'échéance :", 'تاريخ انتهاء الصلاحية :')}
+                </label>
                 <input
                   type="date"
                   value={editExpiry}
@@ -347,11 +343,21 @@ const AdminDashboard: React.FC = () => {
             </div>
 
             <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-1">
-              <div className="font-bold text-slate-800">Immeubles rattachés ({selectedSyndic.buildings.length}) :</div>
+              <div className="font-bold text-slate-800">
+                {tr(
+                  `Immeubles rattachés (${selectedSyndic.buildings.length}) :`,
+                  `العمارات التابعة (${selectedSyndic.buildings.length}) :`
+                )}
+              </div>
               {selectedSyndic.buildings.map((b) => (
                 <div key={b.id} className="flex justify-between text-slate-600 font-mono text-[11px]">
-                  <span>• {b.name} ({b.city})</span>
-                  <span>{b.apartments.length} lots · {b.residents.length} résidents</span>
+                  <span>
+                    • {b.name} ({b.city})
+                  </span>
+                  <span>
+                    {b.apartments.length} {tr('lots', 'شقة')} · {b.residents.length}{' '}
+                    {tr('résidents', 'ساكن')}
+                  </span>
                 </div>
               ))}
             </div>

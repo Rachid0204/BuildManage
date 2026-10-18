@@ -9,9 +9,7 @@ import {
   PlusIcon,
   PhoneIcon,
   WhatsAppIcon,
-  TagIcon,
   TrashIcon,
-  ChatIcon,
 } from '../icons/IconComponents';
 import {
   getMarketplaceItems,
@@ -22,6 +20,7 @@ import {
   sendChatMessage,
 } from '../../firebase/services';
 import Loading from '../common/Loading';
+import { useI18n } from '../../hooks/useI18n';
 
 interface MarketplaceViewProps {
   building: Building;
@@ -32,23 +31,23 @@ interface MarketplaceViewProps {
   isResidentPortal?: boolean;
 }
 
-const CATEGORIES: { id: MarketplaceCategory; label: string; icon: string }[] = [
-  { id: 'furniture', label: 'Meubles & Déco', icon: '🛋️' },
-  { id: 'appliances', label: 'Électroménager', icon: '🔌' },
-  { id: 'kids', label: 'Enfants & Jouets', icon: '🧸' },
-  { id: 'bricolage', label: 'Bricolage & Jardin', icon: '🔨' },
-  { id: 'services', label: 'Entraide & Services', icon: '🤝' },
-  { id: 'electronics', label: 'High-Tech & TV', icon: '💻' },
-  { id: 'other', label: 'Autre', icon: '📦' },
+const CATEGORIES: { id: MarketplaceCategory; labelFr: string; labelAr: string; icon: string }[] = [
+  { id: 'furniture', labelFr: 'Meubles & Déco', labelAr: 'أثاث وديكور', icon: '🛋️' },
+  { id: 'appliances', labelFr: 'Électroménager', labelAr: 'أجهزة كهرومنزلية', icon: '🔌' },
+  { id: 'kids', labelFr: 'Enfants & Jouets', labelAr: 'أطفال وألعاب', icon: '🧸' },
+  { id: 'bricolage', labelFr: 'Bricolage & Jardin', labelAr: 'أدوات وحديقة', icon: '🔨' },
+  { id: 'services', labelFr: 'Entraide & Services', labelAr: 'تعاون وخدمات', icon: '🤝' },
+  { id: 'electronics', labelFr: 'High-Tech & TV', labelAr: 'إلكترونيات وتلفاز', icon: '💻' },
+  { id: 'other', labelFr: 'Autre', labelAr: 'أخرى', icon: '📦' },
 ];
 
 const SAMPLE_IMAGES = [
-  { label: 'Mobilier & Salon', url: 'https://images.unsplash.com/photo-1533090161767-e6ffed986c88?w=800&auto=format&fit=crop&q=80' },
-  { label: 'Électroménager / Cuisine', url: 'https://images.unsplash.com/photo-1517668808822-9ebb02f2a0e6?w=800&auto=format&fit=crop&q=80' },
-  { label: 'Livres / Culture', url: 'https://images.unsplash.com/photo-1512820790803-83ca734da794?w=800&auto=format&fit=crop&q=80' },
-  { label: 'Enfants / Vélo', url: 'https://images.unsplash.com/photo-1485965120184-e220f721d03e?w=800&auto=format&fit=crop&q=80' },
-  { label: 'Covoiturage / Transport', url: 'https://images.unsplash.com/photo-1449965408869-eaa3f722e40d?w=800&auto=format&fit=crop&q=80' },
-  { label: 'Bricolage / Outils', url: 'https://images.unsplash.com/photo-1581783342308-f792dbdd27c5?w=800&auto=format&fit=crop&q=80' },
+  { labelFr: 'Mobilier & Salon', labelAr: 'أثاث وصالون', url: 'https://images.unsplash.com/photo-1533090161767-e6ffed986c88?w=800&auto=format&fit=crop&q=80' },
+  { labelFr: 'Électroménager / Cuisine', labelAr: 'كهرومنزلي / مطبخ', url: 'https://images.unsplash.com/photo-1517668808822-9ebb02f2a0e6?w=800&auto=format&fit=crop&q=80' },
+  { labelFr: 'Livres / Culture', labelAr: 'كتب / ثقافة', url: 'https://images.unsplash.com/photo-1512820790803-83ca734da794?w=800&auto=format&fit=crop&q=80' },
+  { labelFr: 'Enfants / Vélo', labelAr: 'أطفال / دراجة', url: 'https://images.unsplash.com/photo-1485965120184-e220f721d03e?w=800&auto=format&fit=crop&q=80' },
+  { labelFr: 'Covoiturage / Transport', labelAr: 'نقل مشترك', url: 'https://images.unsplash.com/photo-1449965408869-eaa3f722e40d?w=800&auto=format&fit=crop&q=80' },
+  { labelFr: 'Bricolage / Outils', labelAr: 'معدات وأدوات', url: 'https://images.unsplash.com/photo-1581783342308-f792dbdd27c5?w=800&auto=format&fit=crop&q=80' },
 ];
 
 const currencyFormatter = new Intl.NumberFormat('fr-MA', {
@@ -116,6 +115,7 @@ const MarketplaceCard: React.FC<MarketplaceCardProps> = ({
   onUpdateStatus,
   onDelete,
 }) => {
+  const { tr } = useI18n();
   const isOwner = item.residentId === currentResidentId;
   const isSold = item.status === 'sold';
   const isReserved = item.status === 'reserved';
@@ -130,7 +130,10 @@ const MarketplaceCard: React.FC<MarketplaceCardProps> = ({
 
   const cleanPhone = (item.whatsapp || item.phone).replace(/\s+/g, '').replace('+', '');
   const waUrl = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(
-    `Salam ${item.residentName}, je suis votre voisin (${currentApartmentNumber}). Je vous contacte au sujet de votre annonce sur le Souk : "${item.title}". Est-ce toujours disponible ?`
+    tr(
+      `Salam ${item.residentName}, je suis votre voisin (${currentApartmentNumber}). Je vous contacte au sujet de votre annonce sur le Souk : "${item.title}". Est-ce toujours disponible ?`,
+      `السلام عليكم ${item.residentName}، أنا جارك (${currentApartmentNumber}). أتواصل معك بخصوص إعلانك في سوق الجيران: "${item.title}". هل لا يزال متوفراً؟`
+    )
   )}`;
 
   const handleNextPhoto = (e: React.MouseEvent) => {
@@ -161,34 +164,33 @@ const MarketplaceCard: React.FC<MarketplaceCardProps> = ({
             className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
           />
 
-          {/* Gradient protection overlay */}
           <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-black/20 pointer-events-none" />
 
           {/* Top Badges */}
           <div className="absolute top-2.5 left-2.5 flex items-center gap-1.5 flex-wrap z-10">
             {item.type === 'free' ? (
               <span className="bg-emerald-600 text-white font-bold text-[10px] uppercase tracking-wider px-2.5 py-0.5 rounded-full shadow-sm">
-                🎁 Don Gratuit
+                🎁 {tr('Don Gratuit', 'تبرع مجاني')}
               </span>
             ) : item.type === 'service' ? (
               <span className="bg-indigo-600 text-white font-bold text-[10px] uppercase tracking-wider px-2.5 py-0.5 rounded-full shadow-sm">
-                🤝 Service
+                🤝 {tr('Service', 'خدمة')}
               </span>
             ) : (
               <span className="bg-blue-600 text-white font-bold text-[10px] uppercase tracking-wider px-2.5 py-0.5 rounded-full shadow-sm">
-                🏷️ À Vendre
+                🏷️ {tr('À Vendre', 'للبيع')}
               </span>
             )}
 
             {item.condition && (
               <span className="bg-black/60 backdrop-blur-sm text-white font-medium text-[10px] px-2 py-0.5 rounded-full">
                 {item.condition === 'new'
-                  ? 'Neuf'
+                  ? tr('Neuf', 'جديد')
                   : item.condition === 'like_new'
-                  ? 'Comme neuf'
+                  ? tr('Comme neuf', 'شبه جديد')
                   : item.condition === 'good'
-                  ? 'Bon état'
-                  : "État d'usage"}
+                  ? tr('Bon état', 'حالة جيدة')
+                  : tr("État d'usage", 'مستعمل')}
               </span>
             )}
           </div>
@@ -203,14 +205,14 @@ const MarketplaceCard: React.FC<MarketplaceCardProps> = ({
             </div>
           )}
 
-          {/* Carousel Arrows on Card (if multiple photos) */}
+          {/* Carousel Arrows on Card */}
           {itemPhotos.length > 1 && (
             <>
               <button
                 type="button"
                 onClick={handlePrevPhoto}
                 className="absolute left-1.5 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-black/40 hover:bg-black/70 text-white flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity z-10"
-                title="Photo précédente"
+                title={tr('Photo précédente', 'الصورة السابقة')}
               >
                 ‹
               </button>
@@ -218,12 +220,11 @@ const MarketplaceCard: React.FC<MarketplaceCardProps> = ({
                 type="button"
                 onClick={handleNextPhoto}
                 className="absolute right-1.5 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-black/40 hover:bg-black/70 text-white flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity z-10"
-                title="Photo suivante"
+                title={tr('Photo suivante', 'الصورة التالية')}
               >
                 ›
               </button>
 
-              {/* Dot Indicators */}
               <div className="absolute bottom-2.5 left-1/2 -translate-x-1/2 flex items-center gap-1 z-10">
                 {itemPhotos.map((_, i) => (
                   <span
@@ -237,18 +238,18 @@ const MarketplaceCard: React.FC<MarketplaceCardProps> = ({
             </>
           )}
 
-          {/* Overlay Status (Vendu / Réservé) */}
+          {/* Overlay Status */}
           {isSold && (
             <div className="absolute inset-0 bg-slate-900/65 backdrop-blur-[2px] flex items-center justify-center z-20">
               <span className="text-white font-bold text-xs uppercase tracking-wider px-3 py-1 bg-rose-600 rounded-lg shadow-md">
-                Vendu / Clôturé
+                {tr('Vendu / Clôturé', 'تم البيع / مغلق')}
               </span>
             </div>
           )}
           {isReserved && !isSold && (
             <div className="absolute inset-0 bg-amber-900/40 backdrop-blur-[1px] flex items-center justify-center z-20">
               <span className="text-white font-bold text-xs uppercase tracking-wider px-3 py-1 bg-amber-600 rounded-lg shadow-md">
-                Réservé
+                {tr('Réservé', 'محجوز')}
               </span>
             </div>
           )}
@@ -256,7 +257,7 @@ const MarketplaceCard: React.FC<MarketplaceCardProps> = ({
           {/* Price Tag in Bottom Right */}
           <div className="absolute bottom-2.5 right-2.5 z-10">
             <span className="bg-white/95 text-slate-900 font-mono font-bold text-sm px-2.5 py-1 rounded-lg shadow-sm border border-slate-200">
-              {item.type === 'free' ? '0 DH (Don)' : currencyFormatter.format(item.price)}
+              {item.type === 'free' ? tr('0 DH (Don)', '0 درهم (مجاني)') : currencyFormatter.format(item.price)}
             </span>
           </div>
         </div>
@@ -299,7 +300,7 @@ const MarketplaceCard: React.FC<MarketplaceCardProps> = ({
               className="w-full flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs transition-all shadow-xs"
             >
               <span>💬</span>
-              <span>{isOwner ? 'Voir les messages reçus' : 'Discuter sur la plateforme'}</span>
+              <span>{isOwner ? tr('Voir les messages reçus', 'عرض الرسائل الواردة') : tr('Discuter sur la plateforme', 'المحادثة عبر المنصة')}</span>
               {messageCount > 0 && (
                 <span className="bg-amber-400 text-slate-950 font-mono text-[10px] font-extrabold px-1.5 py-0.5 rounded-full">
                   {messageCount}
@@ -322,13 +323,13 @@ const MarketplaceCard: React.FC<MarketplaceCardProps> = ({
                 onClick={() => onOpenDetails(item, cardPhotoIndex)}
                 className="flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs transition-colors"
               >
-                <span>🔍 Photos ({itemPhotos.length})</span>
+                <span>🔍 {tr('Photos', 'الصور')} ({itemPhotos.length})</span>
               </button>
             </div>
           </div>
         ) : (
           <div className="flex items-center justify-between text-xs text-slate-400 py-1">
-            <span>Cette annonce est clôturée.</span>
+            <span>{tr('Cette annonce est clôturée.', 'هذا الإعلان مغلق.')}</span>
             <div className="flex items-center gap-2">
               {messageCount > 0 && (
                 <button
@@ -336,14 +337,14 @@ const MarketplaceCard: React.FC<MarketplaceCardProps> = ({
                   onClick={() => onOpenChat(item)}
                   className="text-xs text-teal-700 font-semibold hover:underline"
                 >
-                  💬 Historique ({messageCount})
+                  💬 {tr('Historique', 'السجل')} ({messageCount})
                 </button>
               )}
               <button
                 onClick={() => onOpenDetails(item, cardPhotoIndex)}
                 className="text-xs text-slate-600 underline"
               >
-                Voir détails
+                {tr('Voir détails', 'التفاصيل')}
               </button>
             </div>
           </div>
@@ -358,14 +359,14 @@ const MarketplaceCard: React.FC<MarketplaceCardProps> = ({
                   onClick={() => onUpdateStatus(item.id, isReserved ? 'available' : 'reserved')}
                   className="text-amber-700 hover:text-amber-900 font-semibold"
                 >
-                  {isReserved ? 'Rendre disponible' : 'Marquer réservé'}
+                  {isReserved ? tr('Rendre disponible', 'إعادة العرض') : tr('Marquer réservé', 'تحديد كمحجوز')}
                 </button>
                 <span>·</span>
                 <button
                   onClick={() => onUpdateStatus(item.id, 'sold')}
                   className="text-slate-600 hover:text-rose-700 font-semibold"
                 >
-                  Marquer vendu
+                  {tr('Marquer vendu', 'تحديد كمباع')}
                 </button>
               </div>
             ) : (
@@ -373,18 +374,18 @@ const MarketplaceCard: React.FC<MarketplaceCardProps> = ({
                 onClick={() => onUpdateStatus(item.id, 'available')}
                 className="text-teal-700 hover:text-teal-900 font-semibold"
               >
-                Remettre en vente
+                {tr('Remettre en vente', 'إعادة العرض للبيع')}
               </button>
             )}
 
             <button
               onClick={() => {
-                if (confirm('Voulez-vous vraiment supprimer cette annonce ?')) {
+                if (confirm(tr('Voulez-vous vraiment supprimer cette annonce ?', 'هل تريد حقاً حذف هذا الإعلان؟'))) {
                   onDelete(item.id);
                 }
               }}
               className="text-rose-500 hover:text-rose-700 p-1"
-              title="Supprimer l'annonce"
+              title={tr("Supprimer l'annonce", 'حذف الإعلان')}
             >
               <TrashIcon />
             </button>
@@ -403,6 +404,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
   currentPhone = '0661 22 33 44',
   isResidentPortal = false,
 }) => {
+  const { tr, isAr } = useI18n();
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -450,7 +452,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
 
   const sendChatMutation = useMutation({
     mutationFn: (content: string) => {
-      if (!activeChatListing) throw new Error('Aucune annonce sélectionnée');
+      if (!activeChatListing) throw new Error(tr('Aucune annonce sélectionnée', 'لم يتم تحديد أي إعلان'));
       const isSeller = activeChatListing.residentId === currentResidentId;
       const payload: Omit<ChatMessage, 'id' | 'createdAt'> = {
         buildingId: building.id,
@@ -462,7 +464,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
         recipientId: activeChatListing.residentId,
         recipientName: activeChatListing.residentName,
         content,
-        badge: isSeller ? 'Réponse Vendeur' : 'Question Souk',
+        badge: isSeller ? tr('Réponse Vendeur', 'رد البائع') : tr('Question Souk', 'سؤال في السوق'),
         marketplaceItemId: activeChatListing.id,
         marketplaceItemTitle: activeChatListing.title,
         marketplaceItemPrice: activeChatListing.price,
@@ -522,7 +524,12 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
       queryClient.invalidateQueries({ queryKey: ['marketplaceItems', building.id] });
       setIsPublishModalOpen(false);
       resetForm();
-      alert('Votre annonce avec photos a été publiée avec succès sur le Souk des Résidents !');
+      alert(
+        tr(
+          'Votre annonce avec photos a été publiée avec succès sur le Souk des Résidents !',
+          'تم نشر إعلانك مع الصور بنجاح في سوق الساكنة!'
+        )
+      );
     },
   });
 
@@ -563,12 +570,12 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
   const handleFilesSelected = async (files: FileList | File[]) => {
     const fileArray = Array.from(files).filter((f) => f.type.startsWith('image/'));
     if (fileArray.length === 0) {
-      alert('Veuillez sélectionner des fichiers image valides (JPG, PNG, WebP).');
+      alert(tr('Veuillez sélectionner des fichiers image valides (JPG, PNG, WebP).', 'يرجى اختيار ملفات صور صالحة (JPG, PNG, WebP).'));
       return;
     }
 
     if (uploadedPhotos.length + fileArray.length > 5) {
-      alert('Vous pouvez télécharger un maximum de 5 photos par annonce.');
+      alert(tr('Vous pouvez télécharger un maximum de 5 photos par annonce.', 'يمكنك تحميل 5 صور كحد أقصى لكل إعلان.'));
     }
 
     const availableSlots = Math.max(0, 5 - uploadedPhotos.length);
@@ -580,7 +587,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
       setUploadedPhotos((prev) => [...prev, ...results]);
     } catch (err) {
       console.error('Erreur compression image:', err);
-      alert("Une erreur s'est produite lors de la lecture des photos.");
+      alert(tr("Une erreur s'est produite lors de la lecture des photos.", 'حدث خطأ أثناء قراءة الصور.'));
     } finally {
       setIsCompressing(false);
     }
@@ -610,7 +617,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
 
   const handleAddSampleImage = (url: string) => {
     if (uploadedPhotos.length >= 5) {
-      return alert('Limite de 5 photos atteinte.');
+      return alert(tr('Limite de 5 photos atteinte.', 'تم بلوغ الحد الأقصى (5 صور).'));
     }
     setUploadedPhotos((prev) => [...prev, url]);
   };
@@ -618,7 +625,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
   const handlePublish = (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim() || !description.trim()) {
-      return alert('Le titre et la description sont obligatoires.');
+      return alert(tr('Le titre et la description sont obligatoires.', 'العنوان والوصف إجباريان.'));
     }
 
     const finalPrice = listingType === 'free' ? 0 : Number(price) || 0;
@@ -665,9 +672,8 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
     setDetailPhotoIndex(initialIndex);
   };
 
-  if (isLoading) return <Loading message="Chargement du Souk des Résidents..." />;
+  if (isLoading) return <Loading message={tr('Chargement du Souk des Résidents...', 'جاري تحميل سوق الجيران...')} />;
 
-  // Photos of the currently active detail modal
   const modalPhotos = activeDetailItem
     ? activeDetailItem.images && activeDetailItem.images.length > 0
       ? activeDetailItem.images
@@ -686,14 +692,17 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
               <span className="p-1.5 bg-teal-100 text-teal-800 rounded-lg">
                 <MarketplaceIcon />
               </span>
-              <span>Le Souk des Résidents</span>
+              <span>{tr('Le Souk des Résidents', 'سوق الجيران والساكنة')}</span>
             </h1>
             <span className="text-xs bg-emerald-100 text-emerald-800 font-semibold px-2.5 py-0.5 rounded-full">
-              Petites Annonces & Économie Circulaire
+              {tr('Petites Annonces & Économie Circulaire', 'إعلانات مبوبة وتبادل بين الجيران')}
             </span>
           </div>
           <p className="text-xs sm:text-sm text-slate-500 mt-1">
-            Achetez, vendez, donnez ou partagez des services entre voisins de la résidence {building.name}.
+            {tr(
+              `Achetez, vendez, donnez ou partagez des services entre voisins de la résidence ${building.name}.`,
+              `اشترِ، بِع، تبرع أو تبادل الخدمات مع جيرانك في إقامة ${building.name}.`
+            )}
           </p>
         </div>
 
@@ -704,7 +713,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
             className="px-3.5 py-2 rounded-xl bg-white hover:bg-teal-50 text-teal-900 border border-teal-200 font-bold text-xs sm:text-sm flex items-center gap-2 shadow-xs transition-colors"
           >
             <span>💬</span>
-            <span>Discussions Souk</span>
+            <span>{tr('Discussions Souk', 'محادثات السوق')}</span>
             <span className="bg-teal-700 text-white font-mono text-xs px-2 py-0.5 rounded-full">
               {allMarketplaceMessages.length}
             </span>
@@ -718,19 +727,19 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
             className="text-xs sm:text-sm font-bold flex items-center gap-1.5 shadow-sm bg-teal-700 hover:bg-teal-800 text-white"
           >
             <PlusIcon />
-            <span>Publier une annonce</span>
+            <span>{tr('Publier une annonce', 'نشر إعلان جديد')}</span>
           </Button>
         </div>
       </div>
 
-      {/* Main Tabs (All, Sales, Free/Dons, Services) */}
+      {/* Main Tabs */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-2">
         <div className="flex items-center gap-1 overflow-x-auto">
           {[
-            { id: 'all', label: 'Toutes les annonces' },
-            { id: 'sale', label: '🏷️ À Vendre' },
-            { id: 'free', label: '🎁 Dons Gratuits' },
-            { id: 'service', label: '🤝 Entraide & Services' },
+            { id: 'all', label: tr('Toutes les annonces', 'جميع الإعلانات') },
+            { id: 'sale', label: tr('🏷️ À Vendre', '🏷️ للبيع') },
+            { id: 'free', label: tr('🎁 Dons Gratuits', '🎁 تبرعات مجانية') },
+            { id: 'service', label: tr('🤝 Entraide & Services', '🤝 تعاون وخدمات') },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -750,16 +759,16 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
         <div className="relative w-full sm:w-64">
           <input
             type="text"
-            placeholder="Rechercher meuble, vélo, don..."
+            placeholder={tr('Rechercher meuble, vélo, don...', 'بحث: أثاث، دراجة، تبرع...')}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full text-xs pl-8 pr-3 py-1.5 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-teal-500"
+            className="w-full text-xs ps-8 pe-3 py-1.5 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-teal-500"
           />
-          <span className="absolute left-2.5 top-2 text-slate-400 text-xs">🔍</span>
+          <span className="absolute start-2.5 top-2 text-slate-400 text-xs">🔍</span>
           {searchQuery && (
             <button
               onClick={() => setSearchQuery('')}
-              className="absolute right-2 top-1.5 text-xs text-slate-400 hover:text-slate-600"
+              className="absolute end-2 top-1.5 text-xs text-slate-400 hover:text-slate-600"
             >
               ✕
             </button>
@@ -777,7 +786,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
               : 'bg-white hover:bg-slate-100 text-slate-600 border border-slate-200'
           }`}
         >
-          Toutes catégories
+          {tr('Toutes catégories', 'جميع الفئات')}
         </button>
         {CATEGORIES.map((cat) => (
           <button
@@ -790,7 +799,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
             }`}
           >
             <span>{cat.icon}</span>
-            <span>{cat.label}</span>
+            <span>{isAr ? cat.labelAr : cat.labelFr}</span>
           </button>
         ))}
       </div>
@@ -814,9 +823,12 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
         {filteredItems.length === 0 && (
           <div className="col-span-full py-16 text-center bg-white rounded-2xl border border-dashed border-slate-300 p-8">
             <span className="text-4xl block mb-2">🛍️</span>
-            <h3 className="font-bold text-slate-800 text-base">Aucune annonce trouvée</h3>
+            <h3 className="font-bold text-slate-800 text-base">{tr('Aucune annonce trouvée', 'لم يتم العثور على أي إعلان')}</h3>
             <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-              Soyez le premier à publier un objet à vendre, à donner ou un service pour vos voisins !
+              {tr(
+                'Soyez le premier à publier un objet à vendre, à donner ou un service pour vos voisins !',
+                'كن أول من ينشر غرضاً للبيع أو التبرع أو خدمة لجيرانك!'
+              )}
             </p>
             <Button
               onClick={() => {
@@ -825,7 +837,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
               }}
               className="mt-4 text-xs font-bold bg-teal-700 hover:bg-teal-800"
             >
-              + Publier une annonce avec photos
+              {tr('+ Publier une annonce avec photos', '+ نشر إعلان مع صور')}
             </Button>
           </div>
         )}
@@ -835,18 +847,18 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
       <Modal
         isOpen={isPublishModalOpen}
         onClose={() => setIsPublishModalOpen(false)}
-        title="Publier une annonce sur le Souk des Résidents"
+        title={tr('Publier une annonce sur le Souk des Résidents', 'نشر إعلان في سوق الجيران')}
         footer={
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setIsPublishModalOpen(false)}>
-              Annuler
+              {tr('Annuler', 'إلغاء')}
             </Button>
             <Button
               onClick={handlePublish}
               disabled={publishMutation.isPending || isCompressing}
               className="bg-teal-700 hover:bg-teal-800 text-white font-bold"
             >
-              {publishMutation.isPending ? 'Publication en cours...' : 'Publier mon annonce'}
+              {publishMutation.isPending ? tr('Publication en cours...', 'جاري النشر...') : tr('Publier mon annonce', 'نشر إعلاني')}
             </Button>
           </div>
         }
@@ -854,12 +866,12 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
         <form onSubmit={handlePublish} className="space-y-4 text-xs sm:text-sm">
           {/* Listing Type Selection */}
           <div>
-            <label className="block font-semibold text-slate-700 mb-1">Type d'annonce :</label>
+            <label className="block font-semibold text-slate-700 mb-1">{tr("Type d'annonce :", 'نوع الإعلان:')}</label>
             <div className="grid grid-cols-3 gap-2">
               {[
-                { id: 'sale', label: '🏷️ À Vendre' },
-                { id: 'free', label: '🎁 Don Gratuit' },
-                { id: 'service', label: '🤝 Service / Entraide' },
+                { id: 'sale', label: tr('🏷️ À Vendre', '🏷️ للبيع') },
+                { id: 'free', label: tr('🎁 Don Gratuit', '🎁 تبرع مجاني') },
+                { id: 'service', label: tr('🤝 Service / Entraide', '🤝 خدمة / تعاون') },
               ].map((t) => (
                 <button
                   key={t.id}
@@ -883,19 +895,19 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
           {/* Title & Category */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Titre de l'annonce * :</label>
+              <label className="block font-semibold text-slate-700 mb-1">{tr("Titre de l'annonce * :", 'عنوان الإعلان * :')}</label>
               <input
                 type="text"
                 required
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="Ex: Table basse salon marocain..."
+                placeholder={tr('Ex: Table basse salon marocain...', 'مثال: طاولة صالون مغربي...')}
                 className="w-full text-xs p-2.5 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-500"
               />
             </div>
 
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Catégorie :</label>
+              <label className="block font-semibold text-slate-700 mb-1">{tr('Catégorie :', 'الفئة:')}</label>
               <select
                 value={category}
                 onChange={(e) => setCategory(e.target.value as any)}
@@ -903,7 +915,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
               >
                 {CATEGORIES.map((c) => (
                   <option key={c.id} value={c.id}>
-                    {c.icon} {c.label}
+                    {c.icon} {isAr ? c.labelAr : c.labelFr}
                   </option>
                 ))}
               </select>
@@ -913,41 +925,44 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
           {/* Price & Condition */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Prix (en DH) :</label>
+              <label className="block font-semibold text-slate-700 mb-1">{tr('Prix (en DH) :', 'السعر (بالدرهم):')}</label>
               <input
                 type="number"
                 disabled={listingType === 'free'}
                 value={listingType === 'free' ? 0 : price}
                 onChange={(e) => setPrice(e.target.value === '' ? '' : Number(e.target.value))}
-                placeholder={listingType === 'free' ? '0 DH (Don)' : 'Ex: 350'}
+                placeholder={listingType === 'free' ? tr('0 DH (Don)', '0 درهم (مجاني)') : 'Ex: 350'}
                 className="w-full text-xs p-2.5 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-500 font-mono disabled:bg-slate-100"
               />
             </div>
 
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">État de l'objet :</label>
+              <label className="block font-semibold text-slate-700 mb-1">{tr("État de l'objet :", 'حالة الغرض:')}</label>
               <select
                 value={condition}
                 onChange={(e) => setCondition(e.target.value as any)}
                 className="w-full text-xs p-2.5 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white"
               >
-                <option value="new">Neuf (jamais utilisé)</option>
-                <option value="like_new">Comme neuf</option>
-                <option value="good">Bon état</option>
-                <option value="fair">État d'usage</option>
+                <option value="new">{tr('Neuf (jamais utilisé)', 'جديد (غير مستعمل)')}</option>
+                <option value="like_new">{tr('Comme neuf', 'شبه جديد')}</option>
+                <option value="good">{tr('Bon état', 'حالة جيدة')}</option>
+                <option value="fair">{tr("État d'usage", 'مستعمل')}</option>
               </select>
             </div>
           </div>
 
           {/* Description */}
           <div>
-            <label className="block font-semibold text-slate-700 mb-1">Description détaillée * :</label>
+            <label className="block font-semibold text-slate-700 mb-1">{tr('Description détaillée * :', 'وصف مفصل * :')}</label>
             <textarea
               rows={3}
               required
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Dimensions, marque, motif de vente, disponibilité pour récupération dans l'immeuble..."
+              placeholder={tr(
+                "Dimensions, marque, motif de vente, disponibilité pour récupération dans l'immeuble...",
+                'الأبعاد، العلامة التجارية، سبب البيع، أوقات التسليم داخل الإقامة...'
+              )}
               className="w-full text-xs p-2.5 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-500"
             />
           </div>
@@ -956,14 +971,13 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
           <div className="space-y-2 pt-2 border-t border-slate-100">
             <div className="flex items-center justify-between">
               <label className="block font-semibold text-slate-800">
-                Photos de l'objet ({uploadedPhotos.length}/5) :
+                {tr(`Photos de l'objet (${uploadedPhotos.length}/5) :`, `صور الغرض (${uploadedPhotos.length}/5):`)}
               </label>
               <span className="text-[11px] text-slate-500">
-                La première photo sera utilisée comme photo de couverture.
+                {tr('La première photo sera utilisée comme photo de couverture.', 'الصورة الأولى ستكون صورة الغلاف.')}
               </span>
             </div>
 
-            {/* Hidden file input */}
             <input
               ref={fileInputRef}
               type="file"
@@ -975,7 +989,6 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
               }}
             />
 
-            {/* Drag & Drop Upload Zone */}
             <div
               onDragOver={(e) => {
                 e.preventDefault();
@@ -994,16 +1007,15 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
                 <span className="text-3xl">📸</span>
                 <p className="text-xs font-bold text-slate-800">
                   {isCompressing
-                    ? 'Optimisation des photos en cours...'
-                    : 'Glissez vos photos ici ou cliquez pour parcourir'}
+                    ? tr('Optimisation des photos en cours...', 'جاري معالجة الصور...')
+                    : tr('Glissez vos photos ici ou cliquez pour parcourir', 'اسحب صورك هنا أو اضغط لاختيارها')}
                 </p>
                 <p className="text-[11px] text-slate-500">
-                  Formats supportés : JPG, PNG, WEBP · Jusqu'à 5 photos · Caméra mobile supportée
+                  {tr("Formats supportés : JPG, PNG, WEBP · Jusqu'à 5 photos", 'الصيغ المدعومة: JPG, PNG, WEBP · حتى 5 صور')}
                 </p>
               </div>
             </div>
 
-            {/* Uploaded Photos Thumbnails Grid */}
             {uploadedPhotos.length > 0 && (
               <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 pt-2">
                 {uploadedPhotos.map((photoUrl, idx) => (
@@ -1013,14 +1025,12 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
                   >
                     <img src={photoUrl} alt={`Photo ${idx + 1}`} className="w-full h-full object-cover" />
 
-                    {/* Main Photo Badge on first item */}
                     {idx === 0 && (
                       <span className="absolute top-1 left-1 bg-teal-600 text-white text-[9px] font-bold px-1.5 py-0.2 rounded shadow">
-                        Principale ★
+                        {tr('Principale ★', 'رئيسية ★')}
                       </span>
                     )}
 
-                    {/* Controls overlay on hover */}
                     <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-between p-1.5 text-white">
                       <div className="flex justify-end">
                         <button
@@ -1030,7 +1040,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
                             handleRemovePhoto(idx);
                           }}
                           className="w-5 h-5 rounded-full bg-rose-600 hover:bg-rose-700 flex items-center justify-center text-[10px] font-bold"
-                          title="Supprimer la photo"
+                          title={tr('Supprimer la photo', 'حذف الصورة')}
                         >
                           ✕
                         </button>
@@ -1044,16 +1054,14 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
                             handleSetMainPhoto(idx);
                           }}
                           className="text-[9px] bg-teal-700 hover:bg-teal-800 py-1 px-1.5 rounded font-bold text-center w-full"
-                          title="Placer cette photo en couverture"
                         >
-                          Définir principale
+                          {tr('Définir principale', 'تعيين كرئيسية')}
                         </button>
                       )}
                     </div>
                   </div>
                 ))}
 
-                {/* Add more button tile if slots remain */}
                 {uploadedPhotos.length < 5 && (
                   <button
                     type="button"
@@ -1061,13 +1069,12 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
                     className="border-2 border-dashed border-slate-300 hover:border-teal-500 hover:bg-teal-50/30 rounded-xl aspect-square flex flex-col items-center justify-center gap-1 text-slate-500 hover:text-teal-700 transition-all text-xs font-semibold"
                   >
                     <span className="text-xl">+</span>
-                    <span className="text-[10px]">Ajouter photo</span>
+                    <span className="text-[10px]">{tr('Ajouter photo', 'إضافة صورة')}</span>
                   </button>
                 )}
               </div>
             )}
 
-            {/* Quick Toggle to pick from sample images if no camera photo */}
             <div className="pt-1">
               <button
                 type="button"
@@ -1075,8 +1082,8 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
                 className="text-xs text-teal-700 hover:text-teal-900 underline font-medium"
               >
                 {showSamplePicker
-                  ? 'Masquer les images modèles prédéfinies'
-                  : 'Ou choisir une photo modèle prédéfinie...'}
+                  ? tr('Masquer les images modèles prédéfinies', 'إخفاء الصور النموذجية')
+                  : tr('Ou choisir une photo modèle prédéfinie...', 'أو اختيار صورة نموذجية جاهزة...')}
               </button>
 
               {showSamplePicker && (
@@ -1087,11 +1094,11 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
                       type="button"
                       onClick={() => handleAddSampleImage(img.url)}
                       className="relative rounded-lg overflow-hidden border border-slate-200 h-14 hover:scale-95 transition-transform group"
-                      title={`Ajouter : ${img.label}`}
+                      title={isAr ? img.labelAr : img.labelFr}
                     >
-                      <img src={img.url} alt={img.label} className="w-full h-full object-cover" />
+                      <img src={img.url} alt={isAr ? img.labelAr : img.labelFr} className="w-full h-full object-cover" />
                       <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white text-[10px] font-bold">
-                        + Ajouter
+                        {tr('+ Ajouter', '+ إضافة')}
                       </div>
                     </button>
                   ))}
@@ -1104,7 +1111,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-100">
             <div>
               <label className="block font-semibold text-slate-700 mb-1">
-                Numéro de téléphone / WhatsApp :
+                {tr('Numéro de téléphone / WhatsApp :', 'رقم الهاتف / واتساب:')}
               </label>
               <input
                 type="text"
@@ -1115,7 +1122,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
               />
             </div>
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Coordonnées du lot :</label>
+              <label className="block font-semibold text-slate-700 mb-1">{tr('Coordonnées du lot :', 'بيانات الشقة:')}</label>
               <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 text-xs font-mono">
                 {currentResidentName} ({currentApartmentNumber})
               </div>
@@ -1129,20 +1136,19 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
         <Modal
           isOpen={!!activeDetailItem}
           onClose={() => setActiveDetailItem(null)}
-          title={`Détail de l'annonce : ${activeDetailItem.title}`}
+          title={tr(`Détail de l'annonce : ${activeDetailItem.title}`, `تفاصيل الإعلان: ${activeDetailItem.title}`)}
           footer={
             <div className="flex justify-between items-center w-full">
               <div className="text-xs text-slate-500 font-mono">
-                Publié le {new Date(activeDetailItem.createdAt).toLocaleDateString('fr-MA')}
+                {tr('Publié le', 'نُشر في')} {new Date(activeDetailItem.createdAt).toLocaleDateString(isAr ? 'ar-MA' : 'fr-MA')}
               </div>
               <Button variant="secondary" onClick={() => setActiveDetailItem(null)}>
-                Fermer
+                {tr('Fermer', 'إغلاق')}
               </Button>
             </div>
           }
         >
           <div className="space-y-4 text-xs sm:text-sm">
-            {/* Large Main Photo Viewer with Navigation Arrows */}
             <div className="relative h-72 sm:h-96 w-full rounded-2xl overflow-hidden bg-slate-900 flex items-center justify-center shadow-inner">
               <img
                 src={modalPhotos[detailPhotoIndex] || modalPhotos[0]}
@@ -1150,7 +1156,6 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
                 className="max-h-full max-w-full object-contain"
               />
 
-              {/* Prev / Next Arrows */}
               {modalPhotos.length > 1 && (
                 <>
                   <button
@@ -1161,7 +1166,6 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
                       )
                     }
                     className="absolute left-3 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/60 hover:bg-black/90 text-white flex items-center justify-center text-lg font-bold shadow-lg transition-transform hover:scale-105"
-                    title="Photo précédente"
                   >
                     ‹
                   </button>
@@ -1171,7 +1175,6 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
                       setDetailPhotoIndex((prev) => (prev + 1) % modalPhotos.length)
                     }
                     className="absolute right-3 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/60 hover:bg-black/90 text-white flex items-center justify-center text-lg font-bold shadow-lg transition-transform hover:scale-105"
-                    title="Photo suivante"
                   >
                     ›
                   </button>
@@ -1183,7 +1186,6 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
               )}
             </div>
 
-            {/* Thumbnails Strip */}
             {modalPhotos.length > 1 && (
               <div className="flex items-center gap-2 overflow-x-auto pb-1">
                 {modalPhotos.map((photo, i) => (
@@ -1196,47 +1198,57 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
                         : 'border-transparent opacity-60 hover:opacity-100'
                     }`}
                   >
-                    <img src={photo} alt={`Miniature ${i + 1}`} className="w-full h-full object-cover" />
+                    <img src={photo} alt="" className="w-full h-full object-cover" />
                   </button>
                 ))}
               </div>
             )}
 
-            {/* Badges & Price Header */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2 border-t border-slate-100">
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="font-bold text-xs uppercase tracking-wider bg-teal-50 text-teal-800 border border-teal-200 px-2.5 py-0.5 rounded-full">
                   {CATEGORIES.find((c) => c.id === activeDetailItem.category)?.icon}{' '}
-                  {CATEGORIES.find((c) => c.id === activeDetailItem.category)?.label}
+                  {isAr
+                    ? CATEGORIES.find((c) => c.id === activeDetailItem.category)?.labelAr
+                    : CATEGORIES.find((c) => c.id === activeDetailItem.category)?.labelFr}
                 </span>
 
                 {activeDetailItem.condition && (
                   <span className="text-slate-600 bg-slate-100 text-xs px-2.5 py-0.5 rounded-full font-medium">
-                    État : {activeDetailItem.condition === 'new' ? 'Neuf' : activeDetailItem.condition === 'like_new' ? 'Comme neuf' : activeDetailItem.condition === 'good' ? 'Bon état' : "État d'usage"}
+                    {tr('État :', 'الحالة:')}{' '}
+                    {activeDetailItem.condition === 'new'
+                      ? tr('Neuf', 'جديد')
+                      : activeDetailItem.condition === 'like_new'
+                      ? tr('Comme neuf', 'شبه جديد')
+                      : activeDetailItem.condition === 'good'
+                      ? tr('Bon état', 'حالة جيدة')
+                      : tr("État d'usage", 'مستعمل')}
                   </span>
                 )}
               </div>
 
               <div className="text-xl font-bold font-mono text-teal-900">
-                {activeDetailItem.type === 'free' ? '0 DH (Don Gratuit)' : currencyFormatter.format(activeDetailItem.price)}
+                {activeDetailItem.type === 'free'
+                  ? tr('0 DH (Don Gratuit)', '0 درهم (تبرع مجاني)')
+                  : currencyFormatter.format(activeDetailItem.price)}
               </div>
             </div>
 
-            {/* Description */}
             <div className="space-y-1 bg-slate-50 p-4 rounded-xl border border-slate-200">
-              <h4 className="font-bold text-slate-900 text-sm">Description :</h4>
+              <h4 className="font-bold text-slate-900 text-sm">{tr('Description :', 'الوصف:')}</h4>
               <p className="text-xs text-slate-700 whitespace-pre-line leading-relaxed">
                 {activeDetailItem.description}
               </p>
             </div>
 
-            {/* Neighbor Contact Strip */}
             <div className="p-4 rounded-xl border border-teal-200 bg-teal-50/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="space-y-0.5">
-                <div className="text-xs text-slate-500 font-semibold uppercase">Voisin Vendeur / Donateur</div>
+                <div className="text-xs text-slate-500 font-semibold uppercase">
+                  {tr('Voisin Vendeur / Donateur', 'الجار البائع / المتبرع')}
+                </div>
                 <div className="font-bold text-slate-900 text-sm">{activeDetailItem.residentName}</div>
                 <div className="text-xs text-teal-800 font-mono font-semibold">
-                  Appartement : {activeDetailItem.apartmentNumber}
+                  {tr('Appartement :', 'الشقة:')} {activeDetailItem.apartmentNumber}
                 </div>
               </div>
 
@@ -1252,7 +1264,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
                     className="flex items-center gap-1.5 py-2 px-4 rounded-xl bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs transition-colors shadow-xs"
                   >
                     <span>💬</span>
-                    <span>Discuter sur la plateforme</span>
+                    <span>{tr('Discuter sur la plateforme', 'المحادثة عبر المنصة')}</span>
                     {(messageCountByItemId[activeDetailItem.id] || 0) > 0 && (
                       <span className="bg-amber-400 text-slate-950 font-mono text-[10px] font-extrabold px-1.5 py-0.5 rounded-full">
                         {messageCountByItemId[activeDetailItem.id]}
@@ -1260,9 +1272,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
                     )}
                   </button>
                   <a
-                    href={`https://wa.me/${(activeDetailItem.whatsapp || activeDetailItem.phone).replace(/\s+/g, '').replace('+', '')}?text=${encodeURIComponent(
-                      `Salam ${activeDetailItem.residentName}, je suis votre voisin (${currentApartmentNumber}). Je vous contacte au sujet de votre annonce sur le Souk : "${activeDetailItem.title}". Est-ce toujours disponible ?`
-                    )}`}
+                    href={`https://wa.me/${(activeDetailItem.whatsapp || activeDetailItem.phone).replace(/\s+/g, '').replace('+', '')}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="flex items-center gap-1.5 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition-colors shadow-xs"
@@ -1275,16 +1285,15 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
                     className="flex items-center gap-1.5 py-2 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs transition-colors shadow-xs"
                   >
                     <PhoneIcon />
-                    <span>Appeler</span>
+                    <span>{tr('Appeler', 'اتصال')}</span>
                   </a>
                 </div>
               )}
             </div>
 
-            {/* Owner Controls inside Modal */}
             {activeDetailItem.residentId === currentResidentId && (
               <div className="p-3 bg-slate-100 rounded-xl flex items-center justify-between text-xs">
-                <span className="font-semibold text-slate-700">Gestion de votre annonce :</span>
+                <span className="font-semibold text-slate-700">{tr('Gestion de votre annonce :', 'إدارة إعلانك:')}</span>
                 <div className="flex items-center gap-2">
                   {activeDetailItem.status !== 'sold' ? (
                     <button
@@ -1293,7 +1302,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
                       }
                       className="px-2.5 py-1 bg-rose-600 text-white rounded font-bold hover:bg-rose-700"
                     >
-                      Marquer comme Vendu
+                      {tr('Marquer comme Vendu', 'تحديد كمباع')}
                     </button>
                   ) : (
                     <button
@@ -1302,18 +1311,18 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
                       }
                       className="px-2.5 py-1 bg-teal-600 text-white rounded font-bold hover:bg-teal-700"
                     >
-                      Remettre en vente
+                      {tr('Remettre en vente', 'إعادة العرض للبيع')}
                     </button>
                   )}
                   <button
                     onClick={() => {
-                      if (confirm('Supprimer définitivement cette annonce ?')) {
+                      if (confirm(tr('Supprimer définitivement cette annonce ?', 'هل تريد حذف هذا الإعلان نهائياً؟'))) {
                         deleteMutation.mutate(activeDetailItem.id);
                       }
                     }}
                     className="px-2.5 py-1 text-rose-600 hover:bg-rose-50 border border-rose-300 rounded font-bold"
                   >
-                    Supprimer
+                    {tr('Supprimer', 'حذف')}
                   </button>
                 </div>
               </div>
@@ -1322,25 +1331,24 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
         </Modal>
       )}
 
-      {/* MODAL 3: IN-PLATFORM ITEM CHAT MODAL (DIRECT NEIGHBOR-TO-NEIGHBOR CONVERSATION) */}
+      {/* MODAL 3: IN-PLATFORM ITEM CHAT MODAL */}
       {activeChatListing && (
         <Modal
           isOpen={!!activeChatListing}
           onClose={() => setActiveChatListing(null)}
-          title={`💬 Messagerie Interne · Le Souk des Résidents`}
+          title={tr('💬 Messagerie Interne · Le Souk des Résidents', '💬 المراسلة الداخلية · سوق الجيران')}
           footer={
             <div className="flex justify-between items-center w-full">
               <span className="text-[11px] text-slate-500">
-                🔒 Échange sécurisé entre résidents de {building.name}
+                🔒 {tr(`Échange sécurisé entre résidents de ${building.name}`, `تواصل آمن بين سكان ${building.name}`)}
               </span>
               <Button variant="secondary" onClick={() => setActiveChatListing(null)}>
-                Fermer
+                {tr('Fermer', 'إغلاق')}
               </Button>
             </div>
           }
         >
           <div className="space-y-3 text-xs">
-            {/* Referenced Listing Summary Banner */}
             <div className="p-3 rounded-xl bg-teal-50/80 border border-teal-200 flex items-center justify-between gap-3">
               <div className="flex items-center gap-3 min-w-0">
                 <img
@@ -1356,10 +1364,10 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
                   <div className="flex items-center gap-1.5">
                     <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-teal-700 text-white">
                       {activeChatListing.type === 'free'
-                        ? 'Don'
+                        ? tr('Don', 'تبرع')
                         : activeChatListing.type === 'service'
-                        ? 'Service'
-                        : 'À vendre'}
+                        ? tr('Service', 'خدمة')
+                        : tr('À vendre', 'للبيع')}
                     </span>
                     <span className="font-mono font-bold text-teal-900 text-xs">
                       {activeChatListing.type === 'free'
@@ -1371,7 +1379,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
                     {activeChatListing.title}
                   </h4>
                   <p className="text-[11px] text-slate-600">
-                    Vendeur : <strong>{activeChatListing.residentName}</strong> ({activeChatListing.apartmentNumber})
+                    {tr('Vendeur :', 'البائع:')} <strong>{activeChatListing.residentName}</strong> ({activeChatListing.apartmentNumber})
                   </p>
                 </div>
               </div>
@@ -1385,20 +1393,25 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
                 }}
                 className="px-2.5 py-1.5 rounded-lg bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 font-semibold text-[11px] shrink-0"
               >
-                Voir annonce
+                {tr('Voir annonce', 'عرض الإعلان')}
               </button>
             </div>
 
-            {/* Chat Messages Scroll Container */}
             <div className="h-72 overflow-y-auto p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
               {activeItemMessages.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center text-center text-slate-400 p-4 space-y-1.5">
                   <span className="text-3xl">👋</span>
                   <p className="font-bold text-slate-700 text-xs">
-                    Démarrez la discussion avec {activeChatListing.residentName} ({activeChatListing.apartmentNumber})
+                    {tr(
+                      `Démarrez la discussion avec ${activeChatListing.residentName} (${activeChatListing.apartmentNumber})`,
+                      `ابدأ المحادثة مع ${activeChatListing.residentName} (${activeChatListing.apartmentNumber})`
+                    )}
                   </p>
                   <p className="text-[11px] text-slate-500 max-w-xs">
-                    Posez vos questions sur l'état de l'article, proposez un créneau pour passer le voir ou convenez d'un prix directement sur la plateforme.
+                    {tr(
+                      "Posez vos questions sur l'état de l'article, proposez un créneau pour passer le voir ou convenez d'un prix directement sur la plateforme.",
+                      'اطرح أسئلتك حول حالة الغرض، اقترح موعداً لمعاينته أو اتفق على السعر مباشرة عبر المنصة.'
+                    )}
                   </p>
                 </div>
               ) : (
@@ -1417,7 +1430,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
                           </span>
                         )}
                         <span className="font-mono text-slate-400">
-                          {new Date(msg.createdAt).toLocaleTimeString('fr-MA', {
+                          {new Date(msg.createdAt).toLocaleTimeString(isAr ? 'ar-MA' : 'fr-MA', {
                             hour: '2-digit',
                             minute: '2-digit',
                           })}
@@ -1439,13 +1452,12 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
               <div ref={chatBottomRef} />
             </div>
 
-            {/* Quick Pre-filled Conversation Starters */}
             <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
               {[
-                'Salam, cet article est-il toujours disponible ?',
-                "Puis-je passer le voir aujourd'hui ?",
-                'Le prix est-il légèrement négociable ?',
-                'Je suis intéressé(e), je le prends !',
+                tr('Salam, cet article est-il toujours disponible ?', 'السلام عليكم، هل هذا الغرض لا يزال متوفراً؟'),
+                tr("Puis-je passer le voir aujourd'hui ?", 'هل يمكنني المرور لمعاينته اليوم؟'),
+                tr('Le prix est-il légèrement négociable ?', 'هل السعر قابل للتفاوض قليلاً؟'),
+                tr('Je suis intéressé(e), je le prends !', 'أنا مهتم، سأشتريه!'),
               ].map((quickText, i) => (
                 <button
                   key={i}
@@ -1458,13 +1470,15 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
               ))}
             </div>
 
-            {/* Input Form */}
             <form onSubmit={handleSendMarketplaceChat} className="flex items-center gap-2 pt-1">
               <input
                 type="text"
                 value={chatInputText}
                 onChange={(e) => setChatInputText(e.target.value)}
-                placeholder={`Écrire à ${activeChatListing.residentName} (${activeChatListing.apartmentNumber})...`}
+                placeholder={tr(
+                  `Écrire à ${activeChatListing.residentName} (${activeChatListing.apartmentNumber})...`,
+                  `اكتب رسالة إلى ${activeChatListing.residentName} (${activeChatListing.apartmentNumber})...`
+                )}
                 className="flex-1 text-xs p-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white"
               />
               <Button
@@ -1472,7 +1486,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
                 disabled={!chatInputText.trim() || sendChatMutation.isPending}
                 className="bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs px-4 py-2.5 rounded-xl shrink-0"
               >
-                {sendChatMutation.isPending ? 'Envoi...' : 'Envoyer ✈️'}
+                {sendChatMutation.isPending ? tr('Envoi...', 'جاري الإرسال...') : tr('Envoyer ✈️', 'إرسال ✈️')}
               </Button>
             </form>
           </div>
@@ -1484,19 +1498,22 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
         <Modal
           isOpen={isInboxOpen}
           onClose={() => setIsInboxOpen(false)}
-          title="💬 Toutes les Discussions du Souk (Messagerie Interne)"
+          title={tr('💬 Toutes les Discussions du Souk (Messagerie Interne)', '💬 جميع محادثات السوق (المراسلة الداخلية)')}
           footer={
             <div className="flex justify-end">
               <Button variant="secondary" onClick={() => setIsInboxOpen(false)}>
-                Fermer
+                {tr('Fermer', 'إغلاق')}
               </Button>
             </div>
           }
         >
-          <div className="space-y-3 text-xs max-h-96 overflow-y-auto pr-1">
+          <div className="space-y-3 text-xs max-h-96 overflow-y-auto pe-1">
             {items.filter((it) => (messageCountByItemId[it.id] || 0) > 0).length === 0 ? (
               <div className="text-center py-8 text-slate-500">
-                Aucune discussion active sur les annonces pour le moment. Cliquez sur « Discuter sur la plateforme » sur n'importe quelle annonce pour contacter un voisin !
+                {tr(
+                  "Aucune discussion active sur les annonces pour le moment. Cliquez sur « Discuter sur la plateforme » sur n'importe quelle annonce pour contacter un voisin !",
+                  'لا توجد محادثات نشطة حول الإعلانات حالياً. اضغط على "المحادثة عبر المنصة" في أي إعلان للتواصل مع جارك!'
+                )}
               </div>
             ) : (
               items
@@ -1536,7 +1553,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
                             </p>
                           )}
                           <p className="text-[10px] text-slate-400 font-mono mt-0.5">
-                            Annonce de {it.residentName} ({it.apartmentNumber})
+                            {tr('Annonce de', 'إعلان من طرف')} {it.residentName} ({it.apartmentNumber})
                           </p>
                         </div>
                       </div>
@@ -1545,7 +1562,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
                         <span className="bg-teal-700 text-white font-mono text-[10px] font-bold px-2 py-0.5 rounded-full">
                           {itemMsgs.length} msg
                         </span>
-                        <span className="text-[11px] text-teal-700 font-semibold">Ouvrir →</span>
+                        <span className="text-[11px] text-teal-700 font-semibold">{tr('Ouvrir →', 'فتح ←')}</span>
                       </div>
                     </div>
                   );

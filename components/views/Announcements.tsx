@@ -18,7 +18,7 @@ const AnnouncementModal: React.FC<{
     const [content, setContent] = useState('');
     const [aiTopic, setAiTopic] = useState('');
     const [isGenerating, setIsGenerating] = useState(false);
-    const { t, language } = useI18n();
+    const { t, tr, language } = useI18n();
 
     const resetForm = () => {
         setTitle('');
@@ -47,7 +47,7 @@ const AnnouncementModal: React.FC<{
             resetForm();
             onClose();
         } else {
-            alert("Please fill in a title and content.");
+            alert(tr("Veuillez renseigner un titre et un contenu.", "يرجى إدخال العنوان والمحتوى."));
         }
     };
 

@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { Outlet, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import Sidebar from '../Sidebar';
 import Header from '../Header';
-import { useAuth } from '../../contexts/AuthContext';
+import { useAuth, getHomeRouteForRole } from '../../contexts/AuthContext';
 import { useBuilding } from '../../contexts/BuildingContext';
+import { useI18n } from '../../hooks/useI18n';
 import Loading from '../common/Loading';
 import {
     DashboardIcon,
@@ -22,21 +23,26 @@ const getActiveView = (pathname: string): any => {
 const DashboardLayout: React.FC = () => {
     const { logout, userProfile, loading } = useAuth();
     const { syndic, selectedBuilding, setSelectedBuildingId } = useBuilding();
+    const { language, t, tr } = useI18n();
     const location = useLocation();
     const navigate = useNavigate();
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
     const handleLogout = async () => {
         await logout();
-        navigate('/login');
+        navigate('/login', { replace: true });
     };
 
     const activeView = getActiveView(location.pathname);
 
-    if (loading) return <Loading message="Initializing..." />;
+    if (loading) return <Loading message={tr('Initialisation...', 'جاري التحميل...')} />;
+
+    if (userProfile && userProfile.role !== 'syndic') {
+        return <Navigate to={getHomeRouteForRole(userProfile.role)} replace />;
+    }
 
     if (userProfile?.role === 'syndic' && !syndic) {
-        return <Loading message="Loading Syndic Profile..." />;
+        return <Loading message={tr('Chargement du profil Syndic...', 'جاري تحميل ملف السنديك...')} />;
     }
 
     if (!syndic) return null;
@@ -47,7 +53,10 @@ const DashboardLayout: React.FC = () => {
     };
 
     return (
-        <div className="flex h-screen bg-slate-100 flex-col overflow-hidden">
+        <div
+            className="flex h-screen bg-slate-100 flex-col overflow-hidden"
+            dir={language === 'ar' ? 'rtl' : 'ltr'}
+        >
             <div className="flex-1 flex overflow-hidden relative">
                 <Sidebar 
                     syndic={syndic} 
@@ -85,7 +94,7 @@ const DashboardLayout: React.FC = () => {
                         }`}
                     >
                         <span className="scale-90"><DashboardIcon /></span>
-                        <span className="truncate max-w-[64px]">Accueil</span>
+                        <span className="truncate max-w-[64px]">{t('mobileNav.home')}</span>
                     </button>
 
                     <button
@@ -96,7 +105,7 @@ const DashboardLayout: React.FC = () => {
                         }`}
                     >
                         <span className="scale-90"><FinancialsIcon /></span>
-                        <span className="truncate max-w-[64px]">Finances</span>
+                        <span className="truncate max-w-[64px]">{t('mobileNav.financials')}</span>
                     </button>
 
                     <button
@@ -107,7 +116,7 @@ const DashboardLayout: React.FC = () => {
                         }`}
                     >
                         <span className="scale-90"><WrenchIcon /></span>
-                        <span className="truncate max-w-[64px]">Travaux</span>
+                        <span className="truncate max-w-[64px]">{t('mobileNav.maintenance')}</span>
                     </button>
 
                     <button
@@ -118,7 +127,7 @@ const DashboardLayout: React.FC = () => {
                         }`}
                     >
                         <span className="scale-90"><AGIcon /></span>
-                        <span className="truncate max-w-[64px]">AG & Votes</span>
+                        <span className="truncate max-w-[64px]">{t('mobileNav.ag')}</span>
                     </button>
 
                     <button
@@ -131,7 +140,7 @@ const DashboardLayout: React.FC = () => {
                         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
                         </svg>
-                        <span className="truncate max-w-[64px]">Plus</span>
+                        <span className="truncate max-w-[64px]">{t('mobileNav.more')}</span>
                     </button>
                 </div>
             </nav>

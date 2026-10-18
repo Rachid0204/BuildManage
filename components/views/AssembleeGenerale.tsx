@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import type { Building, AssembleeGenerale, Syndic, AGResolution, AGVoteCast } from '../../types';
+import type { Building, AssembleeGenerale, Syndic, AGResolution } from '../../types';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import Modal from '../common/Modal';
@@ -22,7 +22,7 @@ interface AssembleeGeneraleProps {
 }
 
 const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syndic }) => {
-  const { t } = useI18n();
+  const { tr, isAr } = useI18n();
   const queryClient = useQueryClient();
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -73,7 +73,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
 
   const toggleVotingMutation = useMutation({
     mutationFn: (isOpen: boolean) => {
-      if (!activeAG) throw new Error('Aucune AG active');
+      if (!activeAG) throw new Error(tr('Aucune AG active', 'لا توجد جمعية عامة نشطة'));
       return toggleAGVoting(activeAG.id, isOpen);
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['ag', building.id] }),
@@ -111,7 +111,6 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
 
   const handleOpenRecordVoteModal = (resolution: AGResolution) => {
     setSelectedResolutionForVote(resolution);
-    // Default to first resident
     const defaultRes = building.residents[0];
     setSelectedResidentIdForVote(defaultRes?.id || '');
     setInSessionVoteChoice('for');
@@ -140,7 +139,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
   };
 
   const handleCreateAG = () => {
-    if (!newTitle) return alert("Veuillez renseigner le titre de l'assemblée.");
+    if (!newTitle) return alert(tr("Veuillez renseigner le titre de l'assemblée.", 'يرجى إدخال عنوان الجمعية العامة.'));
 
     const initialAttendees = building.residents.map((res) => {
       const apt = building.apartments.find((a) => a.id === res.apartmentId || a.ownerId === res.id);
@@ -163,7 +162,10 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
       id: `res-${Date.now()}-${idx}`,
       number: idx + 1,
       title: item.replace(/^\d+[\.\-]\s*/, ''),
-      description: `Délibération et vote de l'assemblée concernant : ${item}`,
+      description: tr(
+        `Délibération et vote de l'assemblée concernant : ${item}`,
+        `مداولة وتصويت الجمعية العامة حول: ${item}`
+      ),
       majorityType: idx === 0 || idx === 1 ? 'simple' : idx === 4 ? 'absolute' : 'simple',
       votesFor: 0,
       votesAgainst: 0,
@@ -189,8 +191,8 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
       agendaItems: parsedAgenda,
       resolutions: initialResolutions,
       attendees: initialAttendees,
-      presidentName: building.managerName || 'Président élu en séance',
-      secretaryName: syndic?.name || 'Le Syndic',
+      presidentName: building.managerName || tr('Président élu en séance', 'الرئيس المنتخب في الجلسة'),
+      secretaryName: syndic?.name || tr('Le Syndic', 'وكيل الاتحاد (السنديك)'),
     };
 
     saveAGMutation.mutate(newAG);
@@ -203,7 +205,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
     return activeAG.resolutions.filter((r) => r.status === resolutionFilter);
   }, [activeAG, resolutionFilter]);
 
-  if (isLoading) return <Loading message="Chargement des assemblées générales..." />;
+  if (isLoading) return <Loading message={tr('Chargement des assemblées générales...', 'جاري تحميل الجمعيات العامة...')} />;
 
   // Calculate global digital voting participation
   const allVotersSet = new Set<string>();
@@ -227,14 +229,17 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
               <AGIcon />
-              <span>Gouvernance & Assemblées Générales (Loi 18-00)</span>
+              <span>{tr('Gouvernance & Assemblées Générales (Loi 18-00)', 'الحكامة والجمعيات العامة (القانون 18-00)')}</span>
             </h1>
             <span className="text-xs bg-teal-50 text-teal-800 font-semibold px-2.5 py-0.5 rounded-full border border-teal-200">
-              Scrutin pondéré par tantièmes
+              {tr('Scrutin pondéré par tantièmes', 'تصويت مرجح بالحصة الشائعة')}
             </span>
           </div>
           <p className="text-sm text-slate-500 mt-0.5">
-            Copropriété {building.name} · Feuille de présence, calcul automatique du quorum et vote électronique certifié
+            {tr(
+              `Copropriété ${building.name} · Feuille de présence, calcul automatique du quorum et vote électronique certifié`,
+              `الملكية المشتركة ${building.name} · ورقة الحضور، حساب النصاب القانوني والتصويت الإلكتروني المعتمد`
+            )}
           </p>
         </div>
 
@@ -255,7 +260,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
 
           <Button onClick={() => setIsCreateModalOpen(true)} className="flex items-center gap-1.5 text-xs sm:text-sm">
             <PlusIcon />
-            <span>Planifier une AG</span>
+            <span>{tr('Planifier une AG', 'برمجة جمع عام')}</span>
           </Button>
         </div>
       </div>
@@ -267,7 +272,9 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
             <div className="space-y-2">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-[11px] font-bold uppercase tracking-wider bg-teal-700/80 text-teal-100 px-2.5 py-0.5 rounded-full border border-teal-500/30">
-                  {activeAG.type === 'AGO' ? 'Assemblée Générale Ordinaire' : 'Assemblée Générale Extraordinaire'}
+                  {activeAG.type === 'AGO'
+                    ? tr('Assemblée Générale Ordinaire', 'جمع عام عادي (AGO)')
+                    : tr('Assemblée Générale Extraordinaire', 'جمع عام استثنائي (AGE)')}
                 </span>
                 <span
                   className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full border flex items-center gap-1.5 ${
@@ -281,24 +288,26 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                       activeAG.isVotingOpen !== false ? 'bg-emerald-400 animate-pulse' : 'bg-slate-400'
                     }`}
                   ></span>
-                  {activeAG.isVotingOpen !== false ? 'Vote en ligne actif' : 'Vote en ligne clôturé'}
+                  {activeAG.isVotingOpen !== false
+                    ? tr('Vote en ligne actif', 'التصويت الإلكتروني مفعل')
+                    : tr('Vote en ligne clôturé', 'التصويت الإلكتروني مغلق')}
                 </span>
                 <span className="text-xs text-teal-200">
-                  {new Date(activeAG.date).toLocaleDateString('fr-MA', {
+                  {new Date(activeAG.date).toLocaleDateString(isAr ? 'ar-MA' : 'fr-MA', {
                     weekday: 'long',
                     day: 'numeric',
                     month: 'long',
                     year: 'numeric',
                   })}{' '}
-                  à {activeAG.time}
+                  {tr('à', 'على الساعة')} {activeAG.time}
                 </span>
               </div>
 
               <h2 className="text-xl font-bold tracking-tight text-white">{activeAG.title}</h2>
               <p className="text-xs text-teal-100/90 max-w-2xl leading-relaxed">
-                Lieu : <strong>{activeAG.location}</strong> · Président de séance :{' '}
-                <strong>{activeAG.presidentName || 'Élu en séance'}</strong> · Secrétaire :{' '}
-                <strong>{activeAG.secretaryName || syndic?.name || 'Le Syndic'}</strong>
+                {tr('Lieu :', 'المكان:')} <strong>{activeAG.location}</strong> · {tr('Président de séance :', 'رئيس الجلسة:')}{' '}
+                <strong>{activeAG.presidentName || tr('Élu en séance', 'منتخب في الجلسة')}</strong> · {tr('Secrétaire :', 'الكاتب:')}{' '}
+                <strong>{activeAG.secretaryName || syndic?.name || tr('Le Syndic', 'وكيل الاتحاد')}</strong>
               </p>
             </div>
 
@@ -312,9 +321,14 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                     ? 'bg-amber-400 hover:bg-amber-500 text-slate-900'
                     : 'bg-emerald-500 hover:bg-emerald-600 text-white'
                 }`}
-                title="Activer ou désactiver la possibilité pour les résidents de voter depuis leur portail"
+                title={tr(
+                  'Activer ou désactiver la possibilité pour les résidents de voter depuis leur portail',
+                  'تفعيل أو إيقاف التصويت الإلكتروني للساكنة من بوابتهم'
+                )}
               >
-                {activeAG.isVotingOpen !== false ? 'Clôturer le vote en ligne' : 'Ouvrir le vote en ligne'}
+                {activeAG.isVotingOpen !== false
+                  ? tr('Clôturer le vote en ligne', 'إغلاق التصويت الإلكتروني')
+                  : tr('Ouvrir le vote en ligne', 'فتح التصويت الإلكتروني')}
               </button>
 
               <Button
@@ -323,7 +337,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                 className="text-xs bg-white/10 hover:bg-white/20 text-white border-white/20 flex items-center gap-1.5"
               >
                 <DocumentsIcon />
-                <span>Télécharger le PV Officiel (PDF)</span>
+                <span>{tr('Télécharger le PV Officiel (PDF)', 'تحميل المحضر الرسمي (PDF)')}</span>
               </Button>
             </div>
           </div>
@@ -332,9 +346,11 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
           <div className="mt-5 pt-4 border-t border-teal-700/60 grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
             <div className="md:col-span-7 space-y-1.5">
               <div className="flex justify-between items-center text-xs">
-                <span className="text-teal-200 font-medium">Quorum légal de copropriété (Loi 18-00 Art. 21) :</span>
+                <span className="text-teal-200 font-medium">
+                  {tr('Quorum légal de copropriété (Loi 18-00 Art. 21) :', 'النصاب القانوني للملكية المشتركة (المادة 21 من القانون 18-00):')}
+                </span>
                 <span className="font-mono font-bold text-white">
-                  {activeAG.presentTantiemes} / {activeAG.totalTantiemes || 1000} tantièmes (
+                  {activeAG.presentTantiemes} / {activeAG.totalTantiemes || 1000} {tr('tantièmes', 'جزء')} (
                   {Math.round(((activeAG.presentTantiemes || 0) / (activeAG.totalTantiemes || 1000)) * 100)}%)
                 </span>
               </div>
@@ -354,25 +370,25 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
               <div className="flex justify-between items-center text-[11px] text-teal-300">
                 <span>
                   {activeAG.quorumReached
-                    ? '✓ Quorum de 1ère convocation atteint (> 50%)'
-                    : '⚠ Quorum non atteint (< 50% des tantièmes)'}
+                    ? tr('✓ Quorum de 1ère convocation atteint (> 50%)', '✓ تم بلوغ النصاب القانوني للدعوة الأولى (> 50%)')
+                    : tr('⚠ Quorum non atteint (< 50% des tantièmes)', '⚠ لم يكتمل النصاب القانوني بعد (< 50% من الأجزاء)')}
                 </span>
-                <span>Seuil légal : 500 / 1000 tantièmes</span>
+                <span>{tr('Seuil légal : 500 / 1000 tantièmes', 'العتبة القانونية: 500 / 1000 جزء')}</span>
               </div>
             </div>
 
             <div className="md:col-span-5 grid grid-cols-2 gap-2.5">
               <div className="bg-teal-950/40 p-2.5 rounded-lg border border-teal-600/30">
                 <span className="text-[10px] text-teal-300 uppercase tracking-wider block font-semibold">
-                  Participation Digitale
+                  {tr('Participation Digitale', 'المشاركة الرقمية')}
                 </span>
                 <span className="text-base font-bold text-white font-mono mt-0.5 block">
-                  {allVotersSet.size} votant{allVotersSet.size > 1 ? 's' : ''} ({totalUniqueVoterTantiemes} t.)
+                  {allVotersSet.size} {tr(allVotersSet.size > 1 ? 'votants' : 'votant', 'مصوت')} ({totalUniqueVoterTantiemes} t.)
                 </span>
               </div>
               <div className="bg-teal-950/40 p-2.5 rounded-lg border border-teal-600/30">
                 <span className="text-[10px] text-teal-300 uppercase tracking-wider block font-semibold">
-                  Résolutions Votées
+                  {tr('Résolutions Votées', 'القرارات المصوت عليها')}
                 </span>
                 <span className="text-base font-bold text-white font-mono mt-0.5 block">
                   {activeAG.resolutions.filter((r) => r.status !== 'pending').length} / {activeAG.resolutions.length}
@@ -391,11 +407,13 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
             <Card className="p-4 bg-white border border-slate-200">
               <div className="flex items-center justify-between pb-3 border-b border-slate-200">
                 <div>
-                  <h3 className="font-bold text-slate-900 text-sm">Feuille de Présence & Émargement</h3>
-                  <p className="text-xs text-slate-500">Pondération légale des droits de vote par copropriétaire</p>
+                  <h3 className="font-bold text-slate-900 text-sm">{tr('Feuille de Présence & Émargement', 'ورقة الحضور والتوقيع')}</h3>
+                  <p className="text-xs text-slate-500">
+                    {tr('Pondération légale des droits de vote par copropriétaire', 'الوزن القانوني لحقوق التصويت لكل مالك مشترك')}
+                  </p>
                 </div>
                 <span className="text-xs font-mono font-bold text-teal-800 bg-teal-50 px-2 py-0.5 rounded border border-teal-200">
-                  {activeAG.attendees.filter((a) => a.status !== 'absent').length} / {activeAG.attendees.length} votants
+                  {activeAG.attendees.filter((a) => a.status !== 'absent').length} / {activeAG.attendees.length} {tr('votants', 'حاضرين')}
                 </span>
               </div>
 
@@ -407,17 +425,17 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                         <span>{attendee.residentName}</span>
                         {allVotersSet.has(attendee.residentId) && (
                           <span className="text-[10px] bg-emerald-100 text-emerald-800 px-1.5 py-0.2 rounded font-semibold">
-                            Vote en ligne ✓
+                            {tr('Vote en ligne ✓', 'تصويت إلكتروني ✓')}
                           </span>
                         )}
                       </div>
                       <div className="text-[11px] text-slate-500 flex items-center gap-1.5 mt-0.5">
-                        <span className="font-semibold text-slate-700">Lot {attendee.apartmentNumber}</span>
+                        <span className="font-semibold text-slate-700">{tr('Lot', 'شقة')} {attendee.apartmentNumber}</span>
                         <span>·</span>
-                        <span className="font-mono text-teal-800 font-bold">{attendee.tantiemes} / 1000 tantièmes</span>
+                        <span className="font-mono text-teal-800 font-bold">{attendee.tantiemes} / 1000 {tr('tantièmes', 'جزء')}</span>
                         {attendee.proxyHolderName && (
                           <span className="text-amber-700 bg-amber-50 px-1 rounded">
-                            Mandat: {attendee.proxyHolderName}
+                            {tr('Mandat:', 'وكالة:')} {attendee.proxyHolderName}
                           </span>
                         )}
                       </div>
@@ -438,13 +456,16 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                             ? 'bg-teal-700 text-white font-bold shadow-xs'
                             : 'text-slate-600 hover:text-slate-900'
                         }`}
-                        title="Copropriétaire présent physiquement en séance"
+                        title={tr('Copropriétaire présent physiquement en séance', 'حاضر شخصياً في الجلسة')}
                       >
-                        Présent
+                        {tr('Présent', 'حاضر')}
                       </button>
                       <button
                         onClick={() => {
-                          const proxyName = prompt('Nom du mandataire (procuration écrite) :', attendee.proxyHolderName || 'Ahmed Alami');
+                          const proxyName = prompt(
+                            tr('Nom du mandataire (procuration écrite) :', 'اسم الوكيل (تفويض كتابي):'),
+                            attendee.proxyHolderName || 'Ahmed Alami'
+                          );
                           if (proxyName !== null) {
                             attendeeMutation.mutate({
                               agId: activeAG.id,
@@ -459,9 +480,9 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                             ? 'bg-amber-600 text-white font-bold shadow-xs'
                             : 'text-slate-600 hover:text-slate-900'
                         }`}
-                        title="Copropriétaire représenté par procuration"
+                        title={tr('Copropriétaire représenté par procuration', 'ممثل بتفويض قانوني')}
                       >
-                        Représenté
+                        {tr('Représenté', 'ممثل')}
                       </button>
                       <button
                         onClick={() =>
@@ -476,9 +497,9 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                             ? 'bg-slate-300 text-slate-800 font-bold'
                             : 'text-slate-400 hover:text-slate-700'
                         }`}
-                        title="Absent et non représenté"
+                        title={tr('Absent et non représenté', 'غائب وغير ممثل')}
                       >
-                        Absent
+                        {tr('Absent', 'غائب')}
                       </button>
                     </div>
                   </div>
@@ -492,9 +513,12 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
             <Card className="p-4 bg-white border border-slate-200">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200">
                 <div>
-                  <h3 className="font-bold text-slate-900 text-sm">Délibérations & Vote des Résolutions</h3>
+                  <h3 className="font-bold text-slate-900 text-sm">{tr('Délibérations & Vote des Résolutions', 'المداولات والتصويت على القرارات')}</h3>
                   <p className="text-xs text-slate-500">
-                    Calcul automatique des majorités légales selon la Loi 18-00 (Articles 21, 22 et 23)
+                    {tr(
+                      'Calcul automatique des majorités légales selon la Loi 18-00 (Articles 21, 22 et 23)',
+                      'حساب تلقائي للأغلبيات القانونية وفق القانون 18-00 (المواد 21، 22 و 23)'
+                    )}
                   </p>
                 </div>
 
@@ -508,7 +532,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                         : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                     }`}
                   >
-                    Toutes ({activeAG.resolutions.length})
+                    {tr('Toutes', 'الكل')} ({activeAG.resolutions.length})
                   </button>
                   <button
                     onClick={() => setResolutionFilter('pending')}
@@ -518,7 +542,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                         : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                     }`}
                   >
-                    En délibération
+                    {tr('En délibération', 'قيد التداول')}
                   </button>
                   <button
                     onClick={() => setResolutionFilter('approved')}
@@ -528,7 +552,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                         : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                     }`}
                   >
-                    Adoptées
+                    {tr('Adoptées', 'مصادق عليها')}
                   </button>
                 </div>
               </div>
@@ -542,10 +566,10 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
 
                   const majorityLabel =
                     res.majorityType === 'simple'
-                      ? 'Majorité simple (Art. 21) · Pour > Contre'
+                      ? tr('Majorité simple (Art. 21) · Pour > Contre', 'الأغلبية البسيطة (المادة 21) · نعم > لا')
                       : res.majorityType === 'absolute'
-                      ? 'Majorité absolue (Art. 22) · min. 501 / 1000 tantièmes'
-                      : 'Unanimité (Art. 23) · 1000 / 1000 tantièmes';
+                      ? tr('Majorité absolue (Art. 22) · min. 501 / 1000 tantièmes', 'الأغلبية المطلقة (المادة 22) · 501 / 1000 جزء على الأقل')
+                      : tr('Unanimité (Art. 23) · 1000 / 1000 tantièmes', 'الإجماع (المادة 23) · 1000 / 1000 جزء');
 
                   return (
                     <div
@@ -556,7 +580,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                         <div className="space-y-1">
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="font-mono text-xs font-bold text-teal-800 bg-teal-50 border border-teal-200 px-2 py-0.5 rounded">
-                              Résolution N° {res.number}
+                              {tr('Résolution N°', 'القرار رقم')} {res.number}
                             </span>
                             <span className="text-[11px] text-slate-500 bg-slate-100 px-2 py-0.5 rounded font-medium">
                               {majorityLabel}
@@ -576,7 +600,11 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                               : 'bg-amber-50 text-amber-800 border-amber-300'
                           }`}
                         >
-                          {res.status === 'approved' ? '✓ Adoptée' : res.status === 'rejected' ? '✗ Rejetée' : 'En délibération'}
+                          {res.status === 'approved'
+                            ? tr('✓ Adoptée', '✓ مصادق عليه')
+                            : res.status === 'rejected'
+                            ? tr('✗ Rejetée', '✗ مرفوض')
+                            : tr('En délibération', 'قيد التداول')}
                         </span>
                       </div>
 
@@ -584,16 +612,16 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                       <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 space-y-1.5">
                         <div className="flex flex-wrap justify-between items-center text-xs font-mono">
                           <span className="text-emerald-700 font-bold">
-                            POUR : {res.votesFor} tantièmes ({percentFor}%)
+                            {tr('POUR :', 'نعم (مع):')} {res.votesFor} {tr('tantièmes', 'جزء')} ({percentFor}%)
                           </span>
                           <span className="text-rose-700 font-bold">
-                            CONTRE : {res.votesAgainst} ({percentAgainst}%)
+                            {tr('CONTRE :', 'لا (ضد):')} {res.votesAgainst} ({percentAgainst}%)
                           </span>
                           <span className="text-slate-500 font-medium">
-                            ABSTENTION : {res.votesAbstain}
+                            {tr('ABSTENTION :', 'امتناع:')} {res.votesAbstain}
                           </span>
                           <span className="text-slate-400 text-[11px]">
-                            Exprimé : <strong>{totalVotes} / 1000</strong>
+                            {tr('Exprimé :', 'المعبر عنه:')} <strong>{totalVotes} / 1000</strong>
                           </span>
                         </div>
 
@@ -616,7 +644,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                             onClick={() => setViewVotersResolution(res)}
                             className="text-xs text-slate-600 hover:text-slate-900 hover:bg-slate-100 px-2 py-1 rounded border border-slate-200 font-medium transition-colors"
                           >
-                            Consulter les votants ({res.voters?.length || 0})
+                            {tr('Consulter les votants', 'عرض المصوتين')} ({res.voters?.length || 0})
                           </button>
                         </div>
 
@@ -625,7 +653,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                             onClick={() => handleOpenRecordVoteModal(res)}
                             className="text-xs bg-teal-700 hover:bg-teal-800 text-white font-bold px-3 py-1.5 flex items-center gap-1.5"
                           >
-                            <span>+ Enregistrer un vote en séance</span>
+                            <span>{tr('+ Enregistrer un vote en séance', '+ تسجيل تصويت في الجلسة')}</span>
                           </Button>
                         </div>
                       </div>
@@ -635,7 +663,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
 
                 {filteredResolutions.length === 0 && (
                   <p className="text-center text-slate-400 text-xs py-8">
-                    Aucune résolution ne correspond au filtre sélectionné.
+                    {tr('Aucune résolution ne correspond au filtre sélectionné.', 'لا يوجد أي قرار يطابق الفلتر المحدد.')}
                   </p>
                 )}
               </div>
@@ -644,9 +672,11 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
         </div>
       ) : (
         <Card className="p-8 text-center space-y-3 bg-white border border-slate-200">
-          <p className="text-slate-500 text-sm">Aucune assemblée générale n'a été planifiée pour cette copropriété.</p>
+          <p className="text-slate-500 text-sm">
+            {tr("Aucune assemblée générale n'a été planifiée pour cette copropriété.", 'لم تتم برمجة أي جمعية عامة لهذه الإقامة بعد.')}
+          </p>
           <Button onClick={() => setIsCreateModalOpen(true)} className="text-sm">
-            Planifier la 1ère Assemblée Générale
+            {tr('Planifier la 1ère Assemblée Générale', 'برمجة الجمع العام الأول')}
           </Button>
         </Card>
       )}
@@ -655,42 +685,44 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
       <Modal
         isOpen={isCreateModalOpen}
         onClose={() => setIsCreateModalOpen(false)}
-        title="Planifier une Assemblée Générale (Loi 18-00)"
+        title={tr('Planifier une Assemblée Générale (Loi 18-00)', 'برمجة جمع عام (القانون 18-00)')}
         footer={
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setIsCreateModalOpen(false)}>
-              Annuler
+              {tr('Annuler', 'إلغاء')}
             </Button>
-            <Button onClick={handleCreateAG}>Créer & Convoquer l'AG</Button>
+            <Button onClick={handleCreateAG}>{tr("Créer & Convoquer l'AG", 'إنشاء واستدعاء الجمع العام')}</Button>
           </div>
         }
       >
         <div className="space-y-4 text-xs sm:text-sm">
           <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Titre de l'Assemblée</label>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              {tr("Titre de l'Assemblée", 'عنوان الجمع العام')}
+            </label>
             <input
               type="text"
               value={newTitle}
               onChange={(e) => setNewTitle(e.target.value)}
-              placeholder="Ex: Assemblée Générale Ordinaire Annuelle (AGO 2026)"
+              placeholder={tr('Ex: Assemblée Générale Ordinaire Annuelle (AGO 2026)', 'مثال: الجمع العام العادي السنوي 2026')}
               className="w-full px-3 py-2 border border-slate-300 rounded text-sm focus:ring-1 focus:ring-teal-500"
             />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Type de réunion</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">{tr('Type de réunion', 'نوع الاجتماع')}</label>
               <select
                 value={newType}
                 onChange={(e) => setNewType(e.target.value as any)}
                 className="w-full px-3 py-2 border border-slate-300 rounded text-sm bg-white"
               >
-                <option value="AGO">Ordinaire (AGO - Bilan annuel & budget)</option>
-                <option value="AGE">Extraordinaire (AGE - Travaux urgents)</option>
+                <option value="AGO">{tr('Ordinaire (AGO - Bilan annuel & budget)', 'عادي (AGO - الحصيلة والميزانية السنوية)')}</option>
+                <option value="AGE">{tr('Extraordinaire (AGE - Travaux urgents)', 'استثنائي (AGE - أشغال مستعجلة)')}</option>
               </select>
             </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Date</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">{tr('Date', 'التاريخ')}</label>
               <input
                 type="date"
                 value={newDate}
@@ -702,7 +734,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Heure de début</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">{tr('Heure de début', 'ساعة البداية')}</label>
               <input
                 type="time"
                 value={newTime}
@@ -711,7 +743,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
               />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Lieu</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">{tr('Lieu', 'المكان')}</label>
               <input
                 type="text"
                 value={newLocation}
@@ -723,7 +755,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
 
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
-              Ordre du Jour & Résolutions (Une résolution par ligne)
+              {tr('Ordre du Jour & Résolutions (Une résolution par ligne)', 'جدول الأعمال والقرارات (قرار واحد في كل سطر)')}
             </label>
             <textarea
               rows={5}
@@ -740,18 +772,23 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
         <Modal
           isOpen={isRecordVoteModalOpen}
           onClose={() => setIsRecordVoteModalOpen(false)}
-          title={`Enregistrer un Vote · Résolution N° ${selectedResolutionForVote.number}`}
+          title={tr(
+            `Enregistrer un Vote · Résolution N° ${selectedResolutionForVote.number}`,
+            `تسجيل تصويت · القرار رقم ${selectedResolutionForVote.number}`
+          )}
           footer={
             <div className="flex justify-end gap-2">
               <Button variant="secondary" onClick={() => setIsRecordVoteModalOpen(false)}>
-                Annuler
+                {tr('Annuler', 'إلغاء')}
               </Button>
               <Button
                 onClick={handleConfirmInSessionVote}
                 disabled={castVoteMutation.isPending}
                 className="bg-teal-700 hover:bg-teal-800 text-white font-bold"
               >
-                {castVoteMutation.isPending ? 'Enregistrement...' : 'Enregistrer le Vote Pondéré'}
+                {castVoteMutation.isPending
+                  ? tr('Enregistrement...', 'جاري التسجيل...')
+                  : tr('Enregistrer le Vote Pondéré', 'تسجيل التصويت المرجح')}
               </Button>
             </div>
           }
@@ -759,7 +796,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
           <div className="space-y-4 text-xs sm:text-sm">
             <div className="p-3 bg-slate-50 rounded-lg border border-slate-200">
               <span className="text-[10px] font-bold uppercase tracking-wider text-teal-800 bg-teal-50 px-2 py-0.5 rounded">
-                Résolution N° {selectedResolutionForVote.number}
+                {tr('Résolution N°', 'القرار رقم')} {selectedResolutionForVote.number}
               </span>
               <h4 className="font-bold text-slate-900 mt-1">{selectedResolutionForVote.title}</h4>
               <p className="text-xs text-slate-600 mt-0.5">{selectedResolutionForVote.description}</p>
@@ -768,7 +805,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
             {/* Select Resident */}
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Copropriétaire Votant (ou représenté par procuration) :
+                {tr('Copropriétaire Votant (ou représenté par procuration) :', 'المالك المشترك المصوت (أو الممثل بوكالة):')}
               </label>
               <select
                 value={selectedResidentIdForVote}
@@ -780,8 +817,8 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                   const existingVote = selectedResolutionForVote.voters?.find((v) => v.residentId === res.id);
                   return (
                     <option key={res.id} value={res.id}>
-                      {res.name} — Lot {apt?.number || 'Lot'} ({apt?.tantiemes || 100}/1000 tantièmes)
-                      {existingVote ? ` [Vote actuel: ${existingVote.vote.toUpperCase()}]` : ' [Non voté]'}
+                      {res.name} — {tr('Lot', 'شقة')} {apt?.number || 'Lot'} ({apt?.tantiemes || 100}/1000 {tr('tantièmes', 'جزء')})
+                      {existingVote ? ` [${tr('Vote actuel:', 'التصويت الحالي:')} ${existingVote.vote.toUpperCase()}]` : ` [${tr('Non voté', 'لم يصوت')}]`}
                     </option>
                   );
                 })}
@@ -797,9 +834,14 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
               return (
                 <div className="p-3 bg-teal-50 rounded-lg border border-teal-200 flex justify-between items-center text-xs">
                   <div>
-                    <span className="font-bold text-teal-900 block">Pondération Légale Automatique :</span>
+                    <span className="font-bold text-teal-900 block">
+                      {tr('Pondération Légale Automatique :', 'الترجيح القانوني التلقائي:')}
+                    </span>
                     <span className="text-teal-800">
-                      Ce vote comptera pour exactement <strong>{tantiemes} tantièmes</strong> ({((tantiemes / 1000) * 100).toFixed(1)}% des voix de la copropriété).
+                      {tr(
+                        `Ce vote comptera pour exactement ${tantiemes} tantièmes (${((tantiemes / 1000) * 100).toFixed(1)}% des voix de la copropriété).`,
+                        `سيُحتسب هذا التصويت بوزن ${tantiemes} جزء (${((tantiemes / 1000) * 100).toFixed(1)}% من مجموع أصوات الملكية المشتركة).`
+                      )}
                     </span>
                   </div>
                   <span className="font-mono font-bold text-lg text-teal-900 px-3 py-1 bg-white rounded-md border border-teal-300">
@@ -811,7 +853,9 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
 
             {/* 3 Option Choice */}
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1.5">Sens du Vote :</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                {tr('Sens du Vote :', 'اتجاه التصويت:')}
+              </label>
               <div className="grid grid-cols-3 gap-2">
                 <button
                   type="button"
@@ -823,7 +867,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                   }`}
                 >
                   <span className="block text-base">🟢</span>
-                  <span className="text-xs font-bold block">POUR</span>
+                  <span className="text-xs font-bold block">{tr('POUR', 'موافق (نعم)')}</span>
                 </button>
 
                 <button
@@ -836,7 +880,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                   }`}
                 >
                   <span className="block text-base">🔴</span>
-                  <span className="text-xs font-bold block">CONTRE</span>
+                  <span className="text-xs font-bold block">{tr('CONTRE', 'معارض (لا)')}</span>
                 </button>
 
                 <button
@@ -849,7 +893,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                   }`}
                 >
                   <span className="block text-base">⚪</span>
-                  <span className="text-xs font-bold block">ABSTENTION</span>
+                  <span className="text-xs font-bold block">{tr('ABSTENTION', 'امتناع')}</span>
                 </button>
               </div>
             </div>
@@ -857,13 +901,13 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
             {/* Optional Comment / Proxy */}
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Observation, mandat de procuration ou réserve (Loi 18-00) :
+                {tr('Observation, mandat de procuration ou réserve (Loi 18-00) :', 'ملاحظة، تفويض وكالة أو تحفظ (القانون 18-00):')}
               </label>
               <input
                 type="text"
                 value={inSessionVoteComment}
                 onChange={(e) => setInSessionVoteComment(e.target.value)}
-                placeholder="Ex: Vote exprimé en séance par le mandataire..."
+                placeholder={tr('Ex: Vote exprimé en séance par le mandataire...', 'مثال: تصويت معبر عنه في الجلسة بواسطة الوكيل...')}
                 className="w-full px-3 py-1.5 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-teal-500"
               />
             </div>
@@ -876,11 +920,14 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
         <Modal
           isOpen={!!viewVotersResolution}
           onClose={() => setViewVotersResolution(null)}
-          title={`Registre du Scrutin · Résolution N° ${viewVotersResolution.number}`}
+          title={tr(
+            `Registre du Scrutin · Résolution N° ${viewVotersResolution.number}`,
+            `سجل الاقتراع · القرار رقم ${viewVotersResolution.number}`
+          )}
           footer={
             <div className="flex justify-end">
               <Button variant="secondary" onClick={() => setViewVotersResolution(null)}>
-                Fermer
+                {tr('Fermer', 'إغلاق')}
               </Button>
             </div>
           }
@@ -895,11 +942,11 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
               <table className="min-w-full divide-y divide-slate-200 text-xs">
                 <thead className="bg-slate-50 text-slate-600 font-semibold">
                   <tr>
-                    <th className="px-3 py-2 text-left">Copropriétaire</th>
-                    <th className="px-3 py-2 text-left">Lot</th>
-                    <th className="px-3 py-2 text-center">Tantièmes</th>
-                    <th className="px-3 py-2 text-center">Vote</th>
-                    <th className="px-3 py-2 text-left">Date & Observation</th>
+                    <th className="px-3 py-2 text-start">{tr('Copropriétaire', 'المالك المشترك')}</th>
+                    <th className="px-3 py-2 text-start">{tr('Lot', 'الوحدة')}</th>
+                    <th className="px-3 py-2 text-center">{tr('Tantièmes', 'الحصة الشائعة')}</th>
+                    <th className="px-3 py-2 text-center">{tr('Vote', 'التصويت')}</th>
+                    <th className="px-3 py-2 text-start">{tr('Date & Observation', 'التاريخ والملاحظة')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
@@ -920,11 +967,11 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                               : 'bg-slate-100 text-slate-700'
                           }`}
                         >
-                          {v.vote === 'for' ? 'POUR' : v.vote === 'against' ? 'CONTRE' : 'ABSTENTION'}
+                          {v.vote === 'for' ? tr('POUR', 'موافق') : v.vote === 'against' ? tr('CONTRE', 'معارض') : tr('ABSTENTION', 'ممتنع')}
                         </span>
                       </td>
                       <td className="px-3 py-2 text-slate-500 font-mono text-[11px]">
-                        {new Date(v.castAt).toLocaleString('fr-MA')}
+                        {new Date(v.castAt).toLocaleString(isAr ? 'ar-MA' : 'fr-MA')}
                         {v.comment && <div className="text-slate-700 italic font-sans mt-0.5">« {v.comment} »</div>}
                       </td>
                     </tr>
@@ -933,7 +980,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                   {(!viewVotersResolution.voters || viewVotersResolution.voters.length === 0) && (
                     <tr>
                       <td colSpan={5} className="px-3 py-6 text-center text-slate-400">
-                        Aucun vote n'a encore été enregistré sur cette résolution.
+                        {tr("Aucun vote n'a encore été enregistré sur cette résolution.", 'لم يتم تسجيل أي تصويت على هذا القرار بعد.')}
                       </td>
                     </tr>
                   )}

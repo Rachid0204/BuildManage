@@ -9,15 +9,18 @@ type TranslationKeys = NestedKey<typeof translations.en>;
 
 interface I18nContextType {
     language: Language;
+    isAr: boolean;
     setLanguage: (language: Language) => void;
+    toggleLanguage: () => void;
     t: (key: TranslationKeys, replacements?: Record<string, string>) => string;
+    tr: (frText: string, arText: string) => string;
 }
 
 const I18nContext = createContext<I18nContextType | undefined>(undefined);
 
 const getInitialLanguage = (): Language => {
     const storedLang = localStorage.getItem('syndik_lang');
-    if (storedLang === 'en' || storedLang === 'fr' || storedLang === 'ar') {
+    if (storedLang === 'fr' || storedLang === 'ar') {
         return storedLang;
     }
     return 'fr'; // Default to French for Moroccan context
@@ -25,6 +28,7 @@ const getInitialLanguage = (): Language => {
 
 export const I18nProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
     const [language, setLanguage] = useState<Language>(getInitialLanguage);
+    const isAr = language === 'ar';
 
     useEffect(() => {
         localStorage.setItem('syndik_lang', language);
@@ -32,13 +36,30 @@ export const I18nProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         document.documentElement.dir = language === 'ar' ? 'rtl' : 'ltr';
     }, [language]);
 
+    const toggleLanguage = () => {
+        setLanguage((prev) => (prev === 'ar' ? 'fr' : 'ar'));
+    };
+
+    const tr = (frText: string, arText: string): string => {
+        return language === 'ar' ? arText : frText;
+    };
+
     const t = (key: TranslationKeys, replacements?: Record<string, string>): string => {
         const keys = key.split('.');
-        let text: any = translations[language];
+        let text: any = translations[language] || translations.fr;
 
         for (const k of keys) {
             text = text?.[k];
             if (text === undefined) {
+                // Fallback to French if key missing in active locale
+                let fallback: any = translations.fr;
+                for (const fk of keys) {
+                    fallback = fallback?.[fk];
+                }
+                if (fallback !== undefined) {
+                    text = fallback;
+                    break;
+                }
                 console.warn(`Translation key not found: ${key}`);
                 return key;
             }
@@ -55,9 +76,12 @@ export const I18nProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         return result;
     };
 
-
     return (
-        React.createElement(I18nContext.Provider, { value: { language, setLanguage, t } }, children)
+        React.createElement(
+            I18nContext.Provider,
+            { value: { language, isAr, setLanguage, toggleLanguage, t, tr } },
+            children
+        )
     );
 };
 

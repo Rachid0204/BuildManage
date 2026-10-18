@@ -9,10 +9,10 @@ import {
   PhoneIcon,
   WhatsAppIcon,
   StarIcon,
-  WrenchIcon,
 } from '../icons/IconComponents';
 import { getPrestatairesForBuilding, addPrestataireReview } from '../../firebase/services';
 import Loading from '../common/Loading';
+import { useI18n } from '../../hooks/useI18n';
 
 interface ServiceProvidersDirectoryProps {
   building: Building;
@@ -22,28 +22,28 @@ interface ServiceProvidersDirectoryProps {
   isResidentPortal?: boolean;
 }
 
-const CATEGORY_FILTERS = [
-  { id: 'all', label: 'Tous les corps d\'état', icon: '🛠️' },
-  { id: 'plumbing', label: 'Plomberie & Fuites', icon: '🚰' },
-  { id: 'electrical', label: 'Électricité & Éclairage', icon: '⚡' },
-  { id: 'locksmith', label: 'Serrurerie & Portes', icon: '🔑' },
-  { id: 'elevator', label: 'Ascensoristes', icon: '🛗' },
-  { id: 'air_conditioning', label: 'Climatisation', icon: '❄️' },
-  { id: 'cleaning', label: 'Nettoyage & Hygiène', icon: '🧹' },
-  { id: 'painting', label: 'Peinture & Finitions', icon: '🎨' },
-];
-
 export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps> = ({
   building,
   residentName = 'Résident',
   apartmentNumber = 'Lot A-102',
   residentId = 'res-2',
-  isResidentPortal = true,
 }) => {
+  const { tr } = useI18n();
   const queryClient = useQueryClient();
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [emergencyOnly, setEmergencyOnly] = useState(false);
+
+  const CATEGORY_FILTERS = [
+    { id: 'all', label: tr("Tous les corps d'état", 'جميع التخصصات'), icon: '🛠️' },
+    { id: 'plumbing', label: tr('Plomberie & Fuites', 'السباكة والتسربات'), icon: '🚰' },
+    { id: 'electrical', label: tr('Électricité & Éclairage', 'الكهرباء والإنارة'), icon: '⚡' },
+    { id: 'locksmith', label: tr('Serrurerie & Portes', 'الأقفال والأبواب'), icon: '🔑' },
+    { id: 'elevator', label: tr('Ascensoristes', 'صيانة المصاعد'), icon: '🛗' },
+    { id: 'air_conditioning', label: tr('Climatisation', 'التكييف'), icon: '❄️' },
+    { id: 'cleaning', label: tr('Nettoyage & Hygiène', 'النظافة والتعقيم'), icon: '🧹' },
+    { id: 'painting', label: tr('Peinture & Finitions', 'الصباغة والترميم'), icon: '🎨' },
+  ];
 
   // Review Modal State
   const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
@@ -83,7 +83,7 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
       setIsReviewModalOpen(false);
       setReviewComment('');
       setRatingScore(5);
-      alert('Merci ! Votre avis a été publié pour vos voisins.');
+      alert(tr('Merci ! Votre avis a été publié pour vos voisins.', 'شكراً! تم نشر تقييمكم لفائدة جيرانكم.'));
     },
   });
 
@@ -116,15 +116,28 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
 
   const handleSendWhatsAppRequest = () => {
     if (!targetPrestataire) return;
-    const cleanPhone = (targetPrestataire.whatsapp || targetPrestataire.phone).replace(/\s+/g, '').replace('+', '');
+    const cleanPhone = (targetPrestataire.whatsapp || targetPrestataire.phone)
+      .replace(/\s+/g, '')
+      .replace('+', '');
     const text = encodeURIComponent(
-      `Bonjour ${targetPrestataire.contactPerson || targetPrestataire.name},\nJe suis ${residentName} résidant à ${building.name} (${apartmentNumber}).\nJ'ai besoin d'une intervention : ${problemDescription || 'Demande de dépannage'}.\nUrgence : ${urgencyLevel === 'urgent' ? 'URGENT' : 'Normal'}.\nMerci de me contacter !`
+      tr(
+        `Bonjour ${targetPrestataire.contactPerson || targetPrestataire.name},\nJe suis ${residentName} résidant à ${building.name} (${apartmentNumber}).\nJ'ai besoin d'une intervention : ${problemDescription || 'Demande de dépannage'}.\nUrgence : ${urgencyLevel === 'urgent' ? 'URGENT' : 'Normal'}.\nMerci de me contacter !`,
+        `مرحباً ${targetPrestataire.contactPerson || targetPrestataire.name}،\nأنا ${residentName} ساكن في ${building.name} (${apartmentNumber}).\nأحتاج إلى تدخل تقني : ${problemDescription || 'طلب إصلاح'}.\nدرجة الاستعجال : ${urgencyLevel === 'urgent' ? 'مستعجل جداً' : 'عادي'}.\nشكراً للتواصل معي!`
+      )
     );
     window.open(`https://wa.me/${cleanPhone}?text=${text}`, '_blank');
     setIsRequestModalOpen(false);
   };
 
-  if (isLoading) return <Loading message="Chargement des prestataires et artisans..." />;
+  if (isLoading)
+    return (
+      <Loading
+        message={tr(
+          'Chargement des prestataires et artisans...',
+          'جاري تحميل دليل مقدمي الخدمات والحرفيين...'
+        )}
+      />
+    );
 
   return (
     <div className="space-y-6">
@@ -136,14 +149,19 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
               <span className="p-1.5 bg-amber-100 text-amber-800 rounded-lg">
                 <PrestatairesIcon />
               </span>
-              <span>Artisans & Prestataires Recommandés</span>
+              <span>
+                {tr('Artisans & Prestataires Recommandés', 'الحرفيون ومقدمو الخدمات الموصى بهم')}
+              </span>
             </h1>
             <span className="text-xs bg-teal-100 text-teal-800 font-semibold px-2.5 py-0.5 rounded-full">
-              Loi 18-00 & Répertoire Agréé
+              {tr('Loi 18-00 & Répertoire Agréé', 'قانون 18-00 والدليل المعتمد')}
             </span>
           </div>
           <p className="text-xs sm:text-sm text-slate-500 mt-1">
-            Artisans de confiance, plombiers, électriciens et serruriers agréés par le Syndic pour vos dépannages privatifs ou communs.
+            {tr(
+              'Artisans de confiance, plombiers, électriciens et serruriers agréés par le Syndic pour vos dépannages privatifs ou communs.',
+              'حرفيون موثوقون، سباكون، كهربائيون وتقنيو أقفال معتمدون من طرف السنديك لإصلاحاتكم الخاصة أو المشتركة.'
+            )}
           </p>
         </div>
 
@@ -157,7 +175,7 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
           }`}
         >
           <span className="text-sm">🚨</span>
-          <span>Urgences 24h/7j uniquement</span>
+          <span>{tr('Urgences 24h/7j uniquement', 'طوارئ 24/7 فقط')}</span>
         </button>
       </div>
 
@@ -166,17 +184,23 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
         <div className="space-y-1">
           <div className="flex items-center gap-2">
             <span className="text-amber-400 font-bold text-xs uppercase tracking-wider flex items-center gap-1">
-              <span>⚡ Dépannage Immédiat Résidence</span>
+              <span>⚡ {tr('Dépannage Immédiat Résidence', 'تدخل فوري بالإقامة')}</span>
             </span>
             <span className="text-[10px] bg-rose-500/30 text-rose-300 font-bold px-2 py-0.5 rounded border border-rose-500/40">
-              Astreinte active
+              {tr('Astreinte active', 'مداومة نشطة')}
             </span>
           </div>
           <h3 className="text-base sm:text-lg font-bold">
-            Fuite d'eau, panne électrique ou porte bloquée ?
+            {tr(
+              "Fuite d'eau, panne électrique ou porte bloquée ?",
+              'تسرب مياه، عطب كهربائي أو باب مغلق؟'
+            )}
           </h3>
           <p className="text-xs text-slate-300 max-w-2xl">
-            Tous les prestataires listés ci-dessous ont été vérifiés par le Conseil Syndical (assurance RC pro, ICE valide et tarifs négociés).
+            {tr(
+              'Tous les prestataires listés ci-dessous ont été vérifiés par le Conseil Syndical (assurance RC pro, ICE valide et tarifs négociés).',
+              'جميع مقدمي الخدمات المدرجين أدناه تم التحقق منهم من طرف مكتب السنديك (تأمين المسؤولية المدنية، تعريف ICE صالح وأسعار تفضيلية).'
+            )}
           </p>
         </div>
 
@@ -187,42 +211,44 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
             className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition-colors shadow-sm"
           >
             <PhoneIcon />
-            <span>SOS Plombier</span>
+            <span>{tr('SOS Plombier', 'سباك طوارئ')}</span>
           </a>
           <a
             href="tel:0661774411"
             className="flex items-center gap-1.5 px-3 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl transition-colors shadow-sm"
           >
             <PhoneIcon />
-            <span>SOS Serrurier</span>
+            <span>{tr('SOS Serrurier', 'أقفال طوارئ')}</span>
           </a>
           <a
             href="tel:0522345678"
             className="flex items-center gap-1.5 px-3 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold rounded-xl transition-colors shadow-sm"
           >
             <PhoneIcon />
-            <span>Ascenseur 24/7</span>
+            <span>{tr('Ascenseur 24/7', 'المصعد 24/7')}</span>
           </a>
         </div>
       </div>
 
       {/* Category Pills & Search Toolbar */}
       <div className="space-y-3">
-        {/* Search & Count Bar */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="relative flex-1 max-w-md">
             <input
               type="text"
-              placeholder="Rechercher par artisan, métier, spécialité (ex: fuite, chauffe-eau, serrure)..."
+              placeholder={tr(
+                'Rechercher par artisan, métier, spécialité (ex: fuite, chauffe-eau, serrure)...',
+                'البحث حسب الحرفي، المهنة أو التخصص (مثال: تسرب، سخان، قفل)...'
+              )}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full text-xs sm:text-sm pl-9 pr-3 py-2.5 rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-teal-500"
+              className="w-full text-xs sm:text-sm ps-9 pe-3 py-2.5 rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-teal-500"
             />
-            <span className="absolute left-3 top-3 text-slate-400 text-xs">🔍</span>
+            <span className="absolute start-3 top-3 text-slate-400 text-xs">🔍</span>
             {searchQuery && (
               <button
                 onClick={() => setSearchQuery('')}
-                className="absolute right-3 top-2.5 text-xs text-slate-400 hover:text-slate-600"
+                className="absolute end-3 top-2.5 text-xs text-slate-400 hover:text-slate-600"
               >
                 ✕
               </button>
@@ -230,7 +256,8 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
           </div>
 
           <div className="text-xs text-slate-500 font-medium">
-            <strong>{filteredPrestataires.length}</strong> artisan(s) disponible(s)
+            <strong>{filteredPrestataires.length}</strong>{' '}
+            {tr('artisan(s) disponible(s)', 'حرفي / مقدم خدمة متاح')}
           </div>
         </div>
 
@@ -261,7 +288,10 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
         {filteredPrestataires.map((p) => {
           const cleanPhone = (p.whatsapp || p.phone).replace(/\s+/g, '').replace('+', '');
           const waUrl = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(
-            `Bonjour ${p.contactPerson || p.name}, je vous contacte depuis la Résidence ${building.name}. Avez-vous une disponibilité pour un dépannage ?`
+            tr(
+              `Bonjour ${p.contactPerson || p.name}, je vous contacte depuis la Résidence ${building.name}. Avez-vous une disponibilité pour un dépannage ?`,
+              `مرحباً ${p.contactPerson || p.name}، أتواصل معكم من إقامة ${building.name}. هل أنتم متاحون للتدخل والإصلاح؟`
+            )
           )}`;
 
           return (
@@ -269,25 +299,24 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
               key={p.id}
               className="p-5 flex flex-col justify-between bg-white border border-slate-200 hover:border-teal-300 hover:shadow-md transition-all rounded-2xl relative overflow-hidden"
             >
-              {/* Top Card Badges */}
               <div>
                 <div className="flex items-start justify-between gap-2">
                   <div className="space-y-0.5">
                     <div className="flex items-center gap-1.5 flex-wrap">
                       {p.isVerifiedBySyndic && (
                         <span className="text-[10px] font-bold bg-teal-50 text-teal-800 border border-teal-200 px-2 py-0.5 rounded-full flex items-center gap-1">
-                          <span>✓</span> Agréé Syndic
+                          <span>✓</span> {tr('Agréé Syndic', 'معتمد من السنديك')}
                         </span>
                       )}
                       {p.isEmergency247 && (
                         <span className="text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200 px-2 py-0.5 rounded-full flex items-center gap-0.5">
-                          <span>🚨</span> 24h/7j
+                          <span>🚨</span> 24/7
                         </span>
                       )}
                     </div>
                     <h3 className="text-base font-bold text-slate-900 mt-2">{p.name}</h3>
                     <p className="text-xs text-slate-500 font-medium">
-                      Interlocuteur : <strong>{p.contactPerson}</strong>
+                      {tr('Interlocuteur :', 'المخاطب :')} <strong>{p.contactPerson}</strong>
                     </p>
                   </div>
 
@@ -300,7 +329,7 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
                       </span>
                     </div>
                     <span className="text-[10px] text-slate-400 mt-0.5">
-                      ({p.reviewsCount || (p.reviews ? p.reviews.length : 12)} avis)
+                      ({p.reviewsCount || (p.reviews ? p.reviews.length : 12)} {tr('avis', 'تقييم')})
                     </span>
                   </div>
                 </div>
@@ -323,13 +352,17 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
                 <div className="mt-3.5 pt-3 border-t border-slate-100 space-y-1 text-xs">
                   {p.hourlyRate && (
                     <div className="flex items-center justify-between text-slate-600">
-                      <span className="text-[11px] text-slate-400">Tarif indicatif :</span>
+                      <span className="text-[11px] text-slate-400">
+                        {tr('Tarif indicatif :', 'التعريفة التقريبية :')}
+                      </span>
                       <span className="font-semibold text-slate-900">{p.hourlyRate}</span>
                     </div>
                   )}
                   {p.city && (
                     <div className="flex items-center justify-between text-slate-600">
-                      <span className="text-[11px] text-slate-400">Zone :</span>
+                      <span className="text-[11px] text-slate-400">
+                        {tr('Zone :', 'المنطقة :')}
+                      </span>
                       <span className="text-slate-700">{p.city}</span>
                     </div>
                   )}
@@ -344,11 +377,13 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
                 {p.reviews && p.reviews.length > 0 && (
                   <div className="mt-3 pt-2 border-t border-slate-100">
                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
-                      Dernier avis copropriétaire :
+                      {tr('Dernier avis copropriétaire :', 'آخر تقييم من السكان :')}
                     </p>
                     <div className="bg-slate-50 p-2 rounded text-[11px] text-slate-700 border border-slate-100 space-y-0.5">
                       <div className="flex items-center justify-between text-[10px] font-semibold text-slate-900">
-                        <span>{p.reviews[0].residentName} ({p.reviews[0].apartmentNumber})</span>
+                        <span>
+                          {p.reviews[0].residentName} ({p.reviews[0].apartmentNumber})
+                        </span>
                         <span className="text-amber-600">{'★'.repeat(p.reviews[0].rating)}</span>
                       </div>
                       <p className="italic text-slate-600">"{p.reviews[0].comment}"</p>
@@ -360,16 +395,14 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
               {/* Action Buttons */}
               <div className="mt-5 pt-3 border-t border-slate-100 space-y-2">
                 <div className="grid grid-cols-2 gap-2">
-                  {/* Call Direct */}
                   <a
                     href={`tel:${p.phone.replace(/\s+/g, '')}`}
                     className="flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs transition-colors shadow-sm"
                   >
                     <PhoneIcon />
-                    <span>Appeler</span>
+                    <span>{tr('Appeler', 'اتصال')}</span>
                   </a>
 
-                  {/* WhatsApp Direct */}
                   <a
                     href={waUrl}
                     target="_blank"
@@ -387,14 +420,14 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
                     className="text-[11px] text-slate-600 hover:text-teal-700 font-semibold flex items-center gap-1"
                   >
                     <span>⭐</span>
-                    <span>Laisser un avis</span>
+                    <span>{tr('Laisser un avis', 'إضافة تقييم')}</span>
                   </button>
 
                   <button
                     onClick={() => handleOpenRequest(p)}
                     className="text-[11px] text-teal-700 hover:text-teal-900 font-bold underline"
                   >
-                    Demander une intervention
+                    {tr('Demander une intervention', 'طلب تدخل تقني')}
                   </button>
                 </div>
               </div>
@@ -407,7 +440,10 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
         <div className="text-center py-12 bg-white rounded-2xl border border-slate-200 space-y-2">
           <span className="text-3xl block">🔍</span>
           <p className="text-sm font-semibold text-slate-800">
-            Aucun prestataire ne correspond à vos critères de recherche.
+            {tr(
+              'Aucun prestataire ne correspond à vos critères de recherche.',
+              'لا يوجد أي مقدم خدمة يطابق معايير البحث الخاصة بكم.'
+            )}
           </p>
           <Button
             variant="secondary"
@@ -418,7 +454,7 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
             }}
             className="text-xs"
           >
-            Réinitialiser les filtres
+            {tr('Réinitialiser les filtres', 'إعادة ضبط الفلاتر')}
           </Button>
         </div>
       )}
@@ -427,16 +463,17 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
       <Modal
         isOpen={isReviewModalOpen}
         onClose={() => setIsReviewModalOpen(false)}
-        title={`Laisser un avis sur ${targetPrestataire?.name || 'l\'artisan'}`}
+        title={`${tr('Laisser un avis sur', 'إضافة تقييم حول')} ${targetPrestataire?.name || ''}`}
         footer={
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setIsReviewModalOpen(false)}>
-              Annuler
+              {tr('Annuler', 'إلغاء')}
             </Button>
             <Button
               onClick={() => {
                 if (!targetPrestataire) return;
-                if (!reviewComment.trim()) return alert('Veuillez rédiger un court commentaire.');
+                if (!reviewComment.trim())
+                  return alert(tr('Veuillez rédiger un court commentaire.', 'يرجى كتابة تعليق قصير.'));
                 reviewMutation.mutate({
                   prestataireId: targetPrestataire.id,
                   rating: ratingScore,
@@ -445,19 +482,22 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
               }}
               disabled={reviewMutation.isPending}
             >
-              Publier l'avis
+              {tr("Publier l'avis", 'نشر التقييم')}
             </Button>
           </div>
         }
       >
         <div className="space-y-4 text-xs">
           <p className="text-slate-600">
-            Votre retour d'expérience aide l'ensemble des résidents de <strong>{building.name}</strong> à choisir des artisans fiables.
+            {tr(
+              `Votre retour d'expérience aide l'ensemble des résidents de ${building.name} à choisir des artisans fiables.`,
+              `يساعد تقييمكم جميع سكان إقامة ${building.name} على اختيار حرفيين موثوقين.`
+            )}
           </p>
 
           <div>
             <label className="block font-semibold text-slate-700 mb-1">
-              Note globale (sur 5 étoiles) :
+              {tr('Note globale (sur 5 étoiles) :', 'التقييم العام (من 5 نجوم) :')}
             </label>
             <div className="flex items-center gap-2">
               {[1, 2, 3, 4, 5].map((star) => (
@@ -470,7 +510,7 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
                   {star <= ratingScore ? '⭐' : '☆'}
                 </button>
               ))}
-              <span className="font-bold text-slate-800 text-sm ml-2">
+              <span className="font-bold text-slate-800 text-sm ms-2">
                 {ratingScore} / 5
               </span>
             </div>
@@ -478,19 +518,23 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
 
           <div>
             <label className="block font-semibold text-slate-700 mb-1">
-              Votre commentaire :
+              {tr('Votre commentaire :', 'تعليقكم :')}
             </label>
             <textarea
               rows={3}
               value={reviewComment}
               onChange={(e) => setReviewComment(e.target.value)}
-              placeholder="Ponctualité, propreté du chantier, respect des tarifs annoncés..."
+              placeholder={tr(
+                'Ponctualité, propreté du chantier, respect des tarifs annoncés...',
+                'الالتزام بالمواعيد، جودة العمل، احترام الأسعار المتفق عليها...'
+              )}
               className="w-full text-xs p-3 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-500"
             />
           </div>
 
           <div className="bg-slate-50 p-2.5 rounded border border-slate-200 text-[11px] text-slate-500">
-            Avis publié sous le nom de : <strong>{residentName}</strong> ({apartmentNumber})
+            {tr('Avis publié sous le nom de :', 'سيُنشر التقييم باسم :')}{' '}
+            <strong>{residentName}</strong> ({apartmentNumber})
           </div>
         </div>
       </Modal>
@@ -499,16 +543,16 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
       <Modal
         isOpen={isRequestModalOpen}
         onClose={() => setIsRequestModalOpen(false)}
-        title={`Demande d'intervention à ${targetPrestataire?.name || 'l\'artisan'}`}
+        title={`${tr("Demande d'intervention à", 'طلب تدخل تقني من')} ${targetPrestataire?.name || ''}`}
         footer={
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setIsRequestModalOpen(false)}>
-              Annuler
+              {tr('Annuler', 'إلغاء')}
             </Button>
             <Button onClick={handleSendWhatsAppRequest} className="bg-emerald-600 hover:bg-emerald-700">
               <span className="flex items-center gap-1.5">
                 <WhatsAppIcon />
-                <span>Envoyer sur WhatsApp</span>
+                <span>{tr('Envoyer sur WhatsApp', 'إرسال عبر واتساب')}</span>
               </span>
             </Button>
           </div>
@@ -516,12 +560,15 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
       >
         <div className="space-y-4 text-xs">
           <p className="text-slate-600">
-            Un message WhatsApp structuré sera pré-rempli avec les coordonnées de votre appartement pour une prise en charge rapide par l'artisan.
+            {tr(
+              "Un message WhatsApp structuré sera pré-rempli avec les coordonnées de votre appartement pour une prise en charge rapide par l'artisan.",
+              'سيتم تجهيز رسالة واتساب منظمة تتضمن معلومات شقتكم لتسريع تكفل الحرفي بطلبكم.'
+            )}
           </p>
 
           <div>
             <label className="block font-semibold text-slate-700 mb-1">
-              Niveau d'urgence :
+              {tr("Niveau d'urgence :", 'درجة الاستعجال :')}
             </label>
             <div className="grid grid-cols-2 gap-2">
               <button
@@ -533,7 +580,7 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
                     : 'bg-white border-slate-200 text-slate-600'
                 }`}
               >
-                🚨 Urgent (Intervention rapide)
+                🚨 {tr('Urgent (Intervention rapide)', 'مستعجل (تدخل فوري)')}
               </button>
               <button
                 type="button"
@@ -544,33 +591,38 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
                     : 'bg-white border-slate-200 text-slate-600'
                 }`}
               >
-                🗓️ Normal (Devis / Rénovation)
+                🗓️ {tr('Normal (Devis / Rénovation)', 'عادي (طلب عرض سعر / إصلاح)')}
               </button>
             </div>
           </div>
 
           <div>
             <label className="block font-semibold text-slate-700 mb-1">
-              Description de la panne ou du besoin :
+              {tr('Description de la panne ou du besoin :', 'وصف العطب أو الحاجة :')}
             </label>
             <textarea
               rows={3}
               value={problemDescription}
               onChange={(e) => setProblemDescription(e.target.value)}
-              placeholder="Ex: Robinet qui fuit sous l'évier de la cuisine, besoin d'un changement de joint..."
+              placeholder={tr(
+                "Ex: Robinet qui fuit sous l'évier de la cuisine, besoin d'un changement de joint...",
+                'مثال: تسرب مياه تحت حوض المطبخ، حاجة لتغيير الصمام...'
+              )}
               className="w-full text-xs p-3 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-500"
             />
           </div>
 
           <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 space-y-1 text-[11px] text-slate-600">
             <div>
-              Artisan contacté : <strong>{targetPrestataire?.name}</strong> ({targetPrestataire?.contactPerson})
+              {tr('Artisan contacté :', 'الحرفي المعني :')}{' '}
+              <strong>{targetPrestataire?.name}</strong> ({targetPrestataire?.contactPerson})
             </div>
             <div>
-              Téléphone : <strong>{targetPrestataire?.phone}</strong>
+              {tr('Téléphone :', 'الهاتف :')} <strong>{targetPrestataire?.phone}</strong>
             </div>
             <div>
-              Immeuble : <strong>{building.name}</strong> · Lot : <strong>{apartmentNumber}</strong>
+              {tr('Immeuble :', 'الإقامة :')} <strong>{building.name}</strong> · {tr('Lot :', 'الشقة :')}{' '}
+              <strong>{apartmentNumber}</strong>
             </div>
           </div>
         </div>

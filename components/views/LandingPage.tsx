@@ -1,74 +1,18 @@
-
-import React, { useState, useRef, useEffect } from 'react';
+import React from 'react';
 import Button from '../common/Button';
+import LanguageToggle from '../common/LanguageToggle';
 import { useI18n } from '../../hooks/useI18n';
-import type { Language } from '../../types';
 import { BuildingsIcon, FinancialsIcon, SparklesIcon } from '../icons/IconComponents';
 
 interface LandingPageProps {
     onLoginClick: () => void;
 }
 
-const LandingLanguageSwitcher: React.FC = () => {
-    const { language, setLanguage } = useI18n();
-    const [isOpen, setIsOpen] = useState(false);
-    const dropdownRef = useRef<HTMLDivElement>(null);
-
-    const languages: { code: Language, name: string }[] = [
-        { code: 'en', name: 'English' },
-        { code: 'fr', name: 'Français' },
-        { code: 'ar', name: 'العربية' },
-    ];
-
-    useEffect(() => {
-        const handleClickOutside = (event: MouseEvent) => {
-            if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-                setIsOpen(false);
-            }
-        };
-        document.addEventListener('mousedown', handleClickOutside);
-        return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, []);
-
-    const handleLanguageChange = (lang: Language) => {
-        setLanguage(lang);
-        setIsOpen(false);
-    };
-
-    return (
-        <div className="relative" ref={dropdownRef}>
-            <button
-                onClick={() => setIsOpen(!isOpen)}
-                className="flex items-center justify-center px-3 py-2 text-sm font-medium text-gray-700 hover:text-primary-600 focus:outline-none"
-            >
-                <span className="uppercase me-1">{language}</span>
-                <svg className={`w-4 h-4 transition-transform ${isOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
-            </button>
-            {isOpen && (
-                <div className="absolute right-0 mt-2 w-40 bg-white rounded-md shadow-lg z-20 ring-1 ring-black ring-opacity-5">
-                    <ul className="py-1">
-                        {languages.map(lang => (
-                            <li key={lang.code}>
-                                <button
-                                    onClick={() => handleLanguageChange(lang.code)}
-                                    className={`block w-full text-start px-4 py-2 text-sm ${language === lang.code ? 'bg-primary-50 text-primary-700 font-bold' : 'text-gray-700 hover:bg-gray-100'}`}
-                                >
-                                    {lang.name}
-                                </button>
-                            </li>
-                        ))}
-                    </ul>
-                </div>
-            )}
-        </div>
-    );
-};
-
 const LandingPage: React.FC<LandingPageProps> = ({ onLoginClick }) => {
-    const { t } = useI18n();
+    const { t, language } = useI18n();
 
     return (
-        <div className="min-h-screen bg-gray-50 flex flex-col font-sans">
+        <div className="min-h-screen bg-gray-50 flex flex-col font-sans" dir={language === 'ar' ? 'rtl' : 'ltr'}>
             {/* Navbar */}
             <nav className="bg-white shadow-sm sticky top-0 z-40">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -81,8 +25,8 @@ const LandingPage: React.FC<LandingPageProps> = ({ onLoginClick }) => {
                                 <span className="font-bold text-xl text-gray-900">Syndik</span>
                             </div>
                         </div>
-                        <div className="flex items-center space-x-4">
-                            <LandingLanguageSwitcher />
+                        <div className="flex items-center gap-3">
+                            <LanguageToggle variant="light" />
                             <Button onClick={onLoginClick}>
                                 {t('landing.login')}
                             </Button>
@@ -312,7 +256,9 @@ const LandingPage: React.FC<LandingPageProps> = ({ onLoginClick }) => {
                     <div className="flex items-center">
                          <span className="font-bold text-lg">Syndik</span>
                     </div>
-                    <p className="text-sm text-gray-400">&copy; {new Date().getFullYear()} Syndik Morocco. All rights reserved.</p>
+                    <p className="text-sm text-gray-400">
+                        &copy; {new Date().getFullYear()} Syndik Maroc. {language === 'ar' ? 'جميع الحقوق محفوظة.' : 'Tous droits réservés.'}
+                    </p>
                 </div>
             </footer>
         </div>

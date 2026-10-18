@@ -26,7 +26,7 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
   apartments,
   monthlySyndicFees,
 }) => {
-  const { t } = useI18n();
+  const { t, tr } = useI18n();
   const [number, setNumber] = useState('');
   const [floor, setFloor] = useState('1');
   const [area, setArea] = useState('80');
@@ -119,8 +119,8 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
       onClose={onClose}
       title={
         existingApartment
-          ? `Modifier le lot ${existingApartment.number}`
-          : 'Ajouter un lot de copropriété (Loi 18-00)'
+          ? `${tr('Modifier le lot', 'تعديل الشقة / الوحدة')} ${existingApartment.number}`
+          : tr('Ajouter un lot de copropriété (Loi 18-00)', 'إضافة شقة / وحدة للملكية المشتركة (قانون 18-00)')
       }
       footer={
         <>
@@ -137,13 +137,13 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
-              Numéro de lot / Appartement
+              {tr('Numéro de lot / Appartement', 'رقم الشقة / الوحدة')}
             </label>
             <input
               type="text"
               value={number}
               onChange={(e) => setNumber(e.target.value)}
-              placeholder="Ex: A-101 ou 12"
+              placeholder={tr('Ex: A-101 ou 12', 'مثال: A-101 أو 12')}
               className={`w-full px-3 py-2 border rounded text-sm ${
                 errors.number ? 'border-red-500' : 'border-slate-300'
               }`}
@@ -152,24 +152,28 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Type de bien</label>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              {tr('Type de bien', 'نوع العقار')}
+            </label>
             <select
               value={coproType}
               onChange={(e) => setCoproType(e.target.value as Apartment['coproType'])}
               className="w-full px-3 py-2 border border-slate-300 rounded text-sm bg-white"
             >
-              <option value="apartment">Appartement</option>
-              <option value="duplex">Duplex / Penthouse</option>
-              <option value="commercial">Local Commercial</option>
-              <option value="parking">Place de Parking</option>
-              <option value="box">Box / Garage</option>
+              <option value="apartment">{tr('Appartement', 'شقة سكنية')}</option>
+              <option value="duplex">{tr('Duplex / Penthouse', 'دوبلكس / بنتهاوس')}</option>
+              <option value="commercial">{tr('Local Commercial', 'محل تجاري')}</option>
+              <option value="parking">{tr('Place de Parking', 'موقف سيارة')}</option>
+              <option value="box">{tr('Box / Garage', 'مرآب / مستودع')}</option>
             </select>
           </div>
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Étage</label>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              {tr('Étage', 'الطابق')}
+            </label>
             <input
               type="number"
               value={floor}
@@ -184,7 +188,7 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
 
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
-              Superficie (m²)
+              {tr('Superficie (m²)', 'المساحة (م²)')}
             </label>
             <input
               type="number"
@@ -200,7 +204,7 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
 
           <div>
             <label className="block text-xs font-semibold text-teal-800 mb-1">
-              Tantièmes (/1000)
+              {tr('Tantièmes (/1000)', 'الحصص العقارية (/1000)')}
             </label>
             <input
               type="number"
@@ -213,7 +217,7 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
 
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
-              Cotisation (MAD)
+              {tr('Cotisation (MAD)', 'المساهمة (درهم)')}
             </label>
             <input
               type="number"
@@ -227,14 +231,16 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
 
         <div>
           <label className="block text-xs font-semibold text-slate-700 mb-1">
-            Copropriétaire (Propriétaire - Optionnel)
+            {tr('Copropriétaire (Propriétaire - Optionnel)', 'المالك المشترك (اختياري)')}
           </label>
           <select
             value={ownerId || ''}
             onChange={(e) => setOwnerId(e.target.value || null)}
             className="w-full px-3 py-2 border border-slate-300 rounded text-sm bg-white"
           >
-            <option value="">-- Lot non assigné / Sans copropriétaire --</option>
+            <option value="">
+              {tr('-- Lot non assigné / Sans copropriétaire --', '-- وحدة غير معينة / بدون مالك --')}
+            </option>
             {residents
               .filter((r) => r.isOwner)
               .map((r) => (
@@ -244,20 +250,28 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
               ))}
           </select>
           <p className="text-[11px] text-slate-500 mt-1">
-            Vous pouvez également assigner un lot directement depuis la fiche d&apos;un résident.
+            {tr(
+              "Vous pouvez également assigner un lot directement depuis la fiche d'un résident.",
+              'يمكنكم أيضاً تعيين شقة مباشرة من بطاقة الساكن.'
+            )}
           </p>
         </div>
 
         <div>
           <label className="block text-xs font-semibold text-slate-700 mb-1">
-            Locataire (Si applicable)
+            {tr('Locataire (Si applicable)', 'المكتري (إن وجد)')}
           </label>
           <select
             value={tenantId || ''}
             onChange={(e) => setTenantId(e.target.value || null)}
             className="w-full px-3 py-2 border border-slate-300 rounded text-sm bg-white"
           >
-            <option value="">-- Aucun locataire (Occupé par propriétaire ou vacant) --</option>
+            <option value="">
+              {tr(
+                '-- Aucun locataire (Occupé par propriétaire ou vacant) --',
+                '-- بدون مكتري (مشغولة من المالك أو شاغرة) --'
+              )}
+            </option>
             {residents
               .filter((r) => !r.isOwner)
               .map((r) => (
@@ -301,6 +315,7 @@ const BulkApartmentModal: React.FC<BulkApartmentModalProps> = ({
   existingApartments,
   defaultMonthlyFees,
 }) => {
+  const { tr } = useI18n();
   const [prefix, setPrefix] = useState('');
   const [floorStart, setFloorStart] = useState('1');
   const [floorEnd, setFloorEnd] = useState('4');
@@ -434,26 +449,33 @@ const BulkApartmentModal: React.FC<BulkApartmentModalProps> = ({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="Création en masse de lots (Générateur par étages / blocs)"
+      title={tr(
+        'Création en masse de lots (Générateur par étages / blocs)',
+        'إنشاء جماعي للشقق والوحدات (حسب الطوابق / الأجنحة)'
+      )}
       footer={
         <div className="flex flex-wrap items-center justify-between w-full gap-2">
           <span className="text-xs text-slate-500">
-            <strong>{validNonDuplicateRows.length}</strong> lots prêts à créer
+            <strong>{validNonDuplicateRows.length}</strong>{' '}
+            {tr('lots prêts à créer', 'وحدة جاهزة للإنشاء')}
             {duplicateCount > 0 && (
               <span className="text-amber-600 ms-1">
-                ({duplicateCount} doublon(s) ignoré(s))
+                ({duplicateCount} {tr('doublon(s) ignoré(s)', 'مكررة تم تجاهلها')})
               </span>
             )}
           </span>
           <div className="flex items-center gap-2">
             <Button variant="secondary" onClick={onClose}>
-              Annuler
+              {tr('Annuler', 'إلغاء')}
             </Button>
             <Button
               onClick={handleConfirmBulk}
               disabled={validNonDuplicateRows.length === 0}
             >
-              Créer {validNonDuplicateRows.length} lots en masse
+              {tr(
+                `Créer ${validNonDuplicateRows.length} lots en masse`,
+                `إنشاء ${validNonDuplicateRows.length} وحدة دفعة واحدة`
+              )}
             </Button>
           </div>
         </div>
@@ -464,19 +486,19 @@ const BulkApartmentModal: React.FC<BulkApartmentModalProps> = ({
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div>
               <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                Préfixe / Bloc
+                {tr('Préfixe / Bloc', 'البادئة / الجناح')}
               </label>
               <input
                 type="text"
                 value={prefix}
                 onChange={(e) => setPrefix(e.target.value)}
-                placeholder="Ex: A- ou vide"
+                placeholder={tr('Ex: A- ou vide', 'مثال: A- أو فارغ')}
                 className="w-full px-2.5 py-1.5 border border-slate-300 rounded text-xs bg-white"
               />
             </div>
             <div>
               <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                Étage début
+                {tr('Étage début', 'من الطابق')}
               </label>
               <input
                 type="number"
@@ -487,7 +509,7 @@ const BulkApartmentModal: React.FC<BulkApartmentModalProps> = ({
             </div>
             <div>
               <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                Étage fin
+                {tr('Étage fin', 'إلى الطابق')}
               </label>
               <input
                 type="number"
@@ -498,7 +520,7 @@ const BulkApartmentModal: React.FC<BulkApartmentModalProps> = ({
             </div>
             <div>
               <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                Lots / étage
+                {tr('Lots / étage', 'عدد الشقق / طابق')}
               </label>
               <input
                 type="number"
@@ -514,37 +536,37 @@ const BulkApartmentModal: React.FC<BulkApartmentModalProps> = ({
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div>
               <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                Numérotation
+                {tr('Numérotation', 'طريقة الترقيم')}
               </label>
               <select
                 value={numberingPattern}
                 onChange={(e) => setNumberingPattern(e.target.value as any)}
                 className="w-full px-2.5 py-1.5 border border-slate-300 rounded text-xs bg-white"
               >
-                <option value="floor_num">Étage + N° (101, 102...)</option>
-                <option value="floor_alpha">Étage + Lettre (1A, 1B...)</option>
-                <option value="sequential">Séquentiel (1, 2, 3...)</option>
+                <option value="floor_num">{tr('Étage + N° (101, 102...)', 'الطابق + الرقم (101، 102...)')}</option>
+                <option value="floor_alpha">{tr('Étage + Lettre (1A, 1B...)', 'الطابق + حرف (1A، 1B...)')}</option>
+                <option value="sequential">{tr('Séquentiel (1, 2, 3...)', 'تسلسلي (1، 2، 3...)')}</option>
               </select>
             </div>
             <div>
               <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                Type de bien
+                {tr('Type de bien', 'نوع العقار')}
               </label>
               <select
                 value={coproType}
                 onChange={(e) => setCoproType(e.target.value as Apartment['coproType'])}
                 className="w-full px-2.5 py-1.5 border border-slate-300 rounded text-xs bg-white"
               >
-                <option value="apartment">Appartement</option>
-                <option value="duplex">Duplex</option>
-                <option value="commercial">Commercial</option>
-                <option value="parking">Parking</option>
-                <option value="box">Box / Garage</option>
+                <option value="apartment">{tr('Appartement', 'شقة')}</option>
+                <option value="duplex">{tr('Duplex', 'دوبلكس')}</option>
+                <option value="commercial">{tr('Commercial', 'محل تجاري')}</option>
+                <option value="parking">{tr('Parking', 'موقف سيارة')}</option>
+                <option value="box">{tr('Box / Garage', 'مرآب')}</option>
               </select>
             </div>
             <div>
               <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                Surface (m²)
+                {tr('Surface (m²)', 'المساحة (م²)')}
               </label>
               <input
                 type="number"
@@ -555,7 +577,7 @@ const BulkApartmentModal: React.FC<BulkApartmentModalProps> = ({
             </div>
             <div>
               <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                Cotisation (MAD)
+                {tr('Cotisation (MAD)', 'المساهمة (درهم)')}
               </label>
               <input
                 type="number"
@@ -574,11 +596,18 @@ const BulkApartmentModal: React.FC<BulkApartmentModalProps> = ({
                 onChange={(e) => setDistributeTantiemes(e.target.checked)}
                 className="rounded border-slate-300 text-teal-600 focus:ring-teal-500"
               />
-              <span>Répartir automatiquement 1000 tantièmes sur la série générée</span>
+              <span>
+                {tr(
+                  'Répartir automatiquement 1000 tantièmes sur la série générée',
+                  'توزيع 1000 حصة عقارية تلقائياً على المجموعة المُنشأة'
+                )}
+              </span>
             </label>
             {!distributeTantiemes && (
               <div className="flex items-center gap-1.5">
-                <span className="text-xs text-slate-600">Tantièmes fixe/lot :</span>
+                <span className="text-xs text-slate-600">
+                  {tr('Tantièmes fixe/lot :', 'حصص ثابتة لكل وحدة :')}
+                </span>
                 <input
                   type="number"
                   value={fixedTantiemes}
@@ -594,19 +623,22 @@ const BulkApartmentModal: React.FC<BulkApartmentModalProps> = ({
         <div>
           <div className="flex items-center justify-between mb-2">
             <h4 className="text-xs font-bold uppercase tracking-wider text-slate-600">
-              Aperçu et personnalisation avant création ({previewRows.length} lots)
+              {tr(
+                `Aperçu et personnalisation avant création (${previewRows.length} lots)`,
+                `معاينة وتخصيص قبل الإنشاء (${previewRows.length} وحدة)`
+              )}
             </h4>
           </div>
           <div className="max-h-60 overflow-y-auto border border-slate-200 rounded-lg">
             <table className="min-w-full divide-y divide-slate-200 text-xs">
               <thead className="bg-slate-100 sticky top-0">
-                <tr className="text-left text-slate-600">
-                  <th className="px-2.5 py-2">N° Lot</th>
-                  <th className="px-2.5 py-2">Étage</th>
-                  <th className="px-2.5 py-2">Surface (m²)</th>
-                  <th className="px-2.5 py-2">Tantièmes</th>
-                  <th className="px-2.5 py-2">Frais (MAD)</th>
-                  <th className="px-2.5 py-2 text-right">Retirer</th>
+                <tr className="text-start text-slate-600">
+                  <th className="px-2.5 py-2">{tr('N° Lot', 'رقم الشقة')}</th>
+                  <th className="px-2.5 py-2">{tr('Étage', 'الطابق')}</th>
+                  <th className="px-2.5 py-2">{tr('Surface (m²)', 'المساحة (م²)')}</th>
+                  <th className="px-2.5 py-2">{tr('Tantièmes', 'الحصص')}</th>
+                  <th className="px-2.5 py-2">{tr('Frais (MAD)', 'الواجب (درهم)')}</th>
+                  <th className="px-2.5 py-2 text-end">{tr('Retirer', 'إزالة')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 bg-white">
@@ -630,7 +662,7 @@ const BulkApartmentModal: React.FC<BulkApartmentModalProps> = ({
                         />
                         {isDup && (
                           <span className="block text-[10px] text-amber-700">
-                            Existe déjà
+                            {tr('Existe déjà', 'موجود مسبقاً')}
                           </span>
                         )}
                       </td>
@@ -690,12 +722,12 @@ const BulkApartmentModal: React.FC<BulkApartmentModalProps> = ({
                           className="w-20 px-2 py-1 border border-slate-200 rounded text-xs font-mono"
                         />
                       </td>
-                      <td className="px-2.5 py-1.5 text-right">
+                      <td className="px-2.5 py-1.5 text-end">
                         <button
                           type="button"
                           onClick={() => handleRemoveRow(row.tempId)}
                           className="p-1 text-slate-400 hover:text-rose-600 rounded"
-                          title="Retirer cette ligne"
+                          title={tr('Retirer cette ligne', 'إزالة هذا السطر')}
                         >
                           <TrashIcon />
                         </button>
@@ -735,6 +767,7 @@ const Apartments: React.FC<ApartmentsProps> = ({
   onUpdateApartment,
   onDeleteApartment,
 }) => {
+  const { tr } = useI18n();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
   const [selectedApartment, setSelectedApartment] = useState<Apartment | null>(null);
@@ -768,11 +801,11 @@ const Apartments: React.FC<ApartmentsProps> = ({
   };
 
   const typeLabels: Record<string, string> = {
-    apartment: 'Appartement',
-    duplex: 'Duplex',
-    commercial: 'Commercial',
-    parking: 'Parking',
-    box: 'Box / Garage',
+    apartment: tr('Appartement', 'شقة'),
+    duplex: tr('Duplex', 'دوبلكس'),
+    commercial: tr('Commercial', 'تجاري'),
+    parking: tr('Parking', 'موقف سيارة'),
+    box: tr('Box / Garage', 'مرآب'),
   };
 
   return (
@@ -801,22 +834,23 @@ const Apartments: React.FC<ApartmentsProps> = ({
       <Modal
         isOpen={!!deletingApartment}
         onClose={() => setDeletingApartment(null)}
-        title={`Supprimer le lot ${deletingApartment?.number || ''}`}
+        title={`${tr('Supprimer le lot', 'حذف الشقة / الوحدة')} ${deletingApartment?.number || ''}`}
         footer={
           <>
             <Button variant="secondary" onClick={() => setDeletingApartment(null)}>
-              Annuler
+              {tr('Annuler', 'إلغاء')}
             </Button>
             <Button variant="danger" onClick={confirmDelete} className="ms-3">
-              Supprimer le lot
+              {tr('Supprimer le lot', 'حذف الوحدة')}
             </Button>
           </>
         }
       >
         <p className="text-sm text-slate-600">
-          Confirmez-vous la suppression du lot{' '}
-          <strong className="text-slate-900">{deletingApartment?.number}</strong> (Étage{' '}
-          {deletingApartment?.floor}) ? Les résidents rattachés seront automatiquement désassignés de ce lot.
+          {tr(
+            `Confirmez-vous la suppression du lot ${deletingApartment?.number} (Étage ${deletingApartment?.floor}) ? Les résidents rattachés seront automatiquement désassignés de ce lot.`,
+            `هل تؤكدون حذف الشقة / الوحدة ${deletingApartment?.number} (الطابق ${deletingApartment?.floor})؟ سيتم إلغاء ربط السكان المسجلين بهذه الوحدة تلقائياً.`
+          )}
         </p>
       </Modal>
 
@@ -824,10 +858,13 @@ const Apartments: React.FC<ApartmentsProps> = ({
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-2 border-b border-slate-200">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
-            Lots de Copropriété &amp; Tantièmes
+            {tr('Lots de Copropriété & Tantièmes', 'الشقق والوحدات والحصص العقارية')}
           </h1>
           <p className="text-sm text-slate-500 mt-0.5">
-            Répartition des quotes-parts d&apos;indivision (Loi 18-00) pour {building.name}
+            {tr(
+              `Répartition des quotes-parts d'indivision (Loi 18-00) pour ${building.name}`,
+              `توزيع الحصص الشائعة للملكية المشتركة (قانون 18-00) لإقامة ${building.name}`
+            )}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -836,17 +873,23 @@ const Apartments: React.FC<ApartmentsProps> = ({
             onClick={() => exportApartmentsPDF(building, residents)}
             disabled={building.apartments.length === 0}
             className="flex items-center gap-1.5 text-xs sm:text-sm"
-            title="Exporter l'inventaire des lots et tantièmes en PDF (Loi 18-00)"
+            title={tr(
+              "Exporter l'inventaire des lots et tantièmes en PDF (Loi 18-00)",
+              'تصدير جرد الشقق والحصص العقارية بصيغة PDF (قانون 18-00)'
+            )}
           >
             <DocumentsIcon />
-            <span>Exporter PDF</span>
+            <span>{tr('Exporter PDF', 'تصدير PDF')}</span>
           </Button>
           <Button
             variant="secondary"
             onClick={() => exportApartmentsCSV(building, residents)}
             disabled={building.apartments.length === 0}
             className="flex items-center gap-1.5 text-xs sm:text-sm"
-            title="Exporter l'inventaire des lots au format CSV (Excel)"
+            title={tr(
+              "Exporter l'inventaire des lots au format CSV (Excel)",
+              'تصدير جرد الشقق بصيغة CSV (إكسل)'
+            )}
           >
             <span>⬇ CSV</span>
           </Button>
@@ -857,35 +900,36 @@ const Apartments: React.FC<ApartmentsProps> = ({
               className="flex items-center gap-2 text-sm"
             >
               <PlusIcon />
-              <span>Création en masse (Bulk)</span>
+              <span>{tr('Création en masse (Bulk)', 'إنشاء جماعي للشقق')}</span>
             </Button>
           )}
           <Button onClick={handleAdd} className="flex items-center gap-2 text-sm">
             <PlusIcon />
-            <span>Ajouter un lot</span>
+            <span>{tr('Ajouter un lot', 'إضافة شقة / وحدة')}</span>
           </Button>
         </div>
       </div>
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
-        <Card className="p-4 border-l-4 border-l-teal-600">
+        <Card className="p-4 border-s-4 border-s-teal-600">
           <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-            Total des Lots
+            {tr('Total des Lots', 'مجموع الوحدات / الشقق')}
           </p>
           <p className="text-2xl font-bold font-mono text-slate-900 mt-1">
-            {totalCount} lots
+            {totalCount} {tr('lots', 'شقة')}
           </p>
           <p className="text-[11px] text-slate-500 mt-0.5">
-            {building.apartments.filter((a) => a.ownerId || a.tenantId).length} lots occupés / assignés
+            {building.apartments.filter((a) => a.ownerId || a.tenantId).length}{' '}
+            {tr('lots occupés / assignés', 'وحدة مشغولة / معينة')}
           </p>
         </Card>
 
-        <Card className="p-4 border-l-4 border-l-indigo-600">
+        <Card className="p-4 border-s-4 border-s-indigo-600">
           <div className="flex items-start justify-between gap-2">
             <div>
               <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                Total Tantièmes Enregistrés
+                {tr('Total Tantièmes Enregistrés', 'مجموع الحصص العقارية المسجلة')}
               </p>
               <p className="text-2xl font-bold font-mono text-indigo-900 mt-1">
                 {totalTantiemesSum} / 1000
@@ -896,28 +940,31 @@ const Apartments: React.FC<ApartmentsProps> = ({
                 type="button"
                 onClick={onRebalanceTantiemes}
                 className="px-2.5 py-1 text-[11px] font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-md transition-colors"
-                title="Répartir proportionnellement à la superficie sur 1000"
+                title={tr(
+                  'Répartir proportionnellement à la superficie sur 1000',
+                  'توزيع الحصص تناسبياً حسب المساحة على 1000'
+                )}
               >
-                Équilibrer / 1000
+                {tr('Équilibrer / 1000', 'موازنة / 1000')}
               </button>
             )}
           </div>
           <p className="text-[11px] text-slate-500 mt-0.5">
             {totalTantiemesSum === 1000
-              ? '✓ Total exact (1000/1000)'
-              : '⚠ À équilibrer sur 1000 millièmes'}
+              ? tr('✓ Total exact (1000/1000)', '✓ المجموع مضبوط (1000/1000)')
+              : tr('⚠ À équilibrer sur 1000 millièmes', '⚠ يجب موازنة المجموع على 1000 جزء')}
           </p>
         </Card>
 
-        <Card className="p-4 border-l-4 border-l-emerald-600">
+        <Card className="p-4 border-s-4 border-s-emerald-600">
           <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-            Superficie Totale Privative
+            {tr('Superficie Totale Privative', 'المساحة الإجمالية الخاصة')}
           </p>
           <p className="text-2xl font-bold font-mono text-emerald-800 mt-1">
             {building.apartments.reduce((sum, a) => sum + (a.area || 0), 0)} m²
           </p>
           <p className="text-[11px] text-slate-500 mt-0.5">
-            Base du calcul de répartition
+            {tr('Base du calcul de répartition', 'أساس احتساب توزيع التكاليف')}
           </p>
         </Card>
       </div>
@@ -930,22 +977,22 @@ const Apartments: React.FC<ApartmentsProps> = ({
               <div>
                 <div className="flex items-center gap-2">
                   <span className="font-mono font-bold text-base text-teal-900">
-                    Lot {apartment.number}
+                    {tr('Lot', 'شقة')} {apartment.number}
                   </span>
                   <span className="text-xs text-slate-500">
-                    · {typeLabels[apartment.coproType || 'apartment']} · Étage{' '}
+                    · {typeLabels[apartment.coproType || 'apartment']} · {tr('Étage', 'الطابق')}{' '}
                     {apartment.floor}
                   </span>
                 </div>
                 <p className="text-xs text-slate-700 mt-1">
-                  <strong>Propriétaire :</strong>{' '}
+                  <strong>{tr('Propriétaire :', 'المالك :')}</strong>{' '}
                   {apartment.ownerId
-                    ? residentMap.get(apartment.ownerId) || 'Assigné'
-                    : 'Non assigné'}
+                    ? residentMap.get(apartment.ownerId) || tr('Assigné', 'مُعيّن')
+                    : tr('Non assigné', 'غير معين')}
                 </p>
                 {apartment.tenantId && (
                   <p className="text-xs text-slate-500 mt-0.5">
-                    <strong>Locataire :</strong>{' '}
+                    <strong>{tr('Locataire :', 'المكتري :')}</strong>{' '}
                     {residentMap.get(apartment.tenantId)}
                   </p>
                 )}
@@ -955,7 +1002,7 @@ const Apartments: React.FC<ApartmentsProps> = ({
                   type="button"
                   onClick={() => handleEdit(apartment)}
                   className="p-2 text-slate-500 hover:text-slate-800 rounded-lg hover:bg-slate-100 min-w-[40px] min-h-[40px] flex items-center justify-center"
-                  title="Modifier"
+                  title={tr('Modifier', 'تعديل')}
                 >
                   <PencilIcon />
                 </button>
@@ -963,7 +1010,7 @@ const Apartments: React.FC<ApartmentsProps> = ({
                   type="button"
                   onClick={() => setDeletingApartment(apartment)}
                   className="p-2 text-slate-500 hover:text-rose-600 rounded-lg hover:bg-rose-50 min-w-[40px] min-h-[40px] flex items-center justify-center"
-                  title="Supprimer"
+                  title={tr('Supprimer', 'حذف')}
                 >
                   <TrashIcon />
                 </button>
@@ -971,19 +1018,25 @@ const Apartments: React.FC<ApartmentsProps> = ({
             </div>
             <div className="mt-3 pt-2.5 border-t border-slate-100 grid grid-cols-3 gap-2 text-xs">
               <div>
-                <span className="text-slate-400 block text-[10px]">Superficie</span>
+                <span className="text-slate-400 block text-[10px]">
+                  {tr('Superficie', 'المساحة')}
+                </span>
                 <span className="font-mono font-semibold text-slate-700">
                   {apartment.area} m²
                 </span>
               </div>
               <div>
-                <span className="text-slate-400 block text-[10px]">Tantièmes</span>
+                <span className="text-slate-400 block text-[10px]">
+                  {tr('Tantièmes', 'الحصص')}
+                </span>
                 <span className="font-mono font-bold text-teal-700">
                   {apartment.tantiemes || 100} / 1000
                 </span>
               </div>
-              <div className="text-right">
-                <span className="text-slate-400 block text-[10px]">Cotisation</span>
+              <div className="text-end">
+                <span className="text-slate-400 block text-[10px]">
+                  {tr('Cotisation', 'المساهمة')}
+                </span>
                 <span className="font-mono font-bold text-slate-900">
                   {apartment.monthlyFees} MAD
                 </span>
@@ -997,19 +1050,19 @@ const Apartments: React.FC<ApartmentsProps> = ({
       <Card className="hidden md:block overflow-hidden border border-slate-200">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-slate-200 text-xs sm:text-sm">
-            <thead className="bg-slate-50 text-slate-500 text-left font-medium">
+            <thead className="bg-slate-50 text-slate-500 text-start font-medium">
               <tr>
-                <th className="px-4 py-2.5">Lot / N°</th>
-                <th className="px-4 py-2.5">Type</th>
-                <th className="px-4 py-2.5">Étage</th>
-                <th className="px-4 py-2.5">Copropriétaire</th>
-                <th className="px-4 py-2.5">Locataire</th>
-                <th className="px-4 py-2.5 text-right">Superficie</th>
-                <th className="px-4 py-2.5 text-right font-semibold text-teal-800">
-                  Tantièmes
+                <th className="px-4 py-2.5 text-start">{tr('Lot / N°', 'رقم الوحدة')}</th>
+                <th className="px-4 py-2.5 text-start">{tr('Type', 'النوع')}</th>
+                <th className="px-4 py-2.5 text-start">{tr('Étage', 'الطابق')}</th>
+                <th className="px-4 py-2.5 text-start">{tr('Copropriétaire', 'المالك المشترك')}</th>
+                <th className="px-4 py-2.5 text-start">{tr('Locataire', 'المكتري')}</th>
+                <th className="px-4 py-2.5 text-end">{tr('Superficie', 'المساحة')}</th>
+                <th className="px-4 py-2.5 text-end font-semibold text-teal-800">
+                  {tr('Tantièmes', 'الحصص')}
                 </th>
-                <th className="px-4 py-2.5 text-right">Cotisation</th>
-                <th className="px-4 py-2.5 text-right">Actions</th>
+                <th className="px-4 py-2.5 text-end">{tr('Cotisation', 'المساهمة')}</th>
+                <th className="px-4 py-2.5 text-end">{tr('Actions', 'إجراءات')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white">
@@ -1029,7 +1082,9 @@ const Apartments: React.FC<ApartmentsProps> = ({
                     {apartment.ownerId ? (
                       residentMap.get(apartment.ownerId) || '---'
                     ) : (
-                      <span className="text-xs text-slate-400 italic">Non assigné</span>
+                      <span className="text-xs text-slate-400 italic">
+                        {tr('Non assigné', 'غير معين')}
+                      </span>
                     )}
                   </td>
                   <td className="px-4 py-2 text-slate-500">
@@ -1037,27 +1092,27 @@ const Apartments: React.FC<ApartmentsProps> = ({
                       ? residentMap.get(apartment.tenantId)
                       : '---'}
                   </td>
-                  <td className="px-4 py-2 text-right font-mono text-slate-700">
+                  <td className="px-4 py-2 text-end font-mono text-slate-700">
                     {apartment.area} m²
                   </td>
-                  <td className="px-4 py-2 text-right font-mono font-bold text-teal-700">
+                  <td className="px-4 py-2 text-end font-mono font-bold text-teal-700">
                     {apartment.tantiemes || 100} / 1000
                   </td>
-                  <td className="px-4 py-2 text-right font-mono text-slate-800">
+                  <td className="px-4 py-2 text-end font-mono text-slate-800">
                     {apartment.monthlyFees} MAD
                   </td>
-                  <td className="px-4 py-2 text-right space-x-1.5 whitespace-nowrap">
+                  <td className="px-4 py-2 text-end space-x-1.5 whitespace-nowrap">
                     <button
                       onClick={() => handleEdit(apartment)}
                       className="p-1 text-slate-400 hover:text-slate-600 rounded"
-                      title="Modifier"
+                      title={tr('Modifier', 'تعديل')}
                     >
                       <PencilIcon />
                     </button>
                     <button
                       onClick={() => setDeletingApartment(apartment)}
                       className="p-1 text-slate-400 hover:text-rose-600 rounded"
-                      title="Supprimer"
+                      title={tr('Supprimer', 'حذف')}
                     >
                       <TrashIcon />
                     </button>
@@ -1067,7 +1122,10 @@ const Apartments: React.FC<ApartmentsProps> = ({
               {building.apartments.length === 0 && (
                 <tr>
                   <td colSpan={9} className="px-4 py-8 text-center text-slate-400">
-                    Aucun lot enregistré pour cet immeuble. Utilisez &laquo; Création en masse &raquo; ou &laquo; Ajouter un lot &raquo;.
+                    {tr(
+                      'Aucun lot enregistré pour cet immeuble. Utilisez « Création en masse » ou « Ajouter un lot ».',
+                      'لا توجد أي شقة مسجلة لهذه العمارة. استخدموا « إنشاء جماعي للشقق » أو « إضافة شقة / وحدة ».'
+                    )}
                   </td>
                 </tr>
               )}

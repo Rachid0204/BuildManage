@@ -1,11 +1,9 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
 import type { Building, Resident, Apartment } from '../../types';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import Modal from '../common/Modal';
 import { useI18n } from '../../hooks/useI18n';
-import { useAuth, getHomeRouteForRole } from '../../contexts/AuthContext';
 import { PlusIcon, PencilIcon, TrashIcon, DocumentsIcon } from '../icons/IconComponents';
 import { exportResidentsPDF, exportResidentsCSV } from '../../services/pdfService';
 
@@ -29,7 +27,7 @@ const ResidentModal: React.FC<ResidentModalProps> = ({
   apartments,
   residents,
 }) => {
-  const { t } = useI18n();
+  const { t, tr } = useI18n();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
@@ -51,7 +49,6 @@ const ResidentModal: React.FC<ResidentModalProps> = ({
       setPhone(existingResident.phone);
       setCin(existingResident.cin || '');
       setIsOwner(existingResident.isOwner);
-      // Find linked apartment either via resident.apartmentId or apartment.ownerId / tenantId
       const linkedApt =
         apartments.find((a) => a.id === existingResident.apartmentId) ||
         apartments.find(
@@ -75,13 +72,22 @@ const ResidentModal: React.FC<ResidentModalProps> = ({
   const validate = () => {
     const newErrors: Record<string, string> = {};
     if (!name.trim() || name.trim().length < 2) {
-      newErrors.name = 'Le nom complet est obligatoire (min. 2 caractères)';
+      newErrors.name = tr(
+        'Le nom complet est obligatoire (min. 2 caractères)',
+        'الاسم الكامل مطلوب (حرفان على الأقل)'
+      );
     }
     if (!email.trim() || !email.includes('@')) {
-      newErrors.email = 'Une adresse email valide est obligatoire';
+      newErrors.email = tr(
+        'Une adresse email valide est obligatoire',
+        'يرجى إدخال بريد إلكتروني صحيح'
+      );
     }
     if (!phone.trim() || phone.trim().length < 6) {
-      newErrors.phone = 'Un numéro de téléphone valide est obligatoire';
+      newErrors.phone = tr(
+        'Un numéro de téléphone valide est obligatoire',
+        'يرجى إدخال رقم هاتف صحيح'
+      );
     }
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -154,7 +160,7 @@ const ResidentModal: React.FC<ResidentModalProps> = ({
               htmlFor="res-cin"
               className="block text-xs font-semibold text-slate-700 mb-1"
             >
-              N° CIN (Optionnel)
+              {tr('N° CIN (Optionnel)', 'رقم البطاقة الوطنية CIN (اختياري)')}
             </label>
             <input
               type="text"
@@ -263,7 +269,7 @@ const ResidentModal: React.FC<ResidentModalProps> = ({
             htmlFor="res-apartment"
             className="block text-xs font-semibold text-slate-700 mb-1"
           >
-            Lot / Appartement assigné dans l&apos;immeuble
+            {tr("Lot / Appartement assigné dans l'immeuble", 'الشقة / الوحدة المخصصة في العمارة')}
           </label>
           <select
             id="res-apartment"
@@ -271,24 +277,29 @@ const ResidentModal: React.FC<ResidentModalProps> = ({
             onChange={(e) => setApartmentId(e.target.value)}
             className="block w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
           >
-            <option value="">-- Aucun lot assigné pour le moment --</option>
+            <option value="">
+              {tr('-- Aucun lot assigné pour le moment --', '-- لم يتم تعيين أي شقة حالياً --')}
+            </option>
             {apartments.map((apt) => {
               const currentHolderId = isOwner ? apt.ownerId : apt.tenantId;
               const currentHolderName = currentHolderId
                 ? residentMap.get(currentHolderId)
                 : null;
               const statusText = currentHolderName
-                ? `${isOwner ? 'Propriétaire' : 'Locataire'} actuel : ${currentHolderName}`
-                : 'Libre';
+                ? `${isOwner ? tr('Propriétaire', 'المالك') : tr('Locataire', 'المكتري')} ${tr('actuel', 'الحالي')} : ${currentHolderName}`
+                : tr('Libre', 'شاغرة');
               return (
                 <option key={apt.id} value={apt.id}>
-                  Lot {apt.number} (Étage {apt.floor} · {apt.area}m²) — {statusText}
+                  {tr('Lot', 'شقة')} {apt.number} ({tr('Étage', 'طابق')} {apt.floor} · {apt.area}m²) — {statusText}
                 </option>
               );
             })}
           </select>
           <p className="text-[11px] text-slate-500 mt-1">
-            L&apos;assignation met automatiquement à jour le propriétaire ou locataire sur la fiche du lot choisi.
+            {tr(
+              "L'assignation met automatiquement à jour le propriétaire ou locataire sur la fiche du lot choisi.",
+              'يؤدي التعيين إلى تحديث اسم المالك أو المكتري تلقائياً في بطاقة الشقة المختارة.'
+            )}
           </p>
         </div>
 
@@ -303,10 +314,16 @@ const ResidentModal: React.FC<ResidentModalProps> = ({
               />
               <div className="ms-2.5">
                 <span className="text-xs sm:text-sm font-bold text-teal-950 block">
-                  Générer automatiquement les identifiants d&apos;accès portail
+                  {tr(
+                    "Générer automatiquement les identifiants d'accès portail",
+                    'توليد بيانات الولوج إلى بوابة الساكن تلقائياً'
+                  )}
                 </span>
                 <p className="text-xs text-teal-800 mt-0.5">
-                  Crée immédiatement un compte résident avec mot de passe temporaire et affiche la fiche d&apos;accès prête à partager (WhatsApp / Email).
+                  {tr(
+                    "Crée immédiatement un compte résident avec mot de passe temporaire et affiche la fiche d'accès prête à partager (WhatsApp / Email).",
+                    'ينشئ فوراً حساباً للساكن مع كلمة مرور مؤقتة ويعرض بطاقة الولوج الجاهزة للمشاركة (واتساب / بريد إلكتروني).'
+                  )}
                 </p>
               </div>
             </label>
@@ -336,18 +353,24 @@ const CredentialsModal: React.FC<CredentialsModalProps> = ({
   onClose,
   onRegenerate,
 }) => {
+  const { tr } = useI18n();
   const [copied, setCopied] = useState(false);
-  const { loginWithEmail } = useAuth();
-  const navigate = useNavigate();
 
   if (!resident) return null;
 
   const password = resident.generatedPassword || 'Syndik-Demo2026!';
-  const shareText = `Bonjour ${resident.name},\nVoici vos identifiants d'accès au Portail Copropriétaire (${buildingName}${
-    apartmentNumber ? ` - Lot ${apartmentNumber}` : ''
-  }) :\n• Identifiant (Email) : ${resident.email}\n• Mot de passe temporaire : ${password}\n• Rôle : ${
-    resident.isOwner ? 'Copropriétaire' : 'Locataire'
-  }`;
+  const shareText = tr(
+    `Bonjour ${resident.name},\nVoici vos identifiants d'accès au Portail Copropriétaire (${buildingName}${
+      apartmentNumber ? ` - Lot ${apartmentNumber}` : ''
+    }) :\n• Identifiant (Email) : ${resident.email}\n• Mot de passe temporaire : ${password}\n• Rôle : ${
+      resident.isOwner ? 'Copropriétaire' : 'Locataire'
+    }`,
+    `مرحباً ${resident.name}،\nإليكم بيانات الولوج إلى بوابة الملكية المشتركة (${buildingName}${
+      apartmentNumber ? ` - شقة ${apartmentNumber}` : ''
+    }) :\n• المعرف (البريد الإلكتروني) : ${resident.email}\n• كلمة المرور المؤقتة : ${password}\n• الصفة : ${
+      resident.isOwner ? 'مالك مشترك' : 'مكتري'
+    }`
+  );
 
   const handleCopy = () => {
     if (navigator.clipboard) {
@@ -357,17 +380,11 @@ const CredentialsModal: React.FC<CredentialsModalProps> = ({
     }
   };
 
-  const handleSimulateResidentLogin = async () => {
-    const profile = await loginWithEmail(resident.email, password);
-    onClose();
-    navigate(getHomeRouteForRole(profile.role), { replace: true });
-  };
-
   return (
     <Modal
       isOpen={!!resident}
       onClose={onClose}
-      title="Fiche d'Identifiants d'Accès Résident"
+      title={tr("Fiche d'Identifiants d'Accès Résident", 'بطاقة بيانات ولوج الساكن')}
       footer={
         <div className="flex flex-wrap items-center justify-between w-full gap-2">
           {onRegenerate && (
@@ -376,18 +393,17 @@ const CredentialsModal: React.FC<CredentialsModalProps> = ({
               onClick={() => onRegenerate(resident.id)}
               className="text-xs font-semibold text-slate-600 hover:text-teal-700 underline"
             >
-              Régénérer un nouveau mot de passe
+              {tr('Régénérer un nouveau mot de passe', 'إعادة توليد كلمة مرور جديدة')}
             </button>
           )}
           <div className="flex flex-wrap items-center gap-2 ms-auto">
             <Button variant="secondary" onClick={onClose}>
-              Fermer
+              {tr('Fermer', 'إغلاق')}
             </Button>
-            <Button variant="secondary" onClick={handleCopy}>
-              {copied ? '✓ Copié !' : 'Copier la fiche'}
-            </Button>
-            <Button onClick={handleSimulateResidentLogin}>
-              Se connecter avec ce compte →
+            <Button onClick={handleCopy}>
+              {copied
+                ? tr('✓ Copié dans le presse-papiers !', '✓ تم النسخ إلى الحافظة!')
+                : tr('Copier la fiche d’identifiants', 'نسخ بطاقة بيانات الولوج')}
             </Button>
           </div>
         </div>
@@ -399,34 +415,54 @@ const CredentialsModal: React.FC<CredentialsModalProps> = ({
             ✓
           </div>
           <div className="text-xs text-emerald-950">
-            <p className="font-bold text-sm">Compte résident actif</p>
+            <p className="font-bold text-sm">
+              {tr('Compte résident actif', 'حساب الساكن مفعل')}
+            </p>
             <p className="mt-0.5 text-emerald-800">
-              Ces identifiants permettent à <strong>{resident.name}</strong> de se connecter immédiatement au Portail Résident (<code>/resident</code>).
+              {tr(
+                `Transmettez cette fiche à ${resident.name} afin qu'il puisse se connecter à son Portail Résident (/resident).`,
+                `شاركوا هذه البطاقة مع ${resident.name} لكي يتمكن من تسجيل الدخول إلى بوابة الساكن (/resident).`
+              )}
             </p>
           </div>
         </div>
 
         <div className="p-4 rounded-xl bg-slate-900 text-white space-y-3 font-mono text-xs">
           <div className="flex justify-between items-center border-b border-slate-800 pb-2">
-            <span className="text-slate-400 font-sans">Résident :</span>
+            <span className="text-slate-400 font-sans">
+              {tr('Résident :', 'الساكن :')}
+            </span>
             <span className="font-bold text-white font-sans">
-              {resident.name} ({resident.isOwner ? 'Copropriétaire' : 'Locataire'})
+              {resident.name} (
+              {resident.isOwner
+                ? tr('Copropriétaire', 'مالك مشترك')
+                : tr('Locataire', 'مكتري')}
+              )
             </span>
           </div>
           <div className="flex justify-between items-center border-b border-slate-800 pb-2">
-            <span className="text-slate-400 font-sans">Immeuble / Lot :</span>
+            <span className="text-slate-400 font-sans">
+              {tr('Immeuble / Lot :', 'العمارة / الشقة :')}
+            </span>
             <span className="font-bold text-teal-300">
-              {buildingName} {apartmentNumber ? `• Lot ${apartmentNumber}` : '• Non assigné'}
+              {buildingName}{' '}
+              {apartmentNumber
+                ? `• ${tr('Lot', 'شقة')} ${apartmentNumber}`
+                : `• ${tr('Non assigné', 'غير معين')}`}
             </span>
           </div>
           <div className="flex justify-between items-center border-b border-slate-800 pb-2">
-            <span className="text-slate-400 font-sans">Identifiant (Email / CIN) :</span>
+            <span className="text-slate-400 font-sans">
+              {tr('Identifiant (Email / CIN) :', 'المعرف (البريد / CIN) :')}
+            </span>
             <span className="font-bold text-amber-300 select-all">
               {resident.email} {resident.cin ? `(${resident.cin})` : ''}
             </span>
           </div>
           <div className="flex justify-between items-center">
-            <span className="text-slate-400 font-sans">Mot de passe généré :</span>
+            <span className="text-slate-400 font-sans">
+              {tr('Mot de passe généré :', 'كلمة المرور المُولدة :')}
+            </span>
             <span className="px-2.5 py-1 rounded bg-slate-800 text-emerald-300 font-bold text-sm tracking-wider select-all border border-slate-700">
               {password}
             </span>
@@ -434,7 +470,10 @@ const CredentialsModal: React.FC<CredentialsModalProps> = ({
         </div>
 
         <p className="text-xs text-slate-500">
-          Astuce : Cliquez sur <strong>« Se connecter avec ce compte → »</strong> pour basculer immédiatement vers l&apos;Espace Résident de <strong>{resident.name}</strong>, ou utilisez son email/CIN sur l&apos;écran de connexion.
+          {tr(
+            "Note : Pour tester ce compte résident, déconnectez-vous d'abord de votre session Syndic puis connectez-vous sur la page de connexion avec l'email ou le numéro CIN ci-dessus.",
+            'ملاحظة : لتجربة حساب الساكن هذا، قم أولاً بتسجيل الخروج من جلسة السنديك ثم سجل الدخول في صفحة الاتصال باستخدام البريد الإلكتروني أو رقم CIN أعلاه.'
+          )}
         </p>
       </div>
     </Modal>
@@ -461,7 +500,7 @@ const Residents: React.FC<{
   onDeleteResident,
   onRegenerateCredentials,
 }) => {
-  const { t } = useI18n();
+  const { t, tr } = useI18n();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedResident, setSelectedResident] = useState<Resident | null>(null);
   const [credentialResidentId, setCredentialResidentId] = useState<string | null>(
@@ -570,14 +609,14 @@ const Residents: React.FC<{
       <Modal
         isOpen={!!deletingResident}
         onClose={() => setDeletingResident(null)}
-        title="Supprimer le résident"
+        title={tr('Supprimer le résident', 'حذف الساكن')}
         footer={
           <>
             <Button variant="secondary" onClick={() => setDeletingResident(null)}>
-              Annuler
+              {tr('Annuler', 'إلغاء')}
             </Button>
             <Button variant="danger" onClick={confirmDelete} className="ms-3">
-              Supprimer
+              {tr('Supprimer', 'حذف')}
             </Button>
           </>
         }
@@ -595,7 +634,10 @@ const Residents: React.FC<{
             {t('residents.title', { buildingName: building.name })}
           </h1>
           <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
-            Gestion des copropriétaires, locataires, affectation des lots et génération des accès portail
+            {tr(
+              'Gestion des copropriétaires, locataires, affectation des lots et génération des accès portail',
+              'تدبير الملاك المشتركين والمكترين وتعيين الشقق وتوليد بيانات الولوج إلى البوابة'
+            )}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -604,17 +646,23 @@ const Residents: React.FC<{
             onClick={() => exportResidentsPDF(building)}
             disabled={building.residents.length === 0}
             className="flex items-center gap-1.5 text-xs sm:text-sm"
-            title="Exporter le registre officiel des résidents en PDF (Loi 18-00)"
+            title={tr(
+              'Exporter le registre officiel des résidents en PDF (Loi 18-00)',
+              'تصدير السجل الرسمي للسكان بصيغة PDF (قانون 18-00)'
+            )}
           >
             <DocumentsIcon />
-            <span>Exporter PDF</span>
+            <span>{tr('Exporter PDF', 'تصدير PDF')}</span>
           </Button>
           <Button
             variant="secondary"
             onClick={() => exportResidentsCSV(building)}
             disabled={building.residents.length === 0}
             className="flex items-center gap-1.5 text-xs sm:text-sm"
-            title="Exporter la liste des résidents au format CSV (Excel)"
+            title={tr(
+              'Exporter la liste des résidents au format CSV (Excel)',
+              'تصدير لائحة السكان بصيغة CSV (إكسل)'
+            )}
           >
             <span>⬇ CSV</span>
           </Button>
@@ -661,11 +709,11 @@ const Residents: React.FC<{
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     {assignedApt ? (
                       <span className="px-2 py-0.5 rounded bg-teal-50 text-teal-800 border border-teal-200 font-mono text-xs font-bold">
-                        Lot {assignedApt.number} (Étage {assignedApt.floor})
+                        {tr('Lot', 'شقة')} {assignedApt.number} ({tr('Étage', 'طابق')} {assignedApt.floor})
                       </span>
                     ) : (
                       <span className="px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 text-xs">
-                        Lot non assigné
+                        {tr('Lot non assigné', 'شقة غير معينة')}
                       </span>
                     )}
                     <button
@@ -678,8 +726,8 @@ const Residents: React.FC<{
                       }`}
                     >
                       {resident.hasAccount
-                        ? '🔑 Voir Identifiants'
-                        : '⚡ Générer Accès'}
+                        ? tr('🔑 Voir Identifiants', '🔑 عرض بيانات الولوج')
+                        : tr('⚡ Générer Accès', '⚡ توليد حساب ولوج')}
                     </button>
                   </div>
                 </div>
@@ -696,7 +744,7 @@ const Residents: React.FC<{
                     variant="danger"
                     className="!p-2 min-w-[40px] min-h-[40px]"
                     onClick={() => setDeletingResident(resident)}
-                    title="Supprimer"
+                    title={tr('Supprimer', 'حذف')}
                   >
                     <TrashIcon />
                   </Button>
@@ -720,23 +768,23 @@ const Residents: React.FC<{
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50">
               <tr>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase">
+                <th className="px-5 py-3 text-start text-xs font-semibold text-slate-500 uppercase">
                   {t('residents.table.name')}
                 </th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase">
-                  Lot Assigné
+                <th className="px-5 py-3 text-start text-xs font-semibold text-slate-500 uppercase">
+                  {tr('Lot Assigné', 'الشقة المعينة')}
                 </th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase">
+                <th className="px-5 py-3 text-start text-xs font-semibold text-slate-500 uppercase">
                   {t('residents.table.role')}
                 </th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase">
-                  Contact
+                <th className="px-5 py-3 text-start text-xs font-semibold text-slate-500 uppercase">
+                  {tr('Contact', 'الاتصال')}
                 </th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase">
-                  Accès Portail
+                <th className="px-5 py-3 text-start text-xs font-semibold text-slate-500 uppercase">
+                  {tr('Accès Portail', 'ولوج البوابة')}
                 </th>
-                <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500 uppercase">
-                  Actions
+                <th className="px-5 py-3 text-end text-xs font-semibold text-slate-500 uppercase">
+                  {tr('Actions', 'إجراءات')}
                 </th>
               </tr>
             </thead>
@@ -758,7 +806,7 @@ const Residents: React.FC<{
                     <td className="px-5 py-3.5 whitespace-nowrap">
                       {assignedApt ? (
                         <span className="px-2.5 py-1 rounded-md bg-teal-50 text-teal-900 border border-teal-200 font-mono text-xs font-bold">
-                          Lot {assignedApt.number} · Étage {assignedApt.floor}
+                          {tr('Lot', 'شقة')} {assignedApt.number} · {tr('Étage', 'طابق')} {assignedApt.floor}
                         </span>
                       ) : (
                         <button
@@ -766,7 +814,7 @@ const Residents: React.FC<{
                           onClick={() => handleEdit(resident)}
                           className="text-xs text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-2.5 py-1 rounded-md font-medium"
                         >
-                          + Assigner un lot
+                          {tr('+ Assigner un lot', '+ تعيين شقة')}
                         </button>
                       )}
                     </td>
@@ -800,11 +848,11 @@ const Residents: React.FC<{
                         }`}
                       >
                         {resident.hasAccount
-                          ? '🔑 Voir Identifiants'
-                          : '⚡ Générer Accès'}
+                          ? tr('🔑 Voir Identifiants', '🔑 عرض بيانات الولوج')
+                          : tr('⚡ Générer Accès', '⚡ توليد حساب ولوج')}
                       </button>
                     </td>
-                    <td className="px-5 py-3.5 whitespace-nowrap text-right text-sm font-medium space-x-2">
+                    <td className="px-5 py-3.5 whitespace-nowrap text-end text-sm font-medium space-x-2">
                       <Button
                         variant="secondary"
                         className="!p-2"
@@ -817,7 +865,7 @@ const Residents: React.FC<{
                         variant="danger"
                         className="!p-2"
                         onClick={() => setDeletingResident(resident)}
-                        title="Supprimer"
+                        title={tr('Supprimer', 'حذف')}
                       >
                         <TrashIcon />
                       </Button>

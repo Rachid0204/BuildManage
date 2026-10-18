@@ -12,6 +12,7 @@ import Button from '../common/Button';
 import Modal from '../common/Modal';
 import Loading from '../common/Loading';
 import { WrenchIcon, PlusIcon, PencilIcon } from '../icons/IconComponents';
+import { useI18n } from '../../hooks/useI18n';
 
 interface MaintenanceProps {
   building: Building;
@@ -23,40 +24,47 @@ interface MaintenanceProps {
 
 const CATEGORY_META: Record<
   MaintenanceRequest['category'],
-  { label: string; icon: string; badgeClass: string }
+  { labelFr: string; labelAr: string; icon: string; badgeClass: string }
 > = {
   elevator: {
-    label: 'Ascenseur & Monte-charge',
+    labelFr: 'Ascenseur & Monte-charge',
+    labelAr: 'المصعد والآليات',
     icon: '🛗',
     badgeClass: 'bg-purple-50 text-purple-800 border-purple-200',
   },
   plumbing: {
-    label: 'Plomberie & Canalisation',
+    labelFr: 'Plomberie & Canalisation',
+    labelAr: 'السباكة وقنوات المياه',
     icon: '🚰',
     badgeClass: 'bg-cyan-50 text-cyan-800 border-cyan-200',
   },
   electrical: {
-    label: 'Électricité & Éclairage',
+    labelFr: 'Électricité & Éclairage',
+    labelAr: 'الكهرباء والإنارة',
     icon: '⚡',
     badgeClass: 'bg-amber-50 text-amber-800 border-amber-200',
   },
   common_area: {
-    label: 'Parties Communes & Hall',
+    labelFr: 'Parties Communes & Hall',
+    labelAr: 'الأجزاء المشتركة والبهو',
     icon: '🏢',
     badgeClass: 'bg-teal-50 text-teal-800 border-teal-200',
   },
   cleaning: {
-    label: 'Propreté & Hygiène',
+    labelFr: 'Propreté & Hygiène',
+    labelAr: 'النظافة والصحة',
     icon: '🧹',
     badgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-200',
   },
   security: {
-    label: 'Sécurité, Portail & Accès',
+    labelFr: 'Sécurité, Portail & Accès',
+    labelAr: 'الأمن، البوابة والولوج',
     icon: '🛡️',
     badgeClass: 'bg-indigo-50 text-indigo-800 border-indigo-200',
   },
   other: {
-    label: 'Autre Intervention',
+    labelFr: 'Autre Intervention',
+    labelAr: 'تدخل آخر',
     icon: '🔧',
     badgeClass: 'bg-slate-100 text-slate-800 border-slate-200',
   },
@@ -64,19 +72,23 @@ const CATEGORY_META: Record<
 
 const SAMPLE_MAINTENANCE_PHOTOS = [
   {
-    label: 'Ascenseur / Machinerie',
+    labelFr: 'Ascenseur / Machinerie',
+    labelAr: 'المصعد / المحرك',
     url: 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=800&auto=format&fit=crop&q=80',
   },
   {
-    label: 'Plomberie / Vanne eau',
+    labelFr: 'Plomberie / Vanne eau',
+    labelAr: 'السباكة / صمام المياه',
     url: 'https://images.unsplash.com/photo-1585704032915-c3400ca199e7?w=800&auto=format&fit=crop&q=80',
   },
   {
-    label: 'Éclairage / Parties communes',
+    labelFr: 'Éclairage / Parties communes',
+    labelAr: 'الإنارة / الأجزاء المشتركة',
     url: 'https://images.unsplash.com/photo-1513694203232-719a280e022f?w=800&auto=format&fit=crop&q=80',
   },
   {
-    label: 'Chantier / Réparation',
+    labelFr: 'Chantier / Réparation',
+    labelAr: 'ورش / إصلاح',
     url: 'https://images.unsplash.com/photo-1541888946425-d09bb18086f6?w=800&auto=format&fit=crop&q=80',
   },
 ];
@@ -126,11 +138,7 @@ const compressPhotoFile = (file: File, maxWidth = 1100, maxHeight = 1100, qualit
 
 // Visual 4-Stage Progress Stepper
 const MaintenanceProgressStepper: React.FC<{ request: MaintenanceRequest }> = ({ request }) => {
-  // Determine active stage (1 to 4)
-  // Stage 1: Signalé / Reçu
-  // Stage 2: Pris en charge & Artisan assigné
-  // Stage 3: Intervention en cours sur site
-  // Stage 4: Clôturé & Vérifié
+  const { tr, isAr } = useI18n();
   let activeStage = 1;
   if (request.status === 'completed') {
     activeStage = 4;
@@ -143,28 +151,28 @@ const MaintenanceProgressStepper: React.FC<{ request: MaintenanceRequest }> = ({
   const stages = [
     {
       step: 1,
-      label: '1. Signalé & Reçu',
-      sub: new Date(request.createdAt).toLocaleDateString('fr-MA'),
+      label: tr('1. Signalé & Reçu', '1. تم التبليغ والاستلام'),
+      sub: new Date(request.createdAt).toLocaleDateString(isAr ? 'ar-MA' : 'fr-MA'),
     },
     {
       step: 2,
-      label: '2. Artisan Assigné',
-      sub: request.assignedTo ? request.assignedTo : 'En attente syndic',
+      label: tr('2. Artisan Assigné', '2. تعيين المهني'),
+      sub: request.assignedTo ? request.assignedTo : tr('En attente syndic', 'في انتظار السنديك'),
     },
     {
       step: 3,
-      label: '3. Travaux en cours',
+      label: tr('3. Travaux en cours', '3. الأشغال جارية'),
       sub:
         activeStage >= 3
-          ? `${request.updates?.length || 1} note(s) de suivi`
-          : 'Intervention sur site',
+          ? tr(`${request.updates?.length || 1} note(s) de suivi`, `${request.updates?.length || 1} ملاحظات تتبع`)
+          : tr('Intervention sur site', 'تدخل ميداني'),
     },
     {
       step: 4,
-      label: '4. Résolu & Vérifié',
+      label: tr('4. Résolu & Vérifié', '4. تم الحل والتحقق'),
       sub: request.completedAt
-        ? new Date(request.completedAt).toLocaleDateString('fr-MA')
-        : 'Clôture finale',
+        ? new Date(request.completedAt).toLocaleDateString(isAr ? 'ar-MA' : 'fr-MA')
+        : tr('Clôture finale', 'إغلاق نهائي'),
     },
   ];
 
@@ -172,10 +180,10 @@ const MaintenanceProgressStepper: React.FC<{ request: MaintenanceRequest }> = ({
     <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5">
       <div className="flex items-center justify-between mb-2">
         <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
-          Suivi d'avancement en temps réel
+          {tr("Suivi d'avancement en temps réel", 'تتبع تقدم الأشغال في الوقت الفعلي')}
         </span>
         <span className="text-[11px] font-mono font-bold text-teal-800">
-          Étape {activeStage} / 4 ({Math.round((activeStage / 4) * 100)}%)
+          {tr(`Étape ${activeStage} / 4`, `المرحلة ${activeStage} / 4`)} ({Math.round((activeStage / 4) * 100)}%)
         </span>
       </div>
 
@@ -221,7 +229,7 @@ const MaintenanceProgressStepper: React.FC<{ request: MaintenanceRequest }> = ({
                 </span>
                 <span className="truncate text-[11px]">{st.label}</span>
               </div>
-              <div className="text-[10px] truncate mt-0.5 pl-5 font-mono opacity-80">
+              <div className="text-[10px] truncate mt-0.5 ps-5 font-mono opacity-80">
                 {st.sub}
               </div>
             </div>
@@ -239,6 +247,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
   currentResidentName = 'Fatima Zahra Mansouri',
   currentApartmentNumber = 'Lot A-102',
 }) => {
+  const { tr, isAr } = useI18n();
   const queryClient = useQueryClient();
   const updatePhotoInputRef = useRef<HTMLInputElement | null>(null);
   const newTicketPhotoInputRef = useRef<HTMLInputElement | null>(null);
@@ -313,7 +322,12 @@ const Maintenance: React.FC<MaintenanceProps> = ({
       queryClient.invalidateQueries({ queryKey: ['maintenance'] });
       setSelectedRequest(null);
       setExpandedTicketIds((prev) => ({ ...prev, [vars.id]: true }));
-      setBannerMessage('Le suivi du ticket de maintenance a été mis à jour avec succès.');
+      setBannerMessage(
+        tr(
+          'Le suivi du ticket de maintenance a été mis à jour avec succès.',
+          'تم تحديث تتبع طلب الصيانة بنجاح.'
+        )
+      );
       setTimeout(() => setBannerMessage(null), 4000);
     },
   });
@@ -328,7 +342,12 @@ const Maintenance: React.FC<MaintenanceProps> = ({
       setNewDescription('');
       setNewPhotos([]);
       setExpandedTicketIds((prev) => ({ ...prev, [created.id]: true }));
-      setBannerMessage('Votre signalement a été enregistré et transmis au Syndic avec suivi en direct.');
+      setBannerMessage(
+        tr(
+          'Votre signalement a été enregistré et transmis au Syndic avec suivi en direct.',
+          'تم تسجيل بلاغكم وإرساله إلى وكيل الاتحاد (السنديك) مع التتبع المباشر.'
+        )
+      );
       setTimeout(() => setBannerMessage(null), 4000);
     },
   });
@@ -341,10 +360,10 @@ const Maintenance: React.FC<MaintenanceProps> = ({
     setEditInvoiceRef(req.invoiceRef || '');
     setStepTitle(
       isResidentPortal
-        ? 'Observation complémentaire du copropriétaire'
+        ? tr('Observation complémentaire du copropriétaire', 'ملاحظة إضافية من المالك المشترك')
         : req.status === 'pending'
-        ? 'Prise en charge & Assignation du prestataire'
-        : 'Point d\'avancement de l\'intervention'
+        ? tr('Prise en charge & Assignation du prestataire', 'التكفل بالطلب وتعيين المهني')
+        : tr("Point d'avancement de l'intervention", 'تحديث تقدم التدخل')
     );
     setStepNote('');
     setStepPhotos([]);
@@ -376,15 +395,17 @@ const Maintenance: React.FC<MaintenanceProps> = ({
       stepInfo: {
         title:
           stepTitle.trim() ||
-          (isResidentPortal ? 'Note du résident' : 'Mise à jour du statut par le Syndic'),
+          (isResidentPortal
+            ? tr('Note du résident', 'ملاحظة الساكن')
+            : tr('Mise à jour du statut par le Syndic', 'تحديث الحالة من طرف السنديك')),
         note:
           stepNote.trim() ||
           (editStatus === 'completed'
-            ? 'Travaux achevés et réceptionnés sans réserve.'
-            : `Mise à jour du dossier (${editAssignedTo || 'Syndic'}).`),
+            ? tr('Travaux achevés et réceptionnés sans réserve.', 'انتهت الأشغال وتم استلامها بدون تحفظ.')
+            : tr(`Mise à jour du dossier (${editAssignedTo || 'Syndic'}).`, `تحديث الملف (${editAssignedTo || 'السنديك'}).`)),
         updatedBy: isResidentPortal
           ? `${currentResidentName} (${currentApartmentNumber})`
-          : 'SyndicPro Gestion (Bureau Syndic)',
+          : tr('SyndicPro Gestion (Bureau Syndic)', 'مكتب السنديك'),
         updatedByRole: isResidentPortal ? 'resident' : 'syndic',
         stepPhotos,
       },
@@ -395,13 +416,14 @@ const Maintenance: React.FC<MaintenanceProps> = ({
     e.preventDefault();
     if (!newDescription.trim()) return;
 
+    const catLabel = isAr ? CATEGORY_META[newCategory].labelAr : CATEGORY_META[newCategory].labelFr;
     createMutation.mutate({
       buildingId: building.id,
       residentId: isResidentPortal ? currentResidentId : building.residents[0]?.id || 'res-1',
-      residentName: isResidentPortal ? currentResidentName : 'SyndicPro Gestion (Inspection)',
-      apartmentNumber: isResidentPortal ? currentApartmentNumber : 'Parties Communes',
-      title: newTitle.trim() || `${CATEGORY_META[newCategory].label} — ${newLocation || 'Immeuble'}`,
-      location: newLocation.trim() || 'Parties communes de la résidence',
+      residentName: isResidentPortal ? currentResidentName : tr('SyndicPro Gestion (Inspection)', 'مكتب السنديك (معاينة)'),
+      apartmentNumber: isResidentPortal ? currentApartmentNumber : tr('Parties Communes', 'الأجزاء المشتركة'),
+      title: newTitle.trim() || `${catLabel} — ${newLocation || tr('Immeuble', 'العمارة')}`,
+      location: newLocation.trim() || tr('Parties communes de la résidence', 'الأجزاء المشتركة للإقامة'),
       category: newCategory,
       priority: newPriority,
       description: newDescription.trim(),
@@ -456,7 +478,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
     return { total, pending, inProgress, completed, totalCost };
   }, [requests]);
 
-  if (isLoading) return <Loading message="Chargement du suivi des interventions..." />;
+  if (isLoading) return <Loading message={tr('Chargement du suivi des interventions...', 'جاري تحميل تتبع التدخلات والأشغال...')} />;
 
   return (
     <div className="space-y-6">
@@ -468,14 +490,17 @@ const Maintenance: React.FC<MaintenanceProps> = ({
               <span className="p-1.5 bg-teal-100 text-teal-800 rounded-lg">
                 <WrenchIcon />
               </span>
-              <span>Suivi des Incidents & Travaux de Maintenance</span>
+              <span>{tr('Suivi des Incidents & Travaux de Maintenance', 'تتبع الأعطاب وأشغال الصيانة')}</span>
             </h1>
             <span className="text-xs bg-teal-50 text-teal-800 border border-teal-200 font-semibold px-2.5 py-0.5 rounded-full">
-              Transparence Syndic & Copropriétaires
+              {tr('Transparence Syndic & Copropriétaires', 'شفافية بين السنديك والملاك المشتركين')}
             </span>
           </div>
           <p className="text-xs sm:text-sm text-slate-500 mt-1">
-            Suivez chaque réclamation étape par étape avec notes techniques du Syndic, prestataires mandatés et photos d'intervention ({building.name}).
+            {tr(
+              `Suivez chaque réclamation étape par étape avec notes techniques du Syndic, prestataires mandatés et photos d'intervention (${building.name}).`,
+              `تتبع كل شكاية خطوة بخطوة مع الملاحظات التقنية للسنديك، المهنيين المكلفين وصور التدخل (${building.name}).`
+            )}
           </p>
         </div>
 
@@ -484,7 +509,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
           className="text-xs sm:text-sm font-bold flex items-center gap-1.5 bg-teal-700 hover:bg-teal-800 text-white shrink-0 shadow-xs"
         >
           <PlusIcon />
-          <span>{isResidentPortal ? 'Signaler un incident' : 'Nouveau ticket travaux'}</span>
+          <span>{isResidentPortal ? tr('Signaler un incident', 'التبليغ عن عطب') : tr('Nouveau ticket travaux', 'طلب أشغال جديد')}</span>
         </Button>
       </div>
 
@@ -501,31 +526,31 @@ const Maintenance: React.FC<MaintenanceProps> = ({
       {/* KPI Strip */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         <Card className="p-3.5 border border-slate-200 bg-white">
-          <div className="text-[11px] font-semibold uppercase text-slate-500">Total Dossiers</div>
+          <div className="text-[11px] font-semibold uppercase text-slate-500">{tr('Total Dossiers', 'مجموع الملفات')}</div>
           <div className="text-2xl font-bold font-mono text-slate-900 mt-1">{stats.total}</div>
-          <div className="text-[10px] text-slate-400">Parties communes & lots</div>
+          <div className="text-[10px] text-slate-400">{tr('Parties communes & lots', 'الأجزاء المشتركة والشقق')}</div>
         </Card>
         <Card className="p-3.5 border border-amber-200 bg-amber-50/40">
-          <div className="text-[11px] font-semibold uppercase text-amber-800">En Attente</div>
+          <div className="text-[11px] font-semibold uppercase text-amber-800">{tr('En Attente', 'قيد الانتظار')}</div>
           <div className="text-2xl font-bold font-mono text-amber-900 mt-1">{stats.pending}</div>
-          <div className="text-[10px] text-amber-700">À assigner au prestataire</div>
+          <div className="text-[10px] text-amber-700">{tr('À assigner au prestataire', 'في انتظار تعيين المهني')}</div>
         </Card>
         <Card className="p-3.5 border border-blue-200 bg-blue-50/40">
-          <div className="text-[11px] font-semibold uppercase text-blue-800">En Cours</div>
+          <div className="text-[11px] font-semibold uppercase text-blue-800">{tr('En Cours', 'قيد الإنجاز')}</div>
           <div className="text-2xl font-bold font-mono text-blue-900 mt-1">{stats.inProgress}</div>
-          <div className="text-[10px] text-blue-700">Artisan sur site</div>
+          <div className="text-[10px] text-blue-700">{tr('Artisan sur site', 'المهني في عين المكان')}</div>
         </Card>
         <Card className="p-3.5 border border-emerald-200 bg-emerald-50/40">
-          <div className="text-[11px] font-semibold uppercase text-emerald-800">Résolus & Vérifiés</div>
+          <div className="text-[11px] font-semibold uppercase text-emerald-800">{tr('Résolus & Vérifiés', 'تم الحل والتحقق')}</div>
           <div className="text-2xl font-bold font-mono text-emerald-900 mt-1">{stats.completed}</div>
-          <div className="text-[10px] text-emerald-700">Clôturés avec preuves</div>
+          <div className="text-[10px] text-emerald-700">{tr('Clôturés avec preuves', 'مغلقة مع الإثباتات')}</div>
         </Card>
         <Card className="p-3.5 border border-slate-200 bg-slate-900 text-white col-span-2 sm:col-span-1">
-          <div className="text-[11px] font-semibold uppercase text-slate-300">Coût Engagé</div>
+          <div className="text-[11px] font-semibold uppercase text-slate-300">{tr('Coût Engagé', 'التكلفة الملتزم بها')}</div>
           <div className="text-xl font-bold font-mono text-amber-400 mt-1">
             {currencyFormatter.format(stats.totalCost)}
           </div>
-          <div className="text-[10px] text-slate-400">Factures & devis validés</div>
+          <div className="text-[10px] text-slate-400">{tr('Factures & devis validés', 'الفواتير وعروض الأسعار المصادق عليها')}</div>
         </Card>
       </div>
 
@@ -543,7 +568,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                🏢 Tout l'immeuble ({requests.length})
+                🏢 {tr("Tout l'immeuble", 'كل العمارة')} ({requests.length})
               </button>
               <button
                 type="button"
@@ -554,16 +579,16 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                👤 Mes signalements ({requests.filter((r) => r.residentId === currentResidentId).length})
+                👤 {tr('Mes signalements', 'بلاغاتي')} ({requests.filter((r) => r.residentId === currentResidentId).length})
               </button>
             </div>
           )}
 
           {[
-            { id: 'all', label: 'Tous les statuts' },
-            { id: 'pending', label: '⏳ Reçus / En attente' },
-            { id: 'in_progress', label: '🔧 En cours d\'intervention' },
-            { id: 'completed', label: '✅ Résolus & Clôturés' },
+            { id: 'all', label: tr('Tous les statuts', 'جميع الحالات') },
+            { id: 'pending', label: tr('⏳ Reçus / En attente', '⏳ مستلمة / في الانتظار') },
+            { id: 'in_progress', label: tr("🔧 En cours d'intervention", '🔧 قيد التدخل') },
+            { id: 'completed', label: tr('✅ Résolus & Clôturés', '✅ تم الحل والإغلاق') },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -586,10 +611,10 @@ const Maintenance: React.FC<MaintenanceProps> = ({
             onChange={(e) => setPriorityFilter(e.target.value as any)}
             className="text-xs px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-700 font-medium"
           >
-            <option value="all">Toutes urgences</option>
-            <option value="high">🔴 Urgence Haute</option>
-            <option value="medium">🟠 Urgence Moyenne</option>
-            <option value="low">🟢 Normale</option>
+            <option value="all">{tr('Toutes urgences', 'جميع الأولويات')}</option>
+            <option value="high">{tr('🔴 Urgence Haute', '🔴 مستعجل جداً')}</option>
+            <option value="medium">{tr('🟠 Urgence Moyenne', '🟠 متوسط الأهمية')}</option>
+            <option value="low">{tr('🟢 Normale', '🟢 عادي')}</option>
           </select>
 
           <div className="relative flex-1 sm:w-56">
@@ -597,10 +622,10 @@ const Maintenance: React.FC<MaintenanceProps> = ({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Rechercher ascenseur, fuite, artisan..."
-              className="w-full text-xs pl-7 pr-3 py-1.5 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-500"
+              placeholder={tr('Rechercher ascenseur, fuite, artisan...', 'بحث: مصعد، تسرب، مهني...')}
+              className="w-full text-xs ps-7 pe-3 py-1.5 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-500"
             />
-            <span className="absolute left-2.5 top-2 text-slate-400 text-xs">🔍</span>
+            <span className="absolute start-2.5 top-2 text-slate-400 text-xs">🔍</span>
           </div>
         </div>
       </div>
@@ -609,9 +634,10 @@ const Maintenance: React.FC<MaintenanceProps> = ({
       <div className="space-y-4">
         {filteredRequests.map((req) => {
           const catMeta = CATEGORY_META[req.category] || CATEGORY_META.other;
+          const catLabel = isAr ? catMeta.labelAr : catMeta.labelFr;
           const resObj = residentMap.get(req.residentId);
-          const displayResident = req.residentName || resObj?.name || 'Copropriétaire';
-          const displayLot = req.apartmentNumber || (resObj?.apartmentId ? `Lot ${resObj.apartmentId}` : 'Parties Communes');
+          const displayResident = req.residentName || resObj?.name || tr('Copropriétaire', 'مالك مشترك');
+          const displayLot = req.apartmentNumber || (resObj?.apartmentId ? `${tr('Lot', 'شقة')} ${resObj.apartmentId}` : tr('Parties Communes', 'الأجزاء المشتركة'));
           const isExpanded = !!expandedTicketIds[req.id];
           const allPhotos = req.photos && req.photos.length > 0 ? req.photos : req.photoUrl ? [req.photoUrl] : [];
           const updatesList = req.updates || [];
@@ -632,7 +658,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                       className={`text-xs font-bold px-2.5 py-0.5 rounded-full border flex items-center gap-1 ${catMeta.badgeClass}`}
                     >
                       <span>{catMeta.icon}</span>
-                      <span>{catMeta.label}</span>
+                      <span>{catLabel}</span>
                     </span>
                     <span
                       className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full uppercase ${
@@ -644,10 +670,10 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                       }`}
                     >
                       {req.priority === 'high'
-                        ? '🔴 Urgente'
+                        ? tr('🔴 Urgente', '🔴 مستعجل')
                         : req.priority === 'medium'
-                        ? '🟠 Moyenne'
-                        : '🟢 Normale'}
+                        ? tr('🟠 Moyenne', '🟠 متوسط')
+                        : tr('🟢 Normale', '🟢 عادي')}
                     </span>
                     <span
                       className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${
@@ -659,10 +685,10 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                       }`}
                     >
                       {req.status === 'completed'
-                        ? '✓ Résolu & Vérifié'
+                        ? tr('✓ Résolu & Vérifié', '✓ تم الحل والتحقق')
                         : req.status === 'in_progress'
-                        ? '🔧 En cours d\'intervention'
-                        : '⏳ Reçu / En attente'}
+                        ? tr("🔧 En cours d'intervention", '🔧 قيد التدخل')
+                        : tr('⏳ Reçu / En attente', '⏳ قيد الانتظار')}
                     </span>
                   </div>
 
@@ -672,15 +698,15 @@ const Maintenance: React.FC<MaintenanceProps> = ({
 
                   <div className="flex items-center gap-3 flex-wrap text-xs text-slate-500">
                     <span>
-                      📍 <strong>Localisation :</strong> {req.location || 'Parties communes'}
+                      📍 <strong>{tr('Localisation :', 'الموقع:')}</strong> {req.location || tr('Parties communes', 'الأجزاء المشتركة')}
                     </span>
                     <span>·</span>
                     <span>
-                      👤 <strong>Signalé par :</strong> {displayResident} ({displayLot})
+                      👤 <strong>{tr('Signalé par :', 'مُبلّغ من طرف:')}</strong> {displayResident} ({displayLot})
                     </span>
                     <span>·</span>
                     <span className="font-mono">
-                      📅 {new Date(req.createdAt).toLocaleDateString('fr-MA')}
+                      📅 {new Date(req.createdAt).toLocaleDateString(isAr ? 'ar-MA' : 'fr-MA')}
                     </span>
                   </div>
                 </div>
@@ -695,8 +721,8 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                     <PencilIcon />
                     <span>
                       {isResidentPortal
-                        ? 'Ajouter note / photo'
-                        : 'Mettre à jour statut & suivi'}
+                        ? tr('Ajouter note / photo', 'إضافة ملاحظة / صورة')
+                        : tr('Mettre à jour statut & suivi', 'تحديث الحالة والتتبع')}
                     </span>
                   </button>
                 </div>
@@ -706,7 +732,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
                 <div className="lg:col-span-7 bg-slate-50 p-3.5 rounded-xl border border-slate-200/80 space-y-2">
                   <div className="text-[11px] font-bold uppercase text-slate-400">
-                    Description de l'incident
+                    {tr("Description de l'incident", 'وصف العطب أو الأشغال')}
                   </div>
                   <p className="text-xs text-slate-700 leading-relaxed">{req.description}</p>
 
@@ -714,7 +740,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                     <div className="mt-2 pt-2 border-t border-slate-200">
                       <div className="text-[11px] font-bold text-teal-800 flex items-center gap-1">
                         <span>🏢</span>
-                        <span>Dernière note officielle du Syndic :</span>
+                        <span>{tr('Dernière note officielle du Syndic :', 'آخر ملاحظة رسمية من السنديك:')}</span>
                       </div>
                       <p className="text-xs text-slate-800 mt-0.5 italic">« {req.syndicNotes} »</p>
                     </div>
@@ -725,20 +751,20 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                 <div className="lg:col-span-5 bg-teal-50/50 p-3.5 rounded-xl border border-teal-200/80 flex flex-col justify-between gap-2 text-xs">
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between">
-                      <span className="text-slate-500 font-medium">Prestataire mandaté :</span>
+                      <span className="text-slate-500 font-medium">{tr('Prestataire mandaté :', 'المهني المكلف:')}</span>
                       <span className="font-bold text-slate-900">
-                        {req.assignedTo || 'En attente de désignation'}
+                        {req.assignedTo || tr('En attente de désignation', 'في انتظار التعيين')}
                       </span>
                     </div>
                     <div className="flex items-center justify-between">
-                      <span className="text-slate-500 font-medium">Coût / Devis TTC :</span>
+                      <span className="text-slate-500 font-medium">{tr('Coût / Devis TTC :', 'التكلفة / عرض السعر:')}</span>
                       <span className="font-mono font-bold text-teal-900">
-                        {req.cost ? currencyFormatter.format(req.cost) : 'Non chiffré'}
+                        {req.cost ? currencyFormatter.format(req.cost) : tr('Non chiffré', 'غير محدد')}
                       </span>
                     </div>
                     {req.invoiceRef && (
                       <div className="flex items-center justify-between">
-                        <span className="text-slate-500 font-medium">Réf. Pièce / Facture :</span>
+                        <span className="text-slate-500 font-medium">{tr('Réf. Pièce / Facture :', 'مرجع الفاتورة:')}</span>
                         <span className="font-mono text-[11px] bg-white px-2 py-0.5 rounded border border-teal-200 text-teal-900">
                           {req.invoiceRef}
                         </span>
@@ -750,7 +776,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                   {allPhotos.length > 0 && (
                     <div className="pt-2 border-t border-teal-200/60">
                       <div className="text-[10px] font-bold uppercase text-teal-900 mb-1.5">
-                        📷 Photos jointes au dossier ({allPhotos.length}) :
+                        📷 {tr('Photos jointes au dossier', 'الصور المرفقة بالملف')} ({allPhotos.length}) :
                       </div>
                       <div className="flex items-center gap-2 overflow-x-auto">
                         {allPhotos.map((photo, idx) => (
@@ -759,7 +785,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                             type="button"
                             onClick={() => setLightboxPhoto(photo)}
                             className="relative w-14 h-14 rounded-lg overflow-hidden border border-teal-300 shrink-0 group hover:scale-95 transition-transform"
-                            title="Agrandir la photo"
+                            title={tr('Agrandir la photo', 'تكبير الصورة')}
                           >
                             <img
                               src={photo}
@@ -791,13 +817,15 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                 >
                   <span>{isExpanded ? '▼' : '▶'}</span>
                   <span>
-                    Journal complet des interventions & preuves ({updatesList.length} étape
-                    {updatesList.length > 1 ? 's' : ''})
+                    {tr(
+                      `Journal complet des interventions & preuves (${updatesList.length} étape${updatesList.length > 1 ? 's' : ''})`,
+                      `السجل الكامل للتدخلات والإثباتات (${updatesList.length} مراحل)`
+                    )}
                   </span>
                 </button>
 
                 {isExpanded && (
-                  <div className="mt-3 pl-3 border-l-2 border-teal-500 space-y-3">
+                  <div className="mt-3 ps-3 border-s-2 border-teal-500 space-y-3">
                     {updatesList.map((upd, idx) => (
                       <div
                         key={upd.id || idx}
@@ -812,12 +840,14 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                                   : 'bg-teal-100 text-teal-900'
                               }`}
                             >
-                              {upd.updatedByRole === 'syndic' ? '🏢 Syndic' : '👤 Copropriétaire'}
+                              {upd.updatedByRole === 'syndic'
+                                ? tr('🏢 Syndic', '🏢 السنديك')
+                                : tr('👤 Copropriétaire', '👤 مالك مشترك')}
                             </span>
                             <span className="font-bold text-slate-900">{upd.title}</span>
                           </div>
                           <span className="font-mono text-[11px] text-slate-400">
-                            {new Date(upd.timestamp).toLocaleString('fr-MA', {
+                            {new Date(upd.timestamp).toLocaleString(isAr ? 'ar-MA' : 'fr-MA', {
                               day: '2-digit',
                               month: '2-digit',
                               year: 'numeric',
@@ -830,10 +860,10 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                         <p className="text-slate-700 leading-relaxed">{upd.note}</p>
 
                         <div className="flex items-center justify-between text-[11px] text-slate-500 pt-1">
-                          <span>Par : {upd.updatedBy}</span>
+                          <span>{tr('Par :', 'بواسطة:')} {upd.updatedBy}</span>
                           {upd.assignedTo && (
                             <span className="font-semibold text-teal-800">
-                              Artisan : {upd.assignedTo}
+                              {tr('Artisan :', 'المهني:')} {upd.assignedTo}
                               {upd.cost ? ` · ${currencyFormatter.format(upd.cost)}` : ''}
                             </span>
                           )}
@@ -850,7 +880,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                               >
                                 <img
                                   src={p}
-                                  alt="Photo d'étape"
+                                  alt={tr("Photo d'étape", 'صورة المرحلة')}
                                   className="w-full h-full object-cover"
                                 />
                               </button>
@@ -870,10 +900,10 @@ const Maintenance: React.FC<MaintenanceProps> = ({
           <Card className="p-12 text-center border border-dashed border-slate-300">
             <span className="text-3xl block mb-2">🔧</span>
             <h3 className="font-bold text-slate-800 text-sm">
-              Aucun ticket de maintenance ne correspond à ces critères
+              {tr('Aucun ticket de maintenance ne correspond à ces critères', 'لا يوجد أي طلب صيانة يطابق هذه المعايير')}
             </h3>
             <p className="text-xs text-slate-500 mt-1">
-              Signalez un nouvel incident ou modifiez les filtres ci-dessus.
+              {tr('Signalez un nouvel incident ou modifiez les filtres ci-dessus.', 'قم بالتبليغ عن عطب جديد أو قم بتعديل الفلاتر أعلاه.')}
             </p>
           </Card>
         )}
@@ -886,20 +916,28 @@ const Maintenance: React.FC<MaintenanceProps> = ({
           onClose={() => setSelectedRequest(null)}
           title={
             isResidentPortal
-              ? `Ajouter une note ou photo · Ticket #${selectedRequest.id.toUpperCase()}`
-              : `Mise à jour du Suivi & Transparence · Ticket #${selectedRequest.id.toUpperCase()}`
+              ? tr(
+                  `Ajouter une note ou photo · Ticket #${selectedRequest.id.toUpperCase()}`,
+                  `إضافة ملاحظة أو صورة · تذكرة #${selectedRequest.id.toUpperCase()}`
+                )
+              : tr(
+                  `Mise à jour du Suivi & Transparence · Ticket #${selectedRequest.id.toUpperCase()}`,
+                  `تحديث التتبع والشفافية · تذكرة #${selectedRequest.id.toUpperCase()}`
+                )
           }
           footer={
             <div className="flex justify-end gap-2">
               <Button variant="secondary" onClick={() => setSelectedRequest(null)}>
-                Annuler
+                {tr('Annuler', 'إلغاء')}
               </Button>
               <Button
                 onClick={handleSaveUpdate}
                 disabled={updateMutation.isPending || isUploadingPhotos}
                 className="bg-teal-700 hover:bg-teal-800 text-white font-bold"
               >
-                {updateMutation.isPending ? 'Enregistrement...' : 'Enregistrer dans le journal'}
+                {updateMutation.isPending
+                  ? tr('Enregistrement...', 'جاري الحفظ...')
+                  : tr('Enregistrer dans le journal', 'حفظ في السجل')}
               </Button>
             </div>
           }
@@ -917,29 +955,29 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block font-bold text-slate-700 mb-1">
-                      Nouveau statut d'avancement :
+                      {tr("Nouveau statut d'avancement :", 'حالة التقدم الجديدة:')}
                     </label>
                     <select
                       value={editStatus}
                       onChange={(e) => setEditStatus(e.target.value as any)}
                       className="w-full p-2.5 rounded-lg border border-slate-300 bg-white font-semibold"
                     >
-                      <option value="pending">⏳ 1. Reçu / En attente de prise en charge</option>
-                      <option value="in_progress">🔧 2-3. En cours d'intervention sur site</option>
-                      <option value="completed">✅ 4. Résolu, vérifié et clôturé</option>
+                      <option value="pending">{tr('⏳ 1. Reçu / En attente de prise en charge', '⏳ 1. مستلم / في انتظار التكفل')}</option>
+                      <option value="in_progress">{tr("🔧 2-3. En cours d'intervention sur site", '🔧 2-3. قيد التدخل في عين المكان')}</option>
+                      <option value="completed">{tr('✅ 4. Résolu, vérifié et clôturé', '✅ 4. تم الحل والتحقق والإغلاق')}</option>
                     </select>
                   </div>
 
                   <div>
                     <label className="block font-bold text-slate-700 mb-1">
-                      Prestataire / Artisan assigné :
+                      {tr('Prestataire / Artisan assigné :', 'المهني / المقاول المكلف:')}
                     </label>
                     <input
                       type="text"
                       list="building-providers-list"
                       value={editAssignedTo}
                       onChange={(e) => setEditAssignedTo(e.target.value)}
-                      placeholder="Sélectionner ou saisir un artisan..."
+                      placeholder={tr('Sélectionner ou saisir un artisan...', 'اختر أو أدخل اسم المهني...')}
                       className="w-full p-2.5 rounded-lg border border-slate-300 bg-white"
                     />
                     <datalist id="building-providers-list">
@@ -955,7 +993,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block font-bold text-slate-700 mb-1">
-                      Coût de l'intervention (MAD TTC) :
+                      {tr("Coût de l'intervention (MAD TTC) :", 'تكلفة التدخل (درهم شاملة الضريبة):')}
                     </label>
                     <input
                       type="number"
@@ -967,7 +1005,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                   </div>
                   <div>
                     <label className="block font-bold text-slate-700 mb-1">
-                      N° Devis ou Facture Fournisseur :
+                      {tr('N° Devis ou Facture Fournisseur :', 'رقم عرض السعر أو الفاتورة:')}
                     </label>
                     <input
                       type="text"
@@ -983,27 +1021,30 @@ const Maintenance: React.FC<MaintenanceProps> = ({
 
             <div>
               <label className="block font-bold text-slate-700 mb-1">
-                Titre de l'étape du journal :
+                {tr("Titre de l'étape du journal :", 'عنوان مرحلة السجل:')}
               </label>
               <input
                 type="text"
                 value={stepTitle}
                 onChange={(e) => setStepTitle(e.target.value)}
-                placeholder="Ex: Remplacement de la pièce effectué sur site..."
+                placeholder={tr('Ex: Remplacement de la pièce effectué sur site...', 'مثال: تم استبدال القطعة في عين المكان...')}
                 className="w-full p-2.5 rounded-lg border border-slate-300"
               />
             </div>
 
             <div>
               <label className="block font-bold text-slate-700 mb-1">
-                Note de transparence visible par les copropriétaires * :
+                {tr('Note de transparence visible par les copropriétaires * :', 'ملاحظة الشفافية المرئية للملاك المشتركين * :')}
               </label>
               <textarea
                 rows={3}
                 required
                 value={stepNote}
                 onChange={(e) => setStepNote(e.target.value)}
-                placeholder="Détaillez le diagnostic technique, les travaux réalisés ou la date de passage prévue..."
+                placeholder={tr(
+                  'Détaillez le diagnostic technique, les travaux réalisés ou la date de passage prévue...',
+                  'فصّل التشخيص التقني، الأشغال المنجزة أو تاريخ التدخل المرتقب...'
+                )}
                 className="w-full p-2.5 rounded-lg border border-slate-300"
               />
             </div>
@@ -1012,7 +1053,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
             <div className="space-y-2 pt-1 border-t border-slate-200">
               <div className="flex items-center justify-between">
                 <label className="font-bold text-slate-700">
-                  📷 Joindre des photos justificatives (Avant / Après travaux) :
+                  📷 {tr('Joindre des photos justificatives (Avant / Après travaux) :', 'إرفاق صور إثباتية (قبل / بعد الأشغال):')}
                 </label>
                 <input
                   type="file"
@@ -1027,13 +1068,13 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                   onClick={() => updatePhotoInputRef.current?.click()}
                   className="px-2.5 py-1 rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 font-bold"
                 >
-                  + Importer depuis l'appareil
+                  {tr("+ Importer depuis l'appareil", '+ استيراد من الجهاز')}
                 </button>
               </div>
 
               {/* Quick Sample Photos for Instant Testing */}
               <div className="flex items-center gap-2 overflow-x-auto pb-1">
-                <span className="text-[10px] text-slate-400 shrink-0">Photos démo :</span>
+                <span className="text-[10px] text-slate-400 shrink-0">{tr('Photos démo :', 'صور تجريبية:')}</span>
                 {SAMPLE_MAINTENANCE_PHOTOS.map((sp, i) => (
                   <button
                     key={i}
@@ -1045,7 +1086,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                     }
                     className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-medium shrink-0"
                   >
-                    + {sp.label}
+                    + {isAr ? sp.labelAr : sp.labelFr}
                   </button>
                 ))}
               </div>
@@ -1078,18 +1119,20 @@ const Maintenance: React.FC<MaintenanceProps> = ({
         <Modal
           isOpen={isCreateModalOpen}
           onClose={() => setIsCreateModalOpen(false)}
-          title="Signaler un incident ou demander une réparation"
+          title={tr('Signaler un incident ou demander une réparation', 'التبليغ عن عطب أو طلب إصلاح')}
           footer={
             <div className="flex justify-end gap-2">
               <Button variant="secondary" onClick={() => setIsCreateModalOpen(false)}>
-                Annuler
+                {tr('Annuler', 'إلغاء')}
               </Button>
               <Button
                 onClick={handleCreateTicket}
                 disabled={createMutation.isPending || !newDescription.trim()}
                 className="bg-teal-700 hover:bg-teal-800 text-white font-bold"
               >
-                {createMutation.isPending ? 'Transmission...' : 'Envoyer le signalement'}
+                {createMutation.isPending
+                  ? tr('Transmission...', 'جاري الإرسال...')
+                  : tr('Envoyer le signalement', 'إرسال التبليغ')}
               </Button>
             </div>
           }
@@ -1097,72 +1140,75 @@ const Maintenance: React.FC<MaintenanceProps> = ({
           <form onSubmit={handleCreateTicket} className="space-y-4 text-xs">
             <div>
               <label className="block font-bold text-slate-700 mb-1">
-                Titre court de l'incident * :
+                {tr("Titre court de l'incident * :", 'عنوان مختصر للعطب * :')}
               </label>
               <input
                 type="text"
                 required
                 value={newTitle}
                 onChange={(e) => setNewTitle(e.target.value)}
-                placeholder="Ex: Fuite d'eau robinet jardin / Panne interphone entrée..."
+                placeholder={tr("Ex: Fuite d'eau robinet jardin / Panne interphone entrée...", 'مثال: تسرب مياه في الحديقة / عطب في الأنترفون...')}
                 className="w-full p-2.5 rounded-lg border border-slate-300"
               />
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="block font-bold text-slate-700 mb-1">Catégorie :</label>
+                <label className="block font-bold text-slate-700 mb-1">{tr('Catégorie :', 'الفئة:')}</label>
                 <select
                   value={newCategory}
                   onChange={(e) => setNewCategory(e.target.value as any)}
                   className="w-full p-2.5 rounded-lg border border-slate-300 bg-white"
                 >
-                  <option value="elevator">🛗 Ascenseur & Monte-charge</option>
-                  <option value="plumbing">🚰 Plomberie & Canalisation</option>
-                  <option value="electrical">⚡ Électricité & Éclairage</option>
-                  <option value="common_area">🏢 Parties Communes & Hall</option>
-                  <option value="cleaning">🧹 Propreté & Hygiène</option>
-                  <option value="security">🛡️ Sécurité, Portail & Accès</option>
-                  <option value="other">🔧 Autre</option>
+                  <option value="elevator">🛗 {tr('Ascenseur & Monte-charge', 'المصعد والآليات')}</option>
+                  <option value="plumbing">🚰 {tr('Plomberie & Canalisation', 'السباكة وقنوات المياه')}</option>
+                  <option value="electrical">⚡ {tr('Électricité & Éclairage', 'الكهرباء والإنارة')}</option>
+                  <option value="common_area">🏢 {tr('Parties Communes & Hall', 'الأجزاء المشتركة والبهو')}</option>
+                  <option value="cleaning">🧹 {tr('Propreté & Hygiène', 'النظافة والصحة')}</option>
+                  <option value="security">🛡️ {tr('Sécurité, Portail & Accès', 'الأمن، البوابة والولوج')}</option>
+                  <option value="other">🔧 {tr('Autre', 'أخرى')}</option>
                 </select>
               </div>
               <div>
-                <label className="block font-bold text-slate-700 mb-1">Niveau d'urgence :</label>
+                <label className="block font-bold text-slate-700 mb-1">{tr("Niveau d'urgence :", 'مستوى الاستعجال:')}</label>
                 <select
                   value={newPriority}
                   onChange={(e) => setNewPriority(e.target.value as any)}
                   className="w-full p-2.5 rounded-lg border border-slate-300 bg-white"
                 >
-                  <option value="low">🟢 Normale</option>
-                  <option value="medium">🟠 Moyenne</option>
-                  <option value="high">🔴 Urgente (Sécurité / Fuite / Ascenseur bloqué)</option>
+                  <option value="low">🟢 {tr('Normale', 'عادي')}</option>
+                  <option value="medium">🟠 {tr('Moyenne', 'متوسط')}</option>
+                  <option value="high">🔴 {tr('Urgente (Sécurité / Fuite / Ascenseur bloqué)', 'مستعجل (أمن / تسرب / مصعد متوقف)')}</option>
                 </select>
               </div>
             </div>
 
             <div>
               <label className="block font-bold text-slate-700 mb-1">
-                Emplacement précis dans l'immeuble :
+                {tr("Emplacement précis dans l'immeuble :", 'الموقع الدقيق داخل العمارة:')}
               </label>
               <input
                 type="text"
                 value={newLocation}
                 onChange={(e) => setNewLocation(e.target.value)}
-                placeholder="Ex: Sous-sol -1 près du local technique / Palier 3ème étage..."
+                placeholder={tr('Ex: Sous-sol -1 près du local technique / Palier 3ème étage...', 'مثال: الطابق تحت الأرضي -1 / بهو الطابق الثالث...')}
                 className="w-full p-2.5 rounded-lg border border-slate-300"
               />
             </div>
 
             <div>
               <label className="block font-bold text-slate-700 mb-1">
-                Description détaillée du constat * :
+                {tr('Description détaillée du constat * :', 'وصف مفصل للعطب * :')}
               </label>
               <textarea
                 rows={3}
                 required
                 value={newDescription}
                 onChange={(e) => setNewDescription(e.target.value)}
-                placeholder="Précisez les symptômes constatés pour faciliter le diagnostic du prestataire..."
+                placeholder={tr(
+                  'Précisez les symptômes constatés pour faciliter le diagnostic du prestataire...',
+                  'حدد تفاصيل العطب الملاحظ لتسهيل التشخيص على المهني...'
+                )}
                 className="w-full p-2.5 rounded-lg border border-slate-300"
               />
             </div>
@@ -1170,7 +1216,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
             <div className="space-y-2 pt-1 border-t border-slate-200">
               <div className="flex items-center justify-between">
                 <label className="font-bold text-slate-700">
-                  📷 Joindre une photo de l'anomalie :
+                  📷 {tr("Joindre une photo de l'anomalie :", 'إرفاق صورة للعطب:')}
                 </label>
                 <input
                   type="file"
@@ -1185,7 +1231,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                   onClick={() => newTicketPhotoInputRef.current?.click()}
                   className="px-2.5 py-1 rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 font-bold"
                 >
-                  + Choisir une photo
+                  {tr('+ Choisir une photo', '+ اختيار صورة')}
                 </button>
               </div>
 
@@ -1217,11 +1263,11 @@ const Maintenance: React.FC<MaintenanceProps> = ({
         <Modal
           isOpen={!!lightboxPhoto}
           onClose={() => setLightboxPhoto(null)}
-          title="Justificatif Photographique d'Intervention"
+          title={tr("Justificatif Photographique d'Intervention", 'الإثبات المصور للتدخل')}
           footer={
             <div className="flex justify-end">
               <Button variant="secondary" onClick={() => setLightboxPhoto(null)}>
-                Fermer
+                {tr('Fermer', 'إغلاق')}
               </Button>
             </div>
           }
@@ -1229,7 +1275,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
           <div className="bg-slate-950 rounded-xl overflow-hidden flex items-center justify-center max-h-[70vh]">
             <img
               src={lightboxPhoto}
-              alt="Preuve d'intervention"
+              alt={tr("Preuve d'intervention", 'صورة التدخل')}
               className="max-w-full max-h-[65vh] object-contain"
             />
           </div>

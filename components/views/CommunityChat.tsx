@@ -4,9 +4,10 @@ import type { Building, ChatMessage, ChatChannelType } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';
 import Card from '../common/Card';
 import Button from '../common/Button';
-import { ChatIcon, ShieldAlertIcon } from '../icons/IconComponents';
+import { ChatIcon } from '../icons/IconComponents';
 import { getChatMessages, sendChatMessage, toggleChatMessageLike } from '../../firebase/services';
 import Loading from '../common/Loading';
+import { useI18n } from '../../hooks/useI18n';
 
 interface CommunityChatProps {
   building: Building;
@@ -25,47 +26,6 @@ interface ChannelDef {
   badge?: string;
 }
 
-const CHANNELS: ChannelDef[] = [
-  {
-    id: 'general',
-    name: 'Canal Général de la Résidence',
-    type: 'general',
-    description: 'Espace d\'échanges collectifs, nouvelles de l\'immeuble et vie de quartier.',
-    icon: '📢',
-  },
-  {
-    id: 'syndic',
-    name: 'Bureau du Syndic (Officiel)',
-    type: 'syndic',
-    description: 'Dialogue officiel avec l\'équipe du Syndic, réclamations et suivi administratif.',
-    icon: '🏢',
-    badge: 'Officiel',
-  },
-  {
-    id: 'help',
-    name: 'Entraide & Bon Voisinage',
-    type: 'help',
-    description: 'Prêt d\'outils, dépannage, covoiturage, garde de plantes, colis.',
-    icon: '🤝',
-  },
-  {
-    id: 'marketplace',
-    name: 'Le Souk des Résidents (Discussions)',
-    type: 'marketplace',
-    description: 'Échanges, offres et négociations entre voisins sur les annonces du Souk.',
-    icon: '🛍️',
-    badge: 'Souk',
-  },
-];
-
-const PRESET_TOPIC_PILLS = [
-  { label: '#Question', tag: 'Question' },
-  { label: '#Urgent', tag: 'Urgent' },
-  { label: '#Travaux', tag: 'Information Travaux' },
-  { label: '#Voisinage', tag: 'Entraide' },
-  { label: '#Parking', tag: 'Parking' },
-];
-
 export const CommunityChat: React.FC<CommunityChatProps> = ({
   building,
   isResidentPortal = false,
@@ -73,6 +33,7 @@ export const CommunityChat: React.FC<CommunityChatProps> = ({
   currentResidentName,
   currentApartmentNumber,
 }) => {
+  const { tr } = useI18n();
   const { userProfile } = useAuth();
   const queryClient = useQueryClient();
   const [activeChannelId, setActiveChannelId] = useState<string>('general');
@@ -81,35 +42,84 @@ export const CommunityChat: React.FC<CommunityChatProps> = ({
   const [searchFilter, setSearchFilter] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Identity resolution
+  const CHANNELS: ChannelDef[] = [
+    {
+      id: 'general',
+      name: tr('Canal Général de la Résidence', 'القناة العامة للإقامة'),
+      type: 'general',
+      description: tr(
+        "Espace d'échanges collectifs, nouvelles de l'immeuble et vie de quartier.",
+        'فضاء للتبادل الجماعي وأخبار العمارة والحياة المشتركة.'
+      ),
+      icon: '📢',
+    },
+    {
+      id: 'syndic',
+      name: tr('Bureau du Syndic (Officiel)', 'مكتب السنديك (رسمي)'),
+      type: 'syndic',
+      description: tr(
+        "Dialogue officiel avec l'équipe du Syndic, réclamations et suivi administratif.",
+        'تواصل رسمي مع فريق السنديك، الشكايات والتتبع الإداري.'
+      ),
+      icon: '🏢',
+      badge: tr('Officiel', 'رسمي'),
+    },
+    {
+      id: 'help',
+      name: tr('Entraide & Bon Voisinage', 'التعاون وحسن الجوار'),
+      type: 'help',
+      description: tr(
+        "Prêt d'outils, dépannage, covoiturage, garde de plantes, colis.",
+        'إعارة الأدوات، المساعدة بين الجيران، النقل المشترك واستلام الطرود.'
+      ),
+      icon: '🤝',
+    },
+    {
+      id: 'marketplace',
+      name: tr('Le Souk des Résidents (Discussions)', 'سوق الإقامة (مناقشات)'),
+      type: 'marketplace',
+      description: tr(
+        'Échanges, offres et négociations entre voisins sur les annonces du Souk.',
+        'تبادلات، عروض ومفاوضات بين الجيران حول إعلانات سوق الإقامة.'
+      ),
+      icon: '🛍️',
+      badge: tr('Souk', 'السوق'),
+    },
+  ];
+
+  const PRESET_TOPIC_PILLS = [
+    { label: tr('#Question', '#سؤال'), tag: tr('Question', 'سؤال') },
+    { label: tr('#Urgent', '#مستعجل'), tag: tr('Urgent', 'مستعجل') },
+    { label: tr('#Travaux', '#أشغال'), tag: tr('Information Travaux', 'معلومات أشغال') },
+    { label: tr('#Voisinage', '#جوار'), tag: tr('Entraide', 'تعاون') },
+    { label: tr('#Parking', '#مرآب'), tag: tr('Parking', 'المرآب') },
+  ];
+
   const isSyndicUser = !isResidentPortal && userProfile?.role !== 'resident';
   const effectiveSenderId = isSyndicUser
-    ? (userProfile?.uid || 'syndic-user')
-    : (currentResidentId || userProfile?.uid || 'res-2');
+    ? userProfile?.uid || 'syndic-user'
+    : currentResidentId || userProfile?.uid || 'res-2';
 
   const effectiveSenderName = isSyndicUser
-    ? 'Syndic Gestionnaire'
-    : (currentResidentName || userProfile?.displayName || 'Copropriétaire');
+    ? tr('Syndic Gestionnaire', 'وكيل الاتحاد (السنديك)')
+    : currentResidentName || userProfile?.displayName || tr('Copropriétaire', 'مالك مشترك');
 
   const effectiveApartment = isSyndicUser
-    ? 'Bureau Syndic'
-    : (currentApartmentNumber || 'Lot A-102');
+    ? tr('Bureau Syndic', 'مكتب السنديك')
+    : currentApartmentNumber || `${tr('Lot', 'شقة')} A-102`;
 
   const effectiveRole: 'syndic' | 'resident' = isSyndicUser ? 'syndic' : 'resident';
 
-  // Fetch messages for building
   const { data: messages = [], isLoading } = useQuery({
     queryKey: ['chatMessages', building.id, activeChannelId],
     queryFn: () => getChatMessages(building.id, activeChannelId),
-    refetchInterval: 5000, // Light polling for real-time vibe
+    refetchInterval: 5000,
   });
 
-  // Scroll to bottom on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages.length, activeChannelId]);
 
-  // Mutations
   const sendMutation = useMutation({
     mutationFn: (content: string) => {
       const payload: Omit<ChatMessage, 'id' | 'createdAt'> = {
@@ -120,7 +130,7 @@ export const CommunityChat: React.FC<CommunityChatProps> = ({
         senderRole: effectiveRole,
         senderApartment: effectiveApartment,
         content,
-        badge: selectedTopic || (effectiveRole === 'syndic' ? 'Annonce Syndic' : undefined),
+        badge: selectedTopic || (effectiveRole === 'syndic' ? tr('Annonce Syndic', 'إعلان السنديك') : undefined),
       };
       return sendChatMessage(payload);
     },
@@ -167,22 +177,25 @@ export const CommunityChat: React.FC<CommunityChatProps> = ({
               <span className="p-1.5 bg-teal-100 text-teal-800 rounded-lg">
                 <ChatIcon />
               </span>
-              <span>Messagerie & Espace Communautaire</span>
+              <span>{tr('Messagerie & Espace Communautaire', 'المحادثات والفضاء التشاركي للجيران')}</span>
             </h1>
             <span className="text-xs bg-emerald-100 text-emerald-800 font-semibold px-2.5 py-0.5 rounded-full flex items-center gap-1">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              En direct
+              {tr('En direct', 'مباشر')}
             </span>
           </div>
           <p className="text-xs sm:text-sm text-slate-500 mt-1">
-            Connectez en toute transparence les copropriétaires, locataires et le Syndic de {building.name}.
+            {tr(
+              `Connectez en toute transparence les copropriétaires, locataires et le Syndic de ${building.name}.`,
+              `تواصل شفاف ومباشر بين الملاك المشتركين، المكترين ومكتب السنديك لإقامة ${building.name}.`
+            )}
           </p>
         </div>
 
         {/* User Presence Badge */}
         <div className="flex items-center gap-2 text-xs bg-white px-3 py-1.5 rounded-lg border border-slate-200 shadow-sm self-start sm:self-auto">
           <div className={`w-2.5 h-2.5 rounded-full ${isSyndicUser ? 'bg-indigo-600' : 'bg-teal-600'}`}></div>
-          <span className="text-slate-500">Connecté en tant que :</span>
+          <span className="text-slate-500">{tr('Connecté en tant que :', 'متصل بصفة :')}</span>
           <span className="font-semibold text-slate-900">
             {effectiveSenderName} ({effectiveApartment})
           </span>
@@ -226,7 +239,7 @@ export const CommunityChat: React.FC<CommunityChatProps> = ({
         <div className="hidden lg:flex lg:col-span-4 flex-col gap-3 h-full">
           <Card className="p-4 flex-1 flex flex-col bg-white border border-slate-200">
             <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">
-              Canaux de Discussion
+              {tr('Canaux de Discussion', 'قنوات النقاش')}
             </h3>
 
             <div className="space-y-2 flex-1">
@@ -237,7 +250,7 @@ export const CommunityChat: React.FC<CommunityChatProps> = ({
                     key={ch.id}
                     type="button"
                     onClick={() => setActiveChannelId(ch.id)}
-                    className={`w-full text-left p-3 rounded-xl transition-all border ${
+                    className={`w-full text-start p-3 rounded-xl transition-all border ${
                       isActive
                         ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
                         : 'bg-slate-50 hover:bg-slate-100 text-slate-800 border-slate-200'
@@ -275,11 +288,13 @@ export const CommunityChat: React.FC<CommunityChatProps> = ({
             {/* Co-ownership Guidelines Info Box */}
             <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-[11px] text-amber-900 space-y-1">
               <div className="font-semibold flex items-center gap-1 text-amber-950">
-                <span>⚖️ Charte de Bon Voisinage</span>
+                <span>⚖️ {tr('Charte de Bon Voisinage', 'ميثاق حسن الجوار')}</span>
               </div>
               <p className="text-amber-800 leading-relaxed">
-                Cet espace est régi par la courtoisie et le respect du Règlement de Copropriété (Loi 18-00).
-                Restons bienveillants et constructifs !
+                {tr(
+                  'Cet espace est régi par la courtoisie et le respect du Règlement de Copropriété (Loi 18-00). Restons bienveillants et constructifs !',
+                  'يخضع هذا الفضاء لقواعد الاحترام المتبادل ونظام الملكية المشتركة (قانون 18-00). لنحافظ على روح التعاون وحسن الجوار!'
+                )}
               </p>
             </div>
           </Card>
@@ -301,16 +316,16 @@ export const CommunityChat: React.FC<CommunityChatProps> = ({
             <div className="relative w-full sm:w-48">
               <input
                 type="text"
-                placeholder="Filtrer messages..."
+                placeholder={tr('Filtrer messages...', 'بحث في الرسائل...')}
                 value={searchFilter}
                 onChange={(e) => setSearchFilter(e.target.value)}
-                className="w-full text-xs pl-7 pr-3 py-1.5 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-1 focus:ring-teal-500"
+                className="w-full text-xs ps-7 pe-3 py-1.5 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-1 focus:ring-teal-500"
               />
-              <span className="absolute left-2.5 top-2 text-slate-400 text-xs">🔍</span>
+              <span className="absolute start-2.5 top-2 text-slate-400 text-xs">🔍</span>
               {searchFilter && (
                 <button
                   onClick={() => setSearchFilter('')}
-                  className="absolute right-2 top-1.5 text-xs text-slate-400 hover:text-slate-600"
+                  className="absolute end-2 top-1.5 text-xs text-slate-400 hover:text-slate-600"
                 >
                   ✕
                 </button>
@@ -321,12 +336,22 @@ export const CommunityChat: React.FC<CommunityChatProps> = ({
           {/* Messages Scroll Area */}
           <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4 bg-slate-50/50">
             {isLoading ? (
-              <Loading message="Chargement des messages..." />
+              <Loading message={tr('Chargement des messages...', 'جاري تحميل الرسائل...')} />
             ) : filteredMessages.length === 0 ? (
               <div className="text-center py-12 text-slate-400 space-y-2">
                 <span className="text-3xl block">💬</span>
-                <p className="text-sm font-medium">Aucun message pour le moment dans ce canal.</p>
-                <p className="text-xs">Soyez le premier à engager la conversation !</p>
+                <p className="text-sm font-medium">
+                  {tr(
+                    'Aucun message pour le moment dans ce canal.',
+                    'لا توجد أي رسالة حالياً في هذه القناة.'
+                  )}
+                </p>
+                <p className="text-xs">
+                  {tr(
+                    'Soyez le premier à engager la conversation !',
+                    'كن أول من يبدأ المحادثة!'
+                  )}
+                </p>
               </div>
             ) : (
               filteredMessages.map((msg) => {
@@ -360,7 +385,6 @@ export const CommunityChat: React.FC<CommunityChatProps> = ({
                         isMe ? 'items-end' : 'items-start'
                       }`}
                     >
-                      {/* Sender Meta Info */}
                       <div
                         className={`flex items-center gap-1.5 text-[11px] ${
                           isMe ? 'justify-end' : 'justify-start'
@@ -384,7 +408,7 @@ export const CommunityChat: React.FC<CommunityChatProps> = ({
 
                         {isSyndicSender && (
                           <span className="text-[10px] bg-blue-100 text-blue-900 font-semibold px-1 rounded">
-                            Syndic
+                            {tr('Syndic', 'السنديك')}
                           </span>
                         )}
 
@@ -419,7 +443,9 @@ export const CommunityChat: React.FC<CommunityChatProps> = ({
                             </span>
                             {msg.marketplaceItemPrice !== undefined && (
                               <span className="font-mono font-bold shrink-0">
-                                {msg.marketplaceItemPrice === 0 ? 'Don' : `${msg.marketplaceItemPrice} DH`}
+                                {msg.marketplaceItemPrice === 0
+                                  ? tr('Don', 'تبرع مجاني')
+                                  : `${msg.marketplaceItemPrice} DH`}
                               </span>
                             )}
                           </div>
@@ -442,7 +468,7 @@ export const CommunityChat: React.FC<CommunityChatProps> = ({
                         <p>{msg.content}</p>
                       </div>
 
-                      {/* Like Action & Reactions */}
+                      {/* Like Action */}
                       <div
                         className={`flex items-center gap-2 pt-0.5 text-[11px] text-slate-400 ${
                           isMe ? 'justify-end' : 'justify-start'
@@ -455,7 +481,7 @@ export const CommunityChat: React.FC<CommunityChatProps> = ({
                               ? 'bg-rose-50 text-rose-600 font-bold'
                               : 'hover:bg-slate-200 text-slate-500'
                           }`}
-                          title="Aimer ce message"
+                          title={tr('Aimer ce message', 'إعجاب بهذه الرسالة')}
                         >
                           <span>{hasLiked ? '❤️' : '🤍'}</span>
                           <span>{msg.likes?.length || 0}</span>
@@ -472,7 +498,7 @@ export const CommunityChat: React.FC<CommunityChatProps> = ({
           {/* Preset Topic Tags Bar */}
           <div className="px-4 py-2 bg-slate-100 border-t border-slate-200 flex items-center gap-2 overflow-x-auto text-xs">
             <span className="text-[11px] font-semibold text-slate-500 whitespace-nowrap">
-              Ajouter un tag :
+              {tr('Ajouter un tag :', 'إضافة وسم :')}
             </span>
             {PRESET_TOPIC_PILLS.map((p) => {
               const isSelected = selectedTopic === p.tag;
@@ -497,7 +523,7 @@ export const CommunityChat: React.FC<CommunityChatProps> = ({
                 onClick={() => setSelectedTopic(null)}
                 className="text-[10px] text-rose-600 hover:underline font-semibold"
               >
-                Retirer tag
+                {tr('Retirer tag', 'إزالة الوسم')}
               </button>
             )}
           </div>
@@ -511,7 +537,10 @@ export const CommunityChat: React.FC<CommunityChatProps> = ({
               type="text"
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
-              placeholder={`Écrire un message dans #${currentChannel.name}...`}
+              placeholder={tr(
+                `Écrire un message dans #${currentChannel.name}...`,
+                `اكتب رسالة في #${currentChannel.name}...`
+              )}
               className="flex-1 text-xs sm:text-sm px-4 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-500 bg-slate-50"
               disabled={sendMutation.isPending}
             />
@@ -521,7 +550,7 @@ export const CommunityChat: React.FC<CommunityChatProps> = ({
               disabled={!inputText.trim() || sendMutation.isPending}
               className="text-xs sm:text-sm px-4 py-2.5 font-bold shadow-sm shrink-0 flex items-center gap-1.5"
             >
-              <span>Envoyer</span>
+              <span>{tr('Envoyer', 'إرسال')}</span>
               <span>✈️</span>
             </Button>
           </form>

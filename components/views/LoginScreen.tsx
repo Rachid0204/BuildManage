@@ -4,6 +4,7 @@ import type { Syndic, UserRole, UserProfile } from '../../types';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import Modal from '../common/Modal';
+import LanguageToggle from '../common/LanguageToggle';
 import { useI18n } from '../../hooks/useI18n';
 import { useAuth, getHomeRouteForRole } from '../../contexts/AuthContext';
 import { getSyndics } from '../../firebase/services';
@@ -27,7 +28,7 @@ interface GeneratedAccountItem {
 }
 
 const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
-  const { t } = useI18n();
+  const { tr, language } = useI18n();
   const navigate = useNavigate();
   const location = useLocation();
   const { loginWithEmail, loginWithGoogle, register } = useAuth();
@@ -105,7 +106,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
                 email: acc.email,
                 password: acc.password,
                 isOwner: acc.isOwner ?? true,
-                buildingName: 'Résidence Gérée',
+                buildingName: tr('Résidence Gérée', 'إقامة مُسيّرة'),
               });
               seenEmails.add(acc.email.toLowerCase());
             }
@@ -123,13 +124,12 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [language]);
 
   const redirectUserToCorrectPage = (profile: UserProfile) => {
     const defaultTarget = getHomeRouteForRole(profile.role);
     const requestedFrom = (location.state as any)?.from?.pathname;
 
-    // Only honor deep-link `from` if user is a syndic and the route belongs to syndic workspace
     if (
       profile.role === 'syndic' &&
       requestedFrom &&
@@ -164,7 +164,13 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
       redirectUserToCorrectPage(profile);
     } catch (err: any) {
       console.error(err);
-      setError(err.message || 'Échec de la connexion. Vérifiez vos identifiants.');
+      setError(
+        err.message ||
+          tr(
+            'Échec de la connexion. Vérifiez vos identifiants.',
+            'فشل تسجيل الدخول. يرجى التحقق من بيانات الاعتماد الخاصة بك.'
+          )
+      );
     } finally {
       setLoading(false);
     }
@@ -179,7 +185,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
       const profile = await loginWithEmail(demoEmail, pass);
       redirectUserToCorrectPage(profile);
     } catch (err: any) {
-      setError(err.message || 'Connexion démo échouée');
+      setError(err.message || tr('Connexion démo échouée', 'فشل الاتصال التجريبي'));
     } finally {
       setLoading(false);
     }
@@ -192,7 +198,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
       const profile = await loginWithGoogle();
       redirectUserToCorrectPage(profile);
     } catch (err: any) {
-      setError(err.message || 'Connexion Google échouée');
+      setError(err.message || tr('Connexion Google échouée', 'فشل تسجيل الدخول عبر Google'));
     } finally {
       setLoading(false);
     }
@@ -204,8 +210,23 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex items-center justify-center px-4 py-10">
+    <div
+      className="min-h-screen bg-slate-50 flex items-center justify-center px-4 py-10"
+      dir={language === 'ar' ? 'rtl' : 'ltr'}
+    >
       <div className="max-w-lg w-full space-y-5">
+        {/* Top Bar with Language Switcher */}
+        <div className="flex items-center justify-between">
+          <button
+            type="button"
+            onClick={handleReturnToPublicSite}
+            className="text-xs font-semibold text-slate-600 hover:text-slate-900"
+          >
+            {tr('← Accueil', '→ الرئيسية')}
+          </button>
+          <LanguageToggle variant="light" />
+        </div>
+
         {/* Brand Header */}
         <div className="text-center">
           <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-teal-700 text-white shadow-sm mb-2.5">
@@ -215,7 +236,10 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
             Syndik
           </h1>
           <p className="text-xs text-slate-500 mt-1 uppercase font-semibold tracking-wider">
-            Plateforme Marocaine de Gestion de Copropriété (Loi 18-00 &amp; 106-12)
+            {tr(
+              'Plateforme Marocaine de Gestion de Copropriété (Loi 18-00 & 106-12)',
+              'المنصة المغربية لتدبير الملكية المشتركة (القانون 18-00 و 106-12)'
+            )}
           </p>
         </div>
 
@@ -223,10 +247,13 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
         <div className="bg-white border border-teal-100 rounded-xl p-4 shadow-xs space-y-3">
           <div className="flex items-center justify-between">
             <p className="text-[11px] font-bold text-teal-900 uppercase tracking-wider">
-              Accès Démo Immédiat par Profil &amp; Redirection Automatique
+              {tr(
+                'Accès Démo Immédiat par Profil & Redirection Automatique',
+                'ولوج تجريبي فوري حسب الصفة مع التوجيه التلقائي'
+              )}
             </p>
             <span className="text-[10px] font-mono bg-teal-50 text-teal-700 px-2 py-0.5 rounded border border-teal-200">
-              5 Rôles Métiers
+              {tr('5 Rôles Métiers', '5 أدوار مهنية')}
             </span>
           </div>
 
@@ -238,7 +265,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
               className="p-2.5 bg-teal-50 hover:bg-teal-100 text-teal-900 rounded-lg text-start transition-colors border border-teal-200 flex flex-col justify-between"
             >
               <span className="font-bold flex items-center justify-between">
-                <span>🏢 Syndic Pro</span>
+                <span>🏢 {tr('Syndic Pro', 'وكيل الاتحاد (السنديك)')}</span>
                 <span className="text-[10px] text-teal-600 font-mono">→ /</span>
               </span>
               <span className="text-[10px] text-teal-700 mt-1 truncate">
@@ -253,11 +280,11 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
               className="p-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-900 rounded-lg text-start transition-colors border border-indigo-200 flex flex-col justify-between"
             >
               <span className="font-bold flex items-center justify-between">
-                <span>🔑 Copropriétaire</span>
+                <span>🔑 {tr('Copropriétaire', 'مالك مشترك')}</span>
                 <span className="text-[10px] text-indigo-600 font-mono">→ /resident</span>
               </span>
               <span className="text-[10px] text-indigo-700 mt-1 truncate">
-                Fatima Zahra • Lot A-102
+                Fatima Zahra • {tr('Lot', 'شقة')} A-102
               </span>
             </button>
 
@@ -268,11 +295,11 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
               className="p-2.5 bg-sky-50 hover:bg-sky-100 text-sky-900 rounded-lg text-start transition-colors border border-sky-200 flex flex-col justify-between"
             >
               <span className="font-bold flex items-center justify-between">
-                <span>🏠 Locataire</span>
+                <span>🏠 {tr('Locataire', 'مكتري')}</span>
                 <span className="text-[10px] text-sky-600 font-mono">→ /resident</span>
               </span>
               <span className="text-[10px] text-sky-700 mt-1 truncate">
-                Youssef Benali • Lot A-102
+                Youssef Benali • {tr('Lot', 'شقة')} A-102
               </span>
             </button>
 
@@ -283,11 +310,11 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
               className="p-2.5 bg-amber-50 hover:bg-amber-100 text-amber-900 rounded-lg text-start transition-colors border border-amber-200 flex flex-col justify-between"
             >
               <span className="font-bold flex items-center justify-between">
-                <span>🛠️ Prestataire</span>
+                <span>🛠️ {tr('Prestataire', 'مقدم خدمة')}</span>
                 <span className="text-[10px] text-amber-700 font-mono">→ /provider</span>
               </span>
               <span className="text-[10px] text-amber-800 mt-1 truncate">
-                Artisan / Ascenseurs
+                {tr('Artisan / Ascenseurs', 'تقني / مصاعد')}
               </span>
             </button>
 
@@ -298,11 +325,14 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
               className="p-2.5 bg-slate-100 hover:bg-slate-200 text-slate-900 rounded-lg text-start transition-colors border border-slate-300 flex flex-col justify-between sm:col-span-2"
             >
               <span className="font-bold flex items-center justify-between">
-                <span>🛡️ Super Admin SaaS</span>
+                <span>🛡️ {tr('Super Admin SaaS', 'المدير العام للنظام SaaS')}</span>
                 <span className="text-[10px] text-slate-600 font-mono">→ /admin</span>
               </span>
               <span className="text-[10px] text-slate-600 mt-1 truncate">
-                Supervision Nationale des Cabinets Syndics &amp; Abonnements
+                {tr(
+                  'Supervision Nationale des Cabinets Syndics & Abonnements',
+                  'الإشراف الوطني على مكاتب السنديك والاشتراكات'
+                )}
               </span>
             </button>
           </div>
@@ -311,7 +341,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
           {generatedAccounts.length > 0 && (
             <div className="pt-2.5 border-t border-slate-100">
               <p className="text-[11px] font-bold text-emerald-900 uppercase tracking-wider mb-1.5">
-                🔑 Comptes Résidents Générés par le Syndic ({generatedAccounts.length})
+                🔑 {tr('Comptes Résidents Générés par le Syndic', 'حسابات السكان المُنشأة من طرف السنديك')} ({generatedAccounts.length})
               </p>
               <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
                 {generatedAccounts.map((acc) => (
@@ -323,12 +353,12 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
                       <div className="font-bold text-slate-900 truncate">
                         {acc.name}{' '}
                         <span className="text-[10px] font-normal text-slate-500">
-                          ({acc.isOwner ? 'Copropriétaire' : 'Locataire'}
-                          {acc.apartmentNumber ? ` • Lot ${acc.apartmentNumber}` : ''})
+                          ({acc.isOwner ? tr('Copropriétaire', 'مالك مشترك') : tr('Locataire', 'مكتري')}
+                          {acc.apartmentNumber ? ` • ${tr('Lot', 'شقة')} ${acc.apartmentNumber}` : ''})
                         </span>
                       </div>
                       <div className="font-mono text-[11px] text-slate-600 truncate">
-                        {acc.email} · MDP:{' '}
+                        {acc.email} · {tr('MDP', 'كلمة المرور')}:{' '}
                         <span className="font-bold text-emerald-800">{acc.password}</span>
                       </div>
                     </div>
@@ -337,7 +367,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
                       onClick={() => handleQuickDemoLogin(acc.email, acc.password)}
                       className="px-2.5 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-[11px] shrink-0"
                     >
-                      Connecter →
+                      {tr('Connecter →', 'دخول ←')}
                     </button>
                   </div>
                 ))}
@@ -361,7 +391,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              Connexion à mon espace
+              {tr('Connexion à mon espace', 'تسجيل الدخول إلى فضائي')}
             </button>
             <button
               type="button"
@@ -375,7 +405,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              Créer un compte Syndik
+              {tr('Créer un compte Syndik', 'إنشاء حساب Syndik')}
             </button>
           </div>
 
@@ -384,7 +414,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
               <>
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Profil utilisateur *
+                    {tr('Profil utilisateur *', 'صفة المستخدم *')}
                   </label>
                   <select
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white font-medium text-slate-900"
@@ -392,13 +422,13 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
                     onChange={(e) => setRole(e.target.value as UserRole)}
                   >
                     <option value="syndic">
-                      🏢 Syndic de Copropriété (Professionnel ou Bénévole)
+                      🏢 {tr('Syndic de Copropriété (Professionnel ou Bénévole)', 'وكيل الاتحاد / السنديك (مهني أو متطوع)')}
                     </option>
                     <option value="resident">
-                      🏠 Copropriétaire / Résident d&apos;immeuble
+                      🏠 {tr("Copropriétaire / Résident d'immeuble", 'مالك مشترك / ساكن بالإقامة')}
                     </option>
                     <option value="provider">
-                      🛠️ Prestataire Technique Agréé
+                      🛠️ {tr('Prestataire Technique Agréé', 'مقدم خدمات تقنية معتمد')}
                     </option>
                   </select>
                 </div>
@@ -406,7 +436,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Nom complet *
+                      {tr('Nom complet *', 'الاسم الكامل *')}
                     </label>
                     <input
                       type="text"
@@ -414,12 +444,12 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
                       className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-1 focus:ring-teal-500"
                       value={name}
                       onChange={(e) => setName(e.target.value)}
-                      placeholder="Ex: Karim Tazi"
+                      placeholder={tr('Ex: Karim Tazi', 'مثال: كريم التازي')}
                     />
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Téléphone GSM (Maroc)
+                      {tr('Téléphone GSM (Maroc)', 'رقم الهاتف النقال')}
                     </label>
                     <input
                       type="tel"
@@ -434,14 +464,14 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
                 {role === 'syndic' && (
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Nom du Cabinet ou Syndicat des Copropriétaires
+                      {tr('Nom du Cabinet ou Syndicat des Copropriétaires', 'اسم مكتب السنديك أو اتحاد الملاك')}
                     </label>
                     <input
                       type="text"
                       className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-1 focus:ring-teal-500"
                       value={companyName}
                       onChange={(e) => setCompanyName(e.target.value)}
-                      placeholder="Ex: Cabinet Atlas Gestion Immobilier"
+                      placeholder={tr('Ex: Cabinet Atlas Gestion Immobilier', 'مثال: مكتب أطلس لتدبير العقارات')}
                     />
                   </div>
                 )}
@@ -449,7 +479,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
                 {role === 'resident' && (
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Numéro CIN (Carte Nationale d&apos;Identité)
+                      {tr("Numéro CIN (Carte Nationale d'Identité)", 'رقم البطاقة الوطنية للتعريف (CIN)')}
                     </label>
                     <input
                       type="text"
@@ -466,8 +496,8 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
                 {isRegistering
-                  ? 'Adresse e-mail professionnelle ou personnelle *'
-                  : 'Adresse e-mail ou N° CIN (pour les résidents) *'}
+                  ? tr('Adresse e-mail professionnelle ou personnelle *', 'البريد الإلكتروني المهني أو الشخصي *')
+                  : tr('Adresse e-mail ou N° CIN (pour les résidents) *', 'البريد الإلكتروني أو رقم البطاقة الوطنية CIN (للسكان) *')}
               </label>
               <input
                 type={isRegistering ? 'email' : 'text'}
@@ -478,7 +508,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
                 placeholder={
                   isRegistering
                     ? 'votre.email@domaine.ma'
-                    : 'Ex: contact@syndicpro.ma ou CIN BK124578'
+                    : tr('Ex: contact@syndicpro.ma ou CIN BK124578', 'مثال: contact@syndicpro.ma أو رقم CIN BK124578')
                 }
               />
             </div>
@@ -486,7 +516,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label className="block text-xs font-semibold text-slate-700">
-                  Mot de passe *
+                  {tr('Mot de passe *', 'كلمة المرور *')}
                 </label>
                 {!isRegistering && (
                   <button
@@ -498,7 +528,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
                     }}
                     className="text-[11px] font-semibold text-teal-700 hover:text-teal-900"
                   >
-                    Mot de passe oublié ?
+                    {tr('Mot de passe oublié ?', 'نسيت كلمة المرور؟')}
                   </button>
                 )}
               </div>
@@ -513,9 +543,9 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute inset-y-0 right-0 px-3 text-xs font-semibold text-slate-500 hover:text-slate-800"
+                  className="absolute inset-y-0 end-0 px-3 text-xs font-semibold text-slate-500 hover:text-slate-800"
                 >
-                  {showPassword ? 'Masquer' : 'Afficher'}
+                  {showPassword ? tr('Masquer', 'إخفاء') : tr('Afficher', 'إظهار')}
                 </button>
               </div>
             </div>
@@ -532,10 +562,10 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
               disabled={loading}
             >
               {loading
-                ? 'Authentification et redirection...'
+                ? tr('Authentification et redirection...', 'جاري التحقق والتوجيه...')
                 : isRegistering
-                ? 'Créer mon compte et accéder à mon espace'
-                : 'Se connecter'}
+                ? tr('Créer mon compte et accéder à mon espace', 'إنشاء حسابي والولوج إلى فضائي')
+                : tr('Se connecter', 'تسجيل الدخول')}
             </Button>
           </form>
 
@@ -547,7 +577,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
               className="w-full flex items-center justify-center gap-2 py-2 px-4 border border-slate-300 rounded-lg bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 transition-colors"
             >
               <span>🌐</span>
-              <span>Continuer avec Google Workspace (Syndic)</span>
+              <span>{tr('Continuer avec Google Workspace (Syndic)', 'المتابعة عبر Google Workspace (للسنديك)')}</span>
             </button>
           </div>
 
@@ -557,7 +587,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
               onClick={handleReturnToPublicSite}
               className="text-xs font-medium text-slate-500 hover:text-slate-900"
             >
-              ← Retour à la page d&apos;accueil publique
+              {tr("← Retour à la page d'accueil publique", '→ العودة إلى الصفحة الرئيسية')}
             </button>
           </div>
         </Card>
@@ -567,11 +597,11 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
       <Modal
         isOpen={isForgotOpen}
         onClose={() => setIsForgotOpen(false)}
-        title="Réinitialisation du mot de passe"
+        title={tr('Réinitialisation du mot de passe', 'إعادة تعيين كلمة المرور')}
         footer={
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setIsForgotOpen(false)}>
-              Fermer
+              {tr('Fermer', 'إغلاق')}
             </Button>
             {!forgotSent && (
               <Button
@@ -580,7 +610,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
                   setForgotSent(true);
                 }}
               >
-                Envoyer les instructions
+                {tr('Envoyer les instructions', 'إرسال التعليمات')}
               </Button>
             )}
           </div>
@@ -589,28 +619,38 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
         <div className="space-y-3 text-xs sm:text-sm text-slate-700">
           {forgotSent ? (
             <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 space-y-2">
-              <p className="font-bold">✓ Instructions envoyées</p>
+              <p className="font-bold">✓ {tr('Instructions envoyées', 'تم إرسال التعليمات')}</p>
               <p className="text-xs">
-                Si un compte correspond à <strong>{forgotEmail}</strong>, un lien de réinitialisation a été envoyé.
+                {tr(
+                  `Si un compte correspond à ${forgotEmail}, un lien de réinitialisation a été envoyé.`,
+                  `إذا كان هناك حساب مرتبط بـ ${forgotEmail}، فقد تم إرسال رابط إعادة التعيين.`
+                )}
               </p>
               <p className="text-xs text-emerald-800 pt-1 border-t border-emerald-200">
-                <strong>Note Copropriétaires / Locataires :</strong> Votre Syndic peut également régénérer votre mot de passe temporaire en 1 clic depuis son module <em>Résidents → Générer Accès</em>.
+                <strong>{tr('Note Copropriétaires / Locataires :', 'ملاحظة للملاك المشتركين / المكترين :')}</strong>{' '}
+                {tr(
+                  'Votre Syndic peut également régénérer votre mot de passe temporaire en 1 clic depuis son module Résidents → Générer Accès.',
+                  'يمكن لوكيل الاتحاد (السنديك) أيضاً إعادة توليد كلمة المرور المؤقتة الخاصة بكم بنقرة واحدة من قسم السكان ← توليد بيانات الولوج.'
+                )}
               </p>
             </div>
           ) : (
             <>
               <p className="text-xs text-slate-600">
-                Saisissez votre adresse e-mail ou numéro CIN. Si vous êtes résident d&apos;un immeuble géré, votre Syndic peut aussi vous transmettre votre fiche d&apos;accès sur WhatsApp.
+                {tr(
+                  "Saisissez votre adresse e-mail ou numéro CIN. Si vous êtes résident d'un immeuble géré, votre Syndic peut aussi vous transmettre votre fiche d'accès sur WhatsApp.",
+                  'أدخل بريدك الإلكتروني أو رقم البطاقة الوطنية CIN. إذا كنت ساكناً في إقامة مُسيّرة، يمكن للسنديك أيضاً إرسال بطاقة الولوج الخاصة بك عبر واتساب.'
+                )}
               </p>
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Adresse e-mail ou N° CIN
+                  {tr('Adresse e-mail ou N° CIN', 'البريد الإلكتروني أو رقم CIN')}
                 </label>
                 <input
                   type="text"
                   value={forgotEmail}
                   onChange={(e) => setForgotEmail(e.target.value)}
-                  placeholder="Ex: ahmed.alami@email.com ou BE458921"
+                  placeholder="Ex: ahmed.alami@email.com / BE458921"
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
                 />
               </div>

@@ -8,12 +8,14 @@ import { PrestatairesIcon, PlusIcon, PencilIcon, TrashIcon } from '../icons/Icon
 import { getPrestatairesForBuilding, savePrestataire, deletePrestataire } from '../../firebase/services';
 import Loading from '../common/Loading';
 import ServiceProvidersDirectory from './ServiceProvidersDirectory';
+import { useI18n } from '../../hooks/useI18n';
 
 interface PrestatairesProps {
   building: Building;
 }
 
 const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
+  const { tr } = useI18n();
   const queryClient = useQueryClient();
   const [activeViewMode, setActiveViewMode] = useState<'directory' | 'legal'>('directory');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -85,7 +87,13 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
   };
 
   const handleSave = () => {
-    if (!name || !phone) return alert('Le nom de l\'entreprise et le téléphone sont obligatoires.');
+    if (!name || !phone)
+      return alert(
+        tr(
+          "Le nom de l'entreprise et le téléphone sont obligatoires.",
+          'اسم الشركة ورقم الهاتف إلزاميان.'
+        )
+      );
 
     const payload: Prestataire = {
       id: editingPrestataire?.id || `prest-${Date.now()}`,
@@ -113,20 +121,21 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
   };
 
   const categoryLabels: Record<Prestataire['category'], string> = {
-    elevator: 'Ascensoriste',
-    cleaning: 'Société de Nettoyage',
-    plumbing: 'Plomberie & Surpresseur',
-    electrical: 'Électricité & Éclairage',
-    security: 'Gardiennage & Sécurité',
-    gardener: 'Espaces Verts',
-    locksmith: 'Serrurerie & Dépannage',
-    painting: 'Peinture & Rénovation',
-    air_conditioning: 'Climatisation & Froid',
-    insurance: 'Compagnie d\'Assurance',
-    other: 'Autre Service',
+    elevator: tr('Ascensoriste', 'صيانة المصاعد'),
+    cleaning: tr('Société de Nettoyage', 'شركة النظافة'),
+    plumbing: tr('Plomberie & Surpresseur', 'السباكة والمضخات'),
+    electrical: tr('Électricité & Éclairage', 'الكهرباء والإنارة'),
+    security: tr('Gardiennage & Sécurité', 'الحراسة والأمن'),
+    gardener: tr('Espaces Verts', 'البستنة والمساحات الخضراء'),
+    locksmith: tr('Serrurerie & Dépannage', 'الأقفال والمفاتيح'),
+    painting: tr('Peinture & Rénovation', 'الصباغة والترميم'),
+    air_conditioning: tr('Climatisation & Froid', 'التكييف والتبريد'),
+    insurance: tr("Compagnie d'Assurance", 'شركة التأمين'),
+    other: tr('Autre Service', 'خدمة أخرى'),
   };
 
-  if (isLoading) return <Loading message="Chargement des prestataires..." />;
+  if (isLoading)
+    return <Loading message={tr('Chargement des prestataires...', 'جاري تحميل مقدمي الخدمات...')} />;
 
   return (
     <div className="space-y-6">
@@ -135,15 +144,19 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
         <div>
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
             <PrestatairesIcon />
-            <span>Prestataires & Artisans de l'Immeuble</span>
+            <span>
+              {tr("Prestataires & Artisans de l'Immeuble", 'مقدمو الخدمات والحرفيون المعتمدون')}
+            </span>
           </h1>
           <p className="text-sm text-slate-500 mt-0.5">
-            Répertoire des artisans, dépannages d'urgence et contrats officiels pour {building.name}
+            {tr(
+              `Répertoire des artisans, dépannages d'urgence et contrats officiels pour ${building.name}`,
+              `دليل الحرفيين، تدخلات الطوارئ والعقود الرسمية لإقامة ${building.name}`
+            )}
           </p>
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Toggle between directory and legal view */}
           <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200">
             <button
               onClick={() => setActiveViewMode('directory')}
@@ -153,7 +166,7 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              🛠️ Répertoire & Avis Résidents
+              🛠️ {tr('Répertoire & Avis Résidents', 'الدليل وتقييمات السكان')}
             </button>
             <button
               onClick={() => setActiveViewMode('legal')}
@@ -163,7 +176,7 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              📑 Gestion Contrats & ICE/RC
+              📑 {tr('Gestion Contrats & ICE/RC', 'تدبير العقود و ICE/RC')}
             </button>
           </div>
 
@@ -175,7 +188,7 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
             className="flex items-center gap-2 text-xs font-bold"
           >
             <PlusIcon />
-            <span>Ajouter</span>
+            <span>{tr('Ajouter', 'إضافة')}</span>
           </Button>
         </div>
       </div>
@@ -185,8 +198,8 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
         <ServiceProvidersDirectory
           building={building}
           isResidentPortal={false}
-          residentName="Syndic Gestionnaire"
-          apartmentNumber="Bureau Syndic"
+          residentName={tr('Syndic Gestionnaire', 'وكيل الاتحاد (السنديك)')}
+          apartmentNumber={tr('Bureau Syndic', 'مكتب السنديك')}
         />
       )}
 
@@ -194,93 +207,110 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
       {activeViewMode === 'legal' && (
         <div className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-        {prestataires.map((p) => (
-          <Card key={p.id} className="p-5 border border-slate-200 hover:border-teal-300 transition-colors flex flex-col justify-between">
-            <div>
-              <div className="flex items-start justify-between gap-2">
+            {prestataires.map((p) => (
+              <Card
+                key={p.id}
+                className="p-5 border border-slate-200 hover:border-teal-300 transition-colors flex flex-col justify-between"
+              >
                 <div>
-                  <span className="text-[11px] font-semibold text-teal-800 bg-teal-50 px-2 py-0.5 rounded">
-                    {categoryLabels[p.category] || p.category}
-                  </span>
-                  <h3 className="font-bold text-slate-900 text-base mt-2">{p.name}</h3>
-                  <p className="text-xs text-slate-500">Contact : {p.contactPerson || 'Non spécifié'}</p>
-                </div>
-                <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => handleOpenEdit(p)}
-                    className="p-1 text-slate-400 hover:text-slate-600 rounded"
-                    title="Modifier"
-                  >
-                    <PencilIcon />
-                  </button>
-                  <button
-                    onClick={() => {
-                      if (confirm(`Supprimer le prestataire ${p.name} ?`)) {
-                        deleteMutation.mutate(p.id);
-                      }
-                    }}
-                    className="p-1 text-slate-400 hover:text-rose-600 rounded"
-                    title="Supprimer"
-                  >
-                    <TrashIcon />
-                  </button>
-                </div>
-              </div>
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <span className="text-[11px] font-semibold text-teal-800 bg-teal-50 px-2 py-0.5 rounded">
+                        {categoryLabels[p.category] || p.category}
+                      </span>
+                      <h3 className="font-bold text-slate-900 text-base mt-2">{p.name}</h3>
+                      <p className="text-xs text-slate-500">
+                        {tr('Contact :', 'المسؤول :')} {p.contactPerson || tr('Non spécifié', 'غير محدد')}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => handleOpenEdit(p)}
+                        className="p-1 text-slate-400 hover:text-slate-600 rounded"
+                        title={tr('Modifier', 'تعديل')}
+                      >
+                        <PencilIcon />
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (
+                            confirm(
+                              tr(
+                                `Supprimer le prestataire ${p.name} ?`,
+                                `حذف مقدم الخدمة ${p.name} ؟`
+                              )
+                            )
+                          ) {
+                            deleteMutation.mutate(p.id);
+                          }
+                        }}
+                        className="p-1 text-slate-400 hover:text-rose-600 rounded"
+                        title={tr('Supprimer', 'حذف')}
+                      >
+                        <TrashIcon />
+                      </button>
+                    </div>
+                  </div>
 
-              {/* Legal & Contact info */}
-              <div className="mt-4 space-y-1.5 text-xs text-slate-600 bg-slate-50 p-2.5 rounded border border-slate-100">
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Tél :</span>
-                  <a href={`tel:${p.phone}`} className="font-semibold text-teal-700 hover:underline">
-                    {p.phone}
+                  {/* Legal & Contact info */}
+                  <div className="mt-4 space-y-1.5 text-xs text-slate-600 bg-slate-50 p-2.5 rounded border border-slate-100">
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">{tr('Tél :', 'الهاتف :')}</span>
+                      <a href={`tel:${p.phone}`} className="font-semibold text-teal-700 hover:underline">
+                        {p.phone}
+                      </a>
+                    </div>
+                    {p.email && (
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">{tr('Email :', 'البريد :')}</span>
+                        <a href={`mailto:${p.email}`} className="text-slate-700 truncate max-w-[180px]">
+                          {p.email}
+                        </a>
+                      </div>
+                    )}
+                    {p.ice && (
+                      <div className="flex justify-between font-mono">
+                        <span className="text-slate-400">ICE :</span>
+                        <span>{p.ice}</span>
+                      </div>
+                    )}
+                    {p.rc && (
+                      <div className="flex justify-between font-mono">
+                        <span className="text-slate-400">RC :</span>
+                        <span>{p.rc}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {p.notes && (
+                    <p className="text-xs text-slate-500 mt-3 italic line-clamp-2">"{p.notes}"</p>
+                  )}
+                </div>
+
+                <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
+                  <span className="text-emerald-700 font-medium flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                    {tr('Contrat actif', 'عقد ساري المفعول')}
+                  </span>
+                  <a
+                    href={`tel:${p.phone}`}
+                    className="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded font-medium transition-colors"
+                  >
+                    {tr('Appeler', 'اتصال')}
                   </a>
                 </div>
-                {p.email && (
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Email :</span>
-                    <a href={`mailto:${p.email}`} className="text-slate-700 truncate max-w-[180px]">
-                      {p.email}
-                    </a>
-                  </div>
-                )}
-                {p.ice && (
-                  <div className="flex justify-between font-mono">
-                    <span className="text-slate-400">ICE :</span>
-                    <span>{p.ice}</span>
-                  </div>
-                )}
-                {p.rc && (
-                  <div className="flex justify-between font-mono">
-                    <span className="text-slate-400">RC :</span>
-                    <span>{p.rc}</span>
-                  </div>
-                )}
-              </div>
+              </Card>
+            ))}
+          </div>
 
-              {p.notes && <p className="text-xs text-slate-500 mt-3 italic line-clamp-2">"{p.notes}"</p>}
-            </div>
-
-            <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
-              <span className="text-emerald-700 font-medium flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                Contrat actif
-              </span>
-              <a
-                href={`tel:${p.phone}`}
-                className="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded font-medium transition-colors"
-              >
-                Appeler
-              </a>
-            </div>
-          </Card>
-        ))}
-      </div>
-
-      {prestataires.length === 0 && (
-        <Card className="p-8 text-center text-slate-500 text-sm">
-          Aucun prestataire enregistré. Ajoutez des artisans ou prestataires pour faciliter la maintenance de votre copropriété.
-        </Card>
-      )}
+          {prestataires.length === 0 && (
+            <Card className="p-8 text-center text-slate-500 text-sm">
+              {tr(
+                'Aucun prestataire enregistré. Ajoutez des artisans ou prestataires pour faciliter la maintenance de votre copropriété.',
+                'لا يوجد أي مقدم خدمة مسجل. أضيفوا الحرفيين أو الشركات لتسهيل صيانة الملكية المشتركة.'
+              )}
+            </Card>
+          )}
         </div>
       )}
 
@@ -291,7 +321,11 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
           setIsModalOpen(false);
           resetForm();
         }}
-        title={editingPrestataire ? 'Modifier le prestataire' : 'Ajouter un prestataire sous contrat'}
+        title={
+          editingPrestataire
+            ? tr('Modifier le prestataire', 'تعديل مقدم الخدمة')
+            : tr('Ajouter un prestataire sous contrat', 'إضافة مقدم خدمة متعاقد')
+        }
         footer={
           <div className="flex justify-end gap-2">
             <Button
@@ -301,52 +335,58 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
                 resetForm();
               }}
             >
-              Annuler
+              {tr('Annuler', 'إلغاء')}
             </Button>
-            <Button onClick={handleSave}>Enregistrer</Button>
+            <Button onClick={handleSave}>{tr('Enregistrer', 'حفظ')}</Button>
           </div>
         }
       >
         <div className="space-y-4">
           <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Nom de l'Entreprise / Artisan *</label>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              {tr("Nom de l'Entreprise / Artisan *", 'اسم الشركة / الحرفي *')}
+            </label>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Ex: Atlas Ascenseurs SARL"
+              placeholder={tr('Ex: Atlas Ascenseurs SARL', 'مثال: أطلس للمصاعد ش.م.م')}
               className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
             />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Corps de métier</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                {tr('Corps de métier', 'التخصص المهني')}
+              </label>
               <select
                 value={category}
                 onChange={(e) => setCategory(e.target.value as any)}
                 className="w-full px-3 py-2 border border-slate-300 rounded text-sm bg-white"
               >
-                <option value="plumbing">Plomberie & Fuites</option>
-                <option value="electrical">Électricité & Domotique</option>
-                <option value="locksmith">Serrurerie & Dépannage</option>
-                <option value="elevator">Ascensoriste</option>
-                <option value="cleaning">Société de Nettoyage</option>
-                <option value="air_conditioning">Climatisation & Froid</option>
-                <option value="painting">Peinture & Rénovation</option>
-                <option value="security">Gardiennage / Sécurité</option>
-                <option value="gardener">Espaces Verts</option>
-                <option value="insurance">Compagnie d'Assurance</option>
-                <option value="other">Autre Service</option>
+                <option value="plumbing">{tr('Plomberie & Fuites', 'السباكة وتسربات المياه')}</option>
+                <option value="electrical">{tr('Électricité & Domotique', 'الكهرباء والإنارة')}</option>
+                <option value="locksmith">{tr('Serrurerie & Dépannage', 'الأقفال والمفاتيح')}</option>
+                <option value="elevator">{tr('Ascensoriste', 'صيانة المصاعد')}</option>
+                <option value="cleaning">{tr('Société de Nettoyage', 'شركة النظافة')}</option>
+                <option value="air_conditioning">{tr('Climatisation & Froid', 'التكييف والتبريد')}</option>
+                <option value="painting">{tr('Peinture & Rénovation', 'الصباغة والترميم')}</option>
+                <option value="security">{tr('Gardiennage / Sécurité', 'الحراسة والأمن')}</option>
+                <option value="gardener">{tr('Espaces Verts', 'البستنة والمساحات الخضراء')}</option>
+                <option value="insurance">{tr("Compagnie d'Assurance", 'شركة التأمين')}</option>
+                <option value="other">{tr('Autre Service', 'خدمة أخرى')}</option>
               </select>
             </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Personne de contact</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                {tr('Personne de contact', 'المخاطب المسؤول')}
+              </label>
               <input
                 type="text"
                 value={contactPerson}
                 onChange={(e) => setContactPerson(e.target.value)}
-                placeholder="Ex: Hassan Amrani"
+                placeholder={tr('Ex: Hassan Amrani', 'مثال: حسن العمراني')}
                 className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
               />
             </div>
@@ -354,7 +394,9 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Téléphone *</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                {tr('Téléphone *', 'الهاتف *')}
+              </label>
               <input
                 type="text"
                 value={phone}
@@ -364,7 +406,9 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
               />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">WhatsApp (direct)</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                {tr('WhatsApp (direct)', 'واتساب (مباشر)')}
+              </label>
               <input
                 type="text"
                 value={whatsapp}
@@ -377,7 +421,9 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Email</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                {tr('Email', 'البريد الإلكتروني')}
+              </label>
               <input
                 type="email"
                 value={email}
@@ -387,12 +433,14 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
               />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Tarif indicatif</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                {tr('Tarif indicatif', 'التعريفة التقريبية')}
+              </label>
               <input
                 type="text"
                 value={hourlyRate}
                 onChange={(e) => setHourlyRate(e.target.value)}
-                placeholder="Ex: À partir de 150 DH"
+                placeholder={tr('Ex: À partir de 150 DH', 'مثال: ابتداءً من 150 درهم')}
                 className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
               />
             </div>
@@ -400,7 +448,9 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">ICE (Maroc)</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                {tr('ICE (Maroc)', 'التعريف الموحد للمقاولة ICE')}
+              </label>
               <input
                 type="text"
                 value={ice}
@@ -410,7 +460,9 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
               />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">RC (Registre Commerce)</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                {tr('RC (Registre Commerce)', 'السجل التجاري RC')}
+              </label>
               <input
                 type="text"
                 value={rc}
@@ -421,7 +473,7 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
             </div>
           </div>
 
-          <div className="flex items-center gap-6 pt-1">
+          <div className="flex flex-wrap items-center gap-6 pt-1">
             <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
               <input
                 type="checkbox"
@@ -429,7 +481,7 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
                 onChange={(e) => setIsEmergency247(e.target.checked)}
                 className="rounded border-slate-300 text-teal-600 focus:ring-teal-500"
               />
-              <span>🚨 Astreinte Dépannage Urgent 24h/7j</span>
+              <span>🚨 {tr('Astreinte Dépannage Urgent 24h/7j', 'خدمة طوارئ مستمرة 24/7')}</span>
             </label>
             <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
               <input
@@ -438,17 +490,22 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
                 onChange={(e) => setIsVerifiedBySyndic(e.target.checked)}
                 className="rounded border-slate-300 text-teal-600 focus:ring-teal-500"
               />
-              <span>✓ Agréé par le Syndic (Loi 18-00)</span>
+              <span>✓ {tr('Agréé par le Syndic (Loi 18-00)', 'معتمد من طرف السنديك (قانون 18-00)')}</span>
             </label>
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Conditions de contrat & notes</label>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              {tr('Conditions de contrat & notes', 'شروط العقد وملاحظات')}
+            </label>
             <textarea
               rows={2}
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
-              placeholder="Ex: Astreinte 24/7, visite de maintenance le 1er mardi du mois..."
+              placeholder={tr(
+                'Ex: Astreinte 24/7, visite de maintenance le 1er mardi du mois...',
+                'مثال: مداومة 24/7، زيارة صيانة دورية كل أول ثلاثاء من الشهر...'
+              )}
               className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
             />
           </div>
