@@ -1,0 +1,70 @@
+import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import type { Language } from '../types';
+import { translations } from '../i18n/locales';
+
+// Helper to get nested keys
+type NestedKey<T> = T extends object ? { [K in keyof T]-?: `${K & string}` | `${K & string}.${NestedKey<T[K]>}` }[keyof T] : never;
+type TranslationKeys = NestedKey<typeof translations.en>;
+
+
+interface I18nContextType {
+    language: Language;
+    setLanguage: (language: Language) => void;
+    t: (key: TranslationKeys, replacements?: Record<string, string>) => string;
+}
+
+const I18nContext = createContext<I18nContextType | undefined>(undefined);
+
+const getInitialLanguage = (): Language => {
+    const storedLang = localStorage.getItem('syndik_lang');
+    if (storedLang === 'en' || storedLang === 'fr' || storedLang === 'ar') {
+        return storedLang;
+    }
+    return 'fr'; // Default to French for Moroccan context
+};
+
+export const I18nProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+    const [language, setLanguage] = useState<Language>(getInitialLanguage);
+
+    useEffect(() => {
+        localStorage.setItem('syndik_lang', language);
+        document.documentElement.lang = language;
+        document.documentElement.dir = language === 'ar' ? 'rtl' : 'ltr';
+    }, [language]);
+
+    const t = (key: TranslationKeys, replacements?: Record<string, string>): string => {
+        const keys = key.split('.');
+        let text: any = translations[language];
+
+        for (const k of keys) {
+            text = text?.[k];
+            if (text === undefined) {
+                console.warn(`Translation key not found: ${key}`);
+                return key;
+            }
+        }
+
+        let result = String(text);
+
+        if (replacements) {
+            Object.keys(replacements).forEach(placeholder => {
+                result = result.replace(`{{${placeholder}}}`, replacements[placeholder]);
+            });
+        }
+
+        return result;
+    };
+
+
+    return (
+        React.createElement(I18nContext.Provider, { value: { language, setLanguage, t } }, children)
+    );
+};
+
+export const useI18n = (): I18nContextType => {
+    const context = useContext(I18nContext);
+    if (!context) {
+        throw new Error('useI18n must be used within an I18nProvider');
+    }
+    return context;
+};

@@ -1,0 +1,916 @@
+import { jsPDF } from "jspdf";
+import type { Invoice, Building, Resident, Syndic, Quittance, AssembleeGenerale, Apartment, Transaction } from "../types";
+
+const currencyFormatter = new Intl.NumberFormat('fr-MA', {
+  style: 'currency',
+  currency: 'MAD',
+  minimumFractionDigits: 2,
+});
+
+// Helper to convert numbers to French words for formal receipts
+function numberToFrenchWords(amount: number): string {
+  const integerPart = Math.floor(amount);
+  const decimalPart = Math.round((amount - integerPart) * 100);
+
+  const units = ["zéro", "un", "deux", "trois", "quatre", "cinq", "six", "sept", "huit", "neuf", "dix",
+                 "onze", "douze", "treize", "quatorze", "quinze", "seize", "dix-sept", "dix-huit", "dix-neuf"];
+  const tens = ["", "", "vingt", "trente", "quarante", "cinquante", "soixante", "soixante-dix", "quatre-vingts", "quatre-vingt-dix"];
+
+  function convertChunk(n: number): string {
+    if (n === 0) return "";
+    if (n < 20) return units[n];
+    if (n < 100) {
+      const ten = Math.floor(n / 10);
+      const unit = n % 10;
+      if (ten === 7) return "soixante-" + (unit === 1 ? "et-onze" : units[10 + unit]);
+      if (ten === 9) return "quatre-vingt-" + units[10 + unit];
+      if (unit === 0) return tens[ten];
+      if (unit === 1) return tens[ten] + "-et-un";
+      return tens[ten] + "-" + units[unit];
+    }
+    const hundred = Math.floor(n / 100);
+    const rest = n % 100;
+    const hundredStr = hundred === 1 ? "cent" : units[hundred] + " cent" + (hundred > 1 && rest === 0 ? "s" : "");
+    if (rest === 0) return hundredStr;
+    return hundredStr + " " + convertChunk(rest);
+  }
+
+  function convert(n: number): string {
+    if (n === 0) return "zéro";
+    if (n < 1000) return convertChunk(n);
+    const thousands = Math.floor(n / 1000);
+    const rest = n % 1000;
+    const thousandStr = thousands === 1 ? "mille" : convertChunk(thousands) + " mille";
+    if (rest === 0) return thousandStr;
+    return thousandStr + " " + convertChunk(rest);
+  }
+
+  const intWords = convert(integerPart);
+  let res = intWords + " dirhams";
+  if (decimalPart > 0) {
+    res += " et " + convert(decimalPart) + " centimes";
+  }
+  return res.charAt(0).toUpperCase() + res.slice(1);
+}
+
+// 1. GENERATE INVOICE PDF
+export const generateInvoicePDF = (invoice: Invoice, building: Building, resident: Resident, syndic?: Syndic) => {
+  const doc = new jsPDF();
+  
+  // Header banner
+  doc.setFillColor(15, 118, 110); // Emerald 700
+  doc.rect(0, 0, 210, 36, 'F');
+  
+  doc.setTextColor(255, 255, 255);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(20);
+  doc.text("APPEL DE FONDS / AVIS DE CHARGES", 14, 23);
+  
+  doc.setFontSize(9);
+  doc.setFont("helvetica", "normal");
+  doc.text(`Réf: ${invoice.invoiceNumber}`, 155, 16);
+  doc.text(`Date: ${new Date(invoice.createdAt).toLocaleDateString('fr-MA')}`, 155, 22);
+  doc.text(`Échéance: ${new Date(invoice.dueDate).toLocaleDateString('fr-MA')}`, 155, 28);
+
+  // Body content
+  doc.setTextColor(30, 41, 59);
+  
+  // From: Syndic / Immeuble
+  doc.setFontSize(11);
+  doc.setFont("helvetica", "bold");
+  doc.text("Émetteur (Syndic de Copropriété) :", 14, 50);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  doc.text(syndic?.name || "Syndic de Copropriété", 14, 56);
+  doc.text(`Copropriété : ${building.name}`, 14, 61);
+  doc.text(building.address, 14, 66);
+  doc.text(building.city, 14, 71);
+  if (syndic?.phone) doc.text(`Tél : ${syndic.phone}`, 14, 76);
+
+  // To: Copropriétaire
+  doc.setFontSize(11);
+  doc.setFont("helvetica", "bold");
+  doc.text("Destinataire (Copropriétaire / Résident) :", 115, 50);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  doc.text(resident.name, 115, 56);
+  if (resident.cin) doc.text(`CIN : ${resident.cin}`, 115, 61);
+  doc.text(`Email : ${resident.email}`, 115, 66);
+  doc.text(`Tél : ${resident.phone}`, 115, 71);
+  doc.text(`Statut : ${resident.isOwner ? "Copropriétaire" : "Locataire"}`, 115, 76);
+
+  // Table
+  let yPos = 92;
+  doc.setFillColor(241, 245, 249);
+  doc.rect(14, yPos, 182, 9, 'F');
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.text("Désignation des charges (Loi 18-00)", 18, yPos + 6);
+  doc.text("Montant (MAD)", 165, yPos + 6);
+
+  yPos += 16;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.text("Charges courantes de copropriété & entretien des parties communes", 18, yPos);
+  doc.text(currencyFormatter.format(invoice.totalAmount), 165, yPos);
+
+  yPos += 6;
+  doc.setDrawColor(226, 232, 240);
+  doc.line(14, yPos, 196, yPos);
+
+  yPos += 12;
+  doc.setFontSize(11);
+  doc.setFont("helvetica", "bold");
+  doc.text("Total à payer :", 125, yPos);
+  doc.setTextColor(15, 118, 110);
+  doc.text(currencyFormatter.format(invoice.totalAmount), 165, yPos);
+
+  // Bank Info for payment
+  yPos += 20;
+  doc.setTextColor(30, 41, 59);
+  doc.setFillColor(248, 250, 252);
+  doc.rect(14, yPos, 182, 28, 'F');
+  doc.setDrawColor(203, 213, 225);
+  doc.rect(14, yPos, 182, 28, 'S');
+
+  doc.setFontSize(9);
+  doc.setFont("helvetica", "bold");
+  doc.text("Modalités de règlement par virement bancaire :", 18, yPos + 7);
+  doc.setFont("helvetica", "normal");
+  doc.text(`Banque : ${building.bankName || syndic?.bankName || "Banque de la Copropriété"}`, 18, yPos + 13);
+  doc.text(`RIB (24 chiffres) : ${building.bankRib || syndic?.rib || "007 780 0001234567890123 45"}`, 18, yPos + 19);
+  doc.text(`Indiquer en motif de virement : [${building.name} - ${resident.name}]`, 18, yPos + 24);
+
+  // Footer Legal
+  const footerY = 278;
+  doc.setFontSize(8);
+  doc.setTextColor(100, 116, 139);
+  doc.text("Conformément à la Loi 18-00 relative au statut de la copropriété des immeubles bâtis.", 105, footerY - 4, { align: 'center' });
+  if (syndic) {
+    const legalLine = [
+      syndic.ice ? `ICE: ${syndic.ice}` : '',
+      syndic.taxId ? `IF: ${syndic.taxId}` : '',
+      syndic.rc ? `RC: ${syndic.rc}` : '',
+      syndic.patente ? `Patente: ${syndic.patente}` : ''
+    ].filter(Boolean).join(' | ');
+    if (legalLine) doc.text(legalLine, 105, footerY, { align: 'center' });
+  }
+
+  doc.save(`Avis_Charges_${invoice.invoiceNumber}.pdf`);
+};
+
+// 2. GENERATE OFFICIAL MOROCCAN QUITTANCE DE PAIEMENT (Loi 18-00 & Loi 106-12)
+export const generateQuittancePDF = (
+  quittance: Quittance,
+  building: Building,
+  syndic?: Syndic,
+  apartment?: Apartment,
+  resident?: Resident,
+  options: { autoDownload?: boolean } = { autoDownload: true }
+) => {
+  const doc = new jsPDF();
+
+  // Colors: Moroccan Deep Emerald & Accents
+  const primaryTeal = [15, 118, 110]; // #0f766e
+  const slateDark = [30, 41, 59];
+  const slateMuted = [100, 116, 139];
+
+  // Outer decorative double border
+  doc.setDrawColor(primaryTeal[0], primaryTeal[1], primaryTeal[2]);
+  doc.setLineWidth(0.8);
+  doc.rect(8, 8, 194, 281);
+  doc.setLineWidth(0.3);
+  doc.setDrawColor(203, 213, 225);
+  doc.rect(10.5, 10.5, 189, 276);
+
+  // Top Moroccan Regulatory Header
+  doc.setFillColor(primaryTeal[0], primaryTeal[1], primaryTeal[2]);
+  doc.rect(12, 12, 186, 32, 'F');
+
+  // Moroccan header text
+  doc.setTextColor(255, 255, 255);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10);
+  doc.text("ROYAUME DU MAROC  ·  SYNDICAT DES COPROPRIÉTAIRES", 105, 19, { align: 'center' });
+
+  doc.setFontSize(13);
+  doc.text("QUITTANCE DE PAIEMENT DES CHARGES DE COPROPRIÉTÉ", 105, 27, { align: 'center' });
+
+  doc.setFontSize(7.5);
+  doc.setFont("helvetica", "normal");
+  doc.text(
+    "Délivrée en application du Dahir n° 1-02-298 portant promulgation de la Loi n° 18-00 modifiée et complétée par la Loi n° 106-12",
+    105,
+    34,
+    { align: 'center' }
+  );
+  doc.text("Reçu libératoire officiel de charges · Valeur probante", 105, 39, { align: 'center' });
+
+  // Identification Bar (Quittance Number, Date, Fiscal Year)
+  let y = 49;
+  doc.setFillColor(241, 245, 249);
+  doc.rect(12, y, 186, 10, 'F');
+  doc.setDrawColor(203, 213, 225);
+  doc.line(12, y, 198, y);
+  doc.line(12, y + 10, 198, y + 10);
+
+  doc.setTextColor(slateDark[0], slateDark[1], slateDark[2]);
+  doc.setFontSize(9);
+  doc.setFont("helvetica", "bold");
+  doc.text(`RÉFÉRENCE QUITTANCE : ${quittance.quittanceNumber}`, 16, y + 6.5);
+
+  const formattedIssueDate = new Date(quittance.createdAt || new Date()).toLocaleDateString('fr-MA', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
+  doc.text(`DÉLIVRÉE LE : ${formattedIssueDate}`, 110, y + 6.5);
+  doc.text(`EXERCICE : ${new Date(quittance.paymentDate || quittance.createdAt).getFullYear()}`, 165, y + 6.5);
+
+  // Two Column Entity Information Box
+  y += 14;
+  const colWidth = 91;
+
+  // Box 1: Copropriété & Syndic
+  doc.setFillColor(250, 250, 252);
+  doc.rect(12, y, colWidth, 42, 'F');
+  doc.setDrawColor(203, 213, 225);
+  doc.rect(12, y, colWidth, 42, 'S');
+
+  // Header banner for Box 1
+  doc.setFillColor(241, 245, 249);
+  doc.rect(12, y, colWidth, 7, 'F');
+  doc.setFontSize(8.5);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(primaryTeal[0], primaryTeal[1], primaryTeal[2]);
+  doc.text("COPROPRIÉTÉ & SYNDICAT DES COPROPRIÉTAIRES", 15, y + 5);
+
+  doc.setTextColor(slateDark[0], slateDark[1], slateDark[2]);
+  doc.setFontSize(8.5);
+  doc.setFont("helvetica", "bold");
+  doc.text(building.name, 15, y + 12);
+  doc.setFont("helvetica", "normal");
+  doc.text(`${building.address}, ${building.city}`, 15, y + 17);
+  doc.text(`Titre Foncier (TF) : ${building.id ? `TF-${building.id.replace('bld-', '')}/C` : '124580/01'}`, 15, y + 22);
+
+  const syndicName = syndic?.name || quittance.syndicName || 'Syndic Mandataire';
+  doc.text(`Syndic en exercice : ${syndicName}`, 15, y + 27);
+  const legalLine = [
+    syndic?.ice ? `ICE : ${syndic.ice}` : 'ICE : 002345678000091',
+    syndic?.taxId ? `IF : ${syndic.taxId}` : 'IF : 4521098',
+  ].join(' · ');
+  doc.text(legalLine, 15, y + 32);
+  if (building.bankRib || syndic?.bankName) {
+    doc.text(`RIB : ${building.bankRib || '007 780 0001234567890123 45'}`, 15, y + 37);
+  }
+
+  // Box 2: Copropriétaire & Désignation du Lot
+  const col2X = 107;
+  doc.setFillColor(250, 250, 252);
+  doc.rect(col2X, y, colWidth, 42, 'F');
+  doc.setDrawColor(203, 213, 225);
+  doc.rect(col2X, y, colWidth, 42, 'S');
+
+  // Header banner for Box 2
+  doc.setFillColor(241, 245, 249);
+  doc.rect(col2X, y, colWidth, 7, 'F');
+  doc.setFontSize(8.5);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(primaryTeal[0], primaryTeal[1], primaryTeal[2]);
+  doc.text("COPROPRIÉTAIRE & DÉSIGNATION DU LOT", col2X + 3, y + 5);
+
+  doc.setTextColor(slateDark[0], slateDark[1], slateDark[2]);
+  doc.setFontSize(8.5);
+  doc.setFont("helvetica", "bold");
+  doc.text(quittance.residentName, col2X + 3, y + 12);
+  doc.setFont("helvetica", "normal");
+  const residentCin = quittance.residentCin || resident?.cin || 'CIN vérifiée';
+  doc.text(`Identifiant / CIN : ${residentCin}`, col2X + 3, y + 17);
+  doc.text(`Désignation : Lot Appartement ${quittance.apartmentNumber}`, col2X + 3, y + 22);
+  doc.text(`Étage : ${apartment?.floor ?? '-'} · Bâtiment / Entrée : A`, col2X + 3, y + 27);
+  const tantiemesValue = quittance.tantiemes || apartment?.tantiemes || 100;
+  doc.setFont("helvetica", "bold");
+  doc.text(`Quote-part : ${tantiemesValue} / 1000èmes (Tantièmes Loi 18-00)`, col2X + 3, y + 32);
+  doc.setFont("helvetica", "normal");
+  doc.text(`Usage du lot : Habitation résidentielle`, col2X + 3, y + 37);
+
+  // Declaration of Receipt
+  y += 47;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.setTextColor(slateDark[0], slateDark[1], slateDark[2]);
+  doc.text(
+    "Le Syndic soussigné, agissant en qualité de représentant légal du Syndicat des Copropriétaires, certifie avoir reçu",
+    12,
+    y
+  );
+  doc.text(
+    "du copropriétaire désigné ci-dessus, le règlement intégral des charges de copropriété pour la période indiquée ci-dessous :",
+    12,
+    y + 5
+  );
+
+  // Charges Breakdown Table (Loi 106-12 Compliant: Charges courantes + Fonds de réserve)
+  y += 11;
+  doc.setFillColor(primaryTeal[0], primaryTeal[1], primaryTeal[2]);
+  doc.rect(12, y, 186, 7.5, 'F');
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.5);
+  doc.text("NATURE & DÉSIGNATION DES CHARGES (LOI 18-00 & 106-12)", 16, y + 5);
+  doc.text("PÉRIODE", 120, y + 5);
+  doc.text("MONTANT (MAD)", 165, y + 5);
+
+  // Table row calculations
+  const totalAmount = quittance.amount || 0;
+  const reserveShare = quittance.reserveFundAmount !== undefined
+    ? quittance.reserveFundAmount
+    : Math.round(totalAmount * 0.15);
+  const courantesShare = quittance.chargesCourantesAmount !== undefined
+    ? quittance.chargesCourantesAmount
+    : (totalAmount - reserveShare);
+
+  y += 7.5;
+  // Row 1: Charges courantes
+  doc.setFillColor(255, 255, 255);
+  doc.rect(12, y, 186, 8, 'F');
+  doc.setTextColor(slateDark[0], slateDark[1], slateDark[2]);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  doc.text("1. Charges générales courantes d'exploitation, gardiennage et entretien", 16, y + 5.5);
+  doc.text(quittance.periodCovered || "Charges courantes", 120, y + 5.5);
+  doc.setFont("helvetica", "bold");
+  doc.text(currencyFormatter.format(courantesShare), 165, y + 5.5);
+
+  y += 8;
+  doc.setDrawColor(226, 232, 240);
+  doc.line(12, y, 198, y);
+
+  // Row 2: Fonds de réserve travaux (Loi 106-12)
+  doc.setFillColor(250, 250, 252);
+  doc.rect(12, y, 186, 8, 'F');
+  doc.setFont("helvetica", "normal");
+  doc.text("2. Cotisation obligatoire au Fonds de Réserve pour travaux (Art. 18 bis - Loi 106-12)", 16, y + 5.5);
+  doc.text(quittance.periodCovered || "Charges courantes", 120, y + 5.5);
+  doc.setFont("helvetica", "bold");
+  doc.text(currencyFormatter.format(reserveShare), 165, y + 5.5);
+
+  y += 8;
+  doc.setDrawColor(203, 213, 225);
+  doc.line(12, y, 198, y);
+
+  // Row 3: TOTAL ROW
+  doc.setFillColor(241, 245, 249);
+  doc.rect(12, y, 186, 10, 'F');
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9.5);
+  doc.setTextColor(primaryTeal[0], primaryTeal[1], primaryTeal[2]);
+  doc.text("TOTAL RÉGLÉ DÉFINITIVEMENT :", 16, y + 6.5);
+  doc.setFontSize(11);
+  doc.text(currencyFormatter.format(totalAmount), 165, y + 6.5);
+
+  doc.setDrawColor(primaryTeal[0], primaryTeal[1], primaryTeal[2]);
+  doc.setLineWidth(0.5);
+  doc.line(12, y + 10, 198, y + 10);
+  doc.setLineWidth(0.2);
+
+  // Amount in French Words
+  y += 15;
+  doc.setTextColor(slateDark[0], slateDark[1], slateDark[2]);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  doc.text("Montant certifié reçu en toutes lettres :", 12, y);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(primaryTeal[0], primaryTeal[1], primaryTeal[2]);
+  doc.text(numberToFrenchWords(totalAmount), 72, y);
+
+  // Payment Execution & Traceability Box
+  y += 5;
+  doc.setFillColor(250, 250, 252);
+  doc.rect(12, y, 186, 20, 'F');
+  doc.setDrawColor(203, 213, 225);
+  doc.rect(12, y, 186, 20, 'S');
+
+  doc.setTextColor(slateDark[0], slateDark[1], slateDark[2]);
+  doc.setFontSize(8);
+  doc.setFont("helvetica", "bold");
+  doc.text("TRAÇABILITÉ DU PAIEMENT ET ENCAISSEMENT :", 15, y + 5);
+
+  const paymentDateStr = quittance.paymentDate
+    ? new Date(quittance.paymentDate).toLocaleDateString('fr-MA')
+    : formattedIssueDate;
+  const payMethodLabel = {
+    virement: 'Virement bancaire',
+    cheque: 'Chèque bancaire',
+    versement: 'Versement agence / GAB',
+    cmi: 'Carte bancaire (CMI)',
+    especes: 'Versement espèces (Reçu de caisse)',
+  }[quittance.paymentMethod] || String(quittance.paymentMethod).toUpperCase();
+
+  doc.setFont("helvetica", "normal");
+  doc.text(`Mode de règlement : ${payMethodLabel}`, 15, y + 10.5);
+  doc.text(`Date de valeur / d'opération : ${paymentDateStr}`, 15, y + 15.5);
+
+  const bankUsed = quittance.bankName || building.bankName || syndic?.bankName || 'Banque de la Copropriété';
+  const refNum = quittance.referenceNumber || `Réf: ${quittance.quittanceNumber}`;
+  doc.text(`Établissement bancaire : ${bankUsed}`, 105, y + 10.5);
+  doc.text(`Numéro de pièce / Transaction : ${refNum}`, 105, y + 15.5);
+
+  // Official Legal Discharge Clause (Moroccan Law 18-00 Jurisprudence)
+  y += 24;
+  doc.setFillColor(248, 250, 252);
+  doc.rect(12, y, 186, 22, 'F');
+  doc.setDrawColor(primaryTeal[0], primaryTeal[1], primaryTeal[2]);
+  doc.setLineWidth(0.4);
+  doc.rect(12, y, 186, 22, 'S');
+  doc.setLineWidth(0.2);
+
+  doc.setFontSize(8);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(primaryTeal[0], primaryTeal[1], primaryTeal[2]);
+  doc.text("MENTION LIBÉRATOIRE LÉGALE (ARTICLES 24 & 25 - LOI 18-00) :", 15, y + 5.5);
+
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(slateDark[0], slateDark[1], slateDark[2]);
+  doc.setFontSize(7.5);
+  doc.text(
+    "La présente quittance donne décharge libératoire au copropriétaire susmentionné pour le montant et la période expressément",
+    15,
+    y + 10.5
+  );
+  doc.text(
+    "désignés ci-dessus, sous réserve de bon encaissement définitif de tout chèque ou effet de commerce remis. Elle confère",
+    15,
+    y + 14.5
+  );
+  doc.text(
+    "au copropriétaire le statut de « Copropriétaire à jour de ses cotisations » pour ladite période au regard du Syndicat.",
+    15,
+    y + 18.5
+  );
+
+  // Lower Section: Digital Verification Stamp & Official Signature
+  y += 26;
+
+  // Digital Security QR / Verification Graphic on the left
+  doc.setFillColor(250, 250, 252);
+  doc.rect(12, y, 78, 42, 'F');
+  doc.setDrawColor(203, 213, 225);
+  doc.rect(12, y, 78, 42, 'S');
+
+  doc.setFontSize(7.5);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(slateDark[0], slateDark[1], slateDark[2]);
+  doc.text("AUTHENTIFICATION & INTÉGRITÉ NUMÉRIQUE", 15, y + 6);
+
+  // Draw simulated QR Matrix
+  const qrX = 16;
+  const qrY = y + 10;
+  const qrSize = 25;
+  doc.setFillColor(255, 255, 255);
+  doc.rect(qrX, qrY, qrSize, qrSize, 'F');
+  doc.setDrawColor(15, 118, 110);
+  doc.rect(qrX, qrY, qrSize, qrSize, 'S');
+
+  // Simulated QR corner squares
+  doc.setFillColor(15, 118, 110);
+  doc.rect(qrX + 2, qrY + 2, 6, 6, 'F');
+  doc.rect(qrX + 17, qrY + 2, 6, 6, 'F');
+  doc.rect(qrX + 2, qrY + 17, 6, 6, 'F');
+  // Dot pattern
+  doc.rect(qrX + 10, qrY + 4, 3, 3, 'F');
+  doc.rect(qrX + 10, qrY + 11, 4, 4, 'F');
+  doc.rect(qrX + 17, qrY + 12, 3, 3, 'F');
+  doc.rect(qrX + 5, qrY + 11, 2, 2, 'F');
+  doc.rect(qrX + 12, qrY + 18, 5, 4, 'F');
+
+  doc.setFontSize(6.5);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(slateMuted[0], slateMuted[1], slateMuted[2]);
+  doc.text("Certifié conforme par Syndik", qrX + 28, qrY + 6);
+  doc.text(`Hash : ${quittance.id.replace('quit-', 'SHA256-').toUpperCase()}`, qrX + 28, qrY + 11);
+  doc.text("Registre National Copro Maroc", qrX + 28, qrY + 16);
+  doc.text(`Lot : ${quittance.apartmentNumber} · ${currencyFormatter.format(totalAmount)}`, qrX + 28, qrY + 21);
+
+  doc.setFontSize(6.5);
+  doc.text("Ce document est opposable aux tiers et fait foi devant toute juridiction compétente.", 15, y + 38);
+
+  // Official Stamp & Signature Box on the right
+  const stampX = 96;
+  const stampW = 102;
+  doc.setFillColor(250, 250, 252);
+  doc.rect(stampX, y, stampW, 42, 'F');
+  doc.setDrawColor(primaryTeal[0], primaryTeal[1], primaryTeal[2]);
+  doc.rect(stampX, y, stampW, 42, 'S');
+
+  doc.setFontSize(8);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(primaryTeal[0], primaryTeal[1], primaryTeal[2]);
+  doc.text(`FAIT À ${building.city.toUpperCase()}, LE ${formattedIssueDate}`, stampX + stampW / 2, y + 6, {
+    align: 'center',
+  });
+
+  doc.setFontSize(8);
+  doc.setTextColor(slateDark[0], slateDark[1], slateDark[2]);
+  doc.text("POUR LE SYNDICAT DES COPROPRIÉTAIRES", stampX + stampW / 2, y + 11, { align: 'center' });
+  doc.setFontSize(7.5);
+  doc.setFont("helvetica", "normal");
+  doc.text(`Le Syndic : ${syndicName}`, stampX + stampW / 2, y + 15, { align: 'center' });
+
+  // Draw simulated Official Seal Circle
+  const sealCenterX = stampX + 26;
+  const sealCenterY = y + 27;
+  doc.setDrawColor(primaryTeal[0], primaryTeal[1], primaryTeal[2]);
+  doc.setLineWidth(0.6);
+  doc.circle(sealCenterX, sealCenterY, 11, 'S');
+  doc.setLineWidth(0.2);
+  doc.circle(sealCenterX, sealCenterY, 9.5, 'S');
+
+  doc.setFontSize(4.5);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(primaryTeal[0], primaryTeal[1], primaryTeal[2]);
+  doc.text("SYNDICAT DES COPROPRIÉTAIRES", sealCenterX, sealCenterY - 4, { align: 'center' });
+  doc.setFontSize(5.5);
+  doc.text("CERTIFIÉ", sealCenterX, sealCenterY, { align: 'center' });
+  doc.text("CONFORME", sealCenterX, sealCenterY + 3.5, { align: 'center' });
+  doc.setFontSize(4.5);
+  doc.text("MAROC · LOI 18-00", sealCenterX, sealCenterY + 7, { align: 'center' });
+
+  // Simulated Signature
+  const sigX = stampX + 48;
+  const sigY = y + 25;
+  doc.setFont("helvetica", "italic");
+  doc.setFontSize(10);
+  doc.setTextColor(15, 23, 42);
+  doc.text("Signed & Certified", sigX + 10, sigY + 3);
+  doc.setDrawColor(30, 41, 59);
+  doc.setLineWidth(0.4);
+  // Elegant signature stroke
+  doc.line(sigX + 2, sigY + 5, sigX + 45, sigY + 5);
+
+  doc.setFontSize(6.5);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(slateMuted[0], slateMuted[1], slateMuted[2]);
+  doc.text("[Cachet & Signature Électronique Réglementaire]", stampX + stampW / 2, y + 38, { align: 'center' });
+
+  // Document Footer
+  const footerY = 284;
+  doc.setFontSize(7);
+  doc.setTextColor(slateMuted[0], slateMuted[1], slateMuted[2]);
+  doc.text(
+    `Imprimé par le Système Intégré de Gestion de Copropriété · Conforme aux normes comptables et juridiques marocaines (Loi 18-00 / 106-12)`,
+    105,
+    footerY,
+    { align: 'center' }
+  );
+
+  const fileName = `Quittance_${quittance.quittanceNumber}_Lot_${quittance.apartmentNumber.replace(/\s+/g, '_')}.pdf`;
+  if (options.autoDownload !== false) {
+    doc.save(fileName);
+  }
+
+  return {
+    doc,
+    fileName,
+    outputBlobUri: () => doc.output('bloburl'),
+  };
+};
+
+// 3. GENERATE MISE EN DEMEURE (Article 25 de la Loi 18-00)
+export const generateMiseEnDemeurePDF = (resident: Resident, apartment: Apartment, building: Building, unpaidAmount: number, syndic?: Syndic) => {
+  const doc = new jsPDF();
+
+  // Header
+  doc.setFontSize(9);
+  doc.setTextColor(100, 116, 139);
+  doc.text("LETTRE RECOMMANDÉE AVEC ACCUSÉ DE RÉCEPTION", 14, 18);
+  doc.text("VALANT MISE EN DEMEURE", 14, 23);
+
+  // Sender (Syndic)
+  doc.setFontSize(10);
+  doc.setTextColor(15, 23, 42);
+  doc.setFont("helvetica", "bold");
+  doc.text(syndic?.name || "Le Syndic de Copropriété", 14, 38);
+  doc.setFont("helvetica", "normal");
+  doc.text(`Immeuble ${building.name}`, 14, 43);
+  doc.text(building.address, 14, 48);
+  doc.text(building.city, 14, 53);
+
+  // Recipient
+  doc.setFont("helvetica", "bold");
+  doc.text(`À l'attention de M./Mme ${resident.name}`, 120, 50);
+  doc.setFont("helvetica", "normal");
+  doc.text(`Copropriétaire de l'appartement N° ${apartment.number}`, 120, 56);
+  doc.text(`Immeuble ${building.name}`, 120, 61);
+  doc.text(building.city, 120, 66);
+
+  // City & Date
+  doc.text(`Fait à ${building.city}, le ${new Date().toLocaleDateString('fr-MA')}`, 14, 78);
+
+  // Subject line
+  doc.setFont("helvetica", "bold");
+  doc.text("Objet : MISE EN DEMEURE POUR NON-PAIEMENT DES CHARGES DE COPROPRIÉTÉ", 14, 88);
+  doc.setFont("helvetica", "normal");
+  doc.text("Réf légale : Article 25 de la Loi n° 18-00 relative à la copropriété des immeubles bâtis", 14, 94);
+
+  // Body
+  let y = 108;
+  doc.text("Madame, Monsieur,", 14, y);
+
+  y += 10;
+  const paragraph1 = `En votre qualité de copropriétaire du lot N° ${apartment.number} au sein de la résidence ${building.name}, nous constatons qu'en dépit de nos précédents rappels amiables, votre compte de charges présente à ce jour un solde débiteur impayé de :`;
+  const splitP1 = doc.splitTextToSize(paragraph1, 182);
+  doc.text(splitP1, 14, y);
+
+  y += 18;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(13);
+  doc.setTextColor(185, 28, 28); // Red
+  doc.text(currencyFormatter.format(unpaidAmount) + ` (${numberToFrenchWords(unpaidAmount)})`, 14, y);
+
+  y += 12;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  doc.setTextColor(15, 23, 42);
+  const paragraph2 = `Par la présente, nous vous METTONS FORMELLEMENT EN DEMEURE de procéder au règlement intégral de cette somme dans un DÉLAI STRICT DE TRENTE (30) JOURS à compter de la réception de la présente lettre.`;
+  const splitP2 = doc.splitTextToSize(paragraph2, 182);
+  doc.text(splitP2, 14, y);
+
+  y += 20;
+  const paragraph3 = `À défaut de règlement dans ce délai légal imparti par l'article 25 de la Loi 18-00, nous serons dans l'obligation de saisir Monsieur le Président du Tribunal de Première Instance territorialement compétent afin d'obtenir une ORDONNANCE D'INJONCTION DE PAYER avec exécution provisoire.`;
+  const splitP3 = doc.splitTextToSize(paragraph3, 182);
+  doc.text(splitP3, 14, y);
+
+  y += 24;
+  const paragraph4 = `Tous les frais de procédure, dépens et intérêts de retard seront intégralement mis à votre charge. Vous pouvez vous libérer par virement sur le compte bancaire de la copropriété : ${building.bankRib || "compte bancaire habituel du syndicat"}.`;
+  const splitP4 = doc.splitTextToSize(paragraph4, 182);
+  doc.text(splitP4, 14, y);
+
+  y += 20;
+  doc.text("Dans l'attente de votre régularisation, nous vous prions d'agréer nos salutations distinguées.", 14, y);
+
+  y += 20;
+  doc.setFont("helvetica", "bold");
+  doc.text("Le Syndic de Copropriété", 140, y);
+  doc.setFont("helvetica", "normal");
+  doc.text("[Signature & Cachet]", 140, y + 16);
+
+  doc.save(`Mise_En_Demeure_${resident.name.replace(/\s+/g, '_')}_Apt_${apartment.number}.pdf`);
+};
+
+// 4. GENERATE PROCÈS-VERBAL D'ASSEMBLÉE GÉNÉRALE (PV AG)
+export const generatePvAgPDF = (ag: AssembleeGenerale, building: Building, syndic?: Syndic) => {
+  const doc = new jsPDF();
+
+  // Header
+  doc.setFillColor(15, 118, 110);
+  doc.rect(0, 0, 210, 32, 'F');
+  doc.setTextColor(255, 255, 255);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(16);
+  doc.text(`PROCÈS-VERBAL D'ASSEMBLÉE GÉNÉRALE (${ag.type})`, 105, 18, { align: 'center' });
+  doc.setFontSize(10);
+  doc.setFont("helvetica", "normal");
+  doc.text(`Copropriété : ${building.name} - ${building.city}`, 105, 26, { align: 'center' });
+
+  let y = 44;
+  doc.setTextColor(15, 23, 42);
+  doc.setFontSize(10);
+  doc.setFont("helvetica", "bold");
+  doc.text(`Date et heure : Le ${ag.date} à ${ag.time}`, 14, y);
+  doc.text(`Lieu de réunion : ${ag.location}`, 14, y + 6);
+  doc.text(`Président de séance : ${ag.presidentName || "Élu en séance"}`, 14, y + 12);
+  doc.text(`Secrétaire de séance : ${ag.secretaryName || syndic?.name || "Le Syndic"}`, 14, y + 18);
+
+  // Quorum section
+  y += 28;
+  doc.setFillColor(241, 245, 249);
+  doc.rect(14, y, 182, 18, 'F');
+  doc.setFont("helvetica", "bold");
+  doc.text("CONSTATATION DU QUORUM LÉGAL (Loi 18-00 / Loi 106-12) :", 18, y + 6);
+  doc.setFont("helvetica", "normal");
+  const quorumText = `Tantièmes présents et représentés : ${ag.presentTantiemes} / ${ag.totalTantiemes} tantièmes (${Math.round((ag.presentTantiemes / ag.totalTantiemes) * 100)}%).`;
+  doc.text(quorumText, 18, y + 12);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(ag.quorumReached ? 15 : 185, ag.quorumReached ? 118 : 28, ag.quorumReached ? 110 : 28);
+  doc.text(ag.quorumReached ? "-> QUORUM ATTEINT : L'Assemblée peut valablement délibérer." : "-> QUORUM NON ATTEINT : Deuxième convocation requise.", 115, y + 12);
+
+  // Order of business
+  y += 26;
+  doc.setTextColor(15, 23, 42);
+  doc.setFont("helvetica", "bold");
+  doc.text("ORDRE DU JOUR :", 14, y);
+  doc.setFont("helvetica", "normal");
+  ag.agendaItems.forEach((item, index) => {
+    y += 6;
+    doc.text(`${index + 1}. ${item}`, 18, y);
+  });
+
+  // Resolutions & Votes
+  y += 12;
+  doc.setFont("helvetica", "bold");
+  doc.text("DÉLIBÉRATIONS ET VOTES DES RÉSOLUTIONS :", 14, y);
+
+  ag.resolutions.forEach((res) => {
+    y += 10;
+    if (y > 250) {
+      doc.addPage();
+      y = 20;
+    }
+    doc.setFillColor(248, 250, 252);
+    doc.rect(14, y, 182, 22, 'F');
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9.5);
+    doc.text(`Résolution N° ${res.number} : ${res.title}`, 18, y + 6);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8.5);
+    doc.text(res.description, 18, y + 11);
+    doc.setFont("helvetica", "bold");
+    doc.text(`Votes : POUR : ${res.votesFor} tantièmes  |  CONTRE : ${res.votesAgainst}  |  ABSTENTION : ${res.votesAbstain}`, 18, y + 17);
+    doc.setTextColor(res.status === 'approved' ? 15 : 185, res.status === 'approved' ? 118 : 28, res.status === 'approved' ? 110 : 28);
+    doc.text(`RÉSULTAT : ${res.status === 'approved' ? "ADOPTÉE" : "REJETÉE"}`, 145, y + 17);
+    doc.setTextColor(15, 23, 42);
+    y += 14;
+  });
+
+  // Signatures
+  y += 15;
+  if (y > 240) {
+    doc.addPage();
+    y = 20;
+  }
+  doc.setFontSize(9);
+  doc.setFont("helvetica", "bold");
+  doc.text("Le Président de séance", 25, y);
+  doc.text("Le Secrétaire de séance", 85, y);
+  doc.text("Le Syndic", 150, y);
+
+  doc.setFont("helvetica", "normal");
+  doc.text("(Signature)", 25, y + 14);
+  doc.text("(Signature)", 85, y + 14);
+  doc.text("(Signature & Cachet)", 150, y + 14);
+
+  doc.save(`PV_Assemblee_Generale_${building.name.replace(/\s+/g, '_')}_${ag.date}.pdf`);
+};
+
+// 5. GENERATE TRANSACTION ACCOUNTING VOUCHER (PIÈCE COMPTABLE LOI 18-00)
+export const generateTransactionVoucherPDF = (
+  trx: Transaction,
+  building: Building,
+  syndic?: Syndic
+) => {
+  const doc = new jsPDF();
+  const isIncome = trx.amount >= 0 || trx.type === 'income';
+  const absAmount = Math.abs(trx.amount);
+
+  // Top header banner
+  doc.setFillColor(isIncome ? 13 : 30, isIncome ? 148 : 41, isIncome ? 136 : 59); // Teal 600 or Slate 800
+  doc.rect(0, 0, 210, 36, 'F');
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(16);
+  doc.text(
+    isIncome ? "PIÈCE COMPTABLE : REÇU D'ENCAISSEMENT" : "PIÈCE COMPTABLE : BORDEREAU DE DÉPENSE",
+    14,
+    20
+  );
+  doc.setFontSize(8.5);
+  doc.setFont("helvetica", "normal");
+  doc.text("Conformité Comptabilité Syndic · Loi 18-00 relative à la copropriété", 14, 27);
+
+  doc.setFontSize(9);
+  doc.setFont("helvetica", "bold");
+  doc.text(`Réf Écriture : ${trx.id}`, 145, 16);
+  doc.setFont("helvetica", "normal");
+  doc.text(`Date : ${new Date(trx.date).toLocaleDateString('fr-MA')}`, 145, 22);
+  doc.text(`Fonds : ${trx.fundType === 'reserve' ? 'FONDS DE RÉSERVE (Loi 106-12)' : 'COMPTE COURANT'}`, 145, 28);
+
+  // General details
+  doc.setTextColor(15, 23, 42);
+  let y = 48;
+
+  // Syndic & Copropriété box
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(226, 232, 240);
+  doc.rect(14, y, 88, 38, 'FD');
+
+  doc.setFontSize(9.5);
+  doc.setFont("helvetica", "bold");
+  doc.text("SYNDICAT DES COPROPRIÉTAIRES :", 18, y + 7);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  doc.text(`Résidence : ${building.name}`, 18, y + 14);
+  doc.text(`Adresse : ${building.address}, ${building.city}`, 18, y + 20);
+  doc.text(`Gestionnaire : ${syndic?.name || building.managerName || 'Syndic'}`, 18, y + 26);
+  if (building.bankName) doc.text(`Banque : ${building.bankName}`, 18, y + 32);
+
+  // Third party box (Prestataire ou Copropriétaire)
+  doc.rect(108, y, 88, 38, 'FD');
+  doc.setFontSize(9.5);
+  doc.setFont("helvetica", "bold");
+  doc.text(isIncome ? "PAYEUR / COPROPRIÉTAIRE :" : "BÉNÉFICIAIRE / PRESTATAIRE :", 112, y + 7);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  doc.text(`Nom : ${trx.thirdPartyName || (isIncome ? 'Copropriétaire' : 'Fournisseur')}`, 112, y + 14);
+  if (trx.thirdPartyIce) {
+    doc.text(`ICE (Entr.) : ${trx.thirdPartyIce}`, 112, y + 20);
+  } else if (trx.lotNumber) {
+    doc.text(`Lot / Apt : ${trx.lotNumber}`, 112, y + 20);
+  }
+  doc.text(`Mode : ${trx.paymentMethod ? trx.paymentMethod.toUpperCase() : 'VIREMENT'}`, 112, y + 26);
+  if (trx.reference) {
+    doc.text(`Réf / Chèque N° : ${trx.reference}`, 112, y + 32);
+  }
+
+  // Voucher details box
+  y = 94;
+  doc.setFillColor(241, 245, 249);
+  doc.rect(14, y, 182, 9, 'F');
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.text("DÉTAIL DE L'OPÉRATION COMPTABLE", 18, y + 6);
+  doc.text("MONTANT NET", 155, y + 6);
+
+  y += 18;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10);
+  doc.text(trx.description, 18, y);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(11);
+  doc.text(currencyFormatter.format(absAmount), 155, y);
+
+  y += 6;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  doc.setTextColor(71, 85, 105);
+  doc.text(`Catégorie comptable : ${trx.category || 'Général'}`, 18, y);
+  if (trx.documentType || trx.invoiceNumber) {
+    doc.text(
+      `Pièce justificative : ${trx.documentType ? trx.documentType.toUpperCase() : 'PIÈCE'} ${
+        trx.invoiceNumber ? 'N° ' + trx.invoiceNumber : ''
+      }`,
+      18,
+      y + 6
+    );
+    y += 6;
+  }
+  if (trx.notes) {
+    doc.text(`Observations / Résolution : ${trx.notes}`, 18, y + 6);
+    y += 6;
+  }
+
+  // Amount in letters box
+  y += 14;
+  doc.setFillColor(254, 252, 232); // Amber 50
+  doc.setDrawColor(254, 240, 138); // Amber 200
+  doc.rect(14, y, 182, 18, 'FD');
+
+  doc.setTextColor(15, 23, 42);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.5);
+  doc.text("MONTANT TOTAL ARRETÉ EN TOUTES LETTRES :", 18, y + 6);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9.5);
+  doc.text(numberToFrenchWords(absAmount), 18, y + 12);
+
+  // Legal declaration
+  y += 26;
+  doc.setFontSize(7.5);
+  doc.setTextColor(100, 116, 139);
+  doc.text(
+    "Le présent document tient lieu de justificatif d'écriture comptable pour le syndicat des copropriétaires conformément aux dispositions",
+    14,
+    y
+  );
+  doc.text(
+    "de la Loi 18-00 régissant la copropriété des immeubles bâtis au Royaume du Maroc et de la Loi 106-12 relative aux fonds de réserve.",
+    14,
+    y + 4
+  );
+
+  // Signatures
+  y += 18;
+  doc.setDrawColor(203, 213, 225);
+  doc.rect(14, y, 56, 32);
+  doc.rect(77, y, 56, 32);
+  doc.rect(140, y, 56, 32);
+
+  doc.setTextColor(15, 23, 42);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8);
+  doc.text("VISA DU SYNDIC", 18, y + 6);
+  doc.text("BÉNÉFICIAIRE / TIERS", 81, y + 6);
+  doc.text("CONSEIL SYNDICAL", 144, y + 6);
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7.5);
+  doc.setTextColor(148, 163, 184);
+  doc.text("(Cachet et Signature)", 18, y + 26);
+  doc.text("(Émargement / Reçu)", 81, y + 26);
+  doc.text("(Vérification comptes)", 144, y + 26);
+
+  doc.save(`Piece_Comptable_${trx.id}_${trx.date.split('T')[0]}.pdf`);
+};
+

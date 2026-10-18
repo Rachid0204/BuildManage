@@ -1,0 +1,8 @@
+{
+  "name": "ImmoGest",
+  "description": "A production-ready, multi-tenant Moroccan syndic (building trustee) SaaS web app designed to streamline building management, financials, and resident communication.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
