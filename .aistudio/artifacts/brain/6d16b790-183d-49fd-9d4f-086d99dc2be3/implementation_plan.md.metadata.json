@@ -1,6 +1,6 @@
 {
-  "summary": "Implementation plan for a B2B Syndic-centric authentication and credential provisioning workflow: Plan-driven Syndic onboarding from the Landing Page, Sign-In-only public login screen, centralized Resident and Prestataire account & credential generation from the Syndic Dashboard with printable PDF access sheets, and mandatory first-login password change.",
-  "updatedAt": "2026-10-18T11:03:37.069913046Z",
+  "summary": "Production Mode Migration Plan for Syndik Maroc: eliminates all mock/demo data fallbacks, removes quick-access demo buttons from the login page, wipes existing test records across client, shared backend, and Firestore, and ensures resilient empty states across all portals.",
+  "updatedAt": "2026-10-18T22:22:32.655611881Z",
   "requestFeedback": true,
   "userFacing": true
 }

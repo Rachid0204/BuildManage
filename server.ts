@@ -8,11 +8,20 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const DATA_DIR = path.join(__dirname, '.data');
-const STORE_FILE = path.join(DATA_DIR, 'syndik-shared-store.json');
+const LEGACY_STORE_FILE = path.join(DATA_DIR, 'syndik-shared-store.json');
+const STORE_FILE = path.join(DATA_DIR, 'syndik-prod-store-v1.json');
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+  // Remove legacy test store file if present
+  if (fs.existsSync(LEGACY_STORE_FILE)) {
+    try {
+      fs.unlinkSync(LEGACY_STORE_FILE);
+    } catch {
+      // ignore
+    }
   }
 }
 
@@ -71,8 +80,6 @@ function mergeArrayById(
     if (!resultMap.has(id)) {
       resultMap.set(id, existingItem);
     } else if (idField === 'id' && Array.isArray(existingItem.buildings)) {
-      // For Syndic objects, if the existing server record has more buildings or residents created in another session,
-      // ensure buildings created by that Syndic are preserved unless explicitly updated
       const incSyndic = resultMap.get(id);
       if (Array.isArray(incSyndic.buildings)) {
         const bldMap = new Map<string, any>();
@@ -96,6 +103,7 @@ async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
+  ensureDataDir();
   app.use(express.json({ limit: '15mb' }));
 
   // Shared multi-user state API endpoints
@@ -108,6 +116,11 @@ async function startServer() {
     const store = readStore();
     const key = req.params.key;
     res.json({ ok: true, key, value: store[key] ?? null });
+  });
+
+  app.post('/api/shared-state/reset', (_req, res) => {
+    writeStore({ __resetAt: new Date().toISOString() });
+    res.json({ ok: true });
   });
 
   app.post('/api/shared-state', (req, res) => {
@@ -124,15 +137,15 @@ async function startServer() {
       store.__deletedIds = Array.from(deletedSet);
     }
 
-    if (key === 'syndik_reactive_syndics') {
+    if (key === 'syndik_prod_syndics_v1') {
       store[key] = mergeArrayById(store[key] || [], value, 'id', deletedSet);
-    } else if (key === 'syndik_reactive_prestataires_v2') {
+    } else if (key === 'syndik_prod_prestataires_v1') {
       store[key] = mergeArrayById(store[key] || [], value, 'id', deletedSet);
-    } else if (key === 'syndik_resident_accounts_v1') {
+    } else if (key === 'syndik_prod_resident_accounts_v1') {
       store[key] = mergeArrayById(store[key] || [], value, 'residentId', deletedSet);
-    } else if (key === 'syndik_prestataire_accounts_v1') {
+    } else if (key === 'syndik_prod_prestataire_accounts_v1') {
       store[key] = mergeArrayById(store[key] || [], value, 'prestataireId', deletedSet);
-    } else if (key === 'syndik_registered_users_v1') {
+    } else if (key === 'syndik_prod_registered_users_v1') {
       store[key] = mergeArrayById(store[key] || [], value, 'uid', deletedSet);
     } else {
       store[key] = value;

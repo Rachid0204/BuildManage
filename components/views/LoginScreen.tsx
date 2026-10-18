@@ -1,30 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
-import type { Syndic, UserProfile, SubscriptionPlan, Prestataire } from '../../types';
+import type { Syndic, UserProfile, SubscriptionPlan } from '../../types';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import Modal from '../common/Modal';
 import LanguageToggle from '../common/LanguageToggle';
 import { useI18n } from '../../hooks/useI18n';
 import { useAuth, getHomeRouteForRole } from '../../contexts/AuthContext';
-import { getSyndics } from '../../firebase/services';
 import { BuildingsIcon } from '../icons/IconComponents';
 
 interface LoginScreenProps {
   syndics?: Syndic[];
   onLogin?: (syndic: Syndic) => void;
   onBack?: () => void;
-}
-
-interface GeneratedAccountItem {
-  id: string;
-  role: 'resident' | 'provider';
-  name: string;
-  email: string;
-  cin?: string;
-  password: string;
-  subtitle: string;
-  buildingName: string;
 }
 
 const PLAN_DETAILS: Record<
@@ -73,12 +61,12 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
       : 'professional'
   );
 
-  // Sign-In Fields
-  const [identifier, setIdentifier] = useState('contact@syndicpro.ma');
-  const [password, setPassword] = useState('password123');
+  // Sign-In Fields (Production: start empty)
+  const [identifier, setIdentifier] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
 
-  // Syndic Onboarding Fields (only used when creating a Syndic account via pricing plan)
+  // Syndic Onboarding Fields (used when creating a Syndic account via pricing plan)
   const [syndicName, setSyndicName] = useState('');
   const [cabinetName, setCabinetName] = useState('');
   const [phone, setPhone] = useState('');
@@ -95,18 +83,11 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
   const [forgotEmail, setForgotEmail] = useState('');
   const [forgotSent, setForgotSent] = useState(false);
 
-  // Syndic-generated Resident & Prestataire accounts for 1-click verification
-  const [generatedAccounts, setGeneratedAccounts] = useState<GeneratedAccountItem[]>([]);
-
   useEffect(() => {
     const modeParam = searchParams.get('mode');
     const planParam = searchParams.get('plan') as SubscriptionPlan | null;
     if (modeParam === 'syndic-signup') {
       setIsSyndicSignup(true);
-      if (identifier === 'contact@syndicpro.ma') {
-        setIdentifier('');
-        setPassword('');
-      }
     } else {
       setIsSyndicSignup(false);
     }
@@ -114,107 +95,6 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
       setSelectedPlan(planParam);
     }
   }, [searchParams]);
-
-  useEffect(() => {
-    let mounted = true;
-    const loadProvisionedAccounts = async () => {
-      try {
-        const syndics = await getSyndics();
-        const items: GeneratedAccountItem[] = [];
-        const seenEmails = new Set<string>();
-
-        // 1. Load Syndic-provisioned Resident accounts
-        for (const s of syndics) {
-          for (const b of s.buildings) {
-            for (const r of b.residents) {
-              if (r.hasAccount && r.generatedPassword) {
-                const apt = b.apartments.find(
-                  (a) =>
-                    a.id === r.apartmentId ||
-                    a.ownerId === r.id ||
-                    a.tenantId === r.id
-                );
-                items.push({
-                  id: r.id,
-                  role: 'resident',
-                  name: r.name,
-                  email: r.email,
-                  cin: r.cin,
-                  password: r.generatedPassword,
-                  subtitle: `${
-                    r.isOwner
-                      ? tr('Copropriétaire', 'مالك مشترك')
-                      : tr('Locataire', 'مكتري')
-                  }${apt?.number ? ` • ${tr('Lot', 'شقة')} ${apt.number}` : ''}`,
-                  buildingName: b.name,
-                });
-                seenEmails.add(r.email.toLowerCase());
-              }
-            }
-          }
-        }
-
-        const rawSavedRes = localStorage.getItem('syndik_resident_accounts_v1');
-        if (rawSavedRes) {
-          const parsed = JSON.parse(rawSavedRes) as Array<{
-            residentId: string;
-            name: string;
-            email: string;
-            password: string;
-            isOwner?: boolean;
-          }>;
-          for (const acc of parsed) {
-            if (!seenEmails.has(acc.email.toLowerCase())) {
-              items.push({
-                id: acc.residentId,
-                role: 'resident',
-                name: acc.name,
-                email: acc.email,
-                password: acc.password,
-                subtitle: acc.isOwner
-                  ? tr('Copropriétaire', 'مالك مشترك')
-                  : tr('Locataire', 'مكتري'),
-                buildingName: tr('Résidence Gérée', 'إقامة مُسيّرة'),
-              });
-              seenEmails.add(acc.email.toLowerCase());
-            }
-          }
-        }
-
-        // 2. Load Syndic-provisioned Prestataire accounts
-        const rawProviders = localStorage.getItem('syndik_reactive_prestataires_v2');
-        if (rawProviders) {
-          const parsedProviders = JSON.parse(rawProviders) as Prestataire[];
-          for (const p of parsedProviders) {
-            if (p.hasAccount && p.generatedPassword && p.email) {
-              if (!seenEmails.has(p.email.toLowerCase())) {
-                items.push({
-                  id: p.id,
-                  role: 'provider',
-                  name: p.name,
-                  email: p.email,
-                  password: p.generatedPassword,
-                  subtitle: `${tr('Prestataire Agréé', 'مقدم خدمة معتمد')} (${p.contactPerson || p.category})`,
-                  buildingName: tr('Portail Prestataire', 'بوابة مقدمي الخدمات'),
-                });
-                seenEmails.add(p.email.toLowerCase());
-              }
-            }
-          }
-        }
-
-        if (mounted) {
-          setGeneratedAccounts(items);
-        }
-      } catch {
-        // ignore
-      }
-    };
-    loadProvisionedAccounts();
-    return () => {
-      mounted = false;
-    };
-  }, [language]);
 
   const redirectUserToCorrectPage = (profile: UserProfile) => {
     const defaultTarget = getHomeRouteForRole(profile.role);
@@ -270,22 +150,6 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
     }
   };
 
-  const handleQuickDemoLogin = async (demoEmail: string, pass = 'password123') => {
-    setLoading(true);
-    setError('');
-    setIsSyndicSignup(false);
-    setIdentifier(demoEmail);
-    setPassword(pass);
-    try {
-      const profile = await loginWithEmail(demoEmail, pass);
-      redirectUserToCorrectPage(profile);
-    } catch (err: any) {
-      setError(err.message || tr('Connexion démo échouée', 'فشل الاتصال التجريبي'));
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleGoogleSignIn = async () => {
     setLoading(true);
     setError('');
@@ -308,10 +172,6 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
     setIsSyndicSignup(false);
     setSearchParams({});
     setError('');
-    if (!identifier) {
-      setIdentifier('contact@syndicpro.ma');
-      setPassword('password123');
-    }
   };
 
   const currentPlanMeta = PLAN_DETAILS[selectedPlan];
@@ -349,146 +209,6 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
             )}
           </p>
         </div>
-
-        {/* Role-Based 1-Click Demo Access (Only shown in Sign-In mode) */}
-        {!isSyndicSignup && (
-          <div className="bg-white border border-teal-100 rounded-xl p-4 shadow-xs space-y-3">
-            <div className="flex items-center justify-between">
-              <p className="text-[11px] font-bold text-teal-900 uppercase tracking-wider">
-                {tr(
-                  'Accès Démo Immédiat par Profil & Redirection Automatique',
-                  'ولوج تجريبي فوري حسب الصفة مع التوجيه التلقائي'
-                )}
-              </p>
-              <span className="text-[10px] font-mono bg-teal-50 text-teal-700 px-2 py-0.5 rounded border border-teal-200">
-                {tr('5 Rôles Métiers', '5 أدوار مهنية')}
-              </span>
-            </div>
-
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
-              <button
-                type="button"
-                disabled={loading}
-                onClick={() => handleQuickDemoLogin('contact@syndicpro.ma')}
-                className="p-2.5 bg-teal-50 hover:bg-teal-100 text-teal-900 rounded-lg text-start transition-colors border border-teal-200 flex flex-col justify-between"
-              >
-                <span className="font-bold flex items-center justify-between">
-                  <span>🏢 {tr('Syndic Pro', 'وكيل الاتحاد')}</span>
-                  <span className="text-[10px] text-teal-600 font-mono">→ /</span>
-                </span>
-                <span className="text-[10px] text-teal-700 mt-1 truncate">
-                  Cabinet SyndicPro Maroc
-                </span>
-              </button>
-
-              <button
-                type="button"
-                disabled={loading}
-                onClick={() => handleQuickDemoLogin('fatima.zahra@email.com')}
-                className="p-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-900 rounded-lg text-start transition-colors border border-indigo-200 flex flex-col justify-between"
-              >
-                <span className="font-bold flex items-center justify-between">
-                  <span>🔑 {tr('Copropriétaire', 'مالك مشترك')}</span>
-                  <span className="text-[10px] text-indigo-600 font-mono">→ /resident</span>
-                </span>
-                <span className="text-[10px] text-indigo-700 mt-1 truncate">
-                  Fatima Zahra • {tr('Lot', 'شقة')} A-102
-                </span>
-              </button>
-
-              <button
-                type="button"
-                disabled={loading}
-                onClick={() => handleQuickDemoLogin('youssef.benali@email.com')}
-                className="p-2.5 bg-sky-50 hover:bg-sky-100 text-sky-900 rounded-lg text-start transition-colors border border-sky-200 flex flex-col justify-between"
-              >
-                <span className="font-bold flex items-center justify-between">
-                  <span>🏠 {tr('Locataire', 'مكتري')}</span>
-                  <span className="text-[10px] text-sky-600 font-mono">→ /resident</span>
-                </span>
-                <span className="text-[10px] text-sky-700 mt-1 truncate">
-                  Youssef Benali • {tr('Lot', 'شقة')} A-102
-                </span>
-              </button>
-
-              <button
-                type="button"
-                disabled={loading}
-                onClick={() => handleQuickDemoLogin('provider@syndik.ma')}
-                className="p-2.5 bg-amber-50 hover:bg-amber-100 text-amber-900 rounded-lg text-start transition-colors border border-amber-200 flex flex-col justify-between"
-              >
-                <span className="font-bold flex items-center justify-between">
-                  <span>🛠️ {tr('Prestataire', 'مقدم خدمة')}</span>
-                  <span className="text-[10px] text-amber-700 font-mono">→ /provider</span>
-                </span>
-                <span className="text-[10px] text-amber-800 mt-1 truncate">
-                  {tr('Artisan / Ascenseurs', 'تقني / مصاعد')}
-                </span>
-              </button>
-
-              <button
-                type="button"
-                disabled={loading}
-                onClick={() => handleQuickDemoLogin('admin@syndik.ma')}
-                className="p-2.5 bg-slate-100 hover:bg-slate-200 text-slate-900 rounded-lg text-start transition-colors border border-slate-300 flex flex-col justify-between sm:col-span-2"
-              >
-                <span className="font-bold flex items-center justify-between">
-                  <span>🛡️ {tr('Super Admin SaaS', 'المدير العام للنظام SaaS')}</span>
-                  <span className="text-[10px] text-slate-600 font-mono">→ /admin</span>
-                </span>
-                <span className="text-[10px] text-slate-600 mt-1 truncate">
-                  {tr(
-                    'Supervision Nationale des Cabinets Syndics & Abonnements',
-                    'الإشراف الوطني على مكاتب السنديك والاشتراكات'
-                  )}
-                </span>
-              </button>
-            </div>
-
-            {/* Syndic-Provisioned Resident & Prestataire Accounts Quick Access */}
-            {generatedAccounts.length > 0 && (
-              <div className="pt-2.5 border-t border-slate-100">
-                <p className="text-[11px] font-bold text-emerald-900 uppercase tracking-wider mb-1.5">
-                  🔑{' '}
-                  {tr(
-                    'Comptes Résidents & Prestataires Générés par le Syndic',
-                    'حسابات السكان ومقدمي الخدمات المُنشأة من طرف السنديك'
-                  )}{' '}
-                  ({generatedAccounts.length})
-                </p>
-                <div className="space-y-1.5 max-h-40 overflow-y-auto pe-1">
-                  {generatedAccounts.map((acc) => (
-                    <div
-                      key={`${acc.role}-${acc.id}`}
-                      className="flex items-center justify-between gap-2 p-2 rounded-lg bg-emerald-50/70 border border-emerald-200 text-xs"
-                    >
-                      <div className="min-w-0">
-                        <div className="font-bold text-slate-900 truncate flex items-center gap-1.5">
-                          <span>{acc.role === 'provider' ? '🛠️' : '🏠'}</span>
-                          <span>{acc.name}</span>
-                          <span className="text-[10px] font-normal text-slate-500">
-                            ({acc.subtitle})
-                          </span>
-                        </div>
-                        <div className="font-mono text-[11px] text-slate-600 truncate">
-                          {acc.email} · {tr('MDP', 'كلمة المرور')}:{' '}
-                          <span className="font-bold text-emerald-800">{acc.password}</span>
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => handleQuickDemoLogin(acc.email, acc.password)}
-                        className="px-2.5 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-[11px] shrink-0"
-                      >
-                        {tr('Tester →', 'تجربة ←')}
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
 
         {/* Main Auth Card */}
         <Card className="p-6 border border-slate-200">
@@ -743,8 +463,8 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
                     value={identifier}
                     onChange={(e) => setIdentifier(e.target.value)}
                     placeholder={tr(
-                      'Ex: contact@syndicpro.ma ou CIN BK124578',
-                      'مثال: contact@syndicpro.ma أو رقم CIN BK124578'
+                      'Ex: contact@moncabinet.ma ou CIN BK124578',
+                      'مثال: contact@moncabinet.ma أو رقم CIN BK124578'
                     )}
                   />
                 </div>
@@ -773,6 +493,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
                       className="w-full px-3 py-2 pe-16 border border-slate-300 rounded-lg text-sm focus:ring-1 focus:ring-teal-500 font-mono"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
+                      placeholder="••••••••"
                     />
                     <button
                       type="button"
@@ -920,7 +641,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
                   type="text"
                   value={forgotEmail}
                   onChange={(e) => setForgotEmail(e.target.value)}
-                  placeholder="Ex: ahmed.alami@email.com / BE458921"
+                  placeholder="Ex: contact@moncabinet.ma / BE458921"
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
                 />
               </div>

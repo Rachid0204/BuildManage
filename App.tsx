@@ -304,10 +304,32 @@ const SyndicDataProvider: React.FC<{ children: React.ReactNode }> = ({
       const targetSyndic =
         (userProfile?.syndicId &&
           syndics.find((s) => s.id === userProfile.syndicId)) ||
+        (userProfile?.email &&
+          syndics.find(
+            (s) => s.email?.trim().toLowerCase() === userProfile.email.trim().toLowerCase()
+          )) ||
         syndics[0];
-      setSyndicData(targetSyndic);
+      if (targetSyndic) {
+        setSyndicData(targetSyndic);
+      }
+    } else if (!isLoading && userProfile?.role === 'syndic') {
+      const fallbackSyndicId = userProfile.syndicId || `syndic-${userProfile.uid}`;
+      const nextYear = new Date(Date.now() + 365 * 86400000).toISOString();
+      const autoSyndic = {
+        id: fallbackSyndicId,
+        name: userProfile.displayName || 'Cabinet Syndic',
+        email: userProfile.email,
+        phone: userProfile.phone || '+212 6 00 00 00 00',
+        createdBy: userProfile.uid,
+        subscriptionPlan: 'professional' as SubscriptionPlan,
+        subscriptionStatus: 'active' as const,
+        subscriptionExpiry: nextYear,
+        buildings: [],
+      };
+      setSyndicData(autoSyndic);
+      void saveSyndic(autoSyndic);
     }
-  }, [syndics, userProfile?.syndicId, setSyndicData]);
+  }, [syndics, isLoading, userProfile, setSyndicData]);
 
   if (isLoading)
     return (
@@ -836,20 +858,24 @@ const AppContent: React.FC = () => {
           <Route
             path="/buildings"
             element={
-              <Buildings
-                syndic={syndic!}
-                onAddBuilding={handleAddBuilding}
-                onUpdateBuilding={(buildingId, updates) =>
-                  updateBuildingMutation.mutate({ buildingId, updates })
-                }
-                onDeleteBuilding={(buildingId) =>
-                  deleteBuildingMutation.mutate(buildingId)
-                }
-                onSelectBuilding={(building: Building) => {
-                  setSelectedBuilding(building);
-                  navigate('/');
-                }}
-              />
+              syndic ? (
+                <Buildings
+                  syndic={syndic}
+                  onAddBuilding={handleAddBuilding}
+                  onUpdateBuilding={(buildingId, updates) =>
+                    updateBuildingMutation.mutate({ buildingId, updates })
+                  }
+                  onDeleteBuilding={(buildingId) =>
+                    deleteBuildingMutation.mutate(buildingId)
+                  }
+                  onSelectBuilding={(building: Building) => {
+                    setSelectedBuilding(building);
+                    navigate('/');
+                  }}
+                />
+              ) : (
+                <Loading />
+              )
             }
           />
 

@@ -55,22 +55,39 @@ import {
 // Keep rich business logic engine active while syncing with shared server & Cloud Firestore
 const isMock = true;
 
-// Shared storage keys
+// Shared production storage keys (zero mock data)
 export const STORAGE_KEYS = {
-  SYNDICS: 'syndik_reactive_syndics',
-  CHARGES: 'syndik_reactive_charges',
-  PROOFS: 'syndik_reactive_proofs',
-  QUITTANCES: 'syndik_reactive_quittances',
-  AG: 'syndik_reactive_ag',
-  PRESTATAIRES: 'syndik_reactive_prestataires_v2',
-  MAINTENANCE: 'syndik_reactive_maintenance_v2',
-  CHAT: 'syndik_reactive_chat_v1',
-  MARKETPLACE: 'syndik_reactive_marketplace_v1',
-  NOTIFICATIONS: 'syndik_reactive_notifications_v1',
-  RESIDENT_ACCOUNTS: 'syndik_resident_accounts_v1',
-  PRESTATAIRE_ACCOUNTS: 'syndik_prestataire_accounts_v1',
-  REGISTERED_USERS: 'syndik_registered_users_v1',
+  SYNDICS: 'syndik_prod_syndics_v1',
+  CHARGES: 'syndik_prod_charges_v1',
+  PROOFS: 'syndik_prod_proofs_v1',
+  QUITTANCES: 'syndik_prod_quittances_v1',
+  AG: 'syndik_prod_ag_v1',
+  PRESTATAIRES: 'syndik_prod_prestataires_v1',
+  MAINTENANCE: 'syndik_prod_maintenance_v1',
+  CHAT: 'syndik_prod_chat_v1',
+  MARKETPLACE: 'syndik_prod_marketplace_v1',
+  NOTIFICATIONS: 'syndik_prod_notifications_v1',
+  RESIDENT_ACCOUNTS: 'syndik_prod_resident_accounts_v1',
+  PRESTATAIRE_ACCOUNTS: 'syndik_prod_prestataire_accounts_v1',
+  REGISTERED_USERS: 'syndik_prod_registered_users_v1',
 };
+
+const LEGACY_TEST_KEYS = [
+  'syndik_reactive_syndics',
+  'syndik_reactive_charges',
+  'syndik_reactive_proofs',
+  'syndik_reactive_quittances',
+  'syndik_reactive_ag',
+  'syndik_reactive_prestataires_v2',
+  'syndik_reactive_maintenance_v2',
+  'syndik_reactive_chat_v1',
+  'syndik_reactive_marketplace_v1',
+  'syndik_reactive_notifications_v1',
+  'syndik_resident_accounts_v1',
+  'syndik_prestataire_accounts_v1',
+  'syndik_registered_users_v1',
+  'syndik_mock_user',
+];
 
 const broadcastChannel =
   typeof window !== 'undefined' && 'BroadcastChannel' in window
@@ -130,12 +147,22 @@ export async function syncAllSharedStateFromServer(): Promise<Record<string, any
     const serverStore = data.store as Record<string, any>;
     const trackedKeys = Object.values(STORAGE_KEYS);
 
+    // If the server store was explicitly reset more recently than our local reset marker, clear local keys first
+    if (typeof window !== 'undefined' && serverStore.__resetAt) {
+      const localResetAt = localStorage.getItem('syndik_prod_last_reset_at');
+      if (localResetAt !== serverStore.__resetAt) {
+        for (const k of trackedKeys) {
+          localStorage.removeItem(k);
+        }
+        localStorage.setItem('syndik_prod_last_reset_at', String(serverStore.__resetAt));
+      }
+    }
+
     for (const key of trackedKeys) {
       const serverVal = serverStore[key];
       if (serverVal !== undefined && serverVal !== null) {
         localStorage.setItem(key, JSON.stringify(serverVal));
       } else {
-        // Seed server with initial local value if server doesn't have this key yet
         const localRaw = localStorage.getItem(key);
         if (localRaw) {
           try {
@@ -153,8 +180,47 @@ export async function syncAllSharedStateFromServer(): Promise<Record<string, any
   }
 }
 
-// Run initial sync in browser
+export async function resetAllProductionData(): Promise<void> {
+  if (typeof window !== 'undefined') {
+    for (const key of Object.values(STORAGE_KEYS)) {
+      localStorage.removeItem(key);
+    }
+    for (const oldKey of LEGACY_TEST_KEYS) {
+      localStorage.removeItem(oldKey);
+    }
+    localStorage.removeItem('syndik_selected_building_id');
+  }
+  try {
+    await fetch('/api/shared-state/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+  } catch {
+    // ignore
+  }
+  const user = auth.currentUser;
+  if (user && user.emailVerified) {
+    try {
+      const snap = await getDocs(collection(db, 'syndics'));
+      for (const docSnap of snap.docs) {
+        try {
+          await deleteDoc(doc(db, 'syndics', docSnap.id));
+        } catch {
+          // ignore
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+  notifyStateUpdated(STORAGE_KEYS.SYNDICS);
+}
+
+// Purge any legacy test/mock keys in browser and run initial sync
 if (typeof window !== 'undefined') {
+  for (const oldKey of LEGACY_TEST_KEYS) {
+    localStorage.removeItem(oldKey);
+  }
   void syncAllSharedStateFromServer();
 }
 
@@ -691,7 +757,7 @@ export interface ResidentAccountRecord {
   mustChangePassword?: boolean;
 }
 
-const RESIDENT_ACCOUNTS_KEY = 'syndik_resident_accounts_v1';
+const RESIDENT_ACCOUNTS_KEY = STORAGE_KEYS.RESIDENT_ACCOUNTS;
 
 function generateTempPassword(name: string): string {
   const cleanPrefix =
@@ -756,6 +822,9 @@ export const addResident = async (
           hasAccount: !!generateCredentials,
           generatedPassword: password,
           credentialsCreatedAt: generateCredentials ? nowIso : undefined,
+          credentialsAuditLog: generateCredentials
+            ? [{ action: 'generated', timestamp: nowIso }]
+            : [],
           mustChangePassword: generateCredentials ? true : undefined,
         };
         bld.residents.push(newResident);
@@ -777,6 +846,7 @@ export const addResident = async (
         }
 
         setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
+        void syncSyndicToFirestoreIfAuthenticated(syndic);
         return newResident;
       }
     }
@@ -856,23 +926,61 @@ export const regenerateResidentCredentials = async (residentId: string): Promise
         const idx = bld.residents.findIndex((r) => r.id === residentId);
         if (idx >= 0) {
           const res = bld.residents[idx];
+          const nowIso = new Date().toISOString();
           const newPassword = generateTempPassword(res.name);
+          const prevLog = Array.isArray(res.credentialsAuditLog) ? res.credentialsAuditLog : [];
           const updated: Resident = {
             ...res,
             hasAccount: true,
             generatedPassword: newPassword,
-            credentialsCreatedAt: new Date().toISOString(),
+            credentialsCreatedAt: nowIso,
+            credentialsAuditLog: [
+              { action: res.hasAccount ? 'regenerated' : 'generated', timestamp: nowIso },
+              ...prevLog,
+            ].slice(0, 20),
             mustChangePassword: true,
           };
           bld.residents[idx] = updated;
           saveResidentCredentialAccount(updated, newPassword);
           setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
+          void syncSyndicToFirestoreIfAuthenticated(syndic);
           return updated;
         }
       }
     }
   }
   throw new Error('Resident not found');
+};
+
+export const recordResidentCredentialShare = async (
+  residentId: string,
+  method: 'pdf' | 'copy'
+): Promise<Resident | null> => {
+  const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
+  for (const syndic of syndics) {
+    for (const bld of syndic.buildings) {
+      const idx = bld.residents.findIndex((r) => r.id === residentId);
+      if (idx >= 0) {
+        const res = bld.residents[idx];
+        const nowIso = new Date().toISOString();
+        const prevLog = Array.isArray(res.credentialsAuditLog) ? res.credentialsAuditLog : [];
+        const updated: Resident = {
+          ...res,
+          credentialsSharedAt: nowIso,
+          credentialsLastSharedMethod: method,
+          credentialsAuditLog: [
+            { action: method === 'pdf' ? 'shared_pdf' : 'shared_copy', timestamp: nowIso },
+            ...prevLog,
+          ].slice(0, 20),
+        };
+        bld.residents[idx] = updated;
+        setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
+        void syncSyndicToFirestoreIfAuthenticated(syndic);
+        return updated;
+      }
+    }
+  }
+  return null;
 };
 
 export const deleteResident = async (residentId: string) => {
@@ -1572,7 +1680,7 @@ export interface PrestataireAccountRecord {
   mustChangePassword?: boolean;
 }
 
-const PRESTATAIRE_ACCOUNTS_KEY = 'syndik_prestataire_accounts_v1';
+const PRESTATAIRE_ACCOUNTS_KEY = STORAGE_KEYS.PRESTATAIRE_ACCOUNTS;
 
 function savePrestataireCredentialAccount(
   prestataire: Prestataire,
@@ -1608,7 +1716,7 @@ function savePrestataireCredentialAccount(
 export const getPrestatairesForBuilding = async (buildingId: string): Promise<Prestataire[]> => {
   if (isMock) {
     const list = getLocalItem<Prestataire[]>(STORAGE_KEYS.PRESTATAIRES, mockPrestataires);
-    return list.filter((p) => !p.buildingId || p.buildingId === buildingId);
+    return list.filter((p) => p.buildingId === buildingId);
   }
 
   const q = query(collection(db, PRESTATAIRES_COL), where('buildingId', '==', buildingId));
@@ -1634,11 +1742,18 @@ export const savePrestataire = async (
       const nowIso = new Date().toISOString();
       const newPassword =
         finalPrestataire.generatedPassword || generateTempPassword(finalPrestataire.name);
+      const prevLog = Array.isArray(finalPrestataire.credentialsAuditLog)
+        ? finalPrestataire.credentialsAuditLog
+        : [];
       finalPrestataire = {
         ...finalPrestataire,
         hasAccount: true,
         generatedPassword: newPassword,
-        credentialsCreatedAt: finalPrestataire.credentialsCreatedAt || nowIso,
+        credentialsCreatedAt: nowIso,
+        credentialsAuditLog: [
+          { action: prev?.hasAccount ? 'regenerated' : 'generated', timestamp: nowIso },
+          ...prevLog,
+        ].slice(0, 20),
         mustChangePassword: finalPrestataire.mustChangePassword ?? true,
       };
       savePrestataireCredentialAccount(finalPrestataire, newPassword);
@@ -1668,6 +1783,7 @@ export const regeneratePrestataireCredentials = async (
     const idx = list.findIndex((p) => p.id === prestataireId);
     if (idx >= 0) {
       const prest = list[idx];
+      const nowIso = new Date().toISOString();
       const fallbackEmail =
         prest.email?.trim() ||
         `contact@${
@@ -1677,12 +1793,17 @@ export const regeneratePrestataireCredentials = async (
             .slice(0, 12) || 'prestataire'
         }.ma`;
       const newPassword = generateTempPassword(prest.name);
+      const prevLog = Array.isArray(prest.credentialsAuditLog) ? prest.credentialsAuditLog : [];
       const updated: Prestataire = {
         ...prest,
         email: fallbackEmail,
         hasAccount: true,
         generatedPassword: newPassword,
-        credentialsCreatedAt: new Date().toISOString(),
+        credentialsCreatedAt: nowIso,
+        credentialsAuditLog: [
+          { action: prest.hasAccount ? 'regenerated' : 'generated', timestamp: nowIso },
+          ...prevLog,
+        ].slice(0, 20),
         mustChangePassword: true,
       };
       list[idx] = updated;
@@ -1692,6 +1813,32 @@ export const regeneratePrestataireCredentials = async (
     }
   }
   throw new Error('Prestataire introuvable');
+};
+
+export const recordPrestataireCredentialShare = async (
+  prestataireId: string,
+  method: 'pdf' | 'copy'
+): Promise<Prestataire | null> => {
+  const list = getLocalItem<Prestataire[]>(STORAGE_KEYS.PRESTATAIRES, mockPrestataires);
+  const idx = list.findIndex((p) => p.id === prestataireId);
+  if (idx >= 0) {
+    const prest = list[idx];
+    const nowIso = new Date().toISOString();
+    const prevLog = Array.isArray(prest.credentialsAuditLog) ? prest.credentialsAuditLog : [];
+    const updated: Prestataire = {
+      ...prest,
+      credentialsSharedAt: nowIso,
+      credentialsLastSharedMethod: method,
+      credentialsAuditLog: [
+        { action: method === 'pdf' ? 'shared_pdf' : 'shared_copy', timestamp: nowIso },
+        ...prevLog,
+      ].slice(0, 20),
+    };
+    list[idx] = updated;
+    setLocalItem(STORAGE_KEYS.PRESTATAIRES, list);
+    return updated;
+  }
+  return null;
 };
 
 export const deletePrestataire = async (prestataireId: string): Promise<boolean> => {
@@ -1879,151 +2026,7 @@ export const initiateCmiPayment = async (invoiceId: string) => {
 // 11. MAINTENANCE & STATUS TRACKER
 // ==========================================
 
-const DEFAULT_MAINTENANCE_REQUESTS: MaintenanceRequest[] = [
-  {
-    id: 'maint-1',
-    buildingId: 'bld-1',
-    residentId: 'res-1',
-    residentName: 'Mohammed Benjelloun',
-    apartmentNumber: 'Lot A-101',
-    title: 'Bruit anormal & vibration au démarrage de l\'ascenseur',
-    location: 'Ascenseur Principal - Palier 2ème étage',
-    category: 'elevator',
-    description: 'Bruit métallique anormal au démarrage de la cabine d\'ascenseur au niveau du 2ème étage avec léger décalage du seuil de porte.',
-    status: 'in_progress',
-    priority: 'high',
-    assignedTo: 'Atlas Ascenseurs SARL',
-    cost: 650,
-    invoiceRef: 'DEV-ATLAS-2026-109',
-    syndicNotes: 'Intervention technique en cours par Atlas Ascenseurs. Le patin de guidage et le contacteur de porte palière sont en cours de remplacement.',
-    photoUrl: 'https://images.unsplash.com/photo-1541888946425-d09bb18086f6?w=800&auto=format&fit=crop&q=80',
-    photos: [
-      'https://images.unsplash.com/photo-1541888946425-d09bb18086f6?w=800&auto=format&fit=crop&q=80',
-      'https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=800&auto=format&fit=crop&q=80',
-    ],
-    createdAt: '2026-10-12T10:00:00Z',
-    updates: [
-      {
-        id: 'upd-101',
-        status: 'pending',
-        title: 'Signalement enregistré par le copropriétaire',
-        note: 'Bruit métallique signalé sur le palier du 2ème étage lors de la fermeture des portes.',
-        updatedBy: 'Mohammed Benjelloun (Lot A-101)',
-        updatedByRole: 'resident',
-        timestamp: '2026-10-12T10:00:00Z',
-        photos: ['https://images.unsplash.com/photo-1541888946425-d09bb18086f6?w=800&auto=format&fit=crop&q=80'],
-      },
-      {
-        id: 'upd-102',
-        status: 'in_progress',
-        title: 'Prise en charge & Assignation du prestataire agréé',
-        note: 'Ordre d\'intervention d\'urgence envoyé à Atlas Ascenseurs SARL (contrat de maintenance mensuel). Technicien M. Youssef Bennis dépêché sur place.',
-        updatedBy: 'SyndicPro Gestion (Bureau Syndic)',
-        updatedByRole: 'syndic',
-        timestamp: '2026-10-12T14:30:00Z',
-        assignedTo: 'Atlas Ascenseurs SARL',
-      },
-      {
-        id: 'upd-103',
-        status: 'in_progress',
-        title: 'Diagnostic sur site & Remplacement du patin de guidage',
-        note: 'Constat effectué en machinerie : usure d\'un coulisseau de guidage et réglage du verrouillage de porte du 2ème étage. Pièce commandée et pose en cours (Devis 650 DH TTC).',
-        updatedBy: 'SyndicPro Gestion (Bureau Syndic)',
-        updatedByRole: 'syndic',
-        timestamp: '2026-10-14T11:15:00Z',
-        assignedTo: 'Atlas Ascenseurs SARL',
-        cost: 650,
-        photos: ['https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=800&auto=format&fit=crop&q=80'],
-      },
-    ],
-  },
-  {
-    id: 'maint-2',
-    buildingId: 'bld-1',
-    residentId: 'res-2',
-    residentName: 'Fatima Zahra Mansouri',
-    apartmentNumber: 'Lot A-102',
-    title: 'Éclairage LED défectueux dans la cage d\'escalier',
-    location: 'Cage d\'escalier principale - Entre 1er et 2ème étage',
-    category: 'common_area',
-    description: 'Remplacement des 3 ampoules LED et du détecteur de mouvement dans la cage d\'escalier principale.',
-    status: 'completed',
-    priority: 'low',
-    assignedTo: 'Élec Pro Maroc & Domotique',
-    cost: 180,
-    invoiceRef: 'FAC-ELEC-2026-441',
-    syndicNotes: 'Les 3 plafonniers LED basse consommation et le capteur crépusculaire ont été remplacés et testés avec succès.',
-    photoUrl: 'https://images.unsplash.com/photo-1513694203232-719a280e022f?w=800&auto=format&fit=crop&q=80',
-    photos: [
-      'https://images.unsplash.com/photo-1513694203232-719a280e022f?w=800&auto=format&fit=crop&q=80',
-    ],
-    createdAt: '2026-10-08T14:00:00Z',
-    completedAt: '2026-10-09T16:00:00Z',
-    updates: [
-      {
-        id: 'upd-201',
-        status: 'pending',
-        title: 'Ticket ouvert par le résident',
-        note: 'Les ampoules du palier 1er étage clignotent et le détecteur de présence ne s\'allume plus le soir.',
-        updatedBy: 'Fatima Zahra Mansouri (Lot A-102)',
-        updatedByRole: 'resident',
-        timestamp: '2026-10-08T14:00:00Z',
-      },
-      {
-        id: 'upd-202',
-        status: 'in_progress',
-        title: 'Intervention programmée avec Élec Pro Maroc',
-        note: 'Passage de l\'électricien M. Youssef El Alami prévu le 09/10 à 14h00 avec fourniture de 3 spots LED 18W.',
-        updatedBy: 'SyndicPro Gestion (Bureau Syndic)',
-        updatedByRole: 'syndic',
-        timestamp: '2026-10-09T09:30:00Z',
-        assignedTo: 'Élec Pro Maroc & Domotique',
-      },
-      {
-        id: 'upd-203',
-        status: 'completed',
-        title: 'Travaux terminés & Vérifiés par le Syndic',
-        note: 'Remplacement effectué et minuterie réglée sur 90 secondes. Facture réglée sur le budget courant (180 DH TTC).',
-        updatedBy: 'SyndicPro Gestion (Bureau Syndic)',
-        updatedByRole: 'syndic',
-        timestamp: '2026-10-09T16:00:00Z',
-        assignedTo: 'Élec Pro Maroc & Domotique',
-        cost: 180,
-        photos: ['https://images.unsplash.com/photo-1513694203232-719a280e022f?w=800&auto=format&fit=crop&q=80'],
-      },
-    ],
-  },
-  {
-    id: 'maint-3',
-    buildingId: 'bld-1',
-    residentId: 'res-2',
-    residentName: 'Fatima Zahra Mansouri',
-    apartmentNumber: 'Lot A-102',
-    title: 'Suintement d\'eau au niveau de la vanne d\'arrêt du garage',
-    location: 'Sous-sol -1 · Colonne montante près de la place N°4',
-    category: 'plumbing',
-    description: 'Légère fuite goutte-à-goutte constatée sur le joint de la vanne principale d\'alimentation eau potable au sous-sol.',
-    status: 'pending',
-    priority: 'medium',
-    photoUrl: 'https://images.unsplash.com/photo-1585704032915-c3400ca199e7?w=800&auto=format&fit=crop&q=80',
-    photos: [
-      'https://images.unsplash.com/photo-1585704032915-c3400ca199e7?w=800&auto=format&fit=crop&q=80',
-    ],
-    createdAt: '2026-10-16T09:15:00Z',
-    updates: [
-      {
-        id: 'upd-301',
-        status: 'pending',
-        title: 'Signalement avec photo transmis au Syndic',
-        note: 'J\'ai remarqué une petite flaque d\'eau sous la vanne principale en garant ma voiture ce matin.',
-        updatedBy: 'Fatima Zahra Mansouri (Lot A-102)',
-        updatedByRole: 'resident',
-        timestamp: '2026-10-16T09:15:00Z',
-        photos: ['https://images.unsplash.com/photo-1585704032915-c3400ca199e7?w=800&auto=format&fit=crop&q=80'],
-      },
-    ],
-  },
-];
+const DEFAULT_MAINTENANCE_REQUESTS: MaintenanceRequest[] = [];
 
 export const getMaintenanceRequestsForBuilding = async (buildingId: string): Promise<MaintenanceRequest[]> => {
   if (isMock) {
@@ -2223,38 +2226,7 @@ export const deleteDocument = async (docToDelete: Document): Promise<boolean> =>
 // 13. NOTIFICATIONS
 // ==========================================
 
-const DEFAULT_NOTIFICATIONS: Notification[] = [
-  {
-    id: 'notif-1',
-    userId: 'all',
-    title: 'Assemblée Générale Ordinaire — Vote Ouvert',
-    message: 'Convocation à l\'AGO 2026 prévue le 25 Octobre. Le scrutin numérique pondéré par tantièmes est ouvert.',
-    type: 'ag',
-    read: false,
-    createdAt: new Date().toISOString(),
-    link: '/ag',
-  },
-  {
-    id: 'notif-2',
-    userId: 'all',
-    title: 'Nouvelle Quittance Certifiée (Loi 18-00)',
-    message: 'Votre quittance de paiement pour le mois d\'Octobre 2026 a été émise et certifiée.',
-    type: 'quittance',
-    read: false,
-    createdAt: new Date(Date.now() - 3600000).toISOString(),
-    link: '/financials',
-  },
-  {
-    id: 'notif-3',
-    userId: 'all',
-    title: 'Suivi Maintenance : Ascenseur Principal',
-    message: 'Atlas Ascenseurs SARL a publié une note d\'intervention et une photo de suivi sur le ticket #maint-1.',
-    type: 'maintenance',
-    read: false,
-    createdAt: new Date(Date.now() - 7200000).toISOString(),
-    link: '/maintenance',
-  },
-];
+const DEFAULT_NOTIFICATIONS: Notification[] = [];
 
 export const getUserNotifications = async (userId: string): Promise<Notification[]> => {
   if (isMock) {

@@ -13,9 +13,10 @@ import {
   addBuilding,
   STORAGE_KEYS,
   pushKeyToSharedServer,
+  resetAllProductionData,
 } from '../../firebase/services';
 import type { Syndic, SubscriptionPlan, SubscriptionStatus, Apartment } from '../../types';
-import { BuildingsIcon, ResidentsIcon, FinancialsIcon, PlusIcon } from '../icons/IconComponents';
+import { BuildingsIcon, ResidentsIcon, FinancialsIcon, PlusIcon, TrashIcon } from '../icons/IconComponents';
 
 const PLAN_PRICES: Record<SubscriptionPlan, number> = {
   starter: 200,
@@ -47,6 +48,7 @@ const AdminDashboard: React.FC = () => {
   const [newApartmentsCount, setNewApartmentsCount] = useState(8);
   const [newMonthlyFees, setNewMonthlyFees] = useState(250);
   const [createError, setCreateError] = useState('');
+  const [isResetModalOpen, setIsResetModalOpen] = useState(false);
 
   const {
     data: syndics = [],
@@ -66,6 +68,15 @@ const AdminDashboard: React.FC = () => {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['syndics'] });
       setSelectedSyndic(null);
+    },
+  });
+
+  const resetProductionMutation = useMutation({
+    mutationFn: resetAllProductionData,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['syndics'] });
+      void queryClient.invalidateQueries();
+      setIsResetModalOpen(false);
     },
   });
 
@@ -258,7 +269,7 @@ const AdminDashboard: React.FC = () => {
               {t('adminPortal.subtitle')}
             </p>
           </div>
-          <div className="flex items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-2.5">
             <button
               type="button"
               onClick={() => void refetch()}
@@ -266,6 +277,14 @@ const AdminDashboard: React.FC = () => {
             >
               <span>{isFetching ? '⟳' : '↻'}</span>
               <span>{tr('Actualiser', 'تحديث')}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsResetModalOpen(true)}
+              className="px-3.5 py-2 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs transition-colors flex items-center gap-1.5"
+            >
+              <TrashIcon />
+              <span>{tr('Purger les données de test', 'مسح بيانات التجربة')}</span>
             </button>
             <Button
               onClick={() => {
@@ -443,8 +462,58 @@ const AdminDashboard: React.FC = () => {
               </tbody>
             </table>
           </div>
+          {syndics.length === 0 && (
+            <div className="py-12 px-4 text-center border-t border-slate-100">
+              <p className="text-sm font-bold text-slate-800">
+                {tr(
+                  'Aucun cabinet Syndic enregistré (Mode Production)',
+                  'لا يوجد أي مكتب سنديك مسجل حالياً (وضع الإنتاج)'
+                )}
+              </p>
+              <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
+                {tr(
+                  "La base de données est vierge de toute donnée de démonstration. Les nouveaux cabinets créés via les offres de la page d'accueil ou via le bouton '+ Nouveau Cabinet Syndic' s'afficheront ici en temps réel.",
+                  'قاعدة البيانات خالية من أي بيانات تجريبية. ستظهر مكاتب السنديك الجديدة المسجلة عبر صفحة الباقات أو عبر زر الإضافة هنا فوراً.'
+                )}
+              </p>
+            </div>
+          )}
         </Card>
       </main>
+
+      {/* Reset Production Data Confirmation Modal */}
+      {isResetModalOpen && (
+        <Modal
+          isOpen={isResetModalOpen}
+          onClose={() => setIsResetModalOpen(false)}
+          title={tr('Purger toutes les données de test', 'مسح جميع البيانات التجريبية')}
+          footer={
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => setIsResetModalOpen(false)}>
+                {tr('Annuler', 'إلغاء')}
+              </Button>
+              <Button
+                variant="danger"
+                onClick={() => resetProductionMutation.mutate()}
+                disabled={resetProductionMutation.isPending}
+              >
+                {resetProductionMutation.isPending
+                  ? tr('Suppression...', 'جاري المسح...')
+                  : tr('Confirmer la remise à zéro', 'تأكيد المسح الكامل')}
+              </Button>
+            </div>
+          }
+        >
+          <div className="space-y-3 text-xs sm:text-sm text-slate-600">
+            <p>
+              {tr(
+                'Cette action supprimera définitivement tous les cabinets Syndics, immeubles, résidents, prestataires et opérations comptables enregistrés afin de repartir sur une base de production totalement vierge.',
+                'سيؤدي هذا الإجراء إلى حذف جميع مكاتب السنديك والعمارات والسكان ومقدمي الخدمات والعمليات المحاسبية المسجلة للبدء بقاعدة بيانات إنتاج فارغة تماماً.'
+              )}
+            </p>
+          </div>
+        </Modal>
+      )}
 
       {/* Create New Syndic Cabinet Modal */}
       {isCreateModalOpen && (

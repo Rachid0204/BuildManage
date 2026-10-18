@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import type { Building, Resident, Apartment } from '../../types';
 import Card from '../common/Card';
 import Button from '../common/Button';
@@ -10,6 +11,24 @@ import {
   exportResidentsCSV,
   exportResidentCredentialsPDF,
 } from '../../services/pdfService';
+import { recordResidentCredentialShare } from '../../firebase/services';
+
+function formatAuditTimestamp(iso?: string, lang?: string): string {
+  if (!iso) return '—';
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '—';
+    return d.toLocaleString(lang === 'ar' ? 'ar-MA' : 'fr-FR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return '—';
+  }
+}
 
 type ResidentModalProps = {
   isOpen: boolean;
@@ -348,6 +367,7 @@ type CredentialsModalProps = {
   apartmentNumber?: string;
   onClose: () => void;
   onRegenerate?: (residentId: string) => void;
+  onShareRecorded?: (residentId: string, method: 'pdf' | 'copy') => void;
 };
 
 const CredentialsModal: React.FC<CredentialsModalProps> = ({
@@ -356,8 +376,9 @@ const CredentialsModal: React.FC<CredentialsModalProps> = ({
   apartmentNumber,
   onClose,
   onRegenerate,
+  onShareRecorded,
 }) => {
-  const { tr } = useI18n();
+  const { tr, language } = useI18n();
   const [copied, setCopied] = useState(false);
 
   if (!resident) return null;
@@ -390,10 +411,12 @@ const CredentialsModal: React.FC<CredentialsModalProps> = ({
       setCopied(true);
       setTimeout(() => setCopied(false), 2500);
     }
+    onShareRecorded?.(resident.id, 'copy');
   };
 
   const handleDownloadPDF = () => {
     exportResidentCredentialsPDF(resident, building, apartmentNumber);
+    onShareRecorded?.(resident.id, 'pdf');
   };
 
   return (
@@ -520,6 +543,49 @@ const CredentialsModal: React.FC<CredentialsModalProps> = ({
             {tr('📄 Télécharger PDF', '📄 تحميل PDF')}
           </button>
         </div>
+
+        {/* Audit Trail Section in Modal */}
+        <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="font-bold text-slate-800 uppercase tracking-wider text-[11px]">
+              {tr("Journal d'audit des identifiants", 'سجل تدقيق بيانات الولوج')}
+            </span>
+            <span className="text-[11px] font-mono text-slate-500">
+              {tr('Traçabilité Syndic', 'تتبع السنديك')}
+            </span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+            <div className="p-2 rounded-lg bg-white border border-slate-200">
+              <div className="text-[10px] font-semibold uppercase text-slate-400">
+                {tr('Dernière génération', 'آخر توليد')}
+              </div>
+              <div className="font-mono font-bold text-slate-800 mt-0.5">
+                {formatAuditTimestamp(resident.credentialsCreatedAt, language)}
+              </div>
+            </div>
+            <div className="p-2 rounded-lg bg-white border border-slate-200">
+              <div className="text-[10px] font-semibold uppercase text-slate-400">
+                {tr('Dernier partage au résident', 'آخر مشاركة مع الساكن')}
+              </div>
+              <div className="font-mono font-bold text-slate-800 mt-0.5 flex items-center gap-1.5">
+                {resident.credentialsSharedAt ? (
+                  <>
+                    <span>{formatAuditTimestamp(resident.credentialsSharedAt, language)}</span>
+                    <span className="px-1.5 py-0.5 rounded bg-teal-50 text-teal-800 border border-teal-200 text-[10px] font-sans">
+                      {resident.credentialsLastSharedMethod === 'pdf'
+                        ? tr('📄 PDF', '📄 PDF')
+                        : tr('📋 Copié', '📋 نسخ')}
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-amber-700 font-sans font-semibold">
+                    {tr('Non partagé', 'لم تتم مشاركته بعد')}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </Modal>
   );
@@ -545,13 +611,19 @@ const Residents: React.FC<{
   onDeleteResident,
   onRegenerateCredentials,
 }) => {
-  const { t, tr } = useI18n();
+  const { t, tr, language } = useI18n();
+  const queryClient = useQueryClient();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedResident, setSelectedResident] = useState<Resident | null>(null);
   const [credentialResidentId, setCredentialResidentId] = useState<string | null>(
     null
   );
   const [deletingResident, setDeletingResident] = useState<Resident | null>(null);
+
+  const handleRecordShare = async (residentId: string, method: 'pdf' | 'copy') => {
+    await recordResidentCredentialShare(residentId, method);
+    await queryClient.invalidateQueries({ queryKey: ['syndics'] });
+  };
 
   // Map residentId -> Apartment for fast lookup
   const residentApartmentMap = useMemo(() => {
@@ -648,6 +720,7 @@ const Residents: React.FC<{
         }
         onClose={() => setCredentialResidentId(null)}
         onRegenerate={handleRegenerateInsideModal}
+        onShareRecorded={handleRecordShare}
       />
 
       {/* Delete Confirmation Modal */}
@@ -775,6 +848,34 @@ const Residents: React.FC<{
                         : tr('⚡ Générer Accès', '⚡ توليد حساب ولوج')}
                     </button>
                   </div>
+                  {resident.hasAccount && (
+                    <div className="mt-2 pt-2 border-t border-slate-100 text-[11px] text-slate-500 space-y-0.5 font-mono">
+                      <div>
+                        <span className="font-sans text-slate-400">
+                          {tr('Généré :', 'تم التوليد :')}
+                        </span>{' '}
+                        {formatAuditTimestamp(resident.credentialsCreatedAt, language)}
+                      </div>
+                      <div>
+                        <span className="font-sans text-slate-400">
+                          {tr('Partagé :', 'تمت المشاركة :')}
+                        </span>{' '}
+                        {resident.credentialsSharedAt ? (
+                          <span className="text-teal-700 font-semibold">
+                            {formatAuditTimestamp(resident.credentialsSharedAt, language)} (
+                            {resident.credentialsLastSharedMethod === 'pdf'
+                              ? 'PDF'
+                              : tr('Copié', 'نسخ')}
+                            )
+                          </span>
+                        ) : (
+                          <span className="font-sans text-amber-700 font-semibold">
+                            {tr('Non partagé', 'لم تتم مشاركته')}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
                   <Button
@@ -827,6 +928,9 @@ const Residents: React.FC<{
                 </th>
                 <th className="px-5 py-3 text-start text-xs font-semibold text-slate-500 uppercase">
                   {tr('Accès Portail', 'ولوج البوابة')}
+                </th>
+                <th className="px-5 py-3 text-start text-xs font-semibold text-slate-500 uppercase">
+                  {tr('Audit Identifiants (Généré / Partagé)', 'سجل التدقيق (التوليد / المشاركة)')}
                 </th>
                 <th className="px-5 py-3 text-end text-xs font-semibold text-slate-500 uppercase">
                   {tr('Actions', 'إجراءات')}
@@ -896,6 +1000,45 @@ const Residents: React.FC<{
                           ? tr('🔑 Voir Identifiants', '🔑 عرض بيانات الولوج')
                           : tr('⚡ Générer Accès', '⚡ توليد حساب ولوج')}
                       </button>
+                    </td>
+                    <td className="px-5 py-3.5 whitespace-nowrap text-xs">
+                      {resident.hasAccount ? (
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-1.5 text-slate-700">
+                            <span className="text-[11px] font-semibold text-slate-400">
+                              {tr('Généré :', 'التوليد :')}
+                            </span>
+                            <span className="font-mono text-[11px] font-semibold">
+                              {formatAuditTimestamp(resident.credentialsCreatedAt, language)}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[11px] font-semibold text-slate-400">
+                              {tr('Partagé :', 'المشاركة :')}
+                            </span>
+                            {resident.credentialsSharedAt ? (
+                              <span className="inline-flex items-center gap-1 font-mono text-[11px] font-semibold text-teal-800 bg-teal-50 px-1.5 py-0.5 rounded border border-teal-200">
+                                <span>
+                                  {formatAuditTimestamp(resident.credentialsSharedAt, language)}
+                                </span>
+                                <span className="font-sans text-[10px] font-bold">
+                                  ({resident.credentialsLastSharedMethod === 'pdf'
+                                    ? 'PDF'
+                                    : tr('Copié', 'نسخ')})
+                                </span>
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-semibold">
+                                {tr('Non partagé', 'لم تتم مشاركته')}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="text-slate-400 italic text-xs">
+                          {tr('Aucun identifiant généré', 'لم يتم توليد حساب')}
+                        </span>
+                      )}
                     </td>
                     <td className="px-5 py-3.5 whitespace-nowrap text-end text-sm font-medium space-x-2">
                       <Button

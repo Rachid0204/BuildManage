@@ -16,12 +16,30 @@ import {
   savePrestataire,
   deletePrestataire,
   regeneratePrestataireCredentials,
+  recordPrestataireCredentialShare,
 } from '../../firebase/services';
 import { exportPrestataireCredentialsPDF } from '../../services/pdfService';
 import { useAuth } from '../../contexts/AuthContext';
 import Loading from '../common/Loading';
 import ServiceProvidersDirectory from './ServiceProvidersDirectory';
 import { useI18n } from '../../hooks/useI18n';
+
+function formatAuditTimestamp(iso?: string, lang?: string): string {
+  if (!iso) return '—';
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '—';
+    return d.toLocaleString(lang === 'ar' ? 'ar-MA' : 'fr-FR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return '—';
+  }
+}
 
 interface PrestatairesProps {
   building: Building;
@@ -33,8 +51,16 @@ const PrestataireCredentialsModal: React.FC<{
   categoryLabel: string;
   onClose: () => void;
   onRegenerate: (prestataireId: string) => void;
-}> = ({ prestataire, building, categoryLabel, onClose, onRegenerate }) => {
-  const { tr } = useI18n();
+  onShareRecorded?: (prestataireId: string, method: 'pdf' | 'copy') => void;
+}> = ({
+  prestataire,
+  building,
+  categoryLabel,
+  onClose,
+  onRegenerate,
+  onShareRecorded,
+}) => {
+  const { tr, language } = useI18n();
   const [copied, setCopied] = useState(false);
 
   if (!prestataire) return null;
@@ -54,10 +80,12 @@ const PrestataireCredentialsModal: React.FC<{
       setCopied(true);
       setTimeout(() => setCopied(false), 2500);
     }
+    onShareRecorded?.(prestataire.id, 'copy');
   };
 
   const handleDownloadPDF = () => {
     exportPrestataireCredentialsPDF(prestataire, building);
+    onShareRecorded?.(prestataire.id, 'pdf');
   };
 
   return (
@@ -171,13 +199,56 @@ const PrestataireCredentialsModal: React.FC<{
             {tr('📄 Télécharger PDF', '📄 تحميل PDF')}
           </button>
         </div>
+
+        {/* Audit Trail Section in Modal */}
+        <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="font-bold text-slate-800 uppercase tracking-wider text-[11px]">
+              {tr("Journal d'audit des identifiants", 'سجل تدقيق بيانات الولوج')}
+            </span>
+            <span className="text-[11px] font-mono text-slate-500">
+              {tr('Traçabilité Syndic', 'تتبع السنديك')}
+            </span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+            <div className="p-2 rounded-lg bg-white border border-slate-200">
+              <div className="text-[10px] font-semibold uppercase text-slate-400">
+                {tr('Dernière génération', 'آخر توليد')}
+              </div>
+              <div className="font-mono font-bold text-slate-800 mt-0.5">
+                {formatAuditTimestamp(prestataire.credentialsCreatedAt, language)}
+              </div>
+            </div>
+            <div className="p-2 rounded-lg bg-white border border-slate-200">
+              <div className="text-[10px] font-semibold uppercase text-slate-400">
+                {tr('Dernier partage au prestataire', 'آخر مشاركة مع مقدم الخدمة')}
+              </div>
+              <div className="font-mono font-bold text-slate-800 mt-0.5 flex items-center gap-1.5">
+                {prestataire.credentialsSharedAt ? (
+                  <>
+                    <span>{formatAuditTimestamp(prestataire.credentialsSharedAt, language)}</span>
+                    <span className="px-1.5 py-0.5 rounded bg-teal-50 text-teal-800 border border-teal-200 text-[10px] font-sans">
+                      {prestataire.credentialsLastSharedMethod === 'pdf'
+                        ? tr('📄 PDF', '📄 PDF')
+                        : tr('📋 Copié', '📋 نسخ')}
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-amber-700 font-sans font-semibold">
+                    {tr('Non partagé', 'لم تتم مشاركته بعد')}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </Modal>
   );
 };
 
 const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
-  const { tr } = useI18n();
+  const { tr, language } = useI18n();
   const { registerOrUpdateUserCredentials } = useAuth();
   const queryClient = useQueryClient();
   const [activeViewMode, setActiveViewMode] = useState<'directory' | 'legal'>('directory');
@@ -382,6 +453,11 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
     other: tr('Autre Service', 'خدمة أخرى'),
   };
 
+  const handleRecordShare = async (prestataireId: string, method: 'pdf' | 'copy') => {
+    await recordPrestataireCredentialShare(prestataireId, method);
+    await queryClient.invalidateQueries({ queryKey: ['prestataires', building.id] });
+  };
+
   if (isLoading)
     return <Loading message={tr('Chargement des prestataires...', 'جاري تحميل مقدمي الخدمات...')} />;
 
@@ -398,6 +474,7 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
         }
         onClose={() => setCredentialPrestataireId(null)}
         onRegenerate={(id) => regenerateMutation.mutate(id)}
+        onShareRecorded={handleRecordShare}
       />
 
       {/* View Mode Toggle Header */}
@@ -554,6 +631,37 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
                   {p.notes && (
                     <p className="text-xs text-slate-500 mt-3 italic line-clamp-2">"{p.notes}"</p>
                   )}
+
+                  {p.hasAccount && (
+                    <div className="mt-3 p-2 rounded-lg bg-slate-50 border border-slate-200 text-[11px] font-mono space-y-0.5">
+                      <div className="flex justify-between">
+                        <span className="font-sans text-slate-400">
+                          {tr('Généré :', 'تم التوليد :')}
+                        </span>
+                        <span className="text-slate-700 font-semibold">
+                          {formatAuditTimestamp(p.credentialsCreatedAt, language)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="font-sans text-slate-400">
+                          {tr('Partagé :', 'تمت المشاركة :')}
+                        </span>
+                        {p.credentialsSharedAt ? (
+                          <span className="text-teal-700 font-semibold">
+                            {formatAuditTimestamp(p.credentialsSharedAt, language)} (
+                            {p.credentialsLastSharedMethod === 'pdf'
+                              ? 'PDF'
+                              : tr('Copié', 'نسخ')}
+                            )
+                          </span>
+                        ) : (
+                          <span className="font-sans text-amber-700 font-semibold">
+                            {tr('Non partagé', 'لم تتم مشاركته')}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between gap-2 text-xs">
@@ -596,6 +704,155 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
             </Card>
           )}
         </div>
+      )}
+
+      {/* Credential Audit Trail Table for Service Providers */}
+      {prestataires.length > 0 && (
+        <Card className="overflow-hidden border border-slate-200">
+          <div className="px-5 py-4 border-b border-slate-200 bg-slate-50/70 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <h2 className="text-sm font-bold text-slate-900">
+                {tr(
+                  'Registre des Accès & Journal d’Audit des Identifiants Prestataires',
+                  'سجل حسابات الولوج وتدقيق مشاركة بيانات مقدمي الخدمات'
+                )}
+              </h2>
+              <p className="text-xs text-slate-500">
+                {tr(
+                  'Suivi horodaté de la dernière génération et du dernier partage (PDF ou copie) des identifiants portail',
+                  'تتبع زمني لآخر توليد وآخر مشاركة (PDF أو نسخ) لبيانات ولوج البوابة'
+                )}
+              </p>
+            </div>
+            <span className="text-xs font-mono text-slate-500">
+              {prestataires.filter((p) => p.hasAccount).length} / {prestataires.length}{' '}
+              {tr('comptes activés', 'حسابات مفعلة')}
+            </span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-slate-200 text-sm">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className="px-5 py-3 text-start text-xs font-semibold text-slate-500 uppercase">
+                    {tr('Prestataire / Entreprise', 'المقاولة / الحرفي')}
+                  </th>
+                  <th className="px-5 py-3 text-start text-xs font-semibold text-slate-500 uppercase">
+                    {tr('Spécialité & Contact', 'التخصص والاتصال')}
+                  </th>
+                  <th className="px-5 py-3 text-start text-xs font-semibold text-slate-500 uppercase">
+                    {tr('Identifiant Portail', 'معرف البوابة')}
+                  </th>
+                  <th className="px-5 py-3 text-start text-xs font-semibold text-slate-500 uppercase">
+                    {tr('Accès Portail', 'ولوج البوابة')}
+                  </th>
+                  <th className="px-5 py-3 text-start text-xs font-semibold text-slate-500 uppercase">
+                    {tr('Audit Identifiants (Généré / Partagé)', 'سجل التدقيق (التوليد / المشاركة)')}
+                  </th>
+                  <th className="px-5 py-3 text-end text-xs font-semibold text-slate-500 uppercase">
+                    {tr('Actions', 'إجراءات')}
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-slate-100">
+                {prestataires.map((p) => (
+                  <tr key={p.id} className="hover:bg-slate-50">
+                    <td className="px-5 py-3.5 whitespace-nowrap">
+                      <div className="font-semibold text-slate-900">{p.name}</div>
+                      {p.ice && (
+                        <div className="text-xs text-slate-400 font-mono">ICE: {p.ice}</div>
+                      )}
+                    </td>
+                    <td className="px-5 py-3.5 whitespace-nowrap text-xs">
+                      <span className="px-2 py-0.5 rounded bg-teal-50 text-teal-800 font-semibold">
+                        {categoryLabels[p.category] || p.category}
+                      </span>
+                      <div className="text-slate-500 mt-1">
+                        {p.contactPerson || '—'} • <span className="font-mono">{p.phone}</span>
+                      </div>
+                    </td>
+                    <td className="px-5 py-3.5 whitespace-nowrap text-xs font-mono text-slate-700">
+                      {p.email || (
+                        <span className="text-slate-400 font-sans italic">
+                          {tr('Non renseigné', 'غير متوفر')}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-5 py-3.5 whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => handleManageCredentials(p)}
+                        className={`px-3 py-1 rounded-lg text-xs font-semibold border transition-colors ${
+                          p.hasAccount
+                            ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
+                            : 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200'
+                        }`}
+                      >
+                        {p.hasAccount
+                          ? tr('🔑 Voir Identifiants', '🔑 عرض بيانات الولوج')
+                          : tr('⚡ Générer Accès', '⚡ توليد حساب ولوج')}
+                      </button>
+                    </td>
+                    <td className="px-5 py-3.5 whitespace-nowrap text-xs">
+                      {p.hasAccount ? (
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-1.5 text-slate-700">
+                            <span className="text-[11px] font-semibold text-slate-400">
+                              {tr('Généré :', 'التوليد :')}
+                            </span>
+                            <span className="font-mono text-[11px] font-semibold">
+                              {formatAuditTimestamp(p.credentialsCreatedAt, language)}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[11px] font-semibold text-slate-400">
+                              {tr('Partagé :', 'المشاركة :')}
+                            </span>
+                            {p.credentialsSharedAt ? (
+                              <span className="inline-flex items-center gap-1 font-mono text-[11px] font-semibold text-teal-800 bg-teal-50 px-1.5 py-0.5 rounded border border-teal-200">
+                                <span>{formatAuditTimestamp(p.credentialsSharedAt, language)}</span>
+                                <span className="font-sans text-[10px] font-bold">
+                                  ({p.credentialsLastSharedMethod === 'pdf'
+                                    ? 'PDF'
+                                    : tr('Copié', 'نسخ')})
+                                </span>
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-semibold">
+                                {tr('Non partagé', 'لم تتم مشاركته')}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="text-slate-400 italic text-xs">
+                          {tr('Aucun identifiant généré', 'لم يتم توليد حساب')}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-5 py-3.5 whitespace-nowrap text-end text-sm font-medium space-x-2">
+                      <Button
+                        variant="secondary"
+                        className="!p-2"
+                        onClick={() => handleOpenEdit(p)}
+                        title={tr('Modifier', 'تعديل')}
+                      >
+                        <PencilIcon />
+                      </Button>
+                      <Button
+                        variant="danger"
+                        className="!p-2"
+                        onClick={() => deleteMutation.mutate(p.id)}
+                        title={tr('Supprimer', 'حذف')}
+                      >
+                        <TrashIcon />
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
       )}
 
       {/* Modal Add / Edit Prestataire */}

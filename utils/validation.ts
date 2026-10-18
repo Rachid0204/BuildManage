@@ -13,6 +13,17 @@ export const ResidentSchema = z.object({
   hasAccount: z.boolean().optional(),
   generatedPassword: z.string().optional(),
   credentialsCreatedAt: z.string().optional(),
+  credentialsSharedAt: z.string().optional(),
+  credentialsLastSharedMethod: z.enum(['pdf', 'copy']).optional(),
+  credentialsAuditLog: z
+    .array(
+      z.object({
+        action: z.enum(['generated', 'regenerated', 'shared_pdf', 'shared_copy']),
+        timestamp: z.string(),
+      })
+    )
+    .optional(),
+  mustChangePassword: z.boolean().optional(),
 });
 
 export const ApartmentSchema = z.object({

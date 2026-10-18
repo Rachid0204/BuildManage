@@ -1,162 +1,110 @@
-# Syndik — B2B Syndic-Centric Authentication & Credential Provisioning Architecture
+# Syndik Maroc — Production Mode & Zero Mock Data Migration
 
-Replaces public self-registration with a secure, enterprise-grade B2B2C property management authentication model where **Syndics onboard by selecting a subscription plan on the Landing Page**, the **public Login screen is strictly for Sign-In**, and **Residents (`Copropriétaires` / `Locataires`) and Service Providers (`Prestataires Agréés`) receive official login credentials generated and managed exclusively by their Syndic**.
+Transition Syndik Maroc from a demo-seeded environment into a clean, production-grade SaaS platform where all collections start completely empty, demo login shortcuts are removed, and all existing test data is wiped for a fresh start.
 
----
-
-## User Review & Critical Decisions
+### User Review & Critical Decisions
 
 > [!IMPORTANT]
-> The following architectural decisions incorporate your confirmed choices and establish a strict chain of trust across all four roles (`Admin`, `Syndic`, `Résident`, `Prestataire`).
+> The following production readiness decisions were confirmed and govern this transition:
 
-- **Confirmed Decision 1 — Sign-In Only on `/login` & Plan-Driven Syndic Onboarding**:
-  - The public `/login` screen is dedicated strictly to **Sign-In** (Authentication) for existing accounts (plus quick Demo Role Sandboxes for testing). Public self-registration tabs for Residents and Prestataires are completely removed.
-  - Selecting a subscription tier on the Landing Page (*Essentiel — 200 MAD/mois*, *Pro — 350 MAD/mois*, or *Entreprise — 500 MAD/mois*) launches the dedicated **Syndic Account & Cabinet Registration** flow pre-configured with the chosen plan.
-- **Confirmed Decision 2 — Printable PDF Access Sheet & Copyable Credentials Modal**:
-  - When the Syndic creates or manages a **Resident** or **Prestataire** from the Syndic Dashboard, the platform generates a unique login email + temporary password (`Syn-XXXX-MA`) and presents a **Fiche d'Accès Officielle** modal with one-click copy and a downloadable, formatted **PDF Access Sheet (Fiche d'Identifiants de Connexion)** ready to print or hand over.
-- **Confirmed Decision 3 — Mandatory First-Login Password Update**:
-  - Accounts provisioned by the Syndic carry a `mustChangePassword: true` security flag. Upon their very first sign-in, the Resident or Prestataire is prompted by a dedicated security screen to set their personal password before entering their portal.
+- **Confirmed Decision 1 — Zero Mock Data Defaults**: All data services (`syndics`, `buildings`, `apartments`, `residents`, `charges`, `payment_proofs`, `quittances`, `assemblees_generales`, `prestataires`, `maintenance`, `chat`, `marketplace`, `notifications`) will initialize with empty arrays (`[]`) instead of falling back to pre-populated Moroccan demo records.
+- **Confirmed Decision 2 — Clean Production Login Screen**: All quick-access demo account buttons ("Comptes de démonstration") and demo credential shortcuts (`syndic@demo.com`, `resident@demo.com`, `prestataire@demo.com`, `admin@demo.com`) will be removed from the public `/login` screen and authentication context.
+- **Confirmed Decision 3 — Complete Test Data Wipe**: Existing test records stored in the shared backend store, browser storage keys, and Cloud Firestore collections will be purged via a production storage version bump and server store reset so the platform starts completely fresh.
 
 ---
 
-## 1. Overview & Core Concept
+### 1. Overview & Core Concept
 
-- **What It Does**: Establishes the Syndic as the single administrative authority for every building they manage. Only a Syndic can subscribe to a SaaS plan and provision access for the co-owners, tenants, and approved maintenance vendors of their buildings.
+- **What It Does**: Converts Syndik Maroc into a strictly real-data production environment. Only real Syndic cabinets created via the pricing plan signup flow or by the SaaS Super Admin exist in the system, and only buildings, lots, residents, and service providers explicitly created by a Syndic appear in their respective portals.
 - **Target Audience / Persona**:
-  - **Syndics Professionnels & Bénévoles**: Subscribe to a plan on the Landing Page, set up their cabinet and first residence, and issue official access credentials to residents and vendors.
-  - **Copropriétaires & Locataires**: Sign in using the official credentials issued by their Syndic, customize their password on first login, and access their personal Resident Portal (`/my-portal`).
-  - **Prestataires Agréés**: Sign in using the vendor credentials issued by the Syndic, update their password on first login, and manage assigned work orders in the Provider Portal (`/provider`).
-- **Key Value**: Eliminates unauthorized self-signups, guarantees every Resident is accurately linked to a verified apartment lot (`tantièmes`) and building, and ensures every Prestataire in the directory is vetted by the Syndic.
+  - **SaaS Super Admin (`wahbi.rachid@gmail.com`)**: Monitors real subscribed Syndic cabinets, MRR, and active buildings starting from a clean 0-cabinet state, with an administrative option to reset/purge data if needed.
+  - **Syndic Cabinets**: Sign up from the landing page pricing plans, land on an onboarding empty state prompting them to create their first building, and progressively add lots, residents, and providers.
+  - **Residents & Service Providers**: Log in exclusively using credentials generated and shared by their Syndic, required to set a personal password on first login.
+- **Key Value**: Eliminates any confusion between sample data and real accounting/legal copropriété records (Law 18-00 / 106-12), ensuring financial ledgers, quittances, and audit trails reflect 100% authentic operations.
 
 ---
 
-## 2. User Experience & Visual Design
+### 2. User Experience & Visual Design
 
-### Key User Flows
-
-1. **Flow A — Syndic Plan Selection & Account Creation (Landing Page $\rightarrow$ Syndic Workspace)**:
-   - On the public Landing Page, the visitor reviews the 3 subscription plans (*Essentiel 200 MAD*, *Pro 350 MAD*, *Entreprise 500 MAD*).
-   - Clicking **« Choisir ce plan »** navigates to the **Syndic Onboarding Flow** with the selected plan badge, price, and building limit pre-selected.
-   - The Syndic enters their full name, cabinet/agency name, professional email, phone, password, and initial residence details (or default setup).
-   - Upon submission, the Syndic account and subscription tier are persisted, and the user is redirected straight into the **Syndic Dashboard (`/dashboard`)**.
-
-2. **Flow B — Clean Sign-In Screen (`/login`)**:
-   - Displays a streamlined, single-purpose **Connexion à votre espace** interface (French & Arabic RTL support) with email/password authentication and role-aware redirection.
-   - Includes a subtle footer link for new property managers (*« Vous êtes un syndic ? Découvrez nos offres et créez votre cabinet »* $\rightarrow$ scrolls to Landing Page pricing tiers).
-   - Retains the 1-click Demo Sandbox bar (*Admin*, *Syndic*, *Copropriétaire*, *Prestataire*) for instant evaluation.
-
-3. **Flow C — Resident Account & Credential Provisioning (Syndic Dashboard $\rightarrow$ Résidents)**:
-   - In **Résidents & Copropriétaires (`/residents`)**, when the Syndic clicks **« Ajouter un résident »**, the modal includes the toggle **« Générer un compte d'accès Résident (Email + Mot de passe temporaire) »** (enabled by default).
-   - Saving the resident creates their directory record, links their apartment lot, registers their login credentials in the authentication store with `mustChangePassword: true`, and immediately opens the **Fiche d'Accès Résident** modal.
-   - From this modal (or anytime from the Resident table via **« Identifiants » / « Régénérer »**), the Syndic can:
-     - Copy the formatted login summary to clipboard.
-     - Download an official **PDF Access Sheet (`Fiche_Acces_Resident.pdf`)** bearing the Syndic's header, building name, apartment number, login URL, email, and temporary password.
-
-4. **Flow D — Prestataire Account & Credential Provisioning (Syndic Dashboard $\rightarrow$ Prestataires)**:
-   - In **Annuaire des Prestataires (`/prestataires`)**, the **« Ajouter un prestataire »** modal is upgraded with a matching **« Créer un compte Portail Prestataire & générer les identifiants »** toggle (enabled by default) and status badges in the vendor cards showing whether portal access is active (`Accès Portail Actif` vs `Sans compte`).
-   - Saving the provider creates their vendor record, provisions their `/provider` login credentials (`mustChangePassword: true`), and opens the **Fiche d'Accès Prestataire** modal with **Copy Credentials** and **Download Official PDF Access Sheet (`Fiche_Acces_Prestataire.pdf`)**.
-   - Existing providers without credentials can have their portal account generated or reset in one click via **« Générer / Réinitialiser l'accès »**.
-
-5. **Flow E — Mandatory First-Login Password Change (Resident & Prestataire)**:
-   - When a Resident or Prestataire logs in with a Syndic-generated temporary password (`mustChangePassword === true`), an intercepting **Sécurisation de votre compte (Changement de mot de passe obligatoire)** view prompts them to enter and confirm a new personal password.
-   - Once confirmed, `mustChangePassword` is cleared in both their profile and persistent credential store, and they proceed to `/my-portal` or `/provider`.
-
-### Visual Identity & Theme
-- **Aesthetic Direction**: Authoritative Moroccan PropTech SaaS — crisp corporate slate surfaces, deep emerald/teal institutional accents (`--primary`: `#0F766E`), and tabular monospace credential blocks.
-- **Color Palette & Mood**:
-  - **60% Neutral Canvas**: Cool alabaster (`bg-slate-50`) and crisp white (`bg-white`) workspace containers.
-  - **30% Structural Surfaces**: Deep slate (`bg-slate-900`) auth side-panel and hairline borders (`border-slate-200`).
-  - **10% Accent Budget**: Emerald teal (`bg-teal-600`, `text-teal-700`) for primary CTAs and verified access states; amber (`text-amber-700`) for temporary password notices.
-- **Typography & Hierarchy**:
-  - Clean geometric headings paired with high-legibility body copy and full Arabic RTL support (`dir="rtl"`).
-  - All generated passwords, CIN codes, ICE numbers, and MAD prices use `font-mono tabular-nums` for unmistakable character clarity.
+- **Key User Flows**:
+  1. **Public Landing & Production Login**:
+     - Visitors browse the landing page and select a subscription plan (`Starter`, `Pro`, `Enterprise`) to register a new Syndic cabinet, or click **Se connecter** to access the clean sign-in form.
+     - The `/login` screen displays only the official email/CIN & password form and Google Sign-In for Syndic/Admin—no demo account cards or auto-fill pills.
+  2. **Syndic First-Time Onboarding (Zero-Building State)**:
+     - When a newly registered Syndic logs in with 0 buildings, the workspace automatically routes to the **Immeubles** view with a clear onboarding empty state card and a primary **+ Ajouter un immeuble** CTA.
+     - If a Syndic signs in via Google for the first time without a cabinet record, the system automatically provisions their clean Syndic cabinet profile with `buildings: []` so the dashboard never crashes on null references.
+  3. **Empty-to-Populated Module Progression**:
+     - Once a building is created, its financial balance starts at `0,00 MAD`, with zero fake transactions, zero fake maintenance tickets, zero fake AG convocations, and zero fake providers—each view presenting a tailored empty state with a direct creation button.
+- **Visual Identity & Theme**:
+  - *Aesthetic Direction*: Utilitarian, high-trust Moroccan PropTech & financial ledger interface compliant with Law 18-00.
+  - *Color Palette & Mood*: Crisp light canvas (`bg-slate-50`, `#F8FAFC`), structural white surfaces (`bg-white` with `1px solid` `border-slate-200`), deep slate navigation headers (`#0F172A`), and Moroccan Emerald/Teal primary accents (`#0F766E` / `#0D9488`). Semantic status colors (`#16A34A` nominal, `#D97706` pending, `#DC2626` overdue).
+  - *Typography & Hierarchy*: Clean neo-grotesque sans headings paired with `font-mono tabular-nums` for all MAD currency amounts, tantièmes (`1000/1000`), ICE/RC numbers, and audit timestamps.
+  - *Component Styling & Layout*: Single-elevation flat cards with 1px borders, responsive sidebar + top header workspace, and structured zero-state panels that guide new Syndics through step-by-step setup.
+- **Interactive Feedback & Motion**:
+  - Immediate optimistic/invalidated React Query updates across tabs and sessions, clear validation messages on forms, and guarded empty states when no building is selected yet.
 
 ---
 
-## 3. Key Product Decisions & Trade-Offs
+### 3. Key Product Decisions & Trade-Offs
 
-- **Decision 1 — Removing Public Self-Registration for Residents & Vendors**:
-  - *Chosen Approach*: Restrict public sign-up exclusively to Syndics subscribing via a pricing plan; all Resident and Prestataire accounts are provisioned inside the Syndic's authenticated workspace.
-  - *Why*: Prevents unauthorized users from joining arbitrary buildings, eliminates duplicate/unlinked resident records, and mirrors real-world Moroccan co-ownership governance (Loi 18-00).
-  - *Alternatives Considered*: Public registration with Syndic approval queues — rejected because it still exposes the building list publicly and creates unnecessary administrative friction compared to direct credential issuance by the Syndic.
-
-- **Decision 2 — Dual-Format Credential Handover (Copyable Modal + Official Printable PDF)**:
-  - *Chosen Approach*: Provide both an instant copyable summary and a formal `jsPDF`-generated **Fiche d'Accès Individuelle** for both Residents and Prestataires.
-  - *Why*: In Morocco, Syndics frequently distribute access notices either as printed letters slipped under apartment doors / handed over at General Meetings (AG) or pasted into digital messages.
-
-- **Decision 3 — First-Login Password Enforcement (`mustChangePassword`)**:
-  - *Chosen Approach*: Automatically flag Syndic-generated credentials with `mustChangePassword: true` and require the Resident or Prestataire to choose a personal password on first sign-in.
-  - *Why*: Ensures privacy so that once the Resident or Prestataire activates their account, their personal password is known only to them, while still allowing the Syndic to issue a fresh temporary password if the user ever forgets theirs.
+- **Decision 1: Versioned Production Storage Keys + Server Reset Endpoint**
+  - *Chosen Approach*: Bump client storage namespace to production keys (`syndik_prod_*`), wipe the server's `.data/syndik-shared-store.json` on startup/reset, and clear any test documents in Cloud Firestore.
+  - *Why*: Ensures that even browsers that previously visited the app during testing will not re-upload stale cached mock data back to the server or Firestore.
+  - *Alternatives Considered*: Only deleting the server file without renaming client keys—rejected because an open browser tab would immediately re-sync its old `localStorage` mock data back to the server.
+- **Decision 2: Auto-Provisioning Clean Syndic Profile on First Authenticated Login**
+  - *Chosen Approach*: When an authenticated Syndic logs in and no matching `Syndic` entity exists yet in the database, automatically create and persist a clean `Syndic` cabinet record (`buildings: []`) tied to their `uid` and `email`.
+  - *Why*: Previously, `SyndicDataProvider` fell back to `syndics[0]` from `mockSyndics`. With zero mock data, `syndics` is empty until the first cabinet is created; auto-provisioning guarantees the Syndic always has a valid cabinet object with `buildings: []`.
+  - *Alternatives Considered*: Showing an error screen when `syndic` is null—rejected because it breaks the onboarding flow for Google Sign-In users.
 
 ---
 
-## 4. Technical Architecture & Data Strategy *(Technical Reference)*
+### 4. Technical Architecture & Data Strategy *(Technical Reference)*
 
-### Architecture & Component Diagram
+- **Architecture & Component Diagram**:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────┐
-│                        PUBLIC MARKETING & AUTH LAYER                       │
+│                        AUTHENTICATION & ENTRY LAYER                        │
 │                                                                            │
-│  ┌───────────────────────────────┐      ┌───────────────────────────────┐  │
-│  │         Landing Page          │      │      Sign-In Screen (/login)  │  │
-│  │  • Essentiel (200 MAD/mois)   │─────▶│  • Email + Password Sign-In   │  │
-│  │  • Pro (350 MAD/mois)         │ Plan │  • Syndic Plan Onboarding     │  │
-│  │  • Entreprise (500 MAD/mois)  │ Flow │    (when ?plan= selected)     │  │
-│  └───────────────────────────────┘      └───────────────┬───────────────┘  │
-└─────────────────────────────────────────────────────────┼──────────────────┘
-                                                          │
-                                                          ▼
+│  ┌──────────────────────────┐             ┌─────────────────────────────┐  │
+│  │   Public Landing Page    │───Plan─────▶│   Production Login Screen   │  │
+│  │  (Plan Selection Flow)   │             │  (No Demo Buttons / Clean)  │  │
+│  └──────────────────────────┘             └──────────────┬──────────────┘  │
+└──────────────────────────────────────────────────────────┼─────────────────┘
+                                                           │
+                                                           ▼
 ┌────────────────────────────────────────────────────────────────────────────┐
-│                   AUTHENTICATION & FIRST-LOGIN SECURITY GATE               │
+│                   PRODUCTION AUTH & STATE SYNCHRONIZATION                  │
 │                                                                            │
 │  ┌──────────────────────────────────────────────────────────────────────┐  │
-│  │  AuthContext (Session + Credential Registry + Role Router)           │  │
-│  │  • Checks mustChangePassword flag on Resident / Prestataire login    │  │
-│  │  • Enforces First-Login Password Update Modal before portal access   │  │
-│  └──────────┬───────────────────────────┬───────────────────────┬───────┘  │
-└─────────────┼───────────────────────────┼───────────────────────┼──────────┘
-              │                           │                       │
-              ▼                           ▼                       ▼
-┌──────────────────────────┐ ┌─────────────────────────┐ ┌───────────────────┐
-│    SYNDIC WORKSPACE      │ │    RESIDENT PORTAL      │ │  PROVIDER PORTAL  │
-│      (/dashboard)        │ │      (/my-portal)       │ │    (/provider)    │
-│                          │ │                         │ │                   │
-│  ┌────────────────────┐  │ │  • Lot & Tantièmes      │ │  • Assigned Work  │
-│  │ Residents Module   │  │ │  • Unpaid Charges &     │ │    Orders         │
-│  │ • Create Resident  │  │ │    Payment Proofs       │ │  • Status Updates │
-│  │ • Generate/Reset   │  │ │  • Official Quittances  │ │    & Tech Notes   │
-│  │   Login & PDF Card │  │ │  • AG Digital Voting    │ │  • Building Info  │
-│  └────────────────────┘  │ │  • Claims & Community   │ └───────────────────┘
-│  ┌────────────────────┐  │ └─────────────────────────┘
-│  │ Prestataires Mod.  │  │
-│  │ • Create Vendor    │  │
-│  │ • Generate/Reset   │  │
-│  │   Login & PDF Card │  │
-│  └────────────────────┘  │
-└──────────────────────────┘
+│  │ AuthContext (Production Mode)                                        │  │
+│  │ • Super Admin recognition (wahbi.rachid@gmail.com)                   │  │
+│  │ • Syndic Signup & Google OAuth -> Auto-creates empty Syndic cabinet  │  │
+│  │ • Resident & Provider Login -> Verified against Syndic-issued creds  │  │
+│  └──────────────────────────────────┬───────────────────────────────────┘  │
+│                                     │                                      │
+│                                     ▼                                      │
+│  ┌──────────────────────┐   ┌──────────────────────┐   ┌────────────────┐  │
+│  │   Cloud Firestore    │◀─▶│ Shared Express Store │◀─▶│ Client Cache   │  │
+│  │ (Empty Collections)  │   │ (/api/shared-state)  │   │ (syndik_prod*) │  │
+│  └──────────────────────┘   └──────────────────────┘   └────────────────┘  │
+└─────────────────────────────────────┬──────────────────────────────────────┘
+                                      │
+          ┌───────────────────────────┼───────────────────────────┐
+          ▼                           ▼                           ▼
+┌───────────────────┐       ┌───────────────────┐       ┌───────────────────┐
+│  SaaS Super Admin │       │  Syndic Workspace │       │ Resident/Provider │
+│     Dashboard     │       │   (Zero-Building  │       │      Portals      │
+│ (Real KPIs & Reset│       │  Onboarding Guard │       │ (1st-Login Gate & │
+│   Data Control)   │       │  & Real Ledgers)  │       │  Bound Building)  │
+└───────────────────┘       └───────────────────┘       └───────────────────┘
 ```
 
-### Data Model & State
-- **`Syndic` & Plan Onboarding**:
-  - Maps selected pricing tier (`starter` = Essentiel 200 MAD / 4 buildings, `professional` = Pro 350 MAD / 8 buildings, `enterprise` = Entreprise 500 MAD / Unlimited) directly into `Syndic.subscriptionPlan` during Syndic registration.
-- **`Resident` Credential Fields**:
-  - `hasAccount?: boolean`, `generatedPassword?: string`, `credentialsCreatedAt?: string`, `mustChangePassword?: boolean`.
-- **`Prestataire` Credential Fields**:
-  - Extended with `hasAccount?: boolean`, `generatedPassword?: string`, `credentialsCreatedAt?: string`, `mustChangePassword?: boolean` so service providers have full parity with residents for account generation, viewing, and password regeneration.
-- **Persistent Credential Store (`syndik_registered_users_v1` & Firestore sync)**:
-  - Stores provisioned credentials keyed by normalized email (`email`, `password`, `profile` including `role`, `syndicId`, `buildingId`, `apartmentId`, `mustChangePassword`).
-  - Updating or regenerating credentials from the Syndic Dashboard immediately synchronizes with the credential registry so the Resident or Prestataire can log in right away.
-
-### Interactive Component & State Mapping
-1. **Landing Page Pricing Selection $\rightarrow$ Syndic Registration**:
-   - Clicking any of the 3 pricing buttons passes the selected tier (`starter`, `professional`, `enterprise`) to `/login?mode=syndic-signup&plan=<tier>`.
-   - When `mode=syndic-signup` is active, the screen renders the **Création de Cabinet Syndic** wizard displaying the chosen plan summary (with option to switch tiers), cabinet details, and initial building configuration.
-2. **Sign-In Only Default on `/login`**:
-   - Navigating to `/login` directly renders only the **Connexion** form (no public Resident or Prestataire registration tabs).
-3. **Syndic Credential Provisioning for Residents & Prestataires**:
-   - Adding or regenerating credentials for a Resident or Prestataire invokes a unified credential generator (`Syn-XXXX-MA`), updates the entity and auth registry, and opens the **Credential Access Modal** with:
-     - Copyable credentials block
-     - **Télécharger la Fiche d'Accès PDF** (powered by `jsPDF` with official Moroccan Syndic layout, instructions for first login, and security notice).
-4. **First-Login Password Update Gate**:
-   - When `userProfile.mustChangePassword === true`, a dedicated modal/screen intercepts navigation and validates the new password (minimum 6 characters, confirmation match, different from temporary password). Submitting updates the stored password, sets `mustChangePassword: false`, and unlocks the user's portal.
+- **Data Model & State**:
+  - All service functions initialize with `[]` instead of `mockSyndics`, `mockCharges`, `mockPaymentProofs`, `mockQuittances`, `mockAssembleesGenerales`, `mockPrestataires`, `mockChatMessages`, and `mockMarketplaceItems`.
+  - New buildings created by a Syndic start with `financials: { balance: 0, transactions: [] }`, `announcements: []`, `documents: []`, `residents: []`, and only the apartment lots generated by the creation wizard.
+- **Interactive Component & State Mapping**:
+  - **Login Screen**: Removes `handleQuickDemo` and the demo account grid. Preserves Syndic signup via pricing plan, standard email/CIN sign-in, and Google Sign-In.
+  - **Auth Context**: Removes hardcoded demo credential checks (`admin@demo.com`, `syndic@demo.com`, `resident@demo.com`, `prestataire@demo.com`). Preserves Super Admin recognition for `wahbi.rachid@gmail.com`, registered Syndics, and Syndic-generated Resident/Provider credentials.
+  - **Syndic Data Provider & Buildings View**: Safely handles `syndics = []` and `syndic = null` while loading or provisioning a new Syndic cabinet, rendering a clean onboarding empty state when `syndic.buildings.length === 0`.
+  - **Server Shared Store & Admin Reset**: Wipes `.data/syndik-shared-store.json` and adds a `POST /api/shared-state/reset` endpoint so the SaaS Super Admin can purge all state if ever needed.

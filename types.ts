@@ -16,7 +16,13 @@ export interface UserProfile {
   cin?: string;
   phone?: string;
   photoURL?: string;
+  providerCategory?: string;
   mustChangePassword?: boolean;
+}
+
+export interface CredentialAuditEntry {
+  action: 'generated' | 'regenerated' | 'shared_pdf' | 'shared_copy';
+  timestamp: string;
 }
 
 export interface Transaction {
@@ -239,6 +245,9 @@ export interface Prestataire {
   hasAccount?: boolean;
   generatedPassword?: string;
   credentialsCreatedAt?: string;
+  credentialsSharedAt?: string;
+  credentialsLastSharedMethod?: 'pdf' | 'copy';
+  credentialsAuditLog?: CredentialAuditEntry[];
   mustChangePassword?: boolean;
 }
 
@@ -255,6 +264,9 @@ export interface Resident {
   hasAccount?: boolean;
   generatedPassword?: string;
   credentialsCreatedAt?: string;
+  credentialsSharedAt?: string;
+  credentialsLastSharedMethod?: 'pdf' | 'copy';
+  credentialsAuditLog?: CredentialAuditEntry[];
   mustChangePassword?: boolean;
 }
 
