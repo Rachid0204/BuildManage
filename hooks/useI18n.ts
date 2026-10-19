@@ -2,17 +2,37 @@ import React, { createContext, useContext, useState, useEffect, ReactNode } from
 import type { Language } from '../types';
 import { translations } from '../i18n/locales';
 
+// Explicit French and Arabic dashboard translations in the i18n hook
+export const dashboardTranslations: Record<'fr' | 'ar', Record<string, string>> = {
+    fr: {
+        'dashboard.tantiemes': 'tantièmes',
+        'dashboard.managedBy': 'Géré par',
+        'dashboard.conveneAg': 'Convoquer une AG',
+        'dashboard.treasuryQuittances': 'Trésorerie & Quittances',
+    },
+    ar: {
+        'dashboard.tantiemes': 'جزء (تانتييم)',
+        'dashboard.managedBy': 'تحت إشراف',
+        'dashboard.conveneAg': 'استدعاء جمع عام',
+        'dashboard.treasuryQuittances': 'الخزينة والوصولات',
+    },
+};
+
 // Helper to get nested keys
 type NestedKey<T> = T extends object ? { [K in keyof T]-?: `${K & string}` | `${K & string}.${NestedKey<T[K]>}` }[keyof T] : never;
-type TranslationKeys = NestedKey<typeof translations.en>;
-
+export type TranslationKeys =
+    | NestedKey<typeof translations.fr>
+    | 'dashboard.tantiemes'
+    | 'dashboard.managedBy'
+    | 'dashboard.conveneAg'
+    | 'dashboard.treasuryQuittances';
 
 interface I18nContextType {
     language: Language;
     isAr: boolean;
     setLanguage: (language: Language) => void;
     toggleLanguage: () => void;
-    t: (key: TranslationKeys, replacements?: Record<string, string>) => string;
+    t: (key: TranslationKeys | string, replacements?: Record<string, string>) => string;
     tr: (frText: string, arText: string) => string;
 }
 
@@ -44,9 +64,21 @@ export const I18nProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         return language === 'ar' ? arText : frText;
     };
 
-    const t = (key: TranslationKeys, replacements?: Record<string, string>): string => {
+    const t = (key: TranslationKeys | string, replacements?: Record<string, string>): string => {
+        const activeLang: 'fr' | 'ar' = language === 'ar' ? 'ar' : 'fr';
+
+        if (dashboardTranslations[activeLang]?.[key]) {
+            let directText = dashboardTranslations[activeLang][key];
+            if (replacements) {
+                Object.keys(replacements).forEach((placeholder) => {
+                    directText = directText.replace(`{{${placeholder}}}`, replacements[placeholder]);
+                });
+            }
+            return directText;
+        }
+
         const keys = key.split('.');
-        let text: any = translations[language] || translations.fr;
+        let text: any = translations[activeLang] || translations.fr;
 
         for (const k of keys) {
             text = text?.[k];
@@ -68,7 +100,7 @@ export const I18nProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         let result = String(text);
 
         if (replacements) {
-            Object.keys(replacements).forEach(placeholder => {
+            Object.keys(replacements).forEach((placeholder) => {
                 result = result.replace(`{{${placeholder}}}`, replacements[placeholder]);
             });
         }
@@ -76,12 +108,10 @@ export const I18nProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         return result;
     };
 
-    return (
-        React.createElement(
-            I18nContext.Provider,
-            { value: { language, isAr, setLanguage, toggleLanguage, t, tr } },
-            children
-        )
+    return React.createElement(
+        I18nContext.Provider,
+        { value: { language, isAr, setLanguage, toggleLanguage, t, tr } },
+        children
     );
 };
 
