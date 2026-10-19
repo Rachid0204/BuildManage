@@ -3,9 +3,27 @@ import * as admin from 'firebase-admin';
 import * as crypto from 'crypto';
 
 const FIRESTORE_DATABASE_ID =
-  process.env.FIRESTORE_DATABASE_ID || 'ai-studio-979bb767-de87-42fa-901d-76ba2f20572a';
+  process.env.FIRESTORE_DATABASE_ID || 'ai-studio-immogest-6d16b790-183d-49fd-9d4f-086d99dc2be3';
 
-const app = admin.apps.length ? admin.app() : admin.initializeApp();
+const initializeFirebaseAdmin = (): admin.app.App => {
+  if (admin.apps.length) {
+    return admin.app();
+  }
+  const rawServiceAccount = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  if (rawServiceAccount && rawServiceAccount.trim().startsWith('{')) {
+    try {
+      const cert = JSON.parse(rawServiceAccount) as admin.ServiceAccount;
+      return admin.initializeApp({
+        credential: admin.credential.cert(cert),
+      });
+    } catch (err) {
+      console.error('Invalid FIREBASE_SERVICE_ACCOUNT_JSON, falling back to default credentials:', err);
+    }
+  }
+  return admin.initializeApp();
+};
+
+const app = initializeFirebaseAdmin();
 const db = admin.firestore(app);
 try {
   db.settings({ databaseId: FIRESTORE_DATABASE_ID } as admin.firestore.Settings);

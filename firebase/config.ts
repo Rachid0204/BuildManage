@@ -1,6 +1,5 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
-  initializeFirestore,
   getFirestore,
   doc,
   getDocFromServer,
@@ -52,21 +51,7 @@ export const isMock =
   !isBrowserRuntime || readEnv('VITE_USE_MOCK_DATA', 'false') === 'true';
 
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
-
-let dbInstance;
-try {
-  dbInstance = initializeFirestore(
-    app,
-    {
-      experimentalForceLongPolling: true,
-    },
-    FIRESTORE_DATABASE_ID
-  );
-} catch {
-  dbInstance = getFirestore(app, FIRESTORE_DATABASE_ID);
-}
-
-export const db = dbInstance;
+export const db = getFirestore(app, FIRESTORE_DATABASE_ID);
 export const auth = getAuth(app);
 export const functions = getFunctions(app);
 export const storage = getStorage(app);
