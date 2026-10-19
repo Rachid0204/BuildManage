@@ -8,24 +8,55 @@ interface BuildingContextType {
   setSelectedBuilding: (building: Building | null) => void;
   buildings: Building[];
   syndic: Syndic | null;
-  setSyndicData: (syndic: Syndic) => void;
+  setSyndicData: (syndic: Syndic | null) => void;
 }
 
 const BuildingContext = createContext<BuildingContextType | undefined>(undefined);
 
+const getTenantBuildingStorageKey = (syndicId?: string | null) =>
+  syndicId ? `syndik_selected_building_id:${syndicId}` : 'syndik_selected_building_id';
+
 export const BuildingProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [selectedBuildingId, setSelectedBuildingId] = useState<string | null>(() => {
-    return localStorage.getItem('syndik_selected_building_id');
-  });
   const [syndic, setSyndic] = useState<Syndic | null>(null);
+  const [selectedBuildingId, setSelectedBuildingId] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem('syndik_selected_building_id');
+    } catch {
+      return null;
+    }
+  });
 
   useEffect(() => {
-    if (selectedBuildingId) {
-      localStorage.setItem('syndik_selected_building_id', selectedBuildingId);
-    } else {
-      localStorage.removeItem('syndik_selected_building_id');
+    if (!syndic) {
+      setSelectedBuildingId(null);
+      return;
     }
-  }, [selectedBuildingId]);
+    try {
+      const tenantScopedId = localStorage.getItem(getTenantBuildingStorageKey(syndic.id));
+      if (tenantScopedId && syndic.buildings.some((b) => b.id === tenantScopedId)) {
+        setSelectedBuildingId(tenantScopedId);
+      } else if (syndic.buildings.length > 0) {
+        setSelectedBuildingId(syndic.buildings[0].id);
+      } else {
+        setSelectedBuildingId(null);
+      }
+    } catch {
+      // Ignore storage access errors
+    }
+  }, [syndic]);
+
+  useEffect(() => {
+    try {
+      if (selectedBuildingId && syndic?.id) {
+        localStorage.setItem(getTenantBuildingStorageKey(syndic.id), selectedBuildingId);
+        localStorage.setItem('syndik_selected_building_id', selectedBuildingId);
+      } else if (syndic?.id) {
+        localStorage.removeItem(getTenantBuildingStorageKey(syndic.id));
+      }
+    } catch {
+      // Ignore storage access errors
+    }
+  }, [selectedBuildingId, syndic?.id]);
 
   const buildings = syndic?.buildings || [];
 

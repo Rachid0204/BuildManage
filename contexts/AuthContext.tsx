@@ -1,955 +1,944 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import {
   User,
   onAuthStateChanged,
   signInWithPopup,
   GoogleAuthProvider,
   signOut,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  updateProfile,
+  updatePassword,
 } from 'firebase/auth';
-import { useQueryClient } from '@tanstack/react-query';
-import { auth, db, OperationType, handleFirestoreError } from '../firebase/config';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
-import type { UserProfile, UserRole, Syndic, Prestataire, SubscriptionPlan, Apartment } from '../types';
+import { auth, db, OperationType, handleFirestoreError } from '../firebase/config';
 import {
   getSyndics,
   saveSyndic,
-  addBuilding,
-  addResident,
-  updateResident,
-  savePrestataire,
+  getPrestatairesForBuilding,
   STORAGE_KEYS,
-  syncAllSharedStateFromServer,
   pushKeyToSharedServer,
+  syncAllSharedStateFromServer,
+  ResidentAccountRecord,
+  PrestataireAccountRecord,
+  sanitizeAccountRecordsInStorage,
 } from '../firebase/services';
+import type { UserProfile, UserRole, SubscriptionPlan, Syndic, Prestataire } from '../types';
+import {
+  hashPasswordSync,
+  verifyPasswordSync,
+  createSignedSessionEnvelope,
+  verifySignedSessionEnvelope,
+  setActiveAuthContext,
+  computeSessionSignature,
+} from '../utils/security';
 
-const SESSION_USER_KEY = 'syndik_prod_user_session_v1';
-
-export const getHomeRouteForRole = (role?: UserRole): string => {
-  switch (role) {
-    case 'admin':
-      return '/admin';
-    case 'resident':
-      return '/resident';
-    case 'provider':
-      return '/provider';
-    case 'syndic':
-    default:
-      return '/';
-  }
-};
+export interface RegisterAccountInput {
+  role: UserRole;
+  name: string;
+  email: string;
+  password: string;
+  phone: string;
+  city?: string;
+  // Syndic specific
+  cabinetName?: string;
+  ice?: string;
+  rc?: string;
+  plan?: SubscriptionPlan;
+  // Resident specific
+  cin?: string;
+  buildingCode?: string;
+  apartmentNumber?: string;
+  isOwner?: boolean;
+  // Provider specific
+  companyName?: string;
+  category?: Prestataire['category'];
+}
 
 interface AuthContextType {
+  user: User | null;
   currentUser: User | null;
   userProfile: UserProfile | null;
   loading: boolean;
+  signInWithGoogle: () => Promise<UserProfile>;
   loginWithGoogle: () => Promise<UserProfile>;
-  loginWithEmail: (identifier: string, pass: string) => Promise<UserProfile>;
-  login: (email: string, role?: UserRole) => Promise<UserProfile>;
+  login: (email: string, pass?: string) => Promise<UserProfile>;
+  loginWithEmail: (email: string, pass?: string) => Promise<UserProfile>;
+  registerAccount: (input: RegisterAccountInput) => Promise<UserProfile>;
   register: (
-    email: string,
-    pass: string,
-    name: string,
-    role: UserRole,
-    extra?: {
+    emailOrInput: string | RegisterAccountInput,
+    password?: string,
+    displayName?: string,
+    role?: UserRole,
+    options?: {
       phone?: string;
-      cin?: string;
       companyName?: string;
       city?: string;
       subscriptionPlan?: SubscriptionPlan;
       initialBuildingName?: string;
-      initialBuildingAddress?: string;
-      initialBuildingFees?: number;
       initialApartmentsCount?: number;
+      initialBuildingFees?: number;
       buildingId?: string;
       apartmentId?: string;
-      isOwner?: boolean;
-      category?: Prestataire['category'];
-      ice?: string;
-      rc?: string;
-      hourlyRate?: string;
     }
   ) => Promise<UserProfile>;
+  completeMandatoryPasswordChange: (newPassword: string) => Promise<void>;
   changePassword: (newPassword: string) => Promise<void>;
   registerOrUpdateUserCredentials: (
     email: string,
-    password: string,
+    passwordOrToken: string,
     profile: UserProfile
   ) => void;
   logout: () => Promise<void>;
-  isAdmin: boolean;
-  isSyndic: boolean;
-  isResident: boolean;
-  isProvider: boolean;
 }
+
+export const getHomeRouteForRole = (role?: UserRole): string => {
+  switch (role) {
+    case 'admin':
+      return '/admin-portal';
+    case 'resident':
+      return '/resident-portal';
+    case 'provider':
+      return '/provider-portal';
+    case 'syndic':
+    default:
+      return '/dashboard';
+  }
+};
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const createSessionFirebaseUser = (profile: UserProfile): User =>
-  ({
+const SESSION_STORAGE_KEY = 'syndik_auth_session_v1';
+const REGISTERED_USERS_KEY = STORAGE_KEYS.REGISTERED_USERS;
+const TRIAL_DURATION_MS = 30 * 86400000; // Standardized 30-day trial (Audit Item 21)
+
+interface StoredUserAccount {
+  uid: string;
+  email: string;
+  passwordHash: string;
+  profile: UserProfile;
+  createdAt: string;
+}
+
+function getStoredRegisteredUsers(): StoredUserAccount[] {
+  try {
+    const raw = localStorage.getItem(REGISTERED_USERS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as any[];
+    if (!Array.isArray(parsed)) return [];
+    let migrated = false;
+    const cleaned: StoredUserAccount[] = parsed
+      .filter((item) => item && typeof item.email === 'string' && item.profile)
+      .map((item) => {
+        const emailNorm = item.email.trim().toLowerCase();
+        const passwordHash =
+          item.passwordHash ||
+          (typeof item.password === 'string' ? hashPasswordSync(item.password, emailNorm) : '');
+        if ('password' in item) {
+          migrated = true;
+        }
+        return {
+          uid: item.uid,
+          email: emailNorm,
+          passwordHash,
+          profile: item.profile,
+          createdAt: item.createdAt || new Date().toISOString(),
+        };
+      });
+    if (migrated) {
+      localStorage.setItem(REGISTERED_USERS_KEY, JSON.stringify(cleaned));
+    }
+    return cleaned;
+  } catch {
+    return [];
+  }
+}
+
+function saveStoredRegisteredUser(account: StoredUserAccount) {
+  const existing = getStoredRegisteredUsers();
+  const sanitizedAccount: StoredUserAccount = {
+    uid: account.uid,
+    email: account.email.trim().toLowerCase(),
+    passwordHash: account.passwordHash,
+    profile: account.profile,
+    createdAt: account.createdAt,
+  };
+  const idx = existing.findIndex(
+    (u) => u.email.toLowerCase() === sanitizedAccount.email || u.uid === sanitizedAccount.uid
+  );
+  if (idx >= 0) {
+    existing[idx] = sanitizedAccount;
+  } else {
+    existing.push(sanitizedAccount);
+  }
+  localStorage.setItem(REGISTERED_USERS_KEY, JSON.stringify(existing));
+  void pushKeyToSharedServer(REGISTERED_USERS_KEY, existing);
+}
+
+function createVerifiedIdentityAdapter(profile: UserProfile): User {
+  const sig = computeSessionSignature(profile);
+  return {
     uid: profile.uid,
     email: profile.email,
-    displayName: profile.displayName,
+    displayName: profile.displayName || profile.email?.split('@')[0] || 'Utilisateur',
+    photoURL: profile.photoURL || null,
     emailVerified: true,
     isAnonymous: false,
     metadata: {},
     providerData: [],
     refreshToken: '',
-    tenantId: null,
+    tenantId: profile.syndicId || null,
     delete: async () => {},
-    getIdToken: async () => 'session-token',
-    getIdTokenResult: async () => ({} as any),
-    reload: async () => {},
-    toJSON: () => ({}),
-    phoneNumber: profile.phone || null,
-    photoURL: profile.photoURL || null,
-  } as unknown as User);
-
-async function syncUserProfileToFirestoreIfAuthenticated(profile: UserProfile): Promise<void> {
-  const fbUser = auth.currentUser;
-  if (!fbUser || !fbUser.emailVerified || fbUser.uid !== profile.uid) return;
-
-  const cleanProfile: Record<string, any> = {
-    uid: String(profile.uid).slice(0, 128),
-    email: String(profile.email || fbUser.email || 'user@syndik.ma').slice(0, 254),
-    displayName: String(profile.displayName || 'Utilisateur Syndik').slice(0, 150),
-    role: ['admin', 'syndic', 'resident', 'provider'].includes(profile.role)
-      ? profile.role
-      : 'syndic',
-  };
-  if (profile.syndicId) cleanProfile.syndicId = String(profile.syndicId).slice(0, 128);
-  if (profile.buildingId) cleanProfile.buildingId = String(profile.buildingId).slice(0, 128);
-  if (profile.buildingName) cleanProfile.buildingName = String(profile.buildingName).slice(0, 200);
-  if (profile.apartmentId) cleanProfile.apartmentId = String(profile.apartmentId).slice(0, 128);
-  if (profile.apartmentNumber) cleanProfile.apartmentNumber = String(profile.apartmentNumber).slice(0, 64);
-  if (typeof profile.isOwner === 'boolean') cleanProfile.isOwner = profile.isOwner;
-  if (profile.cin) cleanProfile.cin = String(profile.cin).slice(0, 32);
-  if (profile.phone) cleanProfile.phone = String(profile.phone).slice(0, 40);
-  if (profile.photoURL) cleanProfile.photoURL = String(profile.photoURL).slice(0, 500);
-  if (typeof profile.mustChangePassword === 'boolean') {
-    cleanProfile.mustChangePassword = profile.mustChangePassword;
-  }
-
-  try {
-    await setDoc(doc(db, 'users', cleanProfile.uid), cleanProfile);
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
-      try {
-        handleFirestoreError(error, OperationType.WRITE, `users/${cleanProfile.uid}`);
-      } catch {
-        // Logged structured FirestoreErrorInfo
+    getIdToken: async () => {
+      if (auth.currentUser) {
+        return auth.currentUser.getIdToken();
       }
-    }
-  }
+      return `syndik-sess-${profile.uid}-${sig}`;
+    },
+    getIdTokenResult: async () => ({
+      token: `syndik-sess-${profile.uid}-${sig}`,
+      expirationTime: new Date(Date.now() + 3600 * 1000).toISOString(),
+      authTime: new Date().toISOString(),
+      issuedAtTime: new Date().toISOString(),
+      signInProvider: 'password',
+      signInSecondFactor: null,
+      claims: {
+        role: profile.role,
+        syndicId: profile.syndicId,
+        buildingId: profile.buildingId,
+      },
+    }),
+    reload: async () => {},
+    toJSON: () => ({ uid: profile.uid, email: profile.email }),
+    phoneNumber: profile.phone || null,
+    providerId: 'firebase',
+  } as unknown as User;
 }
 
-export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
-  children,
-}) => {
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
+export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  const [user, setUser] = useState<User | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
-  const queryClient = useQueryClient();
 
-  const applySession = (profile: UserProfile): UserProfile => {
-    localStorage.setItem(SESSION_USER_KEY, JSON.stringify(profile));
-    setCurrentUser(auth.currentUser || createSessionFirebaseUser(profile));
+  const persistSession = (profile: UserProfile | null, firebaseUser?: User | null) => {
+    if (!profile) {
+      localStorage.removeItem(SESSION_STORAGE_KEY);
+      setActiveAuthContext(null, null);
+      setUser(null);
+      setUserProfile(null);
+      return;
+    }
+    const envelope = createSignedSessionEnvelope(profile);
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(envelope));
+    setActiveAuthContext(profile, null);
     setUserProfile(profile);
-    return profile;
+    setUser(firebaseUser || auth.currentUser || createVerifiedIdentityAdapter(profile));
   };
 
   useEffect(() => {
-    let isMounted = true;
+    // Sanitize any legacy plaintext passwords in localStorage on boot (Audit Item 03)
+    sanitizeAccountRecordsInStorage();
+    void syncAllSharedStateFromServer();
 
-    const initSession = async () => {
-      // Remove legacy mock session key
-      localStorage.removeItem('syndik_mock_user');
-      await syncAllSharedStateFromServer();
-      const storedUser = localStorage.getItem(SESSION_USER_KEY);
-      if (storedUser && isMounted) {
-        try {
-          const user = JSON.parse(storedUser) as UserProfile;
-          setCurrentUser(auth.currentUser || createSessionFirebaseUser(user));
-          setUserProfile(user);
-        } catch (e) {
-          console.error('Failed to parse stored session:', e);
-          localStorage.removeItem(SESSION_USER_KEY);
-        }
-      }
-      if (isMounted) {
-        setLoading(false);
-      }
-    };
-
-    void initSession();
-
-    const unsubscribeAuth = onAuthStateChanged(auth, async (fbUser) => {
-      if (!fbUser || !isMounted) return;
+    // 1. Check signed session envelope in localStorage (rejects unsigned/tampered JSON)
+    const savedSession = localStorage.getItem(SESSION_STORAGE_KEY);
+    if (savedSession) {
       try {
-        const userDoc = await getDoc(doc(db, 'users', fbUser.uid));
-        if (userDoc.exists() && isMounted) {
-          const data = userDoc.data() as UserProfile;
-          localStorage.setItem(SESSION_USER_KEY, JSON.stringify(data));
-          setCurrentUser(fbUser);
-          setUserProfile(data);
+        const parsed = JSON.parse(savedSession);
+        const verifiedProfile = verifySignedSessionEnvelope(parsed);
+        if (verifiedProfile) {
+          setActiveAuthContext(verifiedProfile, null);
+          setUserProfile(verifiedProfile);
+          setUser(createVerifiedIdentityAdapter(verifiedProfile));
+          setLoading(false);
+        } else {
+          // Unsigned or tampered session JSON — purge immediately
+          localStorage.removeItem(SESSION_STORAGE_KEY);
         }
       } catch {
-        // Ignore if user doc not created yet
+        localStorage.removeItem(SESSION_STORAGE_KEY);
       }
+    }
+
+    // 2. Subscribe to real Firebase Auth state
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      if (currentUser) {
+        try {
+          const token = await currentUser.getIdToken();
+          const userDocRef = doc(db, 'users', currentUser.uid);
+          let docSnap;
+          try {
+            docSnap = await getDoc(userDocRef);
+          } catch (error) {
+            if (
+              error instanceof Error &&
+              error.message.includes('Missing or insufficient permissions')
+            ) {
+              handleFirestoreError(error, OperationType.GET, `users/${currentUser.uid}`);
+            }
+            throw error;
+          }
+
+          if (docSnap && docSnap.exists()) {
+            const profileData = docSnap.data() as UserProfile;
+            setActiveAuthContext(profileData, token);
+            persistSession(profileData, currentUser);
+          } else {
+            const storedUsers = getStoredRegisteredUsers();
+            const foundLocal = storedUsers.find(
+              (u) =>
+                u.uid === currentUser.uid ||
+                (currentUser.email &&
+                  u.email.toLowerCase() === currentUser.email.toLowerCase())
+            );
+
+            if (foundLocal) {
+              setActiveAuthContext(foundLocal.profile, token);
+              persistSession(foundLocal.profile, currentUser);
+            } else {
+              // Authenticated via Firebase Auth (e.g. Google Sign-In)
+              const isSuperAdminEmail =
+                currentUser.email?.toLowerCase() === 'wahbi.rachid@gmail.com' &&
+                currentUser.emailVerified;
+              const syndicId = `syndic-${currentUser.uid.slice(0, 8)}`;
+              const newProfile: UserProfile = {
+                uid: currentUser.uid,
+                email: currentUser.email,
+                displayName:
+                  currentUser.displayName ||
+                  currentUser.email?.split('@')[0] ||
+                  'Syndic',
+                photoURL: currentUser.photoURL,
+                role: isSuperAdminEmail ? 'admin' : 'syndic',
+                syndicId,
+              };
+
+              const existingSyndics = await getSyndics();
+              if (!existingSyndics.some((s) => s.id === syndicId)) {
+                await saveSyndic({
+                  id: syndicId,
+                  name: `Cabinet ${newProfile.displayName}`,
+                  logoUrl: '',
+                  createdBy: currentUser.uid,
+                  subscriptionPlan: 'professional',
+                  subscriptionStatus: 'trialing',
+                  subscriptionExpiry: new Date(Date.now() + TRIAL_DURATION_MS).toISOString(),
+                  email: currentUser.email || '',
+                  city: 'Casablanca',
+                  buildings: [],
+                });
+              }
+
+              try {
+                await setDoc(userDocRef, newProfile);
+              } catch {
+                // Firestore rules may require additional fields; local + server state will hold it
+              }
+              setActiveAuthContext(newProfile, token);
+              persistSession(newProfile, currentUser);
+            }
+          }
+        } catch (err) {
+          console.warn('Error loading Firebase user profile:', err);
+        }
+      }
+      setLoading(false);
     });
 
-    const handleStateUpdated = () => {
-      void queryClient.invalidateQueries({ queryKey: ['syndics'] });
-      void queryClient.invalidateQueries({ queryKey: ['prestataires'] });
-    };
+    return () => unsubscribe();
+  }, []);
 
-    window.addEventListener('syndik-state-updated', handleStateUpdated);
-    let bc: BroadcastChannel | null = null;
-    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
-      bc = new BroadcastChannel('syndik_realtime_sync');
-      bc.onmessage = () => {
-        void syncAllSharedStateFromServer().then(() => {
-          void queryClient.invalidateQueries({ queryKey: ['syndics'] });
-          void queryClient.invalidateQueries({ queryKey: ['prestataires'] });
-        });
-      };
-    }
-
-    return () => {
-      isMounted = false;
-      unsubscribeAuth();
-      window.removeEventListener('syndik-state-updated', handleStateUpdated);
-      bc?.close();
-    };
-  }, [queryClient]);
-
-  const loginWithGoogle = async (): Promise<UserProfile> => {
-    await syncAllSharedStateFromServer();
+  const signInWithGoogle = async (): Promise<UserProfile> => {
     const provider = new GoogleAuthProvider();
-    const result = await signInWithPopup(auth, provider);
-    const user = result.user;
-
+    const cred = await signInWithPopup(auth, provider);
+    const currentUser = cred.user;
+    const token = await currentUser.getIdToken();
+    const userDocRef = doc(db, 'users', currentUser.uid);
+    const docSnap = await getDoc(userDocRef);
+    if (docSnap.exists()) {
+      const profileData = docSnap.data() as UserProfile;
+      setActiveAuthContext(profileData, token);
+      persistSession(profileData, currentUser);
+      return profileData;
+    }
     const isSuperAdminEmail =
-      user.email?.toLowerCase() === 'wahbi.rachid@gmail.com' ||
-      user.email?.toLowerCase() === 'admin@syndik.ma';
-
-    if (isSuperAdminEmail) {
-      const adminProfile: UserProfile = {
-        uid: user.uid,
-        email: user.email || 'wahbi.rachid@gmail.com',
-        displayName: user.displayName || 'Super Admin SaaS (Syndik Maroc)',
-        role: 'admin',
-        photoURL: user.photoURL || undefined,
-      };
-      await syncUserProfileToFirestoreIfAuthenticated(adminProfile);
-      await queryClient.invalidateQueries({ queryKey: ['syndics'] });
-      return applySession(adminProfile);
-    }
-
-    const userDocRef = doc(db, 'users', user.uid);
-    try {
-      const userDoc = await getDoc(userDocRef);
-      if (userDoc.exists()) {
-        const existing = userDoc.data() as UserProfile;
-        await queryClient.invalidateQueries({ queryKey: ['syndics'] });
-        return applySession(existing);
-      }
-    } catch {
-      // Proceed to create profile
-    }
-
-    const syndics = await getSyndics();
-    const cleanEmail = (user.email || '').trim().toLowerCase();
-    let matchedSyndic = syndics.find(
-      (s) => s.email?.trim().toLowerCase() === cleanEmail || s.createdBy === user.uid
-    );
-
-    if (!matchedSyndic) {
-      const newSyndicId = `syndic-${Date.now()}`;
-      const trialExpires = new Date();
-      trialExpires.setDate(trialExpires.getDate() + 365);
-      matchedSyndic = await saveSyndic({
-        id: newSyndicId,
-        name: user.displayName ? `Cabinet ${user.displayName}` : 'Cabinet Syndic',
-        createdBy: user.uid,
-        subscriptionPlan: 'professional',
-        subscriptionStatus: 'active',
-        subscriptionExpiry: trialExpires.toISOString(),
-        email: cleanEmail,
-        city: 'Casablanca',
-        buildings: [],
-      });
-    }
-
+      currentUser.email?.toLowerCase() === 'wahbi.rachid@gmail.com' &&
+      currentUser.emailVerified;
+    const syndicId = `syndic-${currentUser.uid.slice(0, 8)}`;
     const newProfile: UserProfile = {
-      uid: user.uid,
-      email: user.email || '',
-      displayName: user.displayName || matchedSyndic.name,
-      role: 'syndic',
-      syndicId: matchedSyndic.id,
-      photoURL: user.photoURL || undefined,
+      uid: currentUser.uid,
+      email: currentUser.email || '',
+      displayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'Syndic',
+      photoURL: currentUser.photoURL,
+      role: isSuperAdminEmail ? 'admin' : 'syndic',
+      syndicId,
     };
-
-    await syncUserProfileToFirestoreIfAuthenticated(newProfile);
-    await queryClient.invalidateQueries({ queryKey: ['syndics'] });
-    return applySession(newProfile);
+    setActiveAuthContext(newProfile, token);
+    persistSession(newProfile, currentUser);
+    return newProfile;
   };
 
-  const loginWithEmail = async (
-    identifier: string,
-    pass: string
-  ): Promise<UserProfile> => {
-    const cleanInput = identifier.trim().toLowerCase();
-    if (!cleanInput) {
-      throw new Error('Veuillez saisir votre adresse e-mail ou numéro CIN.');
-    }
-
-    await syncAllSharedStateFromServer();
-    const syndics = await getSyndics();
-
-    // 1. Check SaaS Super Admin account
-    if (
-      cleanInput === 'wahbi.rachid@gmail.com' ||
-      cleanInput === 'admin@syndik.ma' ||
-      cleanInput === 'superadmin@syndik.ma'
-    ) {
-      await queryClient.invalidateQueries({ queryKey: ['syndics'] });
-      return applySession({
-        uid: 'admin-saas-1',
-        email: cleanInput,
-        displayName: 'Super Admin SaaS (Syndik Maroc)',
-        role: 'admin',
-      });
-    }
-
-    // 2. Check Syndic-Provisioned Provider / Prestataire Accounts
-    let storedProviders: Prestataire[] = [];
+  const login = async (email: string, pass?: string): Promise<UserProfile> => {
+    setLoading(true);
     try {
-      const rawProviders = localStorage.getItem(STORAGE_KEYS.PRESTATAIRES);
-      if (rawProviders) {
-        storedProviders = JSON.parse(rawProviders);
-      }
-    } catch {
-      storedProviders = [];
-    }
+      await syncAllSharedStateFromServer();
+      sanitizeAccountRecordsInStorage();
 
-    let savedProviderAccounts: Array<{
-      prestataireId: string;
-      email: string;
-      password: string;
-      name: string;
-      syndicId: string;
-      buildingId: string;
-      mustChangePassword?: boolean;
-    }> = [];
+      const normalizedEmail = email.trim().toLowerCase();
+      const trimmedPass = (pass ?? '').trim();
 
-    try {
-      const rawProvAccounts = localStorage.getItem(STORAGE_KEYS.PRESTATAIRE_ACCOUNTS);
-      if (rawProvAccounts) {
-        savedProviderAccounts = JSON.parse(rawProvAccounts);
-      }
-    } catch {
-      savedProviderAccounts = [];
-    }
-
-    const matchedProvider = storedProviders.find(
-      (p) => p.email && p.email.trim().toLowerCase() === cleanInput
-    );
-    const matchedProvCred = savedProviderAccounts.find(
-      (acc) => acc.email.trim().toLowerCase() === cleanInput
-    );
-
-    if (matchedProvider || matchedProvCred) {
-      const expectedProvPassword =
-        matchedProvider?.generatedPassword || matchedProvCred?.password;
-
-      if (!expectedProvPassword || pass !== expectedProvPassword) {
+      // Audit Item 01 (P0): Every email login MUST supply and verify a non-empty password.
+      if (!normalizedEmail || !trimmedPass) {
         throw new Error(
-          'Mot de passe incorrect pour ce compte Prestataire. Vérifiez la fiche d’identifiants remise par votre Syndic.'
+          'Veuillez saisir votre adresse email et votre mot de passe.'
         );
       }
 
-      const isTempProvPass =
-        matchedProvider?.mustChangePassword ??
-        matchedProvCred?.mustChangePassword ??
-        Boolean(expectedProvPassword.startsWith('Syndik-'));
+      // 1. Check Registered Accounts (Syndic / Resident / Provider / Admin) with password hash verification
+      const registeredUsers = getStoredRegisteredUsers();
+      const matchedRegistered = registeredUsers.find(
+        (u) => u.email.toLowerCase() === normalizedEmail
+      );
 
-      return applySession({
-        uid: matchedProvider?.id || matchedProvCred!.prestataireId,
-        email: matchedProvider?.email || matchedProvCred!.email,
-        displayName: matchedProvider?.name || matchedProvCred!.name,
-        role: 'provider',
-        syndicId: matchedProvider?.syndicId || matchedProvCred!.syndicId,
-        buildingId: matchedProvider?.buildingId || matchedProvCred!.buildingId,
-        phone: matchedProvider?.phone,
-        mustChangePassword: isTempProvPass,
-      });
-    }
-
-    // 3. Check Syndic-Generated Resident Accounts (by Email OR CIN)
-    let savedResidentAccounts: Array<{
-      residentId: string;
-      email: string;
-      password: string;
-      name: string;
-      isOwner?: boolean;
-      syndicId: string;
-      buildingId: string;
-      apartmentId?: string;
-      mustChangePassword?: boolean;
-    }> = [];
-
-    try {
-      const rawAccounts = localStorage.getItem(STORAGE_KEYS.RESIDENT_ACCOUNTS);
-      if (rawAccounts) {
-        savedResidentAccounts = JSON.parse(rawAccounts);
-      }
-    } catch {
-      savedResidentAccounts = [];
-    }
-
-    for (const syndic of syndics) {
-      for (const bld of syndic.buildings) {
-        const matchedRes = bld.residents.find(
-          (r) =>
-            r.email.trim().toLowerCase() === cleanInput ||
-            (r.cin && r.cin.trim().toLowerCase() === cleanInput)
-        );
-
-        if (matchedRes) {
-          const credRecord = savedResidentAccounts.find(
-            (acc) =>
-              acc.residentId === matchedRes.id ||
-              acc.email.trim().toLowerCase() === matchedRes.email.trim().toLowerCase()
+      if (matchedRegistered) {
+        if (!verifyPasswordSync(trimmedPass, matchedRegistered.passwordHash, normalizedEmail)) {
+          throw new Error(
+            'Identifiants incorrects. Veuillez vérifier votre email et votre mot de passe.'
           );
+        }
+        persistSession(matchedRegistered.profile);
+        return matchedRegistered.profile;
+      }
 
-          const expectedPassword =
-            matchedRes.generatedPassword || credRecord?.password;
+      // 2. Check Resident Credential Accounts (Generated by Syndic) — strictly verifying password hash
+      const rawResidentAccounts = localStorage.getItem(STORAGE_KEYS.RESIDENT_ACCOUNTS);
+      const residentAccounts: ResidentAccountRecord[] = rawResidentAccounts
+        ? JSON.parse(rawResidentAccounts)
+        : [];
+      const matchedResAccount = residentAccounts.find(
+        (a) => a.email.trim().toLowerCase() === normalizedEmail
+      );
 
-          if (!expectedPassword || pass !== expectedPassword) {
-            throw new Error(
-              'Mot de passe incorrect pour ce compte résident. Vérifiez la fiche d’identifiants générée par votre Syndic.'
-            );
-          }
-
-          const assignedApt = bld.apartments.find(
-            (a) =>
-              a.id === matchedRes.apartmentId ||
-              a.ownerId === matchedRes.id ||
-              a.tenantId === matchedRes.id
+      if (matchedResAccount) {
+        const storedSecret = matchedResAccount.passwordHash || matchedResAccount.password;
+        if (!verifyPasswordSync(trimmedPass, storedSecret, normalizedEmail)) {
+          throw new Error(
+            'Identifiants résident incorrects. Veuillez vérifier votre mot de passe sur votre fiche d’accès.'
           );
-
-          const isTempPasswordUsed =
-            matchedRes.mustChangePassword ??
-            credRecord?.mustChangePassword ??
-            Boolean(expectedPassword.startsWith('Syndik-'));
-
-          return applySession({
-            uid: matchedRes.id,
-            email: matchedRes.email,
-            displayName: matchedRes.name,
-            role: 'resident',
-            syndicId: syndic.id,
-            buildingId: bld.id,
-            buildingName: bld.name,
-            apartmentId: assignedApt?.id || matchedRes.apartmentId,
-            apartmentNumber: assignedApt?.number,
-            isOwner: matchedRes.isOwner,
-            cin: matchedRes.cin,
-            phone: matchedRes.phone,
-            mustChangePassword: isTempPasswordUsed,
-          });
         }
-      }
-    }
+        const syndics = await getSyndics();
+        let buildingName = 'Résidence';
+        let apartmentNumber = matchedResAccount.apartmentId || '';
 
-    const standaloneAccount = savedResidentAccounts.find(
-      (acc) => acc.email.trim().toLowerCase() === cleanInput
-    );
-    if (standaloneAccount) {
-      if (!standaloneAccount.password || pass !== standaloneAccount.password) {
-        throw new Error('Mot de passe incorrect pour ce compte résident.');
-      }
-      return applySession({
-        uid: standaloneAccount.residentId,
-        email: standaloneAccount.email,
-        displayName: standaloneAccount.name,
-        role: 'resident',
-        syndicId: standaloneAccount.syndicId,
-        buildingId: standaloneAccount.buildingId,
-        apartmentId: standaloneAccount.apartmentId,
-        isOwner: standaloneAccount.isOwner ?? true,
-        mustChangePassword:
-          standaloneAccount.mustChangePassword ??
-          standaloneAccount.password?.startsWith('Syndik-'),
-      });
-    }
-
-    // 4. Check registered user accounts stored in `STORAGE_KEYS.REGISTERED_USERS`
-    try {
-      const rawCustomUsers = localStorage.getItem(STORAGE_KEYS.REGISTERED_USERS);
-      if (rawCustomUsers) {
-        const customUsers = JSON.parse(rawCustomUsers) as Array<
-          UserProfile & { password?: string }
-        >;
-        const foundUser = customUsers.find(
-          (u) => u.email.trim().toLowerCase() === cleanInput
-        );
-        if (foundUser) {
-          if (foundUser.password && pass !== foundUser.password) {
-            throw new Error('Mot de passe incorrect.');
+        for (const s of syndics) {
+          const bld = s.buildings.find((b) => b.id === matchedResAccount.buildingId);
+          if (bld) {
+            buildingName = bld.name;
+            const apt = bld.apartments.find((a) => a.id === matchedResAccount.apartmentId);
+            if (apt) apartmentNumber = apt.number;
+            break;
           }
-          const { password: _p, ...cleanProfile } = foundUser;
-          await queryClient.invalidateQueries({ queryKey: ['syndics'] });
-          return applySession(cleanProfile);
         }
+
+        const resProfile: UserProfile = {
+          uid: `user-res-${matchedResAccount.residentId}`,
+          email: matchedResAccount.email,
+          displayName: matchedResAccount.name,
+          role: 'resident',
+          syndicId: matchedResAccount.syndicId,
+          buildingId: matchedResAccount.buildingId,
+          buildingName,
+          apartmentId: matchedResAccount.apartmentId,
+          apartmentNumber,
+          residentId: matchedResAccount.residentId,
+          mustChangePassword: matchedResAccount.mustChangePassword ?? true,
+        };
+        persistSession(resProfile);
+        return resProfile;
       }
-    } catch (e: any) {
-      if (e?.message === 'Mot de passe incorrect.') throw e;
-    }
 
-    // 5. Check Registered Syndic Cabinets in `syndics`
-    const matchedSyndic = syndics.find(
-      (s) => s.email?.trim().toLowerCase() === cleanInput
-    );
-    if (matchedSyndic) {
-      await queryClient.invalidateQueries({ queryKey: ['syndics'] });
-      return applySession({
-        uid: matchedSyndic.createdBy || `syndic-user-${matchedSyndic.id}`,
-        email: matchedSyndic.email || cleanInput,
-        displayName: matchedSyndic.name,
-        role: 'syndic',
-        syndicId: matchedSyndic.id,
-        phone: matchedSyndic.phone,
-      });
-    }
+      // 3. Check Prestataire Credential Accounts (Generated by Syndic) — strictly verifying password hash
+      const rawPrestAccounts = localStorage.getItem(STORAGE_KEYS.PRESTATAIRE_ACCOUNTS);
+      const prestAccounts: PrestataireAccountRecord[] = rawPrestAccounts
+        ? JSON.parse(rawPrestAccounts)
+        : [];
+      const matchedPrestAccount = prestAccounts.find(
+        (a) => a.email.trim().toLowerCase() === normalizedEmail
+      );
 
-    throw new Error(
-      "Aucun compte trouvé avec cet identifiant. Si vous êtes un nouveau Syndic, veuillez choisir un forfait sur la page d'accueil pour créer votre cabinet."
-    );
+      if (matchedPrestAccount) {
+        const storedSecret = matchedPrestAccount.passwordHash || matchedPrestAccount.password;
+        if (!verifyPasswordSync(trimmedPass, storedSecret, normalizedEmail)) {
+          throw new Error(
+            'Identifiants prestataire incorrects. Veuillez vérifier votre mot de passe sur votre fiche d’accès.'
+          );
+        }
+        const syndics = await getSyndics();
+        let buildingName = 'Résidence';
+        for (const s of syndics) {
+          const bld = s.buildings.find((b) => b.id === matchedPrestAccount.buildingId);
+          if (bld) {
+            buildingName = bld.name;
+            break;
+          }
+        }
+
+        const prestProfile: UserProfile = {
+          uid: `user-prest-${matchedPrestAccount.prestataireId}`,
+          email: matchedPrestAccount.email,
+          displayName: matchedPrestAccount.name,
+          role: 'provider',
+          syndicId: matchedPrestAccount.syndicId,
+          buildingId: matchedPrestAccount.buildingId,
+          buildingName,
+          prestataireId: matchedPrestAccount.prestataireId,
+          prestataireCategory: matchedPrestAccount.category,
+          mustChangePassword: matchedPrestAccount.mustChangePassword ?? true,
+        };
+        persistSession(prestProfile);
+        return prestProfile;
+      }
+
+      // 4. Authenticate with Firebase Authentication email/password flow (Audit Item 01)
+      // Knowing an email alone NEVER creates a session without Firebase Auth or passwordHash verification.
+      const cred = await signInWithEmailAndPassword(auth, normalizedEmail, trimmedPass);
+      const token = await cred.user.getIdToken();
+      const userDocRef = doc(db, 'users', cred.user.uid);
+      const docSnap = await getDoc(userDocRef);
+
+      if (docSnap.exists()) {
+        const profileData = docSnap.data() as UserProfile;
+        setActiveAuthContext(profileData, token);
+        persistSession(profileData, cred.user);
+        return profileData;
+      } else {
+        const isSuperAdminEmail =
+          cred.user.email?.toLowerCase() === 'wahbi.rachid@gmail.com' &&
+          cred.user.emailVerified;
+        const fallbackProfile: UserProfile = {
+          uid: cred.user.uid,
+          email: cred.user.email || normalizedEmail,
+          displayName: cred.user.displayName || normalizedEmail.split('@')[0],
+          role: isSuperAdminEmail ? 'admin' : 'syndic',
+        };
+        setActiveAuthContext(fallbackProfile, token);
+        persistSession(fallbackProfile, cred.user);
+        return fallbackProfile;
+      }
+    } catch (error: any) {
+      if (
+        error?.code === 'auth/invalid-credential' ||
+        error?.code === 'auth/user-not-found' ||
+        error?.code === 'auth/wrong-password'
+      ) {
+        throw new Error(
+          'Aucun compte trouvé avec ces identifiants ou mot de passe incorrect.'
+        );
+      }
+      throw error;
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const login = async (email: string): Promise<UserProfile> => {
-    return loginWithEmail(email, '');
-  };
-
-  const register = async (
-    email: string,
-    pass: string,
-    name: string,
-    role: UserRole,
-    extra?: {
+  const registerAccount = async (
+    emailOrInput: string | RegisterAccountInput,
+    passwordArg?: string,
+    displayNameArg?: string,
+    roleArg?: UserRole,
+    optionsArg?: {
       phone?: string;
-      cin?: string;
       companyName?: string;
       city?: string;
       subscriptionPlan?: SubscriptionPlan;
       initialBuildingName?: string;
-      initialBuildingAddress?: string;
-      initialBuildingFees?: number;
       initialApartmentsCount?: number;
+      initialBuildingFees?: number;
       buildingId?: string;
       apartmentId?: string;
-      isOwner?: boolean;
-      category?: Prestataire['category'];
-      ice?: string;
-      rc?: string;
-      hourlyRate?: string;
     }
   ): Promise<UserProfile> => {
-    const cleanEmail = email.trim().toLowerCase();
-    await syncAllSharedStateFromServer();
-
-    let uid = auth.currentUser?.uid || `user-${role}-${Date.now()}`;
-    const syndics = await getSyndics();
-    const defaultSyndic = syndics[0];
-    const defaultBuilding = defaultSyndic?.buildings[0];
-
-    let targetSyndic = defaultSyndic;
-    let targetBuilding = defaultBuilding;
-    if (extra?.buildingId) {
-      for (const s of syndics) {
-        const foundBld = s.buildings.find((b) => b.id === extra.buildingId);
-        if (foundBld) {
-          targetSyndic = s;
-          targetBuilding = foundBld;
-          break;
-        }
-      }
-    }
-
-    let syndicId: string | undefined = undefined;
-    let buildingId: string | undefined = undefined;
-    let buildingName: string | undefined = undefined;
-    let apartmentId: string | undefined = extra?.apartmentId || undefined;
-    let apartmentNumber: string | undefined = undefined;
-    let isOwner: boolean | undefined = extra?.isOwner ?? (role === 'resident' ? true : undefined);
-    let displayName = name.trim();
-
-    if (role === 'syndic') {
-      syndicId = `syndic-${Date.now()}`;
-      const trialExpires = new Date();
-      trialExpires.setDate(trialExpires.getDate() + 365);
-
-      const chosenPlan: SubscriptionPlan = extra?.subscriptionPlan || 'professional';
-      const chosenCity = extra?.city?.trim() || 'Casablanca';
-
-      const newSyndic: Syndic = {
-        id: syndicId,
-        name: extra?.companyName?.trim() || name.trim(),
-        createdBy: uid,
-        subscriptionPlan: chosenPlan,
-        subscriptionStatus: 'active',
-        subscriptionExpiry: trialExpires.toISOString(),
-        email: cleanEmail,
-        phone: extra?.phone || '+212 6 00 00 00 00',
-        city: chosenCity,
-        ice: extra?.ice?.trim() || undefined,
-        rc: extra?.rc?.trim() || undefined,
-        buildings: [],
-      };
-      await saveSyndic(newSyndic);
-
-      // Only create an initial building if the Syndic explicitly entered a building name during signup
-      if (extra?.initialBuildingName?.trim()) {
-        const initialBldTitle = extra.initialBuildingName.trim();
-        const numApts = Math.max(1, Number(extra?.initialApartmentsCount) || 8);
-        const monthlyFee = Math.max(50, Number(extra?.initialBuildingFees) || 250);
-        const baseTantieme = Math.floor(1000 / numApts);
-        const initialApts: Omit<Apartment, 'id' | 'buildingId'>[] = [];
-        for (let i = 1; i <= numApts; i++) {
-          const floorIdx = Math.ceil(i / 2);
-          const unitNum = `${floorIdx}0${((i - 1) % 2) + 1}`;
-          initialApts.push({
-            number: unitNum,
-            floor: floorIdx,
-            area: 85,
-            monthlyFees: monthlyFee,
-            tantiemes:
-              i === 1 ? baseTantieme + (1000 - baseTantieme * numApts) : baseTantieme,
-            coproType: 'apartment',
-            ownerId: null,
-            tenantId: null,
-          });
-        }
-        const createdBld = await addBuilding(syndicId, {
-          name: initialBldTitle,
-          address: extra?.initialBuildingAddress?.trim() || `Boulevard Principal, ${chosenCity}`,
-          city: chosenCity,
-          monthlySyndicFees: monthlyFee,
-          reserveFundRate: 5,
-          managerName: name.trim(),
-          managerPhone: extra?.phone || '+212 6 00 00 00 00',
-          apartments: initialApts,
-        });
-        buildingId = createdBld.id;
-        buildingName = createdBld.name;
-      }
-    } else if (role === 'resident' && targetBuilding && targetSyndic) {
-      syndicId = targetSyndic.id;
-      buildingId = targetBuilding.id;
-      buildingName = targetBuilding.name;
-
-      const cleanCin = extra?.cin?.trim().toLowerCase();
-      const existingRes = targetBuilding.residents.find(
-        (r) =>
-          r.email.trim().toLowerCase() === cleanEmail ||
-          (cleanCin && r.cin && r.cin.trim().toLowerCase() === cleanCin)
-      );
-
-      if (existingRes) {
-        uid = existingRes.id;
-        const resolvedAptId = apartmentId || existingRes.apartmentId;
-        const updatedRes = await updateResident({
-          ...existingRes,
-          name: name.trim() || existingRes.name,
-          email: cleanEmail,
-          phone: extra?.phone || existingRes.phone,
-          cin: extra?.cin?.trim().toUpperCase() || existingRes.cin,
-          isOwner: extra?.isOwner ?? existingRes.isOwner,
-          apartmentId: resolvedAptId,
-          hasAccount: true,
-          generatedPassword: pass,
-          credentialsCreatedAt: new Date().toISOString(),
-        });
-        apartmentId = updatedRes.apartmentId;
-        isOwner = updatedRes.isOwner;
-      } else {
-        const createdRes = await addResident(
-          {
-            syndicId,
-            buildingId,
-            apartmentId,
-            name: name.trim(),
-            email: cleanEmail,
-            phone: extra?.phone || '0661000000',
-            cin: extra?.cin?.trim().toUpperCase() || undefined,
-            isOwner: isOwner ?? true,
-          },
-          true
-        );
-        await updateResident({
-          ...createdRes,
-          hasAccount: true,
-          generatedPassword: pass,
-          credentialsCreatedAt: new Date().toISOString(),
-        });
-        uid = createdRes.id;
-        apartmentId = createdRes.apartmentId;
-      }
-
-      const linkedApt = targetBuilding.apartments.find((a) => a.id === apartmentId);
-      apartmentNumber = linkedApt?.number;
-    } else if (role === 'provider' && targetSyndic && targetBuilding) {
-      syndicId = targetSyndic.id;
-      buildingId = targetBuilding.id;
-      const companyLabel = extra?.companyName?.trim() || name.trim();
-      displayName = companyLabel;
-      uid = `prest-${Date.now()}`;
-
-      await savePrestataire({
-        id: uid,
-        buildingId,
-        syndicId,
-        name: companyLabel,
-        category: extra?.category || 'plumbing',
-        contactPerson: name.trim(),
-        phone: extra?.phone || '0661000000',
-        whatsapp: (extra?.phone || '0661000000').replace(/\s+/g, ''),
-        email: cleanEmail,
-        ice: extra?.ice?.trim() || undefined,
-        rc: extra?.rc?.trim() || undefined,
-        hourlyRate: extra?.hourlyRate?.trim() || '150 DH / intervention',
-        active: true,
-        isVerifiedBySyndic: true,
-        isEmergency247: true,
-        rating: 5.0,
-        reviewsCount: 1,
-        reviews: [],
-        notes: 'Prestataire inscrit via le portail Syndik.',
-      });
-    }
-
-    const newProfile: UserProfile = {
-      uid,
-      email: cleanEmail,
-      displayName,
-      role,
-      syndicId,
-      buildingId,
-      buildingName,
-      apartmentId,
-      apartmentNumber,
-      isOwner,
-      cin: extra?.cin?.trim().toUpperCase(),
-      phone: extra?.phone,
-    };
-
+    const input: RegisterAccountInput =
+      typeof emailOrInput === 'object' && emailOrInput !== null
+        ? emailOrInput
+        : {
+            email: String(emailOrInput),
+            password: passwordArg || '',
+            name: displayNameArg || String(emailOrInput).split('@')[0],
+            role: roleArg || 'syndic',
+            phone: optionsArg?.phone || '',
+            city: optionsArg?.city,
+            cabinetName: optionsArg?.companyName,
+            companyName: optionsArg?.companyName,
+            plan: optionsArg?.subscriptionPlan,
+            buildingCode: optionsArg?.buildingId,
+            apartmentNumber: optionsArg?.apartmentId,
+          };
+    setLoading(true);
     try {
-      const rawCustomUsers = localStorage.getItem(STORAGE_KEYS.REGISTERED_USERS);
-      const customUsers = rawCustomUsers ? JSON.parse(rawCustomUsers) : [];
-      const filtered = customUsers.filter(
-        (u: any) => u.email?.trim().toLowerCase() !== cleanEmail
-      );
-      filtered.push({ ...newProfile, password: pass });
-      localStorage.setItem(STORAGE_KEYS.REGISTERED_USERS, JSON.stringify(filtered));
-      await pushKeyToSharedServer(STORAGE_KEYS.REGISTERED_USERS, filtered);
-    } catch {
-      // ignore storage error
+      await syncAllSharedStateFromServer();
+      const normalizedEmail = input.email.trim().toLowerCase();
+      const trimmedPass = input.password.trim();
+
+      if (!normalizedEmail || trimmedPass.length < 6) {
+        throw new Error('Le mot de passe doit contenir au moins 6 caractères.');
+      }
+
+      const existingUsers = getStoredRegisteredUsers();
+      if (existingUsers.some((u) => u.email.toLowerCase() === normalizedEmail)) {
+        throw new Error(
+          'Un compte existe déjà avec cette adresse email. Veuillez vous connecter.'
+        );
+      }
+
+      const uid = `usr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      let newProfile: UserProfile;
+
+      if (input.role === 'syndic') {
+        const syndicId = `syndic-${Date.now()}`;
+        const cabinetName = input.cabinetName?.trim() || `Cabinet ${input.name.trim()}`;
+
+        const newSyndic: Syndic = {
+          id: syndicId,
+          name: cabinetName,
+          logoUrl: '',
+          createdBy: uid,
+          subscriptionPlan: input.plan || 'professional',
+          subscriptionStatus: 'trialing',
+          subscriptionExpiry: new Date(Date.now() + TRIAL_DURATION_MS).toISOString(),
+          email: normalizedEmail,
+          phone: input.phone.trim(),
+          city: input.city?.trim() || 'Casablanca',
+          ice: input.ice?.trim() || undefined,
+          rc: input.rc?.trim() || undefined,
+          buildings: [],
+        };
+
+        await saveSyndic(newSyndic);
+
+        newProfile = {
+          uid,
+          email: normalizedEmail,
+          displayName: input.name.trim(),
+          role: 'syndic',
+          syndicId,
+          phone: input.phone.trim(),
+        };
+      } else if (input.role === 'resident') {
+        // Audit Item 22: Match only against an explicit building code or verified resident invitation by email.
+        // Never fall back to syndics[0].buildings[0] for an unassigned account!
+        const syndics = await getSyndics();
+        let targetSyndicId: string | undefined;
+        let targetBuildingId: string | undefined;
+        let targetBuildingName: string | undefined;
+        let targetApartmentId: string | undefined;
+        let targetResidentId: string | undefined;
+
+        for (const s of syndics) {
+          for (const b of s.buildings) {
+            const matchedRes = b.residents.find(
+              (r) => r.email && r.email.trim().toLowerCase() === normalizedEmail
+            );
+            if (
+              matchedRes ||
+              (input.buildingCode &&
+                (b.id.toLowerCase() === input.buildingCode.trim().toLowerCase() ||
+                  b.name.toLowerCase() === input.buildingCode.trim().toLowerCase()))
+            ) {
+              targetSyndicId = s.id;
+              targetBuildingId = b.id;
+              targetBuildingName = b.name;
+              if (matchedRes) {
+                targetResidentId = matchedRes.id;
+                targetApartmentId = matchedRes.apartmentId;
+              } else if (input.apartmentNumber) {
+                const matchedApt = b.apartments.find(
+                  (a) =>
+                    a.number.toLowerCase() ===
+                    input.apartmentNumber!.trim().toLowerCase()
+                );
+                if (matchedApt) targetApartmentId = matchedApt.id;
+              }
+              break;
+            }
+          }
+          if (targetBuildingId) break;
+        }
+
+        newProfile = {
+          uid,
+          email: normalizedEmail,
+          displayName: input.name.trim(),
+          role: 'resident',
+          syndicId: targetSyndicId,
+          buildingId: targetBuildingId,
+          buildingName: targetBuildingName,
+          apartmentId: targetApartmentId,
+          apartmentNumber: input.apartmentNumber?.trim() || undefined,
+          residentId: targetResidentId,
+          phone: input.phone.trim(),
+          cin: input.cin?.trim(),
+        };
+      } else {
+        // Provider registration: match only if invited by email, otherwise leave unassigned until linked
+        const syndics = await getSyndics();
+        let targetSyndicId: string | undefined;
+        let targetBuildingId: string | undefined;
+        let targetBuildingName: string | undefined;
+        let targetPrestataireId: string | undefined;
+
+        for (const s of syndics) {
+          for (const b of s.buildings) {
+            const prestList = await getPrestatairesForBuilding(b.id);
+            const matchedPrest = prestList.find(
+              (p) => p.email && p.email.trim().toLowerCase() === normalizedEmail
+            );
+            if (matchedPrest) {
+              targetSyndicId = s.id;
+              targetBuildingId = b.id;
+              targetBuildingName = b.name;
+              targetPrestataireId = matchedPrest.id;
+              break;
+            }
+          }
+          if (targetBuildingId) break;
+        }
+
+        newProfile = {
+          uid,
+          email: normalizedEmail,
+          displayName: input.companyName?.trim() || input.name.trim(),
+          role: 'provider',
+          syndicId: targetSyndicId,
+          buildingId: targetBuildingId,
+          buildingName: targetBuildingName,
+          prestataireId: targetPrestataireId,
+          prestataireCategory: input.category || 'maintenance',
+          phone: input.phone.trim(),
+        };
+      }
+
+      // Save hashed credentials (NEVER store plaintext password in localStorage or shared server)
+      saveStoredRegisteredUser({
+        uid: newProfile.uid,
+        email: normalizedEmail,
+        passwordHash: hashPasswordSync(trimmedPass, normalizedEmail),
+        profile: newProfile,
+        createdAt: new Date().toISOString(),
+      });
+
+      // Attempt optional Firebase Auth creation in background
+      try {
+        const cred = await createUserWithEmailAndPassword(auth, normalizedEmail, trimmedPass);
+        await updateProfile(cred.user, { displayName: newProfile.displayName });
+        await setDoc(doc(db, 'users', cred.user.uid), {
+          ...newProfile,
+          uid: cred.user.uid,
+        });
+      } catch {
+        // Continue with hashed credential account if Firebase email/password is offline
+      }
+
+      persistSession(newProfile);
+      return newProfile;
+    } finally {
+      setLoading(false);
     }
-
-    await syncUserProfileToFirestoreIfAuthenticated(newProfile);
-    await queryClient.invalidateQueries({ queryKey: ['syndics'] });
-    await queryClient.invalidateQueries();
-
-    return applySession(newProfile);
   };
 
-  const changePassword = async (newPassword: string): Promise<void> => {
+  const completeMandatoryPasswordChange = async (newPassword: string) => {
     if (!userProfile) return;
     const trimmed = newPassword.trim();
     if (trimmed.length < 6) {
       throw new Error('Le nouveau mot de passe doit contenir au moins 6 caractères.');
     }
 
-    await syncAllSharedStateFromServer();
+    const normalizedEmail = (userProfile.email || '').trim().toLowerCase();
+    const newPasswordHash = hashPasswordSync(trimmed, normalizedEmail);
 
-    // 1. Update resident account record if resident
-    try {
-      const rawAccounts = localStorage.getItem(STORAGE_KEYS.RESIDENT_ACCOUNTS);
-      if (rawAccounts) {
-        const accounts = JSON.parse(rawAccounts) as Array<{
-          residentId: string;
-          email: string;
-          password: string;
-          mustChangePassword?: boolean;
-        }>;
-        const updated = accounts.map((acc) =>
-          acc.residentId === userProfile.uid ||
-          acc.email.toLowerCase() === userProfile.email.toLowerCase()
-            ? { ...acc, password: trimmed, mustChangePassword: false }
-            : acc
-        );
-        localStorage.setItem(STORAGE_KEYS.RESIDENT_ACCOUNTS, JSON.stringify(updated));
-        await pushKeyToSharedServer(STORAGE_KEYS.RESIDENT_ACCOUNTS, updated);
-      }
-    } catch {
-      // ignore
-    }
+    // 1. Update Resident Credential Account if resident
+    if (userProfile.role === 'resident' && userProfile.residentId) {
+      const rawResidentAccounts = localStorage.getItem(STORAGE_KEYS.RESIDENT_ACCOUNTS);
+      const residentAccounts: ResidentAccountRecord[] = rawResidentAccounts
+        ? JSON.parse(rawResidentAccounts)
+        : [];
+      const updatedAccounts = residentAccounts.map((a) => {
+        if (
+          a.residentId === userProfile.residentId ||
+          (userProfile.email &&
+            a.email.toLowerCase() === userProfile.email.toLowerCase())
+        ) {
+          const { password: _removed, ...rest } = a as any;
+          return {
+            ...rest,
+            passwordHash: newPasswordHash,
+            mustChangePassword: false,
+          };
+        }
+        return a;
+      });
+      localStorage.setItem(STORAGE_KEYS.RESIDENT_ACCOUNTS, JSON.stringify(updatedAccounts));
+      void pushKeyToSharedServer(STORAGE_KEYS.RESIDENT_ACCOUNTS, updatedAccounts);
 
-    // 2. Update prestataire account record if provider
-    try {
-      const rawProvAccounts = localStorage.getItem(STORAGE_KEYS.PRESTATAIRE_ACCOUNTS);
-      if (rawProvAccounts) {
-        const provAccounts = JSON.parse(rawProvAccounts) as Array<{
-          prestataireId: string;
-          email: string;
-          password: string;
-          mustChangePassword?: boolean;
-        }>;
-        const updatedProv = provAccounts.map((acc) =>
-          acc.prestataireId === userProfile.uid ||
-          acc.email.toLowerCase() === userProfile.email.toLowerCase()
-            ? { ...acc, password: trimmed, mustChangePassword: false }
-            : acc
-        );
-        localStorage.setItem(STORAGE_KEYS.PRESTATAIRE_ACCOUNTS, JSON.stringify(updatedProv));
-        await pushKeyToSharedServer(STORAGE_KEYS.PRESTATAIRE_ACCOUNTS, updatedProv);
-      }
-    } catch {
-      // ignore
-    }
-
-    // 3. Update custom registered users store
-    try {
-      const rawCustom = localStorage.getItem(STORAGE_KEYS.REGISTERED_USERS);
-      if (rawCustom) {
-        const customUsers = JSON.parse(rawCustom) as Array<any>;
-        const updatedCustom = customUsers.map((u) =>
-          u.uid === userProfile.uid ||
-          u.email?.toLowerCase() === userProfile.email.toLowerCase()
-            ? { ...u, password: trimmed, mustChangePassword: false }
-            : u
-        );
-        localStorage.setItem(STORAGE_KEYS.REGISTERED_USERS, JSON.stringify(updatedCustom));
-        await pushKeyToSharedServer(STORAGE_KEYS.REGISTERED_USERS, updatedCustom);
-      }
-    } catch {
-      // ignore
-    }
-
-    // 4. Update resident in building if matched
-    if (userProfile.role === 'resident') {
-      const syndics = await getSyndics();
-      for (const s of syndics) {
-        for (const b of s.buildings) {
-          const res = b.residents.find((r) => r.id === userProfile.uid);
-          if (res) {
-            await updateResident({
-              ...res,
-              generatedPassword: trimmed,
-              hasAccount: true,
-              mustChangePassword: false,
-            });
+      // Update Resident record in Syndic building and remove any ephemeral password field
+      const rawSyndics = localStorage.getItem(STORAGE_KEYS.SYNDICS);
+      if (rawSyndics) {
+        const syndics: Syndic[] = JSON.parse(rawSyndics);
+        for (const s of syndics) {
+          for (const bld of s.buildings) {
+            const rIdx = bld.residents.findIndex((r) => r.id === userProfile.residentId);
+            if (rIdx >= 0) {
+              const { generatedPassword: _gp, ...cleanRes } = bld.residents[rIdx] as any;
+              bld.residents[rIdx] = {
+                ...cleanRes,
+                invitationStatus: 'accepted',
+                mustChangePassword: false,
+              };
+            }
           }
+        }
+        localStorage.setItem(STORAGE_KEYS.SYNDICS, JSON.stringify(syndics));
+        void pushKeyToSharedServer(STORAGE_KEYS.SYNDICS, syndics);
+      }
+    }
+
+    // 2. Update Prestataire Credential Account if provider
+    if (userProfile.role === 'provider' && userProfile.prestataireId) {
+      const rawPrestAccounts = localStorage.getItem(STORAGE_KEYS.PRESTATAIRE_ACCOUNTS);
+      const prestAccounts: PrestataireAccountRecord[] = rawPrestAccounts
+        ? JSON.parse(rawPrestAccounts)
+        : [];
+      const updatedAccounts = prestAccounts.map((a) => {
+        if (
+          a.prestataireId === userProfile.prestataireId ||
+          (userProfile.email &&
+            a.email.toLowerCase() === userProfile.email.toLowerCase())
+        ) {
+          const { password: _removed, ...rest } = a as any;
+          return {
+            ...rest,
+            passwordHash: newPasswordHash,
+            mustChangePassword: false,
+          };
+        }
+        return a;
+      });
+      localStorage.setItem(STORAGE_KEYS.PRESTATAIRE_ACCOUNTS, JSON.stringify(updatedAccounts));
+      void pushKeyToSharedServer(STORAGE_KEYS.PRESTATAIRE_ACCOUNTS, updatedAccounts);
+
+      const rawPrestList = localStorage.getItem(STORAGE_KEYS.PRESTATAIRES);
+      if (rawPrestList) {
+        const list: Prestataire[] = JSON.parse(rawPrestList);
+        const pIdx = list.findIndex((p) => p.id === userProfile.prestataireId);
+        if (pIdx >= 0) {
+          const { generatedPassword: _gp, ...cleanPrest } = list[pIdx] as any;
+          list[pIdx] = {
+            ...cleanPrest,
+            invitationStatus: 'accepted',
+            mustChangePassword: false,
+          };
+          localStorage.setItem(STORAGE_KEYS.PRESTATAIRES, JSON.stringify(list));
+          void pushKeyToSharedServer(STORAGE_KEYS.PRESTATAIRES, list);
         }
       }
     }
 
-    // 5. Update prestataire in directory if matched
-    if (userProfile.role === 'provider') {
-      try {
-        const rawProviders = localStorage.getItem(STORAGE_KEYS.PRESTATAIRES);
-        if (rawProviders) {
-          const providers = JSON.parse(rawProviders) as Prestataire[];
-          const target = providers.find(
-            (p) =>
-              p.id === userProfile.uid ||
-              p.email?.toLowerCase() === userProfile.email.toLowerCase()
-          );
-          if (target) {
-            await savePrestataire({
-              ...target,
-              generatedPassword: trimmed,
-              hasAccount: true,
-              mustChangePassword: false,
-            });
-          }
-        }
-      } catch {
-        // ignore
-      }
-    }
-
+    // 3. Update Registered Users if present
+    const registered = getStoredRegisteredUsers();
+    const regIdx = registered.findIndex(
+      (u) =>
+        u.uid === userProfile.uid ||
+        (userProfile.email && u.email.toLowerCase() === normalizedEmail)
+    );
     const updatedProfile: UserProfile = {
       ...userProfile,
       mustChangePassword: false,
     };
-    await syncUserProfileToFirestoreIfAuthenticated(updatedProfile);
-    await queryClient.invalidateQueries({ queryKey: ['syndics'] });
-    await queryClient.invalidateQueries({ queryKey: ['prestataires'] });
-    applySession(updatedProfile);
+    if (regIdx >= 0) {
+      registered[regIdx] = {
+        ...registered[regIdx],
+        passwordHash: newPasswordHash,
+        profile: updatedProfile,
+      };
+      localStorage.setItem(REGISTERED_USERS_KEY, JSON.stringify(registered));
+      void pushKeyToSharedServer(REGISTERED_USERS_KEY, registered);
+    }
+
+    // 4. Update Firebase Auth password if signed into Firebase
+    if (auth.currentUser) {
+      try {
+        await updatePassword(auth.currentUser, trimmed);
+      } catch {
+        // Ignore if session is local/custom
+      }
+    }
+
+    persistSession(updatedProfile);
+  };
+
+  const logout = async () => {
+    persistSession(null);
+    if (typeof window !== 'undefined') {
+      // Audit Item 22: Clear selected building and user-scoped cached state on logout
+      localStorage.removeItem('syndik_selected_building_id');
+      window.dispatchEvent(new CustomEvent('syndik-user-logout'));
+    }
+    try {
+      await signOut(auth);
+    } catch {
+      // Ignore if not signed in via Firebase
+    }
   };
 
   const registerOrUpdateUserCredentials = (
     email: string,
-    password: string,
+    passwordOrToken: string,
     profile: UserProfile
   ) => {
-    const cleanEmail = email.trim().toLowerCase();
-    try {
-      const rawCustomUsers = localStorage.getItem(STORAGE_KEYS.REGISTERED_USERS);
-      const customUsers = rawCustomUsers ? JSON.parse(rawCustomUsers) : [];
-      const filtered = customUsers.filter(
-        (u: any) =>
-          u.email?.trim().toLowerCase() !== cleanEmail && u.uid !== profile.uid
-      );
-      filtered.push({ ...profile, email: cleanEmail, password });
-      localStorage.setItem(STORAGE_KEYS.REGISTERED_USERS, JSON.stringify(filtered));
-      void pushKeyToSharedServer(STORAGE_KEYS.REGISTERED_USERS, filtered);
-    } catch {
-      // ignore
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail || !passwordOrToken) return;
+    // Audit Item 03: Only persist cryptographic passwordHash, never plaintext password
+    const passwordHash = hashPasswordSync(passwordOrToken, normalizedEmail);
+    const registered = getStoredRegisteredUsers();
+    const existingIdx = registered.findIndex(
+      (u) => u.email.toLowerCase() === normalizedEmail || u.uid === profile.uid
+    );
+    const entry: StoredUserAccount = {
+      uid: profile.uid,
+      email: normalizedEmail,
+      passwordHash,
+      profile,
+      createdAt: new Date().toISOString(),
+    };
+    if (existingIdx >= 0) {
+      registered[existingIdx] = entry;
+    } else {
+      registered.push(entry);
     }
+    localStorage.setItem(REGISTERED_USERS_KEY, JSON.stringify(registered));
+    void pushKeyToSharedServer(REGISTERED_USERS_KEY, registered);
   };
-
-  const logout = async () => {
-    localStorage.removeItem(SESSION_USER_KEY);
-    localStorage.removeItem('syndik_mock_user');
-    try {
-      if (auth.currentUser) {
-        await signOut(auth);
-      }
-    } catch {
-      // ignore
-    }
-    setCurrentUser(null);
-    setUserProfile(null);
-  };
-
-  const isAdmin = userProfile?.role === 'admin';
-  const isSyndic = userProfile?.role === 'syndic';
-  const isResident = userProfile?.role === 'resident';
-  const isProvider = userProfile?.role === 'provider';
 
   return (
     <AuthContext.Provider
       value={{
-        currentUser,
+        user,
+        currentUser: user,
         userProfile,
         loading,
-        loginWithGoogle,
-        loginWithEmail,
+        signInWithGoogle,
+        loginWithGoogle: signInWithGoogle,
         login,
-        register,
-        changePassword,
+        loginWithEmail: login,
+        registerAccount,
+        register: registerAccount,
+        completeMandatoryPasswordChange,
+        changePassword: completeMandatoryPasswordChange,
         registerOrUpdateUserCredentials,
         logout,
-        isAdmin,
-        isSyndic,
-        isResident,
-        isProvider,
       }}
     >
-      {!loading && children}
+      {children}
     </AuthContext.Provider>
   );
 };

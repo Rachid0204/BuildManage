@@ -384,7 +384,7 @@ const CredentialsModal: React.FC<CredentialsModalProps> = ({
   if (!resident) return null;
 
   const buildingName = building.name;
-  const password = resident.generatedPassword || 'Syn-2026-MA';
+  const password = resident.invitationCode || resident.invitationToken || 'INV-2026-MA';
   const portalUrl =
     typeof window !== 'undefined' ? `${window.location.origin}/login` : 'https://syndik.ma/login';
 
@@ -672,7 +672,7 @@ const Residents: React.FC<{
   };
 
   const handleGenerateOrShowCredentials = async (resident: Resident) => {
-    if (resident.hasAccount && resident.generatedPassword) {
+    if (resident.hasAccount && (resident.invitationCode || resident.invitationToken)) {
       setCredentialResidentId(resident.id);
     } else if (onRegenerateCredentials) {
       const updated = await onRegenerateCredentials(resident.id);

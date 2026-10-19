@@ -45,6 +45,7 @@ import type {
   Resident,
   Apartment,
   SubscriptionPlan,
+  Syndic,
   UserRole,
   View,
 } from './types';
@@ -67,6 +68,56 @@ const MarketplaceView = React.lazy(() => import('./components/views/MarketplaceV
 const Analytics = React.lazy(() => import('./components/views/Analytics'));
 const Settings = React.lazy(() => import('./components/views/Settings'));
 
+interface RouteErrorBoundaryState {
+  hasError: boolean;
+  errorMessage: string | null;
+}
+
+class RouteErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  RouteErrorBoundaryState
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, errorMessage: null };
+  }
+
+  static getDerivedStateFromError(error: Error): RouteErrorBoundaryState {
+    return {
+      hasError: true,
+      errorMessage: error?.message || 'Erreur inattendue lors du chargement de la vue.',
+    };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-[60vh] flex items-center justify-center p-6">
+          <Card className="max-w-md w-full border border-rose-200 bg-rose-50/40 text-center space-y-4">
+            <h2 className="text-lg font-bold text-slate-900">
+              Une erreur est survenue lors du chargement du module
+            </h2>
+            <p className="text-xs text-slate-600 font-mono">
+              {this.state.errorMessage}
+            </p>
+            <div className="flex justify-center gap-2">
+              <Button
+                onClick={() => {
+                  this.setState({ hasError: false, errorMessage: null });
+                  window.location.reload();
+                }}
+              >
+                Actualiser la page
+              </Button>
+            </div>
+          </Card>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 // Dedicated Provider Portal for Prestataire Agréé role
 const ProviderPortal: React.FC = () => {
   const { userProfile, logout } = useAuth();
@@ -74,15 +125,17 @@ const ProviderPortal: React.FC = () => {
   const { t, tr, language } = useI18n();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const buildingId = userProfile?.buildingId || selectedBuilding?.id || 'bld-1';
+  const buildingId = userProfile?.buildingId || selectedBuilding?.id || '';
 
   const [activeTicketId, setActiveTicketId] = useState<string | null>(null);
   const [techNote, setTechNote] = useState('');
   const [nextStatus, setNextStatus] = useState<'in_progress' | 'completed'>('in_progress');
 
   const { data: requests = [] } = useQuery({
-    queryKey: ['maintenance', buildingId],
-    queryFn: () => getMaintenanceRequestsForBuilding(buildingId),
+    queryKey: ['maintenance', buildingId, userProfile?.uid],
+    queryFn: () =>
+      buildingId ? getMaintenanceRequestsForBuilding(buildingId) : Promise.resolve([]),
+    enabled: Boolean(buildingId),
   });
 
   const categoryLabels: Record<string, string> = {
@@ -137,7 +190,8 @@ const ProviderPortal: React.FC = () => {
             {userProfile?.displayName || tr('Artisan Partenaire', 'حرفي شريك')}
           </h1>
           <p className="text-xs text-slate-400">
-            {t('providerPortal.subtitle')} • {selectedBuilding?.name || 'Résidence Les Palmiers'}
+            {t('providerPortal.subtitle')} •{' '}
+            {selectedBuilding?.name || userProfile?.buildingName || tr('Copropriété assignée', 'الإقامة المعينة')}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -285,49 +339,100 @@ const ProviderPortal: React.FC = () => {
   );
 };
 
-// Wrapper to handle Syndic data fetching and Context population
+// Wrapper to handle Syndic data fetching and Context population (Audit Item 22: No cross-tenant fallback)
 const SyndicDataProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
-  const { currentUser, userProfile } = useAuth();
+  const { currentUser, userProfile, logout } = useAuth();
   const { setSyndicData } = useBuilding();
   const { tr } = useI18n();
+  const [unassignedAccount, setUnassignedAccount] = useState(false);
 
   const { data: syndics = [], isLoading } = useQuery({
-    queryKey: ['syndics'],
+    queryKey: ['syndics', userProfile?.uid || 'anon'],
     queryFn: getSyndics,
     enabled: !!currentUser,
   });
 
   useEffect(() => {
-    if (syndics.length > 0) {
-      const targetSyndic =
-        (userProfile?.syndicId &&
-          syndics.find((s) => s.id === userProfile.syndicId)) ||
-        (userProfile?.email &&
-          syndics.find(
-            (s) => s.email?.trim().toLowerCase() === userProfile.email.trim().toLowerCase()
-          )) ||
-        syndics[0];
-      if (targetSyndic) {
-        setSyndicData(targetSyndic);
+    if (!userProfile) {
+      setSyndicData(null);
+      setUnassignedAccount(false);
+      return;
+    }
+
+    if (userProfile.role === 'admin') {
+      setUnassignedAccount(false);
+      if (syndics.length > 0) {
+        setSyndicData(syndics[0]);
       }
-    } else if (!isLoading && userProfile?.role === 'syndic') {
+      return;
+    }
+
+    if (syndics.length > 0) {
+      const normalizedEmail = userProfile.email?.trim().toLowerCase();
+      let matchedSyndic: Syndic | undefined;
+
+      if (userProfile.syndicId) {
+        matchedSyndic = syndics.find((s) => s.id === userProfile.syndicId);
+      }
+
+      if (!matchedSyndic && userProfile.role === 'syndic') {
+        matchedSyndic = syndics.find(
+          (s) =>
+            s.createdBy === userProfile.uid ||
+            (normalizedEmail && s.email?.trim().toLowerCase() === normalizedEmail)
+        );
+      }
+
+      if (!matchedSyndic && userProfile.role === 'resident') {
+        matchedSyndic = syndics.find((s) =>
+          s.buildings.some(
+            (b) =>
+              (userProfile.buildingId && b.id === userProfile.buildingId) ||
+              b.residents.some(
+                (r) =>
+                  r.id === userProfile.uid ||
+                  (normalizedEmail && r.email.trim().toLowerCase() === normalizedEmail)
+              )
+          )
+        );
+      }
+
+      if (!matchedSyndic && userProfile.role === 'provider') {
+        matchedSyndic = syndics.find((s) =>
+          s.buildings.some((b) => userProfile.buildingId && b.id === userProfile.buildingId)
+        );
+      }
+
+      if (matchedSyndic) {
+        setUnassignedAccount(false);
+        setSyndicData(matchedSyndic);
+        return;
+      }
+    }
+
+    if (!isLoading && userProfile.role === 'syndic') {
       const fallbackSyndicId = userProfile.syndicId || `syndic-${userProfile.uid}`;
-      const nextYear = new Date(Date.now() + 365 * 86400000).toISOString();
-      const autoSyndic = {
+      const trialExpiry = new Date(Date.now() + 30 * 86400000).toISOString();
+      const autoSyndic: Syndic = {
         id: fallbackSyndicId,
         name: userProfile.displayName || 'Cabinet Syndic',
         email: userProfile.email,
         phone: userProfile.phone || '+212 6 00 00 00 00',
+        logoUrl: '',
         createdBy: userProfile.uid,
-        subscriptionPlan: 'professional' as SubscriptionPlan,
-        subscriptionStatus: 'active' as const,
-        subscriptionExpiry: nextYear,
+        subscriptionPlan: 'starter',
+        subscriptionStatus: 'active',
+        subscriptionExpiry: trialExpiry,
         buildings: [],
       };
+      setUnassignedAccount(false);
       setSyndicData(autoSyndic);
       void saveSyndic(autoSyndic);
+    } else if (!isLoading) {
+      setSyndicData(null);
+      setUnassignedAccount(true);
     }
   }, [syndics, isLoading, userProfile, setSyndicData]);
 
@@ -340,6 +445,32 @@ const SyndicDataProvider: React.FC<{ children: React.ReactNode }> = ({
         )}
       />
     );
+
+  if (unassignedAccount && userProfile && userProfile.role !== 'admin') {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+        <Card className="max-w-md w-full border border-amber-200 bg-white text-center space-y-4">
+          <div className="w-12 h-12 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center mx-auto font-bold text-lg">
+            !
+          </div>
+          <h2 className="text-lg font-bold text-slate-900">
+            {tr('Compte en attente de rattachement', 'حساب في انتظار الربط بالإقامة')}
+          </h2>
+          <p className="text-xs text-slate-600 leading-relaxed">
+            {tr(
+              "Votre compte n'est rattaché à aucune copropriété autorisée. Veuillez demander une invitation officielle à votre Syndic gestionnaire.",
+              'حسابكم غير مرتبط بأي إقامة مرخصة حالياً. يرجى طلب دعوة رسمية من وكيل الاتحاد (السنديك).'
+            )}
+          </p>
+          <div className="flex justify-center pt-2">
+            <Button variant="secondary" onClick={() => void logout()}>
+              {tr('Se déconnecter', 'تسجيل الخروج')}
+            </Button>
+          </div>
+        </Card>
+      </div>
+    );
+  }
 
   return <>{children}</>;
 };
@@ -378,11 +509,14 @@ const FirstLoginPasswordGate: React.FC = () => {
       return;
     }
 
-    if (newPassword.trim().startsWith('Syn-') && newPassword.trim().endsWith('-MA')) {
+    if (
+      (newPassword.trim().startsWith('Syn-') || newPassword.trim().startsWith('INV-')) &&
+      newPassword.trim().endsWith('-MA')
+    ) {
       setError(
         tr(
-          'Veuillez choisir un mot de passe personnel différent du mot de passe temporaire généré par le Syndic.',
-          'يرجى اختيار كلمة مرور شخصية مختلفة عن كلمة المرور المؤقتة المُولدة من طرف السنديك.'
+          "Veuillez choisir un mot de passe personnel différent du code d'invitation généré par le Syndic.",
+          'يرجى اختيار كلمة مرور شخصية مختلفة عن رمز الدعوة المؤقت.'
         )
       );
       return;
@@ -434,8 +568,8 @@ const FirstLoginPasswordGate: React.FC = () => {
           </h1>
           <p className="text-xs text-slate-400 mt-1">
             {tr(
-              `Bienvenue ${userProfile?.displayName || ''}. Votre compte (${roleBadge}) a été créé par votre Syndic avec un mot de passe temporaire.`,
-              `مرحباً ${userProfile?.displayName || ''}. تم إنشاء حسابكم (${roleBadge}) من طرف السنديك بكلمة مرور مؤقتة.`
+              `Bienvenue ${userProfile?.displayName || ''}. Votre compte (${roleBadge}) a été invité par votre Syndic.`,
+              `مرحباً ${userProfile?.displayName || ''}. تم إنشاء حسابكم (${roleBadge}) بدعوة من طرف السنديك.`
             )}
           </p>
         </div>
@@ -575,8 +709,9 @@ const AppContent: React.FC = () => {
   const navigate = useNavigate();
 
   const syncResidentToAuthRegistry = (res: Resident) => {
-    if (res.email && res.generatedPassword) {
-      registerOrUpdateUserCredentials(res.email, res.generatedPassword, {
+    const inviteSecret = res.invitationCode || res.generatedPassword;
+    if (res.email && inviteSecret) {
+      registerOrUpdateUserCredentials(res.email, inviteSecret, {
         uid: `res-${res.id}`,
         email: res.email.trim().toLowerCase(),
         displayName: res.name,
@@ -634,7 +769,7 @@ const AppContent: React.FC = () => {
     }) => addResident(data.resident, data.generateCredentials),
     onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ['syndics'] });
-      if (created && created.hasAccount && created.generatedPassword) {
+      if (created && created.hasAccount) {
         syncResidentToAuthRegistry(created);
       }
     },
@@ -654,7 +789,7 @@ const AppContent: React.FC = () => {
     mutationFn: regenerateResidentCredentials,
     onSuccess: (updated) => {
       queryClient.invalidateQueries({ queryKey: ['syndics'] });
-      if (updated && updated.hasAccount && updated.generatedPassword) {
+      if (updated && updated.hasAccount) {
         syncResidentToAuthRegistry(updated);
       }
     },
@@ -782,7 +917,7 @@ const AppContent: React.FC = () => {
         coproType: 'apartment',
         ownerId: null,
         tenantId: null,
-        monthlyFees: buildingData.monthlySyndicFees,
+        monthlyFees: buildingData.monthlySyndicFees ?? 0,
       });
     }
 
@@ -834,233 +969,235 @@ const AppContent: React.FC = () => {
   }
 
   return (
-    <Suspense fallback={<Loading message={tr('Chargement du module...', 'جاري تحميل الوحدة...')} />}>
-      <Routes>
-        <Route element={<DashboardLayout />}>
-          <Route
-            path="/"
-            element={
-              selectedBuilding ? (
-                <Dashboard
-                  building={selectedBuilding}
-                  onNavigate={(view: View) => {
-                    const target = VIEW_TO_ROUTE[view] || '/';
-                    navigate(target);
-                  }}
-                />
-              ) : (
-                <Navigate to="/buildings" replace />
-              )
-            }
-          />
-          <Route path="/dashboard" element={<Navigate to="/" replace />} />
+    <RouteErrorBoundary>
+      <Suspense fallback={<Loading message={tr('Chargement du module...', 'جاري تحميل الوحدة...')} />}>
+        <Routes>
+          <Route element={<DashboardLayout />}>
+            <Route
+              path="/"
+              element={
+                selectedBuilding ? (
+                  <Dashboard
+                    building={selectedBuilding}
+                    onNavigate={(view: View) => {
+                      const target = VIEW_TO_ROUTE[view] || '/';
+                      navigate(target);
+                    }}
+                  />
+                ) : (
+                  <Navigate to="/buildings" replace />
+                )
+              }
+            />
+            <Route path="/dashboard" element={<Navigate to="/" replace />} />
 
-          <Route
-            path="/buildings"
-            element={
-              syndic ? (
-                <Buildings
-                  syndic={syndic}
-                  onAddBuilding={handleAddBuilding}
-                  onUpdateBuilding={(buildingId, updates) =>
-                    updateBuildingMutation.mutate({ buildingId, updates })
-                  }
-                  onDeleteBuilding={(buildingId) =>
-                    deleteBuildingMutation.mutate(buildingId)
-                  }
-                  onSelectBuilding={(building: Building) => {
-                    setSelectedBuilding(building);
-                    navigate('/');
-                  }}
-                />
-              ) : (
-                <Loading />
-              )
-            }
-          />
+            <Route
+              path="/buildings"
+              element={
+                syndic ? (
+                  <Buildings
+                    syndic={syndic}
+                    onAddBuilding={handleAddBuilding}
+                    onUpdateBuilding={(buildingId, updates) =>
+                      updateBuildingMutation.mutate({ buildingId, updates })
+                    }
+                    onDeleteBuilding={(buildingId) =>
+                      deleteBuildingMutation.mutate(buildingId)
+                    }
+                    onSelectBuilding={(building: Building) => {
+                      setSelectedBuilding(building);
+                      navigate('/');
+                    }}
+                  />
+                ) : (
+                  <Loading />
+                )
+              }
+            />
 
-          <Route
-            path="/residents"
-            element={
-              selectedBuilding ? (
-                <Residents
-                  building={selectedBuilding}
-                  onAddResident={handleAddResident}
-                  onUpdateResident={updateResidentMutation.mutate}
-                  onDeleteResident={deleteResidentMutation.mutate}
-                  onRegenerateCredentials={(residentId) =>
-                    regenerateCredentialsMutation.mutateAsync(residentId)
-                  }
-                />
-              ) : (
-                <Navigate to="/buildings" replace />
-              )
-            }
-          />
+            <Route
+              path="/residents"
+              element={
+                selectedBuilding ? (
+                  <Residents
+                    building={selectedBuilding}
+                    onAddResident={handleAddResident}
+                    onUpdateResident={updateResidentMutation.mutate}
+                    onDeleteResident={deleteResidentMutation.mutate}
+                    onRegenerateCredentials={(residentId) =>
+                      regenerateCredentialsMutation.mutateAsync(residentId)
+                    }
+                  />
+                ) : (
+                  <Navigate to="/buildings" replace />
+                )
+              }
+            />
 
-          <Route
-            path="/apartments"
-            element={
-              selectedBuilding ? (
-                <Apartments
-                  building={selectedBuilding}
-                  residents={selectedBuilding.residents}
-                  onAddApartment={handleAddApartment}
-                  onAddApartmentsBulk={handleAddApartmentsBulk}
-                  onRebalanceTantiemes={() =>
-                    rebalanceTantiemesMutation.mutate(selectedBuilding.id)
-                  }
-                  onUpdateApartment={updateApartmentMutation.mutate}
-                  onDeleteApartment={deleteApartmentMutation.mutate}
-                />
-              ) : (
-                <Navigate to="/buildings" replace />
-              )
-            }
-          />
+            <Route
+              path="/apartments"
+              element={
+                selectedBuilding ? (
+                  <Apartments
+                    building={selectedBuilding}
+                    residents={selectedBuilding.residents}
+                    onAddApartment={handleAddApartment}
+                    onAddApartmentsBulk={handleAddApartmentsBulk}
+                    onRebalanceTantiemes={() =>
+                      rebalanceTantiemesMutation.mutate(selectedBuilding.id)
+                    }
+                    onUpdateApartment={updateApartmentMutation.mutate}
+                    onDeleteApartment={deleteApartmentMutation.mutate}
+                  />
+                ) : (
+                  <Navigate to="/buildings" replace />
+                )
+              }
+            />
 
-          <Route
-            path="/financials"
-            element={
-              selectedBuilding && syndic ? (
-                <Financials
-                  building={selectedBuilding}
-                  syndic={syndic}
-                  onAddTransaction={() =>
-                    queryClient.invalidateQueries({ queryKey: ['syndics'] })
-                  }
-                  onGenerateCharges={() =>
-                    generateChargesMutation.mutate({
-                      bId: selectedBuilding.id,
-                      sId: syndic.id,
-                    })
-                  }
-                />
-              ) : (
-                <Navigate to="/buildings" replace />
-              )
-            }
-          />
+            <Route
+              path="/financials"
+              element={
+                selectedBuilding && syndic ? (
+                  <Financials
+                    building={selectedBuilding}
+                    syndic={syndic}
+                    onAddTransaction={() =>
+                      queryClient.invalidateQueries({ queryKey: ['syndics'] })
+                    }
+                    onGenerateCharges={() =>
+                      generateChargesMutation.mutate({
+                        bId: selectedBuilding.id,
+                        sId: syndic.id,
+                      })
+                    }
+                  />
+                ) : (
+                  <Navigate to="/buildings" replace />
+                )
+              }
+            />
 
-          <Route
-            path="/announcements"
-            element={
-              selectedBuilding ? (
-                <Announcements
-                  building={selectedBuilding}
-                  announcements={selectedBuilding.announcements}
-                  onAddAnnouncement={(data) =>
-                    addAnnouncementMutation.mutate({
-                      buildingId: selectedBuilding.id,
-                      title: data.title,
-                      content: data.content,
-                    })
-                  }
-                />
-              ) : (
-                <Navigate to="/buildings" replace />
-              )
-            }
-          />
+            <Route
+              path="/announcements"
+              element={
+                selectedBuilding ? (
+                  <Announcements
+                    building={selectedBuilding}
+                    announcements={selectedBuilding.announcements}
+                    onAddAnnouncement={(data) =>
+                      addAnnouncementMutation.mutate({
+                        buildingId: selectedBuilding.id,
+                        title: data.title,
+                        content: data.content,
+                      })
+                    }
+                  />
+                ) : (
+                  <Navigate to="/buildings" replace />
+                )
+              }
+            />
 
-          <Route
-            path="/documents"
-            element={
-              selectedBuilding ? (
-                <Documents
-                  building={selectedBuilding}
-                  documents={selectedBuilding.documents}
-                />
-              ) : (
-                <Navigate to="/buildings" replace />
-              )
-            }
-          />
+            <Route
+              path="/documents"
+              element={
+                selectedBuilding ? (
+                  <Documents
+                    building={selectedBuilding}
+                    documents={selectedBuilding.documents}
+                  />
+                ) : (
+                  <Navigate to="/buildings" replace />
+                )
+              }
+            />
 
-          <Route
-            path="/maintenance"
-            element={
-              selectedBuilding ? (
-                <Maintenance building={selectedBuilding} />
-              ) : (
-                <Navigate to="/buildings" replace />
-              )
-            }
-          />
+            <Route
+              path="/maintenance"
+              element={
+                selectedBuilding ? (
+                  <Maintenance building={selectedBuilding} />
+                ) : (
+                  <Navigate to="/buildings" replace />
+                )
+              }
+            />
 
-          <Route
-            path="/ag"
-            element={
-              selectedBuilding ? (
-                <AssembleeGenerale building={selectedBuilding} syndic={syndic || undefined} />
-              ) : (
-                <Navigate to="/buildings" replace />
-              )
-            }
-          />
+            <Route
+              path="/ag"
+              element={
+                selectedBuilding ? (
+                  <AssembleeGenerale building={selectedBuilding} syndic={syndic || undefined} />
+                ) : (
+                  <Navigate to="/buildings" replace />
+                )
+              }
+            />
 
-          <Route
-            path="/prestataires"
-            element={
-              selectedBuilding ? (
-                <Prestataires building={selectedBuilding} />
-              ) : (
-                <Navigate to="/buildings" replace />
-              )
-            }
-          />
+            <Route
+              path="/prestataires"
+              element={
+                selectedBuilding ? (
+                  <Prestataires building={selectedBuilding} />
+                ) : (
+                  <Navigate to="/buildings" replace />
+                )
+              }
+            />
 
-          <Route
-            path="/chat"
-            element={
-              selectedBuilding ? (
-                <CommunityChat building={selectedBuilding} />
-              ) : (
-                <Navigate to="/buildings" replace />
-              )
-            }
-          />
+            <Route
+              path="/chat"
+              element={
+                selectedBuilding ? (
+                  <CommunityChat building={selectedBuilding} />
+                ) : (
+                  <Navigate to="/buildings" replace />
+                )
+              }
+            />
 
-          <Route
-            path="/marketplace"
-            element={
-              selectedBuilding ? (
-                <MarketplaceView building={selectedBuilding} />
-              ) : (
-                <Navigate to="/buildings" replace />
-              )
-            }
-          />
+            <Route
+              path="/marketplace"
+              element={
+                selectedBuilding ? (
+                  <MarketplaceView building={selectedBuilding} />
+                ) : (
+                  <Navigate to="/buildings" replace />
+                )
+              }
+            />
 
-          <Route
-            path="/analytics"
-            element={
-              selectedBuilding ? (
-                <Analytics building={selectedBuilding} />
-              ) : (
-                <Navigate to="/buildings" replace />
-              )
-            }
-          />
+            <Route
+              path="/analytics"
+              element={
+                selectedBuilding ? (
+                  <Analytics building={selectedBuilding} />
+                ) : (
+                  <Navigate to="/buildings" replace />
+                )
+              }
+            />
 
-          <Route
-            path="/settings"
-            element={
-              syndic ? (
-                <Settings
-                  syndic={syndic}
-                  onUpdate={updateSyndicMutation.mutate}
-                />
-              ) : (
-                <Loading />
-              )
-            }
-          />
+            <Route
+              path="/settings"
+              element={
+                syndic ? (
+                  <Settings
+                    syndic={syndic}
+                    onUpdate={(updatedSyndic) => updateSyndicMutation.mutateAsync(updatedSyndic)}
+                  />
+                ) : (
+                  <Loading />
+                )
+              }
+            />
 
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Route>
-      </Routes>
-    </Suspense>
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Route>
+        </Routes>
+      </Suspense>
+    </RouteErrorBoundary>
   );
 };
 
@@ -1095,78 +1232,79 @@ const App: React.FC = () => {
   return (
     <Router>
       <BuildingProvider>
-        <Routes>
-          <Route
-            path="/welcome"
-            element={<LandingRouteWrapper onDone={() => setShowLanding(false)} />}
-          />
+        <RouteErrorBoundary>
+          <Routes>
+            <Route
+              path="/welcome"
+              element={<LandingRouteWrapper onDone={() => setShowLanding(false)} />}
+            />
 
-          <Route
-            path="/login"
-            element={
-              currentUser && userProfile ? (
-                <Navigate to={getHomeRouteForRole(userProfile.role)} replace />
-              ) : (
-                <LoginScreen
-                  onLogin={() => setShowLanding(false)}
-                  onBack={() => setShowLanding(true)}
-                />
-              )
-            }
-          />
+            <Route
+              path="/login"
+              element={
+                currentUser && userProfile ? (
+                  <Navigate to={getHomeRouteForRole(userProfile.role)} replace />
+                ) : (
+                  <LoginScreen
+                    onLogin={() => setShowLanding(false)}
+                    onBack={() => setShowLanding(true)}
+                  />
+                )
+              }
+            />
 
-          <Route
-            path="/admin"
-            element={
-              <ProtectedRoute roles={['admin']}>
-                <SyndicDataProvider>
-                  <AdminDashboard />
-                </SyndicDataProvider>
-              </ProtectedRoute>
-            }
-          />
-
-          <Route
-            path="/resident"
-            element={
-              <ProtectedRoute roles={['resident']}>
-                <SyndicDataProvider>
-                  <ResidentDashboard />
-                </SyndicDataProvider>
-              </ProtectedRoute>
-            }
-          />
-
-          <Route
-            path="/provider"
-            element={
-              <ProtectedRoute roles={['provider']}>
-                <SyndicDataProvider>
-                  <ProviderPortal />
-                </SyndicDataProvider>
-              </ProtectedRoute>
-            }
-          />
-
-          <Route
-            path="/*"
-            element={
-              showLanding && !currentUser ? (
-                <LandingRouteWrapper onDone={() => setShowLanding(false)} />
-              ) : (
-                <ProtectedRoute roles={['syndic']}>
+            <Route
+              path="/admin"
+              element={
+                <ProtectedRoute roles={['admin']}>
                   <SyndicDataProvider>
-                    <AppContent />
+                    <AdminDashboard />
                   </SyndicDataProvider>
                 </ProtectedRoute>
-              )
-            }
-          />
-        </Routes>
+              }
+            />
+
+            <Route
+              path="/resident"
+              element={
+                <ProtectedRoute roles={['resident']}>
+                  <SyndicDataProvider>
+                    <ResidentDashboard />
+                  </SyndicDataProvider>
+                </ProtectedRoute>
+              }
+            />
+
+            <Route
+              path="/provider"
+              element={
+                <ProtectedRoute roles={['provider']}>
+                  <SyndicDataProvider>
+                    <ProviderPortal />
+                  </SyndicDataProvider>
+                </ProtectedRoute>
+              }
+            />
+
+            <Route
+              path="/*"
+              element={
+                showLanding && !currentUser ? (
+                  <LandingRouteWrapper onDone={() => setShowLanding(false)} />
+                ) : (
+                  <ProtectedRoute roles={['syndic']}>
+                    <SyndicDataProvider>
+                      <AppContent />
+                    </SyndicDataProvider>
+                  </ProtectedRoute>
+                )
+              }
+            />
+          </Routes>
+        </RouteErrorBoundary>
       </BuildingProvider>
     </Router>
   );
 };
 
 export default App;
-

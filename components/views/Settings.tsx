@@ -7,41 +7,49 @@ import { useToast } from '../common/Toast';
 
 interface SettingsProps {
   syndic: Syndic;
-  onUpdate: (updatedSyndic: Syndic) => void;
+  onUpdate: (updatedSyndic: Syndic) => Promise<unknown> | void;
 }
 
 const Settings: React.FC<SettingsProps> = ({ syndic, onUpdate }) => {
   const { t, tr } = useI18n();
   const { showToast } = useToast();
-  const [name, setName] = useState(syndic.name);
-  const [logoUrl, setLogoUrl] = useState(syndic.logoUrl);
-  const [ice, setIce] = useState(syndic.ice || '');
-  const [taxId, setTaxId] = useState(syndic.taxId || '');
-  const [rc, setRc] = useState(syndic.rc || '');
-  const [patente, setPatente] = useState(syndic.patente || '');
+  const [name, setName] = useState(syndic.name ?? '');
+  const [logoUrl, setLogoUrl] = useState(syndic.logoUrl ?? '');
+  const [ice, setIce] = useState(syndic.ice ?? '');
+  const [taxId, setTaxId] = useState(syndic.taxId ?? '');
+  const [rc, setRc] = useState(syndic.rc ?? '');
+  const [patente, setPatente] = useState(syndic.patente ?? '');
 
   const [isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
-    setName(syndic.name);
-    setLogoUrl(syndic.logoUrl);
-    setIce(syndic.ice || '');
-    setTaxId(syndic.taxId || '');
-    setRc(syndic.rc || '');
-    setPatente(syndic.patente || '');
+    setName(syndic.name ?? '');
+    setLogoUrl(syndic.logoUrl ?? '');
+    setIce(syndic.ice ?? '');
+    setTaxId(syndic.taxId ?? '');
+    setRc(syndic.rc ?? '');
+    setPatente(syndic.patente ?? '');
   }, [syndic]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isLoading) return;
     setMessage(null);
 
-    if (!name.trim()) {
+    const safeName = (name ?? '').trim();
+    const safeLogoUrl = (logoUrl ?? '').trim();
+    const safeIce = (ice ?? '').trim();
+    const safeTaxId = (taxId ?? '').trim();
+    const safeRc = (rc ?? '').trim();
+    const safePatente = (patente ?? '').trim();
+
+    if (!safeName) {
       setMessage({ type: 'error', text: t('settings.validation.nameRequired') });
       return;
     }
 
-    if (ice.trim() && !/^\d{15}$/.test(ice.trim())) {
+    if (safeIce && !/^\d{15}$/.test(safeIce)) {
       setMessage({
         type: 'error',
         text: tr(
@@ -53,21 +61,33 @@ const Settings: React.FC<SettingsProps> = ({ syndic, onUpdate }) => {
     }
 
     setIsLoading(true);
-
-    setTimeout(() => {
-      onUpdate({
-        ...syndic,
-        name: name.trim(),
-        logoUrl: logoUrl.trim() || syndic.logoUrl,
-        ice: ice.trim(),
-        taxId: taxId.trim(),
-        rc: rc.trim(),
-        patente: patente.trim(),
-      });
-      setIsLoading(false);
+    try {
+      await Promise.resolve(
+        onUpdate({
+          ...syndic,
+          name: safeName,
+          logoUrl: safeLogoUrl || (syndic.logoUrl ?? ''),
+          ice: safeIce,
+          taxId: safeTaxId,
+          rc: safeRc,
+          patente: safePatente,
+        })
+      );
       setMessage({ type: 'success', text: t('settings.success') });
       showToast(t('settings.success'), 'success');
-    }, 350);
+    } catch (err: unknown) {
+      const errorText =
+        err instanceof Error
+          ? err.message
+          : tr(
+              "Échec de l'enregistrement des paramètres du cabinet.",
+              'فشل حفظ إعدادات مكتب السنديك.'
+            );
+      setMessage({ type: 'error', text: errorText });
+      showToast(errorText, 'error');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (

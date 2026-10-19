@@ -6,7 +6,11 @@
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build",
-    "start": "node server.ts",
+    "build:functions": "tsc -p functions/tsconfig.json",
+    "typecheck": "tsc --noEmit && tsc -p functions/tsconfig.json --noEmit",
+    "lint": "eslint firestore.rules",
+    "test:verify": "tsx tests/verifyProduction.ts",
+    "start": "tsx server.ts",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -16,7 +20,7 @@
     "firebase": "^12.6.0",
     "firebase-admin": "^13.6.0",
     "firebase-functions": "^7.0.0",
-    "jspdf": "^2.5.1",
+    "jspdf": "^4.2.1",
     "lucide-react": "^1.59.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
@@ -26,12 +30,14 @@
   },
   "devDependencies": {
     "@firebase/eslint-plugin-security-rules": "^0.0.2",
+    "@tailwindcss/vite": "^4.3.3",
     "@types/express": "^5.0.6",
     "@types/node": "^22.14.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^5.0.0",
     "eslint": "^10.13.0",
+    "tailwindcss": "^4.3.3",
     "tsx": "^4.23.15",
     "typescript": "~5.8.2",
     "vite": "^6.2.0"

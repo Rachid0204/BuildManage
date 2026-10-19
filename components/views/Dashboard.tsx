@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import type { Building, Syndic } from '../../types';
+import type { Building, Syndic, View } from '../../types';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import {
@@ -20,6 +20,7 @@ import {
   getQuittancesForBuilding,
 } from '../../firebase/services';
 import { exportBuildingSummaryReportPDF } from '../../services/pdfService';
+import { computeBuildingFundBalances } from '../../utils/security';
 import { useI18n } from '../../hooks/useI18n';
 import { useToast } from '../common/Toast';
 import { FileDown } from 'lucide-react';
@@ -27,6 +28,7 @@ import { FileDown } from 'lucide-react';
 interface DashboardProps {
   building: Building;
   syndic?: Syndic;
+  onNavigate?: (view: View) => void;
 }
 
 const currencyFormatter = new Intl.NumberFormat('fr-MA', {
@@ -91,30 +93,8 @@ const Dashboard: React.FC<DashboardProps> = ({ building, syndic }) => {
   const ledgerTransactions = building?.financials?.transactions || (building as any)?.transactions || [];
 
   const financialStats = useMemo(() => {
-    const computedWorkingFromTx = ledgerTransactions.reduce((acc: number, trx: any) => {
-      if (trx.fundType === 'reserve') return acc;
-      const amt = Number(trx.amount) || 0;
-      if (trx.type === 'expense') return acc - Math.abs(amt);
-      if (trx.type === 'income') return acc + Math.abs(amt);
-      return acc + amt;
-    }, 0);
-
-    const workingBalance =
-      typeof building?.financials?.balance === 'number' && ledgerTransactions.length === 0
-        ? building.financials.balance
-        : computedWorkingFromTx;
-
-    const reserveTransactions = ledgerTransactions.reduce((acc: number, trx: any) => {
-      if (trx.fundType !== 'reserve') return acc;
-      const amt = Number(trx.amount) || 0;
-      if (trx.type === 'expense') return acc - Math.abs(amt);
-      if (trx.type === 'income') return acc + Math.abs(amt);
-      return acc + amt;
-    }, 0);
-
-    const reserveBalance =
-      (building?.financials?.reserveFundBalance || (building as any)?.reserveFundBalance || 0) +
-      reserveTransactions;
+    const { operatingBalance: workingBalance, reserveBalance } =
+      computeBuildingFundBalances(building);
 
     const totalChargesAmount = charges.reduce((s, c) => s + c.amount, 0);
     const paidChargesAmount = charges

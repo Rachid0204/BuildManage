@@ -1,5 +1,4 @@
-
-name: Deploy to Production
+name: Build, Verify & Deploy ImmoGest
 
 on:
   push:
@@ -8,47 +7,52 @@ on:
   pull_request:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
-  build-and-test:
+  build-and-verify:
+    name: Typecheck, Lint, Regression Tests & Build
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Set up Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
 
-      - name: Install Dependencies
-        run: |
-          if [ -f package-lock.json ]; then
-            npm ci || npm install
-          else
-            npm install
-          fi
+      - name: Install dependencies strictly from lockfile
+        run: npm ci
 
-      - name: Run Linting
-        run: npm run lint --if-present
+      - name: Run TypeScript compiler checks (Frontend & Functions)
+        run: npm run typecheck
 
-      - name: Build Project
+      - name: Lint Firestore security rules
+        run: npm run lint
+
+      - name: Run business logic & security regression checks
+        run: npm run test:verify
+
+      - name: Compile Firebase Cloud Functions
+        run: npm run build:functions
+
+      - name: Build production frontend bundle
         run: npm run build
         env:
-          # CI environment variables (Secrets should be set in GitHub Repo Settings)
           VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
           VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}
           VITE_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID }}
           VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}
-          VITE_FIREBASE_SENDER_ID: ${{ secrets.VITE_FIREBASE_SENDER_ID }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
           VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
+          VITE_FIRESTORE_DATABASE_ID: ${{ secrets.VITE_FIRESTORE_DATABASE_ID }}
 
-      # Optional: Deploy to Firebase Hosting (requires FIREBASE_SERVICE_ACCOUNT secret)
-      # - name: Deploy to Firebase
-      #   uses: FirebaseExtended/action-hosting-deploy@v0
-      #   with:
-      #     repoToken: '${{ secrets.GITHUB_TOKEN }}'
-      #     firebaseServiceAccount: '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}'
-      #     channelId: live
-      #     projectId: your-project-id
+      - name: Upload production build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-bundle
+          path: dist/
+          retention-days: 7

@@ -1,26 +1,75 @@
-import { initializeApp } from 'firebase/app';
-import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
+import { initializeApp, getApps, getApp } from 'firebase/app';
+import {
+  initializeFirestore,
+  getFirestore,
+  doc,
+  getDocFromServer,
+} from 'firebase/firestore';
 import { getFunctions } from 'firebase/functions';
 import { getAuth } from 'firebase/auth';
-import firebaseAppletConfig from '../firebase-applet-config.json';
+import { getStorage } from 'firebase/storage';
+import firebaseConfigJson from '../firebase-applet-config.json';
 
-export const firebaseConfig = {
-  apiKey: firebaseAppletConfig.apiKey,
-  authDomain: firebaseAppletConfig.authDomain,
-  projectId: firebaseAppletConfig.projectId,
-  storageBucket: firebaseAppletConfig.storageBucket,
-  messagingSenderId: firebaseAppletConfig.messagingSenderId,
-  appId: firebaseAppletConfig.appId,
-  firestoreDatabaseId: firebaseAppletConfig.firestoreDatabaseId,
+const metaEnv = ((import.meta as unknown as { env?: Record<string, string | undefined> })?.env ||
+  {}) as Record<string, string | undefined>;
+
+const nodeEnv =
+  typeof process !== 'undefined' && process.env
+    ? (process.env as Record<string, string | undefined>)
+    : {};
+
+const readEnv = (key: string, fallback: string): string => {
+  const val = metaEnv[key] ?? nodeEnv[key];
+  return val && val.trim().length > 0 ? val.trim() : fallback;
 };
 
-const app = initializeApp(firebaseConfig);
+export const firebaseConfig = {
+  apiKey: readEnv('VITE_FIREBASE_API_KEY', firebaseConfigJson.apiKey),
+  authDomain: readEnv('VITE_FIREBASE_AUTH_DOMAIN', firebaseConfigJson.authDomain),
+  projectId: readEnv('VITE_FIREBASE_PROJECT_ID', firebaseConfigJson.projectId),
+  storageBucket: readEnv('VITE_FIREBASE_STORAGE_BUCKET', firebaseConfigJson.storageBucket),
+  messagingSenderId: readEnv(
+    'VITE_FIREBASE_MESSAGING_SENDER_ID',
+    firebaseConfigJson.messagingSenderId
+  ),
+  appId: readEnv('VITE_FIREBASE_APP_ID', firebaseConfigJson.appId),
+  measurementId: readEnv(
+    'VITE_FIREBASE_MEASUREMENT_ID',
+    firebaseConfigJson.measurementId || ''
+  ),
+  firestoreDatabaseId: readEnv(
+    'VITE_FIRESTORE_DATABASE_ID',
+    firebaseConfigJson.firestoreDatabaseId || '(default)'
+  ),
+};
 
-export const db = getFirestore(app, firebaseAppletConfig.firestoreDatabaseId);
-export const functions = getFunctions(app);
+export const FIRESTORE_DATABASE_ID = firebaseConfig.firestoreDatabaseId;
+
+const isBrowserRuntime = typeof window !== 'undefined' && typeof document !== 'undefined';
+
+// Canonical environment flag: uses local/shared-state engine in Node tests or when VITE_USE_MOCK_DATA=true
+export const isMock =
+  !isBrowserRuntime || readEnv('VITE_USE_MOCK_DATA', 'false') === 'true';
+
+const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+
+let dbInstance;
+try {
+  dbInstance = initializeFirestore(
+    app,
+    {
+      experimentalForceLongPolling: true,
+    },
+    FIRESTORE_DATABASE_ID
+  );
+} catch {
+  dbInstance = getFirestore(app, FIRESTORE_DATABASE_ID);
+}
+
+export const db = dbInstance;
 export const auth = getAuth(app);
-
-export const isMock = false;
+export const functions = getFunctions(app);
+export const storage = getStorage(app);
 
 export enum OperationType {
   CREATE = 'create',
@@ -36,14 +85,16 @@ export interface FirestoreErrorInfo {
   operationType: OperationType;
   path: string | null;
   authInfo: {
-    userId?: string | null;
-    email?: string | null;
-    emailVerified?: boolean | null;
-    isAnonymous?: boolean | null;
-    tenantId?: string | null;
-    providerInfo?: {
-      providerId?: string | null;
-      email?: string | null;
+    userId: string | undefined;
+    email: string | null | undefined;
+    emailVerified: boolean | undefined;
+    isAnonymous: boolean | undefined;
+    tenantId: string | null | undefined;
+    providerInfo: {
+      providerId: string;
+      displayName: string | null;
+      email: string | null;
+      photoUrl: string | null;
     }[];
   };
 }
@@ -62,9 +113,11 @@ export function handleFirestoreError(
       isAnonymous: auth.currentUser?.isAnonymous,
       tenantId: auth.currentUser?.tenantId,
       providerInfo:
-        auth.currentUser?.providerData?.map((provider) => ({
+        auth.currentUser?.providerData.map((provider) => ({
           providerId: provider.providerId,
+          displayName: provider.displayName,
           email: provider.email,
+          photoUrl: provider.photoURL,
         })) || [],
     },
     operationType,
@@ -75,13 +128,16 @@ export function handleFirestoreError(
 }
 
 async function testConnection() {
+  if (!isBrowserRuntime || isMock) return;
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
   } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
+    if (
+      error instanceof Error &&
+      error.message.includes('the client is offline')
+    ) {
       console.error('Please check your Firebase configuration.');
     }
   }
 }
-
-testConnection();
+void testConnection();

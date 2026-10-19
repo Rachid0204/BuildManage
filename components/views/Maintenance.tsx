@@ -11,6 +11,8 @@ import Card from '../common/Card';
 import Button from '../common/Button';
 import Modal from '../common/Modal';
 import Loading from '../common/Loading';
+import CameraCaptureModal from '../common/CameraCaptureModal';
+import { Camera, Image as ImageIcon } from 'lucide-react';
 import { WrenchIcon, PlusIcon, PencilIcon } from '../icons/IconComponents';
 import { useI18n } from '../../hooks/useI18n';
 
@@ -285,6 +287,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
   const [newPriority, setNewPriority] = useState<MaintenanceRequest['priority']>('medium');
   const [newDescription, setNewDescription] = useState('');
   const [newPhotos, setNewPhotos] = useState<string[]>([]);
+  const [cameraTarget, setCameraTarget] = useState<'new' | 'update' | null>(null);
 
   // Banner Feedback
   const [bannerMessage, setBannerMessage] = useState<string | null>(null);
@@ -1159,7 +1162,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
 
             {/* Photo Attachment for Step */}
             <div className="space-y-2 pt-1 border-t border-slate-200">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <label className="font-bold text-slate-700">
                   📷 {tr('Joindre des photos justificatives (Avant / Après travaux) :', 'إرفاق صور إثباتية (قبل / بعد الأشغال):')}
                 </label>
@@ -1171,13 +1174,24 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                   className="hidden"
                   onChange={(e) => handleUploadFiles(e.target.files, setStepPhotos)}
                 />
-                <button
-                  type="button"
-                  onClick={() => updatePhotoInputRef.current?.click()}
-                  className="px-2.5 py-1 rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 font-bold"
-                >
-                  {tr("+ Importer depuis l'appareil", '+ استيراد من الجهاز')}
-                </button>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setCameraTarget('update')}
+                    className="px-3 py-1.5 rounded-lg bg-teal-700 hover:bg-teal-800 text-white font-bold flex items-center gap-1.5 shadow-2xs transition-colors"
+                  >
+                    <Camera className="w-3.5 h-3.5" />
+                    <span>{tr('Prendre une photo', 'التقاط صورة بالكاميرا')}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updatePhotoInputRef.current?.click()}
+                    className="px-2.5 py-1.5 rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 font-bold flex items-center gap-1.5 transition-colors"
+                  >
+                    <ImageIcon className="w-3.5 h-3.5" />
+                    <span>{tr("Galerie / Fichier", 'من الجهاز')}</span>
+                  </button>
+                </div>
               </div>
 
               {/* Quick Sample Photos for Instant Testing */}
@@ -1322,9 +1336,9 @@ const Maintenance: React.FC<MaintenanceProps> = ({
             </div>
 
             <div className="space-y-2 pt-1 border-t border-slate-200">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <label className="font-bold text-slate-700">
-                  📷 {tr("Joindre une photo de l'anomalie :", 'إرفاق صورة للعطب:')}
+                  📷 {tr("Photo de l'anomalie (Caméra ou Galerie) :", 'صورة العطب (الكاميرا أو المعرض):')}
                 </label>
                 <input
                   type="file"
@@ -1334,17 +1348,28 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                   className="hidden"
                   onChange={(e) => handleUploadFiles(e.target.files, setNewPhotos)}
                 />
-                <button
-                  type="button"
-                  onClick={() => newTicketPhotoInputRef.current?.click()}
-                  className="px-2.5 py-1 rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 font-bold"
-                >
-                  {tr('+ Choisir une photo', '+ اختيار صورة')}
-                </button>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setCameraTarget('new')}
+                    className="px-3 py-1.5 rounded-lg bg-teal-700 hover:bg-teal-800 text-white font-bold flex items-center gap-1.5 shadow-2xs transition-colors"
+                  >
+                    <Camera className="w-3.5 h-3.5" />
+                    <span>{tr('Prendre une photo', 'التقاط صورة بالكاميرا')}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => newTicketPhotoInputRef.current?.click()}
+                    className="px-2.5 py-1.5 rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 font-bold flex items-center gap-1.5 transition-colors"
+                  >
+                    <ImageIcon className="w-3.5 h-3.5" />
+                    <span>{tr('+ Choisir une photo', '+ اختيار صورة')}</span>
+                  </button>
+                </div>
               </div>
 
               {newPhotos.length > 0 && (
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 pt-1 flex-wrap">
                   {newPhotos.map((p, idx) => (
                     <div key={idx} className="relative w-16 h-16 rounded-lg overflow-hidden border border-teal-400">
                       <img src={p} alt="" className="w-full h-full object-cover" />
@@ -1365,6 +1390,19 @@ const Maintenance: React.FC<MaintenanceProps> = ({
           </form>
         </Modal>
       )}
+
+      {/* MODAL: CAMERA LIVE CAPTURE */}
+      <CameraCaptureModal
+        isOpen={cameraTarget !== null}
+        onClose={() => setCameraTarget(null)}
+        onCapture={(dataUrl) => {
+          if (cameraTarget === 'new') {
+            setNewPhotos((prev) => [...prev, dataUrl].slice(0, 5));
+          } else if (cameraTarget === 'update') {
+            setStepPhotos((prev) => [...prev, dataUrl].slice(0, 5));
+          }
+        }}
+      />
 
       {/* MODAL 3: PHOTO LIGHTBOX */}
       {lightboxPhoto && (

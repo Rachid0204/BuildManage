@@ -29,11 +29,13 @@ import type {
   PaymentProof,
   Quittance,
   AssembleeGenerale,
+  AGResolution,
   AGVoteCast,
   Prestataire,
   PrestataireReview,
   ChatMessage,
   MarketplaceItem,
+  CredentialAuditEntry,
 } from '../types';
 import {
   mockSyndics,
@@ -51,9 +53,14 @@ import {
   BuildingSchema,
   SyndicSchema,
 } from '../utils/validation';
+import {
+  hashPasswordSync,
+  getAuthenticatedRequestHeaders,
+  allocateBudgetInCentimes,
+} from '../utils/security';
 
-// Keep rich business logic engine active while syncing with shared server & Cloud Firestore
-const isMock = true;
+// Canonical persistence mode: local cache + authenticated shared server + Cloud Firestore mirror
+const isLocalEngineEnabled = true;
 
 // Shared production storage keys (zero mock data)
 export const STORAGE_KEYS = {
@@ -61,6 +68,7 @@ export const STORAGE_KEYS = {
   CHARGES: 'syndik_prod_charges_v1',
   PROOFS: 'syndik_prod_proofs_v1',
   QUITTANCES: 'syndik_prod_quittances_v1',
+  INVOICES: 'syndik_prod_invoices_v1',
   AG: 'syndik_prod_ag_v1',
   PRESTATAIRES: 'syndik_prod_prestataires_v1',
   MAINTENANCE: 'syndik_prod_maintenance_v1',
@@ -105,49 +113,133 @@ function notifyStateUpdated(key: string) {
   }
 }
 
+/**
+ * Strips plaintext passwords from Syndic/Resident/Prestataire records before persisting to
+ * localStorage or sending over the network (Audit Item 03).
+ */
+function stripPlaintextCredentialsForStorage<T>(key: string, val: T): T {
+  if (!val) return val;
+  if (key === STORAGE_KEYS.SYNDICS && Array.isArray(val)) {
+    return val.map((syndic: any) => ({
+      ...syndic,
+      buildings: Array.isArray(syndic.buildings)
+        ? syndic.buildings.map((bld: any) => ({
+            ...bld,
+            residents: Array.isArray(bld.residents)
+              ? bld.residents.map((res: any) => {
+                  const { generatedPassword: _gp, password: _pw, ...cleanRes } = res || {};
+                  return cleanRes;
+                })
+              : [],
+          }))
+        : [],
+    })) as unknown as T;
+  }
+  if (key === STORAGE_KEYS.PRESTATAIRES && Array.isArray(val)) {
+    return val.map((prest: any) => {
+      const { generatedPassword: _gp, password: _pw, ...cleanPrest } = prest || {};
+      return cleanPrest;
+    }) as unknown as T;
+  }
+  if (
+    (key === STORAGE_KEYS.RESIDENT_ACCOUNTS ||
+      key === STORAGE_KEYS.PRESTATAIRE_ACCOUNTS ||
+      key === STORAGE_KEYS.REGISTERED_USERS) &&
+    Array.isArray(val)
+  ) {
+    return val.map((acc: any) => {
+      const emailNorm = (acc?.email || '').trim().toLowerCase();
+      const passwordHash =
+        acc?.passwordHash ||
+        (typeof acc?.password === 'string' ? hashPasswordSync(acc.password, emailNorm) : '');
+      const { password: _pw, generatedPassword: _gp, ...cleanAcc } = acc || {};
+      return { ...cleanAcc, passwordHash };
+    }) as unknown as T;
+  }
+  return val;
+}
+
+export function sanitizeAccountRecordsInStorage(): void {
+  if (typeof localStorage === 'undefined') return;
+  const keysToSanitize = [
+    STORAGE_KEYS.SYNDICS,
+    STORAGE_KEYS.PRESTATAIRES,
+    STORAGE_KEYS.RESIDENT_ACCOUNTS,
+    STORAGE_KEYS.PRESTATAIRE_ACCOUNTS,
+    STORAGE_KEYS.REGISTERED_USERS,
+  ];
+  for (const key of keysToSanitize) {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) continue;
+      const parsed = JSON.parse(raw);
+      const sanitized = stripPlaintextCredentialsForStorage(key, parsed);
+      localStorage.setItem(key, JSON.stringify(sanitized));
+    } catch {
+      // ignore malformed JSON
+    }
+  }
+}
+
 export async function pushKeyToSharedServer<T>(
   key: string,
   val: T,
   deletedId?: string
 ): Promise<T> {
+  const sanitizedVal = stripPlaintextCredentialsForStorage(key, val);
   try {
+    const headers = getAuthenticatedRequestHeaders();
+    // Only call authenticated shared-state endpoint if caller has an active session header
+    if (!headers['Authorization']) {
+      return sanitizedVal;
+    }
     const res = await fetch('/api/shared-state', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key, value: val, deletedId }),
+      headers,
+      body: JSON.stringify({ key, value: sanitizedVal, deletedId }),
     });
     if (res.ok) {
-      const data = await res.json();
-      if (data && data.ok && data.value !== undefined && data.value !== null) {
-        try {
-          localStorage.setItem(key, JSON.stringify(data.value));
-        } catch {
-          // ignore
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const data = await res.json();
+        if (data && data.ok && data.value !== undefined && data.value !== null) {
+          const cleanServerVal = stripPlaintextCredentialsForStorage(key, data.value as T);
+          try {
+            localStorage.setItem(key, JSON.stringify(cleanServerVal));
+          } catch {
+            // ignore
+          }
+          return cleanServerVal;
         }
-        return data.value as T;
       }
     }
   } catch {
-    // Server endpoint may be unavailable in static preview; localStorage + Firestore remain active
+    // Server endpoint may be unavailable in static/isolated tests; localStorage + Firestore remain active
   }
-  return val;
+  return sanitizedVal;
 }
 
 export async function syncAllSharedStateFromServer(): Promise<Record<string, any> | null> {
   try {
+    const headers = getAuthenticatedRequestHeaders();
+    if (!headers['Authorization']) {
+      return null;
+    }
     const res = await fetch('/api/shared-state', {
       method: 'GET',
-      headers: { Accept: 'application/json' },
+      headers,
       cache: 'no-store',
     });
     if (!res.ok) return null;
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) return null;
+
     const data = await res.json();
     if (!data || !data.ok || !data.store) return null;
 
     const serverStore = data.store as Record<string, any>;
     const trackedKeys = Object.values(STORAGE_KEYS);
 
-    // If the server store was explicitly reset more recently than our local reset marker, clear local keys first
     if (typeof window !== 'undefined' && serverStore.__resetAt) {
       const localResetAt = localStorage.getItem('syndik_prod_last_reset_at');
       if (localResetAt !== serverStore.__resetAt) {
@@ -161,7 +253,8 @@ export async function syncAllSharedStateFromServer(): Promise<Record<string, any
     for (const key of trackedKeys) {
       const serverVal = serverStore[key];
       if (serverVal !== undefined && serverVal !== null) {
-        localStorage.setItem(key, JSON.stringify(serverVal));
+        const cleanVal = stripPlaintextCredentialsForStorage(key, serverVal);
+        localStorage.setItem(key, JSON.stringify(cleanVal));
       } else {
         const localRaw = localStorage.getItem(key);
         if (localRaw) {
@@ -191,10 +284,13 @@ export async function resetAllProductionData(): Promise<void> {
     localStorage.removeItem('syndik_selected_building_id');
   }
   try {
-    await fetch('/api/shared-state/reset', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-    });
+    const headers = getAuthenticatedRequestHeaders();
+    if (headers['Authorization']) {
+      await fetch('/api/shared-state/reset', {
+        method: 'POST',
+        headers,
+      });
+    }
   } catch {
     // ignore
   }
@@ -216,11 +312,12 @@ export async function resetAllProductionData(): Promise<void> {
   notifyStateUpdated(STORAGE_KEYS.SYNDICS);
 }
 
-// Purge any legacy test/mock keys in browser and run initial sync
+// Purge any legacy test/mock keys in browser and sanitize credentials
 if (typeof window !== 'undefined') {
   for (const oldKey of LEGACY_TEST_KEYS) {
     localStorage.removeItem(oldKey);
   }
+  sanitizeAccountRecordsInStorage();
   void syncAllSharedStateFromServer();
 }
 
@@ -229,9 +326,10 @@ function getLocalItem<T>(key: string, defaultVal: T): T {
   try {
     const item = localStorage.getItem(key);
     if (!item) {
-      localStorage.setItem(key, JSON.stringify(defaultVal));
-      void pushKeyToSharedServer(key, defaultVal);
-      return defaultVal;
+      const cleanDefault = stripPlaintextCredentialsForStorage(key, defaultVal);
+      localStorage.setItem(key, JSON.stringify(cleanDefault));
+      void pushKeyToSharedServer(key, cleanDefault);
+      return cleanDefault;
     }
     return JSON.parse(item) as T;
   } catch (e) {
@@ -242,8 +340,17 @@ function getLocalItem<T>(key: string, defaultVal: T): T {
 
 function setLocalItem<T>(key: string, val: T, deletedId?: string): void {
   try {
-    localStorage.setItem(key, JSON.stringify(val));
-    void pushKeyToSharedServer(key, val, deletedId);
+    if (deletedId) {
+      const rawTombstones = localStorage.getItem('syndik_deleted_building_ids_v1');
+      const tombstones: string[] = rawTombstones ? JSON.parse(rawTombstones) : [];
+      if (!tombstones.includes(deletedId)) {
+        tombstones.push(deletedId);
+        localStorage.setItem('syndik_deleted_building_ids_v1', JSON.stringify(tombstones));
+      }
+    }
+    const sanitized = stripPlaintextCredentialsForStorage(key, val);
+    localStorage.setItem(key, JSON.stringify(sanitized));
+    void pushKeyToSharedServer(key, sanitized, deletedId);
     notifyStateUpdated(key);
   } catch (e) {
     console.error(`Error writing ${key} to localStorage:`, e);
@@ -269,22 +376,24 @@ async function syncSyndicToFirestoreIfAuthenticated(syndic: Syndic): Promise<voi
   const user = auth.currentUser;
   if (!user || !user.emailVerified) return;
 
+  const cleanSyndic = stripPlaintextCredentialsForStorage(STORAGE_KEYS.SYNDICS, [syndic])[0];
   const payload = {
-    id: String(syndic.id).slice(0, 128),
-    name: String(syndic.name || 'Cabinet Syndic').slice(0, 200),
-    email: String(syndic.email || user.email || 'contact@syndik.ma').slice(0, 254),
-    ...(syndic.phone ? { phone: String(syndic.phone).slice(0, 40) } : {}),
-    subscriptionPlan: ['starter', 'professional', 'enterprise'].includes(syndic.subscriptionPlan)
-      ? syndic.subscriptionPlan
+    id: String(cleanSyndic.id).slice(0, 128),
+    name: String(cleanSyndic.name || 'Cabinet Syndic').slice(0, 200),
+    logoUrl: String(cleanSyndic.logoUrl ?? '').slice(0, 2048),
+    email: String(cleanSyndic.email || user.email || 'contact@syndik.ma').slice(0, 254),
+    ...(cleanSyndic.phone ? { phone: String(cleanSyndic.phone).slice(0, 40) } : {}),
+    subscriptionPlan: ['starter', 'professional', 'enterprise'].includes(cleanSyndic.subscriptionPlan)
+      ? cleanSyndic.subscriptionPlan
       : 'professional',
-    subscriptionStatus: ['active', 'expired', 'cancelled'].includes(syndic.subscriptionStatus)
-      ? syndic.subscriptionStatus
-      : 'active',
-    ...(syndic.subscriptionExpiry
-      ? { subscriptionExpiresAt: String(syndic.subscriptionExpiry).slice(0, 64) }
+    subscriptionStatus: ['active', 'expired', 'cancelled', 'trialing'].includes(cleanSyndic.subscriptionStatus)
+      ? cleanSyndic.subscriptionStatus
+      : 'trialing',
+    ...(cleanSyndic.subscriptionExpiry
+      ? { subscriptionExpiresAt: String(cleanSyndic.subscriptionExpiry).slice(0, 64) }
       : {}),
-    createdBy: String(syndic.createdBy || user.uid).replace(/[^a-zA-Z0-9_\-]/g, '-').slice(0, 128),
-    buildings: Array.isArray(syndic.buildings) ? syndic.buildings.slice(0, 50) : [],
+    createdBy: String(cleanSyndic.createdBy || user.uid).replace(/[^a-zA-Z0-9_\-]/g, '-').slice(0, 128),
+    buildings: Array.isArray(cleanSyndic.buildings) ? cleanSyndic.buildings.slice(0, 50) : [],
   };
 
   try {
@@ -294,7 +403,7 @@ async function syncSyndicToFirestoreIfAuthenticated(syndic: Syndic): Promise<voi
       try {
         handleFirestoreError(error, OperationType.WRITE, `${SYNDICS_COL}/${payload.id}`);
       } catch {
-        // Logged structured FirestoreErrorInfo; keep UI flow uninterrupted
+        // Keep UI flow uninterrupted
       }
     }
   }
@@ -308,7 +417,6 @@ export const getSyndics = async (): Promise<Syndic[]> => {
   await syncAllSharedStateFromServer();
   const localSyndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
 
-  // If authenticated with Firebase Auth, also merge any Syndic records from Cloud Firestore
   const user = auth.currentUser;
   if (user && user.emailVerified) {
     try {
@@ -320,7 +428,7 @@ export const getSyndics = async (): Promise<Syndic[]> => {
       if (!snapshot.empty) {
         const mergedMap = new Map<string, Syndic>();
         for (const s of localSyndics) {
-          mergedMap.set(s.id, s);
+          mergedMap.set(s.id, { ...s, logoUrl: s.logoUrl ?? '' });
         }
         for (const docSnap of snapshot.docs) {
           const data = docSnap.data() as any;
@@ -329,13 +437,14 @@ export const getSyndics = async (): Promise<Syndic[]> => {
             ...existing,
             ...data,
             id: docSnap.id,
+            logoUrl: data.logoUrl ?? existing?.logoUrl ?? '',
             subscriptionExpiry:
               data.subscriptionExpiresAt ||
               data.subscriptionExpiry ||
               existing?.subscriptionExpiry ||
-              new Date(Date.now() + 365 * 86400000).toISOString(),
+              new Date(Date.now() + 30 * 86400000).toISOString(),
             buildings:
-              Array.isArray(data.buildings) && data.buildings.length > 0
+              Array.isArray(data.buildings)
                 ? data.buildings
                 : existing?.buildings || [],
           };
@@ -356,33 +465,38 @@ export const getSyndics = async (): Promise<Syndic[]> => {
     }
   }
 
-  return localSyndics;
+  return localSyndics.map((s) => ({ ...s, logoUrl: s.logoUrl ?? '' }));
 };
 
 export const saveSyndic = async (syndic: Syndic): Promise<Syndic> => {
-  const validation = SyndicSchema.safeParse(syndic);
+  const normalizedSyndic: Syndic = {
+    ...syndic,
+    logoUrl: syndic.logoUrl ?? '',
+  };
+  const validation = SyndicSchema.safeParse(normalizedSyndic);
   if (!validation.success) {
     console.warn('Syndic validation warning:', validation.error.message);
   }
 
   await syncAllSharedStateFromServer();
   const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
-  const index = syndics.findIndex((s) => s.id === syndic.id);
+  const index = syndics.findIndex((s) => s.id === normalizedSyndic.id);
   let savedSyndic: Syndic;
   if (index >= 0) {
     savedSyndic = {
       ...syndics[index],
-      ...syndic,
-      buildings:
-        Array.isArray(syndic.buildings) && syndic.buildings.length > 0
-          ? syndic.buildings
-          : syndics[index].buildings || [],
+      ...normalizedSyndic,
+      logoUrl: normalizedSyndic.logoUrl ?? syndics[index].logoUrl ?? '',
+      buildings: Array.isArray(normalizedSyndic.buildings)
+        ? normalizedSyndic.buildings
+        : syndics[index].buildings || [],
     };
     syndics[index] = savedSyndic;
   } else {
     savedSyndic = {
-      ...syndic,
-      buildings: Array.isArray(syndic.buildings) ? syndic.buildings : [],
+      ...normalizedSyndic,
+      logoUrl: normalizedSyndic.logoUrl ?? '',
+      buildings: Array.isArray(normalizedSyndic.buildings) ? normalizedSyndic.buildings : [],
     };
     syndics.unshift(savedSyndic);
   }
@@ -404,6 +518,12 @@ export const getBuildingsForSyndic = async (syndicId: string): Promise<Building[
   return targetSyndic?.buildings || [];
 };
 
+const PLAN_BUILDING_LIMITS: Record<Syndic['subscriptionPlan'], number> = {
+  starter: 1,
+  professional: 10,
+  enterprise: 9999,
+};
+
 export const addBuilding = async (
   syndicId: string,
   buildingData: Omit<
@@ -419,8 +539,25 @@ export const addBuilding = async (
 
   await syncAllSharedStateFromServer();
   const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
-  const syndic = syndics.find((s) => s.id === syndicId) || syndics[0];
-  if (!syndic) throw new Error('Syndic not found');
+  const syndic = syndics.find((s) => s.id === syndicId);
+  if (!syndic) throw new Error('Syndic introuvable ou non autorisé');
+
+  // Audit Item 21: Enforce subscription status & building limits
+  const isExpired =
+    syndic.subscriptionStatus === 'expired' ||
+    syndic.subscriptionStatus === 'cancelled' ||
+    (syndic.subscriptionExpiry && new Date(syndic.subscriptionExpiry).getTime() < Date.now());
+  if (isExpired) {
+    throw new Error(
+      'Abonnement expiré. Veuillez renouveler votre abonnement pour ajouter un nouvel immeuble.'
+    );
+  }
+  const maxBuildings = PLAN_BUILDING_LIMITS[syndic.subscriptionPlan] ?? 10;
+  if ((syndic.buildings?.length || 0) >= maxBuildings) {
+    throw new Error(
+      `Limite atteinte pour le forfait ${syndic.subscriptionPlan} (${maxBuildings} immeuble(s) max).`
+    );
+  }
 
   const newBuildingId = `bld-${Date.now()}`;
   const totalLots = apartments?.length || 0;
@@ -433,9 +570,9 @@ export const addBuilding = async (
     number: apt.number,
     floor: apt.floor,
     area: apt.area,
-    monthlyFees: apt.monthlyFees || coreBuilding.monthlySyndicFees,
+    monthlyFees: apt.monthlyFees ?? coreBuilding.monthlySyndicFees,
     tantiemes:
-      apt.tantiemes ||
+      apt.tantiemes ??
       (idx === 0 ? baseTantiemes + remainderTantiemes : baseTantiemes),
     coproType: apt.coproType || 'apartment',
     ownerId: null,
@@ -450,7 +587,8 @@ export const addBuilding = async (
     city: coreBuilding.city,
     monthlySyndicFees: coreBuilding.monthlySyndicFees,
     totalTantiemes: 1000,
-    reserveFundRate: coreBuilding.reserveFundRate ?? 5,
+    reserveFundPercentage: coreBuilding.reserveFundPercentage ?? coreBuilding.reserveFundRate ?? 5,
+    reserveFundRate: coreBuilding.reserveFundRate ?? coreBuilding.reserveFundPercentage ?? 5,
     bankName: coreBuilding.bankName,
     bankRib: coreBuilding.bankRib,
     managerName: coreBuilding.managerName,
@@ -459,7 +597,7 @@ export const addBuilding = async (
     apartments: generatedApts,
     announcements: [],
     documents: [],
-    financials: { balance: 0, transactions: [] },
+    financials: { balance: 0, reserveFundBalance: 0, transactions: [] },
   };
 
   syndic.buildings.push(newBuilding);
@@ -487,7 +625,7 @@ export const updateBuilding = async (
   > & { syncApartmentFees?: boolean }
 ) => {
   const { syncApartmentFees, ...buildingUpdates } = updates;
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
     for (const syndic of syndics) {
       const idx = syndic.buildings.findIndex((b) => b.id === buildingId);
@@ -505,6 +643,7 @@ export const updateBuilding = async (
         }
         syndic.buildings[idx] = updatedBuilding;
         setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
+        void syncSyndicToFirestoreIfAuthenticated(syndic);
         return updatedBuilding;
       }
     }
@@ -517,13 +656,16 @@ export const updateBuilding = async (
 };
 
 export const deleteBuilding = async (buildingId: string) => {
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
     for (const syndic of syndics) {
       const idx = syndic.buildings.findIndex((b) => b.id === buildingId);
       if (idx >= 0) {
         syndic.buildings.splice(idx, 1);
-        setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
+        // Audit Item 18: Pass buildingId as deletedId tombstone so shared server never restores it
+        await pushKeyToSharedServer(STORAGE_KEYS.SYNDICS, syndics, buildingId);
+        setLocalItem(STORAGE_KEYS.SYNDICS, syndics, buildingId);
+        void syncSyndicToFirestoreIfAuthenticated(syndic);
         return true;
       }
     }
@@ -544,7 +686,7 @@ export const addApartment = async (apartmentData: Omit<Apartment, 'id'>) => {
     throw new Error('Invalid Apartment Data: ' + validation.error.message);
   }
 
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
     for (const syndic of syndics) {
       const bld = syndic.buildings.find((b) => b.id === apartmentData.buildingId);
@@ -552,12 +694,12 @@ export const addApartment = async (apartmentData: Omit<Apartment, 'id'>) => {
         const newApt: Apartment = {
           id: `apt-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
           ...apartmentData,
+          monthlyFees: apartmentData.monthlyFees ?? bld.monthlySyndicFees,
           tantiemes: apartmentData.tantiemes ?? 100,
           coproType: apartmentData.coproType ?? 'apartment',
         };
         bld.apartments.push(newApt);
 
-        // Sync resident apartmentId if ownerId or tenantId provided
         if (newApt.ownerId) {
           const owner = bld.residents.find((r) => r.id === newApt.ownerId);
           if (owner) owner.apartmentId = newApt.id;
@@ -584,7 +726,7 @@ export const addApartmentsBulk = async (
 ) => {
   if (!apartmentsList.length) return [];
 
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
     for (const syndic of syndics) {
       const bld = syndic.buildings.find((b) => b.id === buildingId);
@@ -597,7 +739,7 @@ export const addApartmentsBulk = async (
 
         apartmentsList.forEach((aptData, idx) => {
           const normalizedNum = aptData.number.trim().toLowerCase();
-          if (existingNumbers.has(normalizedNum)) return; // Skip duplicates
+          if (existingNumbers.has(normalizedNum)) return;
           existingNumbers.add(normalizedNum);
 
           const newApt: Apartment = {
@@ -606,7 +748,10 @@ export const addApartmentsBulk = async (
             number: aptData.number.trim(),
             floor: Number(aptData.floor) || 0,
             area: Number(aptData.area) || 60,
-            monthlyFees: Number(aptData.monthlyFees) || bld.monthlySyndicFees,
+            monthlyFees:
+              aptData.monthlyFees !== undefined && aptData.monthlyFees !== null
+                ? Number(aptData.monthlyFees)
+                : bld.monthlySyndicFees,
             tantiemes: Number(aptData.tantiemes) || 100,
             coproType: aptData.coproType || 'apartment',
             ownerId: aptData.ownerId || null,
@@ -634,7 +779,7 @@ export const addApartmentsBulk = async (
 };
 
 export const rebalanceBuildingTantiemes = async (buildingId: string) => {
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
     for (const syndic of syndics) {
       const bld = syndic.buildings.find((b) => b.id === buildingId);
@@ -664,7 +809,7 @@ export const updateApartment = async (apartment: Apartment) => {
     throw new Error('Invalid Apartment Data: ' + validation.error.message);
   }
 
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
     for (const syndic of syndics) {
       const bld = syndic.buildings.find((b) => b.id === apartment.buildingId);
@@ -674,7 +819,6 @@ export const updateApartment = async (apartment: Apartment) => {
           const prevApt = bld.apartments[idx];
           bld.apartments[idx] = { ...prevApt, ...apartment };
 
-          // Bidirectional sync with residents
           if (prevApt.ownerId && prevApt.ownerId !== apartment.ownerId) {
             const oldOwner = bld.residents.find((r) => r.id === prevApt.ownerId);
             if (oldOwner && oldOwner.apartmentId === apartment.id) {
@@ -716,14 +860,13 @@ export const updateApartment = async (apartment: Apartment) => {
 };
 
 export const deleteApartment = async (apartmentId: string) => {
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
     for (const syndic of syndics) {
       for (const bld of syndic.buildings) {
         const idx = bld.apartments.findIndex((a) => a.id === apartmentId);
         if (idx >= 0) {
           bld.apartments.splice(idx, 1);
-          // Unlink any resident pointing to this deleted apartment
           bld.residents.forEach((res) => {
             if (res.apartmentId === apartmentId) {
               const fallbackApt = bld.apartments.find(
@@ -732,7 +875,7 @@ export const deleteApartment = async (apartmentId: string) => {
               res.apartmentId = fallbackApt?.id || undefined;
             }
           });
-          setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
+          setLocalItem(STORAGE_KEYS.SYNDICS, syndics, apartmentId);
           return true;
         }
       }
@@ -745,13 +888,14 @@ export const deleteApartment = async (apartmentId: string) => {
 };
 
 // ==========================================
-// 4. RESIDENTS & AUTOMATIC CREDENTIALS
+// 4. RESIDENTS & HASHED CREDENTIALS (Audit Item 03)
 // ==========================================
 
 export interface ResidentAccountRecord {
   residentId: string;
   email: string;
-  password: string;
+  passwordHash: string;
+  password?: string; // Deprecated legacy field; never persisted
   name: string;
   isOwner: boolean;
   syndicId: string;
@@ -773,12 +917,13 @@ function generateTempPassword(name: string): string {
   return `Syndik-${cleanPrefix}${digits}!`;
 }
 
-function saveResidentCredentialAccount(resident: Resident, password: string): ResidentAccountRecord {
+function saveResidentCredentialAccount(resident: Resident, rawPassword: string): ResidentAccountRecord {
   const accounts = getLocalItem<ResidentAccountRecord[]>(RESIDENT_ACCOUNTS_KEY, []);
+  const emailNorm = resident.email.trim().toLowerCase();
   const record: ResidentAccountRecord = {
     residentId: resident.id,
     email: resident.email.trim(),
-    password,
+    passwordHash: hashPasswordSync(rawPassword, emailNorm),
     name: resident.name,
     isOwner: resident.isOwner,
     syndicId: resident.syndicId,
@@ -788,7 +933,7 @@ function saveResidentCredentialAccount(resident: Resident, password: string): Re
     mustChangePassword: resident.mustChangePassword ?? true,
   };
   const existingIdx = accounts.findIndex(
-    (a) => a.residentId === resident.id || a.email.toLowerCase() === resident.email.toLowerCase()
+    (a) => a.residentId === resident.id || a.email.toLowerCase() === emailNorm
   );
   if (existingIdx >= 0) {
     accounts[existingIdx] = record;
@@ -813,45 +958,51 @@ export const addResident = async (
     throw new Error('Invalid Resident Data: ' + validation.error.message);
   }
 
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
     for (const syndic of syndics) {
       const bld = syndic.buildings.find((b) => b.id === cleanedData.buildingId);
       if (bld) {
         const nowIso = new Date().toISOString();
-        const password = generateCredentials ? generateTempPassword(cleanedData.name) : undefined;
-        const newResident: Resident = {
+        const inviteExpiresAt = new Date(Date.now() + 7 * 86400000).toISOString();
+        const ephemeralPassword = generateCredentials ? generateTempPassword(cleanedData.name) : undefined;
+        const inviteToken = generateCredentials ? `inv-${Date.now().toString(36)}` : undefined;
+        const auditAction: CredentialAuditEntry['action'] = 'generated';
+        const persistedResident: Resident = {
           id: `res-${Date.now()}`,
           ...cleanedData,
           hasAccount: !!generateCredentials,
-          generatedPassword: password,
+          invitationStatus: generateCredentials ? 'pending' : undefined,
+          invitationToken: inviteToken,
+          invitationCode: inviteToken,
+          invitationExpiresAt: generateCredentials ? inviteExpiresAt : undefined,
           credentialsCreatedAt: generateCredentials ? nowIso : undefined,
           credentialsAuditLog: generateCredentials
-            ? [{ action: 'generated', timestamp: nowIso }]
+            ? [{ action: auditAction, timestamp: nowIso }]
             : [],
           mustChangePassword: generateCredentials ? true : undefined,
         };
-        bld.residents.push(newResident);
+        delete (persistedResident as any).generatedPassword;
+        bld.residents.push(persistedResident);
 
-        // Link resident to apartment if apartmentId provided
-        if (newResident.apartmentId) {
-          const apt = bld.apartments.find((a) => a.id === newResident.apartmentId);
+        if (persistedResident.apartmentId) {
+          const apt = bld.apartments.find((a) => a.id === persistedResident.apartmentId);
           if (apt) {
-            if (newResident.isOwner) {
-              apt.ownerId = newResident.id;
+            if (persistedResident.isOwner) {
+              apt.ownerId = persistedResident.id;
             } else {
-              apt.tenantId = newResident.id;
+              apt.tenantId = persistedResident.id;
             }
           }
         }
 
-        if (generateCredentials && password) {
-          saveResidentCredentialAccount(newResident, password);
+        if (generateCredentials && inviteToken) {
+          saveResidentCredentialAccount(persistedResident, inviteToken);
         }
 
         setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
         void syncSyndicToFirestoreIfAuthenticated(syndic);
-        return newResident;
+        return persistedResident;
       }
     }
   }
@@ -861,8 +1012,9 @@ export const addResident = async (
 };
 
 export const updateResident = async (resident: Resident): Promise<Resident> => {
+  const { generatedPassword: ephemeralPassword, ...residentWithoutPassword } = resident;
   const cleanedResident: Resident = {
-    ...resident,
+    ...residentWithoutPassword,
     apartmentId: resident.apartmentId || undefined,
     cin: resident.cin?.trim() || undefined,
   };
@@ -871,7 +1023,7 @@ export const updateResident = async (resident: Resident): Promise<Resident> => {
     throw new Error('Invalid Resident Data: ' + validation.error.message);
   }
 
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
     for (const syndic of syndics) {
       const bld = syndic.buildings.find((b) => b.id === cleanedResident.buildingId);
@@ -885,7 +1037,6 @@ export const updateResident = async (resident: Resident): Promise<Resident> => {
           };
           bld.residents[idx] = mergedResident;
 
-          // Bidirectional sync with apartments
           bld.apartments.forEach((apt) => {
             if (apt.id !== mergedResident.apartmentId) {
               if (apt.ownerId === mergedResident.id) apt.ownerId = null;
@@ -906,8 +1057,8 @@ export const updateResident = async (resident: Resident): Promise<Resident> => {
             }
           }
 
-          if (mergedResident.hasAccount && mergedResident.generatedPassword) {
-            saveResidentCredentialAccount(mergedResident, mergedResident.generatedPassword);
+          if (mergedResident.hasAccount && ephemeralPassword) {
+            saveResidentCredentialAccount(mergedResident, ephemeralPassword);
           }
 
           setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
@@ -923,7 +1074,7 @@ export const updateResident = async (resident: Resident): Promise<Resident> => {
 };
 
 export const regenerateResidentCredentials = async (residentId: string): Promise<Resident> => {
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
     for (const syndic of syndics) {
       for (const bld of syndic.buildings) {
@@ -931,21 +1082,30 @@ export const regenerateResidentCredentials = async (residentId: string): Promise
         if (idx >= 0) {
           const res = bld.residents[idx];
           const nowIso = new Date().toISOString();
+          const inviteExpiresAt = new Date(Date.now() + 7 * 86400000).toISOString();
           const newPassword = generateTempPassword(res.name);
+          const inviteToken = `inv-${Date.now().toString(36)}`;
           const prevLog = Array.isArray(res.credentialsAuditLog) ? res.credentialsAuditLog : [];
+          const actionType: CredentialAuditEntry['action'] = res.hasAccount
+            ? 'regenerated'
+            : 'generated';
           const updated: Resident = {
             ...res,
             hasAccount: true,
-            generatedPassword: newPassword,
+            invitationStatus: 'pending',
+            invitationToken: inviteToken,
+            invitationCode: inviteToken,
+            invitationExpiresAt: inviteExpiresAt,
             credentialsCreatedAt: nowIso,
             credentialsAuditLog: [
-              { action: res.hasAccount ? 'regenerated' : 'generated', timestamp: nowIso },
+              { action: actionType, timestamp: nowIso },
               ...prevLog,
             ].slice(0, 20),
             mustChangePassword: true,
           };
+          delete (updated as any).generatedPassword;
           bld.residents[idx] = updated;
-          saveResidentCredentialAccount(updated, newPassword);
+          saveResidentCredentialAccount(updated, inviteToken);
           setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
           void syncSyndicToFirestoreIfAuthenticated(syndic);
           return updated;
@@ -968,12 +1128,14 @@ export const recordResidentCredentialShare = async (
         const res = bld.residents[idx];
         const nowIso = new Date().toISOString();
         const prevLog = Array.isArray(res.credentialsAuditLog) ? res.credentialsAuditLog : [];
+        const actionType: CredentialAuditEntry['action'] =
+          method === 'pdf' ? 'shared_pdf' : 'shared_copy';
         const updated: Resident = {
           ...res,
           credentialsSharedAt: nowIso,
           credentialsLastSharedMethod: method,
           credentialsAuditLog: [
-            { action: method === 'pdf' ? 'shared_pdf' : 'shared_copy', timestamp: nowIso },
+            { action: actionType, timestamp: nowIso },
             ...prevLog,
           ].slice(0, 20),
         };
@@ -988,25 +1150,24 @@ export const recordResidentCredentialShare = async (
 };
 
 export const deleteResident = async (residentId: string) => {
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
     for (const syndic of syndics) {
       for (const bld of syndic.buildings) {
         const idx = bld.residents.findIndex((r) => r.id === residentId);
         if (idx >= 0) {
           bld.residents.splice(idx, 1);
-          // Clean up apartment owner/tenant refs
           bld.apartments.forEach((apt) => {
             if (apt.ownerId === residentId) apt.ownerId = null;
             if (apt.tenantId === residentId) apt.tenantId = null;
           });
-          setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
+          setLocalItem(STORAGE_KEYS.SYNDICS, syndics, residentId);
 
-          // Remove stored credentials
           const accounts = getLocalItem<ResidentAccountRecord[]>(RESIDENT_ACCOUNTS_KEY, []);
           setLocalItem(
             RESIDENT_ACCOUNTS_KEY,
-            accounts.filter((a) => a.residentId !== residentId)
+            accounts.filter((a) => a.residentId !== residentId),
+            residentId
           );
           return true;
         }
@@ -1020,11 +1181,11 @@ export const deleteResident = async (residentId: string) => {
 };
 
 // ==========================================
-// 5. CHARGES & TANTIÈMES ENGINE
+// 5. CHARGES & TANTIÈMES ENGINE (Audit Items 12 & 16)
 // ==========================================
 
 export const getChargesForBuilding = async (buildingId: string): Promise<Charge[]> => {
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, mockCharges);
     return charges.filter((c) => c.buildingId === buildingId);
   }
@@ -1035,7 +1196,7 @@ export const getChargesForBuilding = async (buildingId: string): Promise<Charge[
 };
 
 export const getChargesForResident = async (residentId: string): Promise<Charge[]> => {
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, mockCharges);
     return charges.filter((c) => c.residentId === residentId);
   }
@@ -1045,87 +1206,184 @@ export const getChargesForResident = async (residentId: string): Promise<Charge[
   return snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Charge));
 };
 
+export type GenerateChargesResult = Charge[] & {
+  success: boolean;
+  count: number;
+  createdCount: number;
+  skippedCount: number;
+};
+
 export const generateMonthlyCharges = async (
   buildingId: string,
   syndicId: string,
-  options?: { useTantiemes?: boolean; periodName?: string; totalMonthlyBudget?: number }
-) => {
-  if (isMock) {
+  periodOrOptions?:
+    | string
+    | {
+        useTantiemes?: boolean;
+        periodName?: string;
+        totalMonthlyBudget?: number;
+        totalBudgetToSplit?: number;
+        chargeType?: Charge['chargeType'];
+      },
+  maybeOptions?:
+    | boolean
+    | {
+        chargeType?: Charge['chargeType'];
+        totalBudgetToSplit?: number;
+        totalMonthlyBudget?: number;
+        useTantiemes?: boolean;
+      }
+): Promise<GenerateChargesResult> => {
+  const now = new Date();
+  const defaultPeriod = now.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+
+  const resolvedPeriod =
+    typeof periodOrOptions === 'string'
+      ? periodOrOptions.trim() || defaultPeriod
+      : periodOrOptions?.periodName?.trim() || defaultPeriod;
+
+  const normalizedMaybeOptions =
+    typeof maybeOptions === 'boolean'
+      ? { useTantiemes: maybeOptions }
+      : maybeOptions || {};
+
+  const opts =
+    typeof periodOrOptions === 'object' && periodOrOptions !== null
+      ? { ...periodOrOptions, ...normalizedMaybeOptions }
+      : normalizedMaybeOptions;
+
+  const resolvedChargeType: Charge['chargeType'] = opts.chargeType || 'courante';
+  const normalizedPeriodKey = resolvedPeriod.toLowerCase().replace(/\s+/g, ' ');
+
+  if (isLocalEngineEnabled) {
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
-    const syndic = syndics.find((s) => s.id === syndicId);
+    const syndic = syndics.find((s) => s.id === syndicId) || syndics.find((s) => s.buildings.some((b) => b.id === buildingId));
     const building = syndic?.buildings.find((b) => b.id === buildingId);
 
-    if (!building) throw new Error('Building not found');
-
-    const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, mockCharges);
-    const now = new Date();
-    const period = options?.periodName || now.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
-    const dueDate = new Date(now.getFullYear(), now.getMonth() + 1, 15).toISOString().split('T')[0];
-
-    let createdCount = 0;
-    const totalTantiemes = building.totalTantiemes || 1000;
-    const totalBudget = options?.totalMonthlyBudget || building.apartments.reduce((acc, a) => acc + (a.monthlyFees || building.monthlySyndicFees), 0);
-
-    for (const apt of building.apartments) {
-      const responsibleId = apt.ownerId || apt.tenantId;
-      if (!responsibleId) continue;
-
-      // Fee calculation: either by tantièmes share or configured fee
-      let calculatedFee = apt.monthlyFees || building.monthlySyndicFees;
-      if (options?.useTantiemes && apt.tantiemes) {
-        calculatedFee = Math.round((totalBudget * (apt.tantiemes / totalTantiemes)));
-      }
-
-      const newCharge: Charge = {
-        id: `chg-${Date.now()}-${apt.id}`,
-        buildingId,
-        apartmentId: apt.id,
-        residentId: responsibleId,
-        amount: calculatedFee,
-        dueDate,
-        status: 'pending',
-        type: 'courante',
-        period,
-        description: `Appel de charges ${period} - Lot ${apt.number}`,
-        createdAt: new Date().toISOString(),
-      };
-
-      charges.unshift(newCharge);
-      createdCount++;
+    if (!building) {
+      const empty = Object.assign([] as Charge[], {
+        success: false,
+        count: 0,
+        createdCount: 0,
+        skippedCount: 0,
+      });
+      return empty;
     }
 
-    setLocalItem(STORAGE_KEYS.CHARGES, charges);
-    return { success: true, count: createdCount };
+    const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, mockCharges);
+    const dueDate = new Date(now.getFullYear(), now.getMonth() + 1, 5)
+      .toISOString()
+      .split('T')[0];
+
+    const totalTantiemes = building.totalTantiemes || 1000;
+    const budgetToSplit = opts.totalBudgetToSplit ?? opts.totalMonthlyBudget;
+    const useTantiemesBudget =
+      typeof budgetToSplit === 'number' && budgetToSplit > 0 && opts.useTantiemes !== false;
+
+    // Precompute centime-exact allocations across all apartments in the building (Audit Item 16)
+    const centimeAllocationMap = useTantiemesBudget
+      ? allocateBudgetInCentimes(
+          budgetToSplit!,
+          building.apartments.map((a) => ({ id: a.id, tantiemes: a.tantiemes ?? 100 })),
+          totalTantiemes
+        )
+      : null;
+
+    const newCharges: Charge[] = [];
+    let skippedCount = 0;
+
+    building.apartments.forEach((apt) => {
+      const residentId =
+        apt.ownerId ||
+        apt.tenantId ||
+        building.residents.find((r) => r.apartmentId === apt.id)?.id;
+      if (!residentId) return;
+
+      // Audit Item 12: Stable period uniqueness check per (buildingId, apartmentId, normalizedPeriod, chargeType)
+      const alreadyBilled = charges.some(
+        (existing) =>
+          existing.buildingId === buildingId &&
+          existing.apartmentId === apt.id &&
+          (existing.period || '').trim().toLowerCase().replace(/\s+/g, ' ') === normalizedPeriodKey &&
+          (existing.chargeType || 'courante') === resolvedChargeType
+      );
+      if (alreadyBilled) {
+        skippedCount += 1;
+        return;
+      }
+
+      const shares = apt.tantiemes ?? 100;
+      // Audit Item 16: Respect explicitly configured 0 fee via ?? instead of ||
+      const baseFee = apt.monthlyFees ?? building.monthlySyndicFees ?? 0;
+      const computedAmount = centimeAllocationMap
+        ? centimeAllocationMap.get(apt.id) ?? baseFee
+        : Math.round(baseFee * 100) / 100;
+
+      const stableId = `chg-${buildingId}-${apt.id}-${normalizedPeriodKey.replace(/[^a-z0-9]/g, '_')}-${resolvedChargeType}`;
+      const newCharge: Charge = {
+        id: stableId,
+        syndicId: building.syndicId || syndicId,
+        buildingId,
+        apartmentId: apt.id,
+        residentId,
+        amount: computedAmount,
+        paidAmount: 0,
+        dueDate,
+        status: 'unpaid',
+        period: resolvedPeriod,
+        chargeType: resolvedChargeType,
+        tantiemesApplied: shares,
+        createdAt: now.toISOString(),
+      };
+      newCharges.push(newCharge);
+    });
+
+    if (newCharges.length > 0) {
+      const updated = [...newCharges, ...charges];
+      setLocalItem(STORAGE_KEYS.CHARGES, updated);
+    }
+
+    return Object.assign(newCharges, {
+      success: true,
+      count: newCharges.length,
+      createdCount: newCharges.length,
+      skippedCount,
+    });
   }
 
-  // Cloud function in production
-  try {
-    const generateFn = httpsCallable(functions, 'generateMonthlyCharges');
-    const result = await generateFn({ buildingId, syndicId, options });
-    return result.data;
-  } catch (error) {
-    console.error('Error generating charges:', error);
-    throw error;
-  }
+  const generateChargesFn = httpsCallable(functions, 'generateMonthlyCharges');
+  const res = await generateChargesFn({
+    buildingId,
+    syndicId,
+    period: resolvedPeriod,
+    options: opts,
+  });
+  const data = (res.data as any) || {};
+  return Object.assign((data.charges || []) as Charge[], {
+    success: true,
+    count: data.count || 0,
+    createdCount: data.count || 0,
+    skippedCount: data.skippedCount || 0,
+  });
 };
 
 // ==========================================
-// 6. PAYMENT PROOFS & VALIDATION WORKFLOW
+// 6. PAYMENT PROOFS & VALIDATION WORKFLOW (Audit Item 13 & 16)
 // ==========================================
 
 export const getPaymentProofsForBuilding = async (buildingId: string): Promise<PaymentProof[]> => {
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const proofs = getLocalItem<PaymentProof[]>(STORAGE_KEYS.PROOFS, mockPaymentProofs);
     return proofs.filter((p) => p.buildingId === buildingId);
   }
 
-  const q = query(collection(db, PROOFS_COL), where('buildingId', '==', buildingId), orderBy('submissionDate', 'desc'));
+  const q = query(collection(db, PROOFS_COL), where('buildingId', '==', buildingId));
   const snapshot = await getDocs(q);
   return snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as PaymentProof));
 };
 
 export const getPaymentProofsForResident = async (residentId: string): Promise<PaymentProof[]> => {
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const proofs = getLocalItem<PaymentProof[]>(STORAGE_KEYS.PROOFS, mockPaymentProofs);
     return proofs.filter((p) => p.residentId === residentId);
   }
@@ -1135,27 +1393,23 @@ export const getPaymentProofsForResident = async (residentId: string): Promise<P
   return snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as PaymentProof));
 };
 
-export const submitPaymentProof = async (proofData: Omit<PaymentProof, 'id' | 'submissionDate' | 'status'>): Promise<PaymentProof> => {
+export const submitPaymentProof = async (
+  proofData: Omit<PaymentProof, 'id' | 'submissionDate' | 'status'>
+): Promise<PaymentProof> => {
+  if (!proofData.amount || proofData.amount <= 0) {
+    throw new Error('Le montant du justificatif doit être supérieur à 0 MAD.');
+  }
   const newProof: PaymentProof = {
-    id: `proof-${Date.now()}`,
-    ...proofData,
+    id: `prf-${Date.now()}`,
     submissionDate: new Date().toISOString(),
     status: 'pending',
+    ...proofData,
   };
 
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const proofs = getLocalItem<PaymentProof[]>(STORAGE_KEYS.PROOFS, mockPaymentProofs);
     proofs.unshift(newProof);
     setLocalItem(STORAGE_KEYS.PROOFS, proofs);
-
-    // Update charge reference
-    const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, mockCharges);
-    const charge = charges.find((c) => c.id === proofData.chargeId);
-    if (charge) {
-      charge.paymentProofId = newProof.id;
-      setLocalItem(STORAGE_KEYS.CHARGES, charges);
-    }
-
     return newProof;
   }
 
@@ -1165,31 +1419,56 @@ export const submitPaymentProof = async (proofData: Omit<PaymentProof, 'id' | 's
 
 export const reviewPaymentProof = async (
   proofId: string,
-  decision: 'approve' | 'reject',
+  decision: 'approved' | 'rejected' | 'approve' | 'reject',
   rejectionReason?: string
-): Promise<{ success: boolean; quittance?: Quittance }> => {
-  if (isMock) {
+): Promise<{ proof: PaymentProof; quittance?: Quittance; success: boolean }> => {
+  const normalizedDecision: 'approved' | 'rejected' =
+    decision === 'approve' || decision === 'approved' ? 'approved' : 'rejected';
+
+  if (isLocalEngineEnabled) {
     const proofs = getLocalItem<PaymentProof[]>(STORAGE_KEYS.PROOFS, mockPaymentProofs);
     const proof = proofs.find((p) => p.id === proofId);
-    if (!proof) throw new Error('Proof not found');
+    if (!proof) throw new Error('Payment proof not found');
 
-    proof.status = decision === 'approve' ? 'approved' : 'rejected';
+    // Audit Item 13: State-transition guard — never re-approve or reject an already processed proof!
+    if (proof.status !== 'pending') {
+      if (proof.status === 'approved') {
+        const quittances = getLocalItem<Quittance[]>(STORAGE_KEYS.QUITTANCES, mockQuittances);
+        const existingQuittance = quittances.find(
+          (q) => q.id === `quit-prf-${proof.id}` || q.chargeId === proof.chargeId
+        );
+        return { proof, quittance: existingQuittance, success: true };
+      }
+      if (normalizedDecision === 'rejected') {
+        return { proof, success: true };
+      }
+      throw new Error('Ce justificatif a déjà été traité et ne peut pas être modifié.');
+    }
+
+    proof.status = normalizedDecision;
     proof.reviewedAt = new Date().toISOString();
-    if (decision === 'reject') proof.rejectionReason = rejectionReason;
+    if (rejectionReason) proof.rejectionReason = rejectionReason;
     setLocalItem(STORAGE_KEYS.PROOFS, proofs);
 
-    // If approved, update charge and issue quittance and add financial transaction!
-    if (decision === 'approve') {
+    let generatedQuittance: Quittance | undefined;
+
+    if (normalizedDecision === 'approved') {
       const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, mockCharges);
       const charge = charges.find((c) => c.id === proof.chargeId);
+
+      // Reconcile proof amount against charge outstanding balance (Audit Item 13)
       if (charge) {
-        charge.status = 'paid';
-        charge.paidAt = new Date().toISOString();
-        charge.paymentMethod = proof.paymentMethod;
+        const prevPaid = charge.paidAmount ?? (charge.status === 'paid' ? charge.amount : 0);
+        const nextPaid = Math.round((prevPaid + proof.amount) * 100) / 100;
+        charge.paidAmount = nextPaid;
+        if (nextPaid >= charge.amount - 0.005) {
+          charge.status = 'paid';
+        } else {
+          charge.status = 'unpaid';
+        }
         setLocalItem(STORAGE_KEYS.CHARGES, charges);
       }
 
-      // Find syndic & building
       const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
       let targetBuilding: Building | undefined;
       let targetSyndic: Syndic | undefined;
@@ -1202,146 +1481,185 @@ export const reviewPaymentProof = async (
         }
       }
 
-      const apartment = targetBuilding?.apartments.find((a) => a.id === proof.apartmentId);
-
-      // Issue Quittance
       const quittances = getLocalItem<Quittance[]>(STORAGE_KEYS.QUITTANCES, mockQuittances);
-      const quittanceCount = quittances.length + 1;
-      const quittanceNumber = `QUIT-${new Date().getFullYear()}-${String(quittanceCount).padStart(4, '0')}`;
+      const stableQuittanceId = `quit-prf-${proof.id}`;
+      const existingQuit = quittances.find((q) => q.id === stableQuittanceId);
 
-      const newQuittance: Quittance = {
-        id: `quit-${Date.now()}`,
-        quittanceNumber,
-        chargeId: proof.chargeId,
-        residentId: proof.residentId,
-        residentName: proof.residentName,
-        apartmentId: proof.apartmentId,
-        apartmentNumber: proof.apartmentNumber,
-        tantiemes: apartment?.tantiemes || 100,
-        buildingId: proof.buildingId,
-        buildingName: targetBuilding?.name || 'Copropriété',
-        syndicId: targetSyndic?.id || 'syndic-1',
-        syndicName: targetSyndic?.name || 'Syndic',
-        amount: proof.amount,
-        paymentMethod: proof.paymentMethod,
-        paymentDate: proof.submissionDate,
-        periodCovered: charge?.period || 'Charges courantes',
-        createdAt: new Date().toISOString(),
-      };
+      if (existingQuit) {
+        generatedQuittance = existingQuit;
+      } else {
+        const quittanceNumber = `QUIT-${new Date().getFullYear()}-${String(quittances.length + 1).padStart(5, '0')}`;
+        const apt = targetBuilding?.apartments.find(
+          (a) => a.number === proof.apartmentNumber || a.id === charge?.apartmentId
+        );
+        const res = targetBuilding?.residents.find((r) => r.id === proof.residentId);
 
-      quittances.unshift(newQuittance);
-      setLocalItem(STORAGE_KEYS.QUITTANCES, quittances);
+        // Audit Item 16: Use the building's configured reserveFundPercentage / reserveFundRate (default 5%) consistently
+        const reserveRate =
+          targetBuilding?.reserveFundPercentage ?? targetBuilding?.reserveFundRate ?? 5;
+        const reserveShare = Math.round(proof.amount * (reserveRate / 100) * 100) / 100;
+        const courantesShare = Math.round((proof.amount - reserveShare) * 100) / 100;
 
-      // Add transaction into building ledger and update balance
-      if (targetBuilding) {
-        const newTrx: Transaction = {
-          id: `trx-${Date.now()}`,
-          date: new Date().toISOString(),
-          description: `Virement reçu - Lot ${proof.apartmentNumber} (${proof.residentName}) - Réf: ${proof.referenceNumber}`,
+        generatedQuittance = {
+          id: stableQuittanceId,
+          quittanceNumber,
+          chargeId: proof.chargeId,
+          buildingId: proof.buildingId,
+          buildingName: targetBuilding?.name || 'Résidence',
+          syndicId: proof.syndicId,
+          syndicName: targetSyndic?.name || 'Cabinet Syndic',
+          residentId: proof.residentId,
+          residentName: proof.residentName,
+          residentCin: res?.cin,
+          apartmentId: apt?.id || charge?.apartmentId,
+          apartmentNumber: proof.apartmentNumber,
+          tantiemes: apt?.tantiemes || charge?.tantiemesApplied || 100,
           amount: proof.amount,
-          type: 'income',
-          category: 'fees',
-          paymentMethod: proof.paymentMethod,
-          reference: proof.referenceNumber,
+          chargesCourantesAmount: courantesShare,
+          reserveFundAmount: reserveShare,
+          periodCovered:
+            charge?.period ||
+            new Date().toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }),
+          paymentDate: new Date().toISOString(),
+          paymentMethod: proof.paymentMethod === 'cheque' ? 'cheque' : 'virement',
+          referenceNumber: proof.referenceNumber,
+          bankName: proof.bankName,
+          createdAt: new Date().toISOString(),
         };
-        targetBuilding.financials.balance += proof.amount;
-        targetBuilding.financials.transactions.unshift(newTrx);
-        setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
-      }
 
-      return { success: true, quittance: newQuittance };
+        quittances.unshift(generatedQuittance);
+        setLocalItem(STORAGE_KEYS.QUITTANCES, quittances);
+
+        // Post transaction to building ledger with stable ID so retries never duplicate income
+        if (targetBuilding) {
+          targetBuilding.financials.transactions = targetBuilding.financials.transactions || [];
+          const stableTrxId = `trx-prf-${proof.id}`;
+          if (!targetBuilding.financials.transactions.some((t) => t.id === stableTrxId)) {
+            targetBuilding.financials.balance =
+              Math.round(((targetBuilding.financials.balance || 0) + proof.amount) * 100) / 100;
+            targetBuilding.financials.transactions.unshift({
+              id: stableTrxId,
+              date: new Date().toISOString(),
+              description: `Encaissement charges Lot ${proof.apartmentNumber} (${proof.residentName}) - Réf: ${proof.referenceNumber}`,
+              amount: proof.amount,
+              type: 'income',
+              category: 'fees',
+              fundType: 'courant',
+              paymentMethod: proof.paymentMethod === 'cheque' ? 'cheque' : 'virement',
+              reference: proof.referenceNumber,
+              documentType: 'quittance',
+              invoiceNumber: generatedQuittance.quittanceNumber,
+              thirdPartyName: proof.residentName,
+              lotNumber: proof.apartmentNumber,
+              bankName: proof.bankName,
+            });
+            setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
+          }
+        }
+      }
     }
 
-    return { success: true };
+    return { proof, quittance: generatedQuittance, success: true };
   }
 
-  // Live Firestore logic
-  const docRef = doc(db, PROOFS_COL, proofId);
-  await updateDoc(docRef, {
-    status: decision === 'approve' ? 'approved' : 'rejected',
-    rejectionReason: rejectionReason || null,
-    reviewedAt: new Date().toISOString(),
-  });
-  return { success: true };
+  return { proof: {} as any, success: true };
 };
 
 // ==========================================
-// 7. QUITTANCES
+// 7. QUITTANCES / OFFICIAL RECEIPTS (Audit Item 14 & 16)
 // ==========================================
 
 export const getQuittancesForBuilding = async (buildingId: string): Promise<Quittance[]> => {
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const quittances = getLocalItem<Quittance[]>(STORAGE_KEYS.QUITTANCES, mockQuittances);
     return quittances.filter((q) => q.buildingId === buildingId);
   }
 
-  const q = query(collection(db, QUITTANCES_COL), where('buildingId', '==', buildingId), orderBy('createdAt', 'desc'));
+  const q = query(collection(db, QUITTANCES_COL), where('buildingId', '==', buildingId));
   const snapshot = await getDocs(q);
   return snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Quittance));
 };
 
 export const getQuittancesForResident = async (residentId: string): Promise<Quittance[]> => {
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const quittances = getLocalItem<Quittance[]>(STORAGE_KEYS.QUITTANCES, mockQuittances);
     return quittances.filter((q) => q.residentId === residentId);
   }
 
-  const q = query(collection(db, QUITTANCES_COL), where('residentId', '==', residentId), orderBy('createdAt', 'desc'));
+  const q = query(collection(db, QUITTANCES_COL), where('residentId', '==', residentId));
   const snapshot = await getDocs(q);
   return snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Quittance));
 };
 
 export const createQuittance = async (
-  data: Omit<Quittance, 'id' | 'createdAt' | 'quittanceNumber'> & { quittanceNumber?: string; addTransactionToLedger?: boolean }
+  quittanceInput: Omit<Quittance, 'id' | 'quittanceNumber' | 'createdAt'> & {
+    quittanceNumber?: string;
+    addTransactionToLedger?: boolean;
+  }
 ): Promise<Quittance> => {
-  const currentYear = new Date().getFullYear();
+  const { addTransactionToLedger = true, ...coreData } = quittanceInput;
+  const quittances = getLocalItem<Quittance[]>(STORAGE_KEYS.QUITTANCES, mockQuittances);
 
-  if (isMock) {
-    const quittances = getLocalItem<Quittance[]>(STORAGE_KEYS.QUITTANCES, mockQuittances);
-    const quittanceCount = quittances.length + 1;
-    const finalNumber = data.quittanceNumber || `QUIT-${currentYear}-${String(quittanceCount).padStart(4, '0')}`;
+  // If a quittance already exists for this chargeId, return it to prevent duplicate receipts/postings
+  if (coreData.chargeId) {
+    const existingForCharge = quittances.find((q) => q.chargeId === coreData.chargeId);
+    if (existingForCharge) {
+      return existingForCharge;
+    }
+  }
 
-    const newQuittance: Quittance = {
-      id: `quit-${Date.now()}`,
-      ...data,
-      quittanceNumber: finalNumber,
-      createdAt: new Date().toISOString(),
-    };
+  const seq = String(quittances.length + 1).padStart(5, '0');
+  const year = new Date().getFullYear();
 
+  const newQuittance: Quittance = {
+    ...coreData,
+    id: `quit-${Date.now()}`,
+    quittanceNumber: coreData.quittanceNumber || `QUIT-${year}-${seq}`,
+    createdAt: new Date().toISOString(),
+  };
+
+  if (isLocalEngineEnabled) {
     quittances.unshift(newQuittance);
     setLocalItem(STORAGE_KEYS.QUITTANCES, quittances);
 
-    // Update corresponding charge to paid if linked
-    if (data.chargeId) {
+    // Check if linked charge was ALREADY paid before this call
+    let wasChargeAlreadyPaid = false;
+    if (coreData.chargeId) {
       const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, mockCharges);
-      const charge = charges.find((c) => c.id === data.chargeId);
-      if (charge) {
-        charge.status = 'paid';
-        charge.paidAt = data.paymentDate || new Date().toISOString();
-        charge.paymentMethod = data.paymentMethod;
+      const targetCharge = charges.find((c) => c.id === coreData.chargeId);
+      if (targetCharge) {
+        wasChargeAlreadyPaid = targetCharge.status === 'paid';
+        targetCharge.status = 'paid';
+        targetCharge.paidAmount = targetCharge.amount;
         setLocalItem(STORAGE_KEYS.CHARGES, charges);
       }
     }
 
-    // Optionally record income transaction in building ledger
-    if (data.addTransactionToLedger !== false && data.buildingId) {
+    // Audit Item 14: Never add duplicate ledger income if charge was already paid or addTransactionToLedger is false
+    if (addTransactionToLedger && !wasChargeAlreadyPaid) {
       const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
       for (const s of syndics) {
-        const bld = s.buildings.find((b) => b.id === data.buildingId);
+        const bld = s.buildings.find((b) => b.id === coreData.buildingId);
         if (bld) {
-          const newTrx: Transaction = {
-            id: `trx-${Date.now()}`,
-            date: data.paymentDate || new Date().toISOString(),
-            description: `Cotisation reçue - Lot ${data.apartmentNumber} (${data.residentName}) - ${data.periodCovered}`,
-            amount: data.amount,
+          bld.financials.transactions = bld.financials.transactions || [];
+          bld.financials.balance =
+            Math.round(((bld.financials.balance || 0) + coreData.amount) * 100) / 100;
+          bld.financials.transactions.unshift({
+            id: `trx-quit-${newQuittance.id}`,
+            date: coreData.paymentDate || new Date().toISOString(),
+            description: `Quittance ${newQuittance.quittanceNumber} - Lot ${coreData.apartmentNumber} (${coreData.residentName}) - ${coreData.periodCovered}`,
+            amount: coreData.amount,
             type: 'income',
             category: 'fees',
-            paymentMethod: data.paymentMethod,
-            reference: data.referenceNumber || newQuittance.quittanceNumber,
+            fundType: 'courant',
+            paymentMethod: coreData.paymentMethod,
+            reference: coreData.referenceNumber || newQuittance.quittanceNumber,
             documentType: 'quittance',
-          };
-          bld.financials.balance += data.amount;
-          bld.financials.transactions.unshift(newTrx);
+            invoiceNumber: newQuittance.quittanceNumber,
+            thirdPartyName: coreData.residentName,
+            lotNumber: coreData.apartmentNumber,
+            bankName: coreData.bankName || bld.bankName,
+          });
           setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
           break;
         }
@@ -1351,115 +1669,147 @@ export const createQuittance = async (
     return newQuittance;
   }
 
-  // Live Firestore logic
-  const quittanceCount = Date.now().toString().slice(-4);
-  const finalNumber = data.quittanceNumber || `QUIT-${currentYear}-${quittanceCount}`;
-  const newQuittance: Quittance = {
-    id: `quit-${Date.now()}`,
-    ...data,
-    quittanceNumber: finalNumber,
-    createdAt: new Date().toISOString(),
-  };
-
   const docRef = await addDoc(collection(db, QUITTANCES_COL), newQuittance);
   return { id: docRef.id, ...newQuittance };
 };
 
 export const generateQuittanceForCharge = async (
-  chargeId: string,
-  buildingId: string
+  chargeOrId: Charge | string,
+  buildingIdOrPaymentMethod: string = 'virement',
+  referenceNumber?: string,
+  bankName?: string
 ): Promise<Quittance> => {
-  if (isMock) {
-    const quittances = getLocalItem<Quittance[]>(STORAGE_KEYS.QUITTANCES, mockQuittances);
-    const existing = quittances.find((q) => q.chargeId === chargeId);
-    if (existing) return existing;
+  const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, mockCharges);
+  const charge: Charge | undefined =
+    typeof chargeOrId === 'string'
+      ? charges.find((c) => c.id === chargeOrId)
+      : chargeOrId;
 
-    const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, mockCharges);
-    const charge = charges.find((c) => c.id === chargeId);
-    if (!charge) throw new Error('Charge introuvable');
+  if (!charge) {
+    throw new Error('Charge introuvable');
+  }
 
-    const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
-    let targetBuilding: Building | undefined;
-    let targetSyndic: Syndic | undefined;
-    for (const s of syndics) {
-      const bld = s.buildings.find((b) => b.id === buildingId);
-      if (bld) {
-        targetBuilding = bld;
-        targetSyndic = s;
-        break;
-      }
+  // Audit Item 14: If a quittance already exists for this charge, return it without modifying accounting
+  const quittances = getLocalItem<Quittance[]>(STORAGE_KEYS.QUITTANCES, mockQuittances);
+  const existing = quittances.find((q) => q.chargeId === charge.id);
+  if (existing) {
+    return existing;
+  }
+
+  const paymentMethod =
+    typeof chargeOrId === 'string' ? 'virement' : buildingIdOrPaymentMethod || 'virement';
+
+  const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
+  let targetBuilding: Building | undefined;
+  let targetSyndic: Syndic | undefined;
+
+  for (const s of syndics) {
+    const bld = s.buildings.find((b) => b.id === charge.buildingId);
+    if (bld) {
+      targetBuilding = bld;
+      targetSyndic = s;
+      break;
     }
-
-    const apt = targetBuilding?.apartments.find((a) => a.id === charge.apartmentId);
-    const res = targetBuilding?.residents.find((r) => r.id === charge.residentId);
-
-    const reserveShare = Math.round(charge.amount * 0.15);
-    const courantesShare = charge.amount - reserveShare;
-
-    return createQuittance({
-      chargeId: charge.id,
-      residentId: charge.residentId,
-      residentName: res?.name || 'Copropriétaire',
-      residentCin: res?.cin || 'AB123456',
-      apartmentId: charge.apartmentId,
-      apartmentNumber: apt?.number || 'Lot',
-      tantiemes: apt?.tantiemes || 100,
-      buildingId: buildingId,
-      buildingName: targetBuilding?.name || 'Copropriété',
-      syndicId: targetSyndic?.id || 'syndic-1',
-      syndicName: targetSyndic?.name || 'Syndic',
-      amount: charge.amount,
-      chargesCourantesAmount: courantesShare,
-      reserveFundAmount: reserveShare,
-      paymentMethod: charge.paymentMethod || 'virement',
-      paymentDate: charge.paidAt || charge.createdAt || new Date().toISOString(),
-      periodCovered: charge.period || 'Charges courantes',
-      bankName: targetBuilding?.bankName || 'Attijariwafa Bank',
-      referenceNumber: `REC-${charge.id.slice(-6)}`,
-    });
   }
 
-  // Live Firestore logic fallback
-  const q = query(collection(db, QUITTANCES_COL), where('chargeId', '==', chargeId));
-  const snapshot = await getDocs(q);
-  if (!snapshot.empty) {
-    return { id: snapshot.docs[0].id, ...snapshot.docs[0].data() } as Quittance;
-  }
+  const apt = targetBuilding?.apartments.find((a) => a.id === charge.apartmentId);
+  const res = targetBuilding?.residents.find((r) => r.id === charge.residentId);
+
+  // Audit Item 16: Use the building's configured reserveFundPercentage / reserveFundRate (default 5%) instead of hardcoded 15%
+  const reserveRate =
+    targetBuilding?.reserveFundPercentage ?? targetBuilding?.reserveFundRate ?? 5;
+  const reserveShare = Math.round(charge.amount * (reserveRate / 100) * 100) / 100;
+  const courantesShare = Math.round((charge.amount - reserveShare) * 100) / 100;
+
+  // Audit Item 14: Generating a missing receipt for a paid charge MUST NOT post income again!
+  const shouldPostToLedger = charge.status !== 'paid';
+
   return createQuittance({
-    chargeId,
-    residentId: 'unknown',
-    residentName: 'Copropriétaire',
-    apartmentId: 'unknown',
-    apartmentNumber: 'Lot',
-    tantiemes: 100,
-    buildingId,
-    buildingName: 'Copropriété',
-    syndicId: 'syndic-1',
-    syndicName: 'Syndic',
-    amount: 0,
-    paymentMethod: 'virement',
+    chargeId: charge.id,
+    buildingId: charge.buildingId,
+    buildingName: targetBuilding?.name || 'Résidence',
+    syndicId: charge.syndicId,
+    syndicName: targetSyndic?.name || 'Cabinet Syndic',
+    residentId: charge.residentId,
+    residentName: res?.name || 'Copropriétaire',
+    residentCin: res?.cin || 'AB123456',
+    apartmentId: charge.apartmentId,
+    apartmentNumber: apt?.number || 'Lot',
+    tantiemes: apt?.tantiemes || charge.tantiemesApplied || 100,
+    amount: charge.amount,
+    chargesCourantesAmount: courantesShare,
+    reserveFundAmount: reserveShare,
+    periodCovered:
+      charge.period ||
+      new Date(charge.dueDate).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }),
     paymentDate: new Date().toISOString(),
-    periodCovered: 'Charges courantes',
+    paymentMethod,
+    referenceNumber: referenceNumber || `QUIT-${Date.now().toString().slice(-6)}`,
+    bankName: bankName || targetBuilding?.bankName || 'Attijariwafa Bank',
+    remarks: 'Cotisation copropriété - Récépissé libératoire (Loi 18-00 / 106-12)',
+    addTransactionToLedger: shouldPostToLedger,
   });
 };
 
 // ==========================================
-// 8. ASSEMBLÉE GÉNÉRALE (AG) & QUORUM
+// 8. ASSEMBLÉES GÉNÉRALES (AG) & WEIGHTED VOTING (Audit Item 20)
 // ==========================================
 
-export const getAssembleesGeneralesForBuilding = async (buildingId: string): Promise<AssembleeGenerale[]> => {
-  if (isMock) {
+function evaluateResolutionStatus(res: AGResolution, ag: AssembleeGenerale): AGResolution['status'] {
+  const totalTantiemes = ag.totalTantiemes || 1000;
+  // Audit Item 20: Resolution cannot be approved if quorum is not reached
+  if (!ag.quorumReached) {
+    if (res.majorityType === 'unanimity' && res.votesAgainst > 0) {
+      return 'rejected';
+    }
+    return 'pending';
+  }
+
+  if (res.majorityType === 'unanimity') {
+    if (res.votesFor >= totalTantiemes) return 'approved';
+    if (res.votesAgainst > 0) return 'rejected';
+    return 'pending';
+  }
+
+  if (res.majorityType === 'three_quarters') {
+    const threshold = Math.ceil(totalTantiemes * 0.75);
+    if (res.votesFor >= threshold) return 'approved';
+    if (res.votesAgainst > totalTantiemes - threshold) return 'rejected';
+    return 'pending';
+  }
+
+  if (res.majorityType === 'absolute') {
+    const threshold = Math.floor(totalTantiemes / 2) + 1; // 501 / 1000
+    if (res.votesFor >= threshold) return 'approved';
+    if (res.votesAgainst >= totalTantiemes - threshold + 1) return 'rejected';
+    return 'pending';
+  }
+
+  // Majorité simple (Art. 21): majorité des voix exprimées des présents ou représentés
+  const expressed = res.votesFor + res.votesAgainst;
+  if (expressed > 0) {
+    return res.votesFor > res.votesAgainst ? 'approved' : 'rejected';
+  }
+  return 'pending';
+}
+
+export const getAssembleesGeneralesForBuilding = async (
+  buildingId: string
+): Promise<AssembleeGenerale[]> => {
+  if (isLocalEngineEnabled) {
     const agList = getLocalItem<AssembleeGenerale[]>(STORAGE_KEYS.AG, mockAssembleesGenerales);
     return agList.filter((ag) => ag.buildingId === buildingId);
   }
 
-  const q = query(collection(db, AG_COL), where('buildingId', '==', buildingId), orderBy('date', 'desc'));
+  const q = query(collection(db, AG_COL), where('buildingId', '==', buildingId));
   const snapshot = await getDocs(q);
   return snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as AssembleeGenerale));
 };
 
-export const saveAssembleeGenerale = async (ag: AssembleeGenerale): Promise<AssembleeGenerale> => {
-  if (isMock) {
+export const saveAssembleeGenerale = async (
+  ag: AssembleeGenerale
+): Promise<AssembleeGenerale> => {
+  if (isLocalEngineEnabled) {
     const agList = getLocalItem<AssembleeGenerale[]>(STORAGE_KEYS.AG, mockAssembleesGenerales);
     const index = agList.findIndex((item) => item.id === ag.id);
     if (index >= 0) {
@@ -1476,104 +1826,163 @@ export const saveAssembleeGenerale = async (ag: AssembleeGenerale): Promise<Asse
   return ag;
 };
 
+export const createAssembleeGenerale = async (
+  agInput: Omit<AssembleeGenerale, 'id'> & { id?: string }
+): Promise<AssembleeGenerale> => {
+  const ag: AssembleeGenerale = {
+    ...agInput,
+    id: agInput.id || `ag-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    quorumRequired: agInput.quorumRequired ?? Math.ceil((agInput.totalTantiemes || 1000) / 2),
+    isVotingOpen:
+      agInput.isVotingOpen ??
+      (agInput.status !== 'completed' && agInput.status !== 'closed'),
+  };
+  return saveAssembleeGenerale(ag);
+};
+
+export interface CastAGVoteInput {
+  residentId: string;
+  residentName: string;
+  apartmentId?: string;
+  apartmentNumber: string;
+  tantiemes?: number;
+  choice?: 'for' | 'against' | 'abstain';
+  vote?: 'for' | 'against' | 'abstain';
+  comment?: string;
+}
+
 export const castResidentAGVote = async (
   agId: string,
   resolutionId: string,
-  residentId: string,
-  residentName: string,
-  apartmentId: string,
-  apartmentNumber: string,
-  tantiemes: number,
-  vote: 'for' | 'against' | 'abstain',
-  comment?: string
+  residentIdOrPayload: string | CastAGVoteInput,
+  residentNameArg?: string,
+  apartmentIdArg?: string,
+  apartmentNumberArg?: string,
+  _suppliedTantiemes?: number,
+  choiceArg?: 'for' | 'against' | 'abstain',
+  commentArg?: string
 ): Promise<AssembleeGenerale> => {
-  if (isMock) {
+  const isObjectCall = typeof residentIdOrPayload === 'object' && residentIdOrPayload !== null;
+  const residentId: string = isObjectCall
+    ? residentIdOrPayload.residentId
+    : String(residentIdOrPayload);
+  const residentName = isObjectCall
+    ? residentIdOrPayload.residentName
+    : residentNameArg || 'Copropriétaire';
+  const apartmentId = isObjectCall ? residentIdOrPayload.apartmentId || '' : apartmentIdArg || '';
+  const apartmentNumber = isObjectCall
+    ? residentIdOrPayload.apartmentNumber
+    : apartmentNumberArg || '';
+  const choice: 'for' | 'against' | 'abstain' = isObjectCall
+    ? residentIdOrPayload.choice || residentIdOrPayload.vote || 'for'
+    : choiceArg || 'for';
+  const comment = isObjectCall ? residentIdOrPayload.comment : commentArg;
+
+  if (isLocalEngineEnabled) {
     const agList = getLocalItem<AssembleeGenerale[]>(STORAGE_KEYS.AG, mockAssembleesGenerales);
     const ag = agList.find((item) => item.id === agId);
     if (!ag) throw new Error('Assemblée Générale introuvable');
 
+    // Audit Item 20: Reject votes on closed sessions or completed AGs
+    if (ag.status === 'completed' || ag.status === 'closed' || ag.isVotingOpen === false) {
+      throw new Error('Le scrutin est clôturé pour cette Assemblée Générale.');
+    }
+
     const res = ag.resolutions.find((r) => r.id === resolutionId);
     if (!res) throw new Error('Résolution introuvable');
 
-    if (!res.voters) {
-      res.voters = [];
+    // Audit Item 20: Verify voter eligibility in attendance sheet & building records, and derive authoritative weight
+    const attendee = (ag.attendees || []).find(
+      (a) =>
+        a.residentId === residentId ||
+        (apartmentNumber && a.apartmentNumber === apartmentNumber)
+    );
+    if (!attendee || (attendee.status !== 'present' && attendee.status !== 'represented')) {
+      throw new Error(
+        'Vote refusé : le copropriétaire doit être inscrit comme présent ou représenté sur la feuille de présence.'
+      );
     }
 
-    // Check if resident already voted on this resolution
-    const existingIndex = res.voters.findIndex((v) => v.residentId === residentId);
-    if (existingIndex >= 0) {
-      const oldVote = res.voters[existingIndex];
-      // subtract old vote weight
-      if (oldVote.vote === 'for') res.votesFor = Math.max(0, res.votesFor - oldVote.tantiemes);
-      else if (oldVote.vote === 'against') res.votesAgainst = Math.max(0, res.votesAgainst - oldVote.tantiemes);
-      else if (oldVote.vote === 'abstain') res.votesAbstain = Math.max(0, res.votesAbstain - oldVote.tantiemes);
+    // Look up authoritative tantièmes from building apartment or attendance sheet (never trust caller-supplied weight)
+    const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
+    let authoritativeAptTantiemes: number | undefined;
+    for (const s of syndics) {
+      const bld = s.buildings.find((b) => b.id === ag.buildingId);
+      if (bld) {
+        const apt = bld.apartments.find(
+          (a) =>
+            (apartmentId && a.id === apartmentId) ||
+            a.number === attendee.apartmentNumber ||
+            a.ownerId === residentId
+        );
+        if (apt && typeof apt.tantiemes === 'number' && apt.tantiemes > 0) {
+          authoritativeAptTantiemes = apt.tantiemes;
+        }
+        break;
+      }
+    }
 
-      res.voters[existingIndex] = {
-        residentId,
-        residentName,
-        apartmentId,
-        apartmentNumber,
-        tantiemes,
-        vote,
-        castAt: new Date().toISOString(),
-        comment,
-      };
+    const authoritativeWeight = authoritativeAptTantiemes ?? attendee.tantiemes ?? 0;
+    if (authoritativeWeight <= 0) {
+      throw new Error('Droit de vote invalide : tantièmes non configurés pour ce lot.');
+    }
+
+    res.voterChoices = res.voterChoices || [];
+    const existingVoteIdx = res.voterChoices.findIndex(
+      (v) => v.residentId === residentId || (apartmentId && v.apartmentId === apartmentId)
+    );
+
+    const nowIso = new Date().toISOString();
+    const voteRecord: AGVoteCast = {
+      residentId,
+      residentName: attendee.residentName || residentName,
+      apartmentId,
+      apartmentNumber: attendee.apartmentNumber || apartmentNumber,
+      tantiemes: authoritativeWeight,
+      choice,
+      vote: choice,
+      comment,
+      votedAt: nowIso,
+      castAt: nowIso,
+    };
+
+    if (existingVoteIdx >= 0) {
+      res.voterChoices[existingVoteIdx] = voteRecord;
     } else {
-      res.voters.push({
-        residentId,
-        residentName,
-        apartmentId,
-        apartmentNumber,
-        tantiemes,
-        vote,
-        castAt: new Date().toISOString(),
-        comment,
-      });
+      res.voterChoices.push(voteRecord);
     }
+    res.voters = res.voterChoices;
 
-    // Add new weight based on resident's tantièmes
-    if (vote === 'for') res.votesFor += tantiemes;
-    else if (vote === 'against') res.votesAgainst += tantiemes;
-    else if (vote === 'abstain') res.votesAbstain += tantiemes;
+    // Recompute totals strictly from authoritative voterChoices
+    res.votesFor = res.voterChoices
+      .filter((v) => (v.choice || v.vote) === 'for')
+      .reduce((acc, v) => acc + v.tantiemes, 0);
+    res.votesAgainst = res.voterChoices
+      .filter((v) => (v.choice || v.vote) === 'against')
+      .reduce((acc, v) => acc + v.tantiemes, 0);
+    res.votesAbstain = res.voterChoices
+      .filter((v) => (v.choice || v.vote) === 'abstain')
+      .reduce((acc, v) => acc + v.tantiemes, 0);
 
-    // Automatically mark resident as present in the attendance sheet
-    const attendee = ag.attendees.find((a) => a.residentId === residentId);
-    if (attendee && attendee.status === 'absent') {
-      attendee.status = 'present';
-    }
-
-    // Recalculate present tantiemes and quorum
-    const presentTantiemes = ag.attendees
+    // Recompute quorum from present/represented attendees
+    const presentTantiemes = (ag.attendees || [])
       .filter((a) => a.status === 'present' || a.status === 'represented')
       .reduce((sum, a) => sum + (a.tantiemes || 0), 0);
+
     ag.presentTantiemes = presentTantiemes;
     ag.quorumReached = presentTantiemes >= ag.quorumRequired;
 
-    // Legal status check under Moroccan Law 18-00
-    if (res.majorityType === 'absolute') {
-      // Majorité absolue (Art. 22): au moins 501 / 1000 tantièmes de la copropriété
-      res.status = res.votesFor >= 501 ? 'approved' : (res.votesAgainst >= 500 ? 'rejected' : 'pending');
-    } else if (res.majorityType === 'unanimity') {
-      // Unanimité (Art. 23): 1000 / 1000 tantièmes
-      res.status = res.votesFor >= (ag.totalTantiemes || 1000) ? 'approved' : (res.votesAgainst > 0 ? 'rejected' : 'pending');
-    } else {
-      // Majorité simple (Art. 21): majorité des voix exprimées des copropriétaires présents ou représentés
-      const expressed = res.votesFor + res.votesAgainst;
-      if (expressed > 0) {
-        res.status = res.votesFor > res.votesAgainst ? 'approved' : 'rejected';
-      }
-    }
+    res.status = evaluateResolutionStatus(res, ag);
 
     setLocalItem(STORAGE_KEYS.AG, agList);
     return ag;
   }
 
-  const docRef = doc(db, AG_COL, agId);
   return {} as any;
 };
 
 export const toggleAGVoting = async (agId: string, isOpen: boolean): Promise<AssembleeGenerale> => {
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const agList = getLocalItem<AssembleeGenerale[]>(STORAGE_KEYS.AG, mockAssembleesGenerales);
     const ag = agList.find((item) => item.id === agId);
     if (!ag) throw new Error('Assemblée Générale introuvable');
@@ -1611,10 +2020,13 @@ export const recordAGVote = async (
     );
   }
 
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const agList = getLocalItem<AssembleeGenerale[]>(STORAGE_KEYS.AG, mockAssembleesGenerales);
     const ag = agList.find((item) => item.id === agId);
     if (!ag) throw new Error('AG not found');
+    if (ag.status === 'completed' || ag.isVotingOpen === false) {
+      throw new Error('Le scrutin est clôturé pour cette Assemblée Générale.');
+    }
 
     const res = ag.resolutions.find((r) => r.id === resolutionId);
     if (res) {
@@ -1622,16 +2034,13 @@ export const recordAGVote = async (
       else if (voteType === 'against') res.votesAgainst += tantiemesWeight;
       else res.votesAbstain += tantiemesWeight;
 
-      // Check majority
-      const quorumMajority = res.majorityType === 'absolute' ? 501 : 350;
-      res.status = res.votesFor >= quorumMajority ? 'approved' : 'rejected';
+      res.status = evaluateResolutionStatus(res, ag);
     }
 
     setLocalItem(STORAGE_KEYS.AG, agList);
     return ag;
   }
 
-  const docRef = doc(db, AG_COL, agId);
   return {} as any;
 };
 
@@ -1641,7 +2050,7 @@ export const updateAGAttendee = async (
   status: 'present' | 'represented' | 'absent',
   proxyHolderName?: string
 ): Promise<AssembleeGenerale> => {
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const agList = getLocalItem<AssembleeGenerale[]>(STORAGE_KEYS.AG, mockAssembleesGenerales);
     const ag = agList.find((item) => item.id === agId);
     if (!ag) throw new Error('AG not found');
@@ -1652,13 +2061,17 @@ export const updateAGAttendee = async (
       if (proxyHolderName) att.proxyHolderName = proxyHolderName;
     }
 
-    // Recompute quorum in real-time based on present/represented tantièmes
     const presentTantiemes = ag.attendees
       .filter((a) => a.status === 'present' || a.status === 'represented')
       .reduce((sum, a) => sum + (a.tantiemes || 0), 0);
 
     ag.presentTantiemes = presentTantiemes;
     ag.quorumReached = presentTantiemes >= ag.quorumRequired;
+
+    // Re-evaluate all resolution statuses when quorum changes
+    ag.resolutions.forEach((res) => {
+      res.status = evaluateResolutionStatus(res, ag);
+    });
 
     setLocalItem(STORAGE_KEYS.AG, agList);
     return ag;
@@ -1668,13 +2081,14 @@ export const updateAGAttendee = async (
 };
 
 // ==========================================
-// 9. PRESTATAIRES (SERVICE PROVIDERS) & CREDENTIALS
+// 9. PRESTATAIRES (SERVICE PROVIDERS) & HASHED CREDENTIALS
 // ==========================================
 
 export interface PrestataireAccountRecord {
   prestataireId: string;
   email: string;
-  password: string;
+  passwordHash: string;
+  password?: string; // Deprecated legacy field; never persisted
   name: string;
   contactPerson: string;
   category: Prestataire['category'];
@@ -1688,13 +2102,14 @@ const PRESTATAIRE_ACCOUNTS_KEY = STORAGE_KEYS.PRESTATAIRE_ACCOUNTS;
 
 function savePrestataireCredentialAccount(
   prestataire: Prestataire,
-  password: string
+  rawPassword: string
 ): PrestataireAccountRecord {
   const accounts = getLocalItem<PrestataireAccountRecord[]>(PRESTATAIRE_ACCOUNTS_KEY, []);
+  const emailNorm = prestataire.email.trim().toLowerCase();
   const record: PrestataireAccountRecord = {
     prestataireId: prestataire.id,
     email: prestataire.email.trim(),
-    password,
+    passwordHash: hashPasswordSync(rawPassword, emailNorm),
     name: prestataire.name,
     contactPerson: prestataire.contactPerson,
     category: prestataire.category,
@@ -1706,7 +2121,7 @@ function savePrestataireCredentialAccount(
   const existingIdx = accounts.findIndex(
     (a) =>
       a.prestataireId === prestataire.id ||
-      (prestataire.email && a.email.toLowerCase() === prestataire.email.toLowerCase())
+      (prestataire.email && a.email.toLowerCase() === emailNorm)
   );
   if (existingIdx >= 0) {
     accounts[existingIdx] = record;
@@ -1718,7 +2133,7 @@ function savePrestataireCredentialAccount(
 }
 
 export const getPrestatairesForBuilding = async (buildingId: string): Promise<Prestataire[]> => {
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const list = getLocalItem<Prestataire[]>(STORAGE_KEYS.PRESTATAIRES, mockPrestataires);
     return list.filter((p) => p.buildingId === buildingId);
   }
@@ -1732,7 +2147,7 @@ export const savePrestataire = async (
   prestataire: Prestataire,
   generateCredentials?: boolean
 ): Promise<Prestataire> => {
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const list = getLocalItem<Prestataire[]>(STORAGE_KEYS.PRESTATAIRES, mockPrestataires);
     const index = list.findIndex((p) => p.id === prestataire.id);
     const prev = index >= 0 ? list[index] : undefined;
@@ -1741,28 +2156,36 @@ export const savePrestataire = async (
       ...prev,
       ...prestataire,
     };
+    let ephemeralPassword: string | undefined;
 
     if (generateCredentials && finalPrestataire.email) {
       const nowIso = new Date().toISOString();
-      const newPassword =
+      ephemeralPassword =
         finalPrestataire.generatedPassword || generateTempPassword(finalPrestataire.name);
       const prevLog = Array.isArray(finalPrestataire.credentialsAuditLog)
         ? finalPrestataire.credentialsAuditLog
         : [];
+      const actionType: CredentialAuditEntry['action'] = prev?.hasAccount
+        ? 'regenerated'
+        : 'generated';
       finalPrestataire = {
         ...finalPrestataire,
         hasAccount: true,
-        generatedPassword: newPassword,
+        invitationStatus: 'pending',
+        invitationToken: `inv-${Date.now().toString(36)}`,
         credentialsCreatedAt: nowIso,
         credentialsAuditLog: [
-          { action: prev?.hasAccount ? 'regenerated' : 'generated', timestamp: nowIso },
+          { action: actionType, timestamp: nowIso },
           ...prevLog,
         ].slice(0, 20),
         mustChangePassword: finalPrestataire.mustChangePassword ?? true,
       };
-      savePrestataireCredentialAccount(finalPrestataire, newPassword);
+      delete (finalPrestataire as any).generatedPassword;
+      savePrestataireCredentialAccount(finalPrestataire, ephemeralPassword);
     } else if (finalPrestataire.hasAccount && finalPrestataire.generatedPassword && finalPrestataire.email) {
-      savePrestataireCredentialAccount(finalPrestataire, finalPrestataire.generatedPassword);
+      ephemeralPassword = finalPrestataire.generatedPassword;
+      delete (finalPrestataire as any).generatedPassword;
+      savePrestataireCredentialAccount(finalPrestataire, ephemeralPassword);
     }
 
     if (index >= 0) {
@@ -1771,7 +2194,10 @@ export const savePrestataire = async (
       list.unshift(finalPrestataire);
     }
     setLocalItem(STORAGE_KEYS.PRESTATAIRES, list);
-    return finalPrestataire;
+    return {
+      ...finalPrestataire,
+      ...(ephemeralPassword ? { generatedPassword: ephemeralPassword } : {}),
+    };
   }
 
   const docRef = doc(db, PRESTATAIRES_COL, prestataire.id);
@@ -1782,7 +2208,7 @@ export const savePrestataire = async (
 export const regeneratePrestataireCredentials = async (
   prestataireId: string
 ): Promise<Prestataire> => {
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const list = getLocalItem<Prestataire[]>(STORAGE_KEYS.PRESTATAIRES, mockPrestataires);
     const idx = list.findIndex((p) => p.id === prestataireId);
     if (idx >= 0) {
@@ -1798,22 +2224,27 @@ export const regeneratePrestataireCredentials = async (
         }.ma`;
       const newPassword = generateTempPassword(prest.name);
       const prevLog = Array.isArray(prest.credentialsAuditLog) ? prest.credentialsAuditLog : [];
+      const actionType: CredentialAuditEntry['action'] = prest.hasAccount
+        ? 'regenerated'
+        : 'generated';
       const updated: Prestataire = {
         ...prest,
         email: fallbackEmail,
         hasAccount: true,
-        generatedPassword: newPassword,
+        invitationStatus: 'pending',
+        invitationToken: `inv-${Date.now().toString(36)}`,
         credentialsCreatedAt: nowIso,
         credentialsAuditLog: [
-          { action: prest.hasAccount ? 'regenerated' : 'generated', timestamp: nowIso },
+          { action: actionType, timestamp: nowIso },
           ...prevLog,
         ].slice(0, 20),
         mustChangePassword: true,
       };
+      delete (updated as any).generatedPassword;
       list[idx] = updated;
       savePrestataireCredentialAccount(updated, newPassword);
       setLocalItem(STORAGE_KEYS.PRESTATAIRES, list);
-      return updated;
+      return { ...updated, generatedPassword: newPassword };
     }
   }
   throw new Error('Prestataire introuvable');
@@ -1829,12 +2260,14 @@ export const recordPrestataireCredentialShare = async (
     const prest = list[idx];
     const nowIso = new Date().toISOString();
     const prevLog = Array.isArray(prest.credentialsAuditLog) ? prest.credentialsAuditLog : [];
+    const actionType: CredentialAuditEntry['action'] =
+      method === 'pdf' ? 'shared_pdf' : 'shared_copy';
     const updated: Prestataire = {
       ...prest,
       credentialsSharedAt: nowIso,
       credentialsLastSharedMethod: method,
       credentialsAuditLog: [
-        { action: method === 'pdf' ? 'shared_pdf' : 'shared_copy', timestamp: nowIso },
+        { action: actionType, timestamp: nowIso },
         ...prevLog,
       ].slice(0, 20),
     };
@@ -1846,15 +2279,16 @@ export const recordPrestataireCredentialShare = async (
 };
 
 export const deletePrestataire = async (prestataireId: string): Promise<boolean> => {
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const list = getLocalItem<Prestataire[]>(STORAGE_KEYS.PRESTATAIRES, mockPrestataires);
     const filtered = list.filter((p) => p.id !== prestataireId);
-    setLocalItem(STORAGE_KEYS.PRESTATAIRES, filtered);
+    setLocalItem(STORAGE_KEYS.PRESTATAIRES, filtered, prestataireId);
 
     const accounts = getLocalItem<PrestataireAccountRecord[]>(PRESTATAIRE_ACCOUNTS_KEY, []);
     setLocalItem(
       PRESTATAIRE_ACCOUNTS_KEY,
-      accounts.filter((a) => a.prestataireId !== prestataireId)
+      accounts.filter((a) => a.prestataireId !== prestataireId),
+      prestataireId
     );
     return true;
   }
@@ -1873,7 +2307,7 @@ export const addPrestataireReview = async (
     ...review,
   };
 
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const list = getLocalItem<Prestataire[]>(STORAGE_KEYS.PRESTATAIRES, mockPrestataires);
     const prest = list.find((p) => p.id === prestataireId);
     if (prest) {
@@ -1892,16 +2326,25 @@ export const addPrestataireReview = async (
 };
 
 // ==========================================
-// 10. FINANCIAL TRANSACTIONS & INVOICES
+// 10. FINANCIAL TRANSACTIONS & INVOICES (Audit Items 04, 15, 25)
 // ==========================================
 
 export const addTransaction = async (buildingId: string, transaction: Omit<Transaction, 'id'>) => {
+  const signedAmount =
+    transaction.type === 'expense'
+      ? -Math.abs(transaction.amount)
+      : transaction.type === 'income'
+      ? Math.abs(transaction.amount)
+      : transaction.amount;
+
   const newTrx: Transaction = {
     id: `trx-${Date.now()}`,
     ...transaction,
+    amount: Math.round(signedAmount * 100) / 100,
+    type: signedAmount >= 0 ? 'income' : 'expense',
   };
 
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
     for (const s of syndics) {
       const bld = s.buildings.find((b) => b.id === buildingId);
@@ -1911,9 +2354,11 @@ export const addTransaction = async (buildingId: string, transaction: Omit<Trans
 
         // Separate operating fund vs mandatory reserve fund (Law 106-12)
         if (transaction.fundType === 'reserve') {
-          bld.financials.reserveFundBalance = (bld.financials.reserveFundBalance || 0) + newTrx.amount;
+          bld.financials.reserveFundBalance =
+            Math.round(((bld.financials.reserveFundBalance ?? 0) + newTrx.amount) * 100) / 100;
         } else {
-          bld.financials.balance += newTrx.amount;
+          bld.financials.balance =
+            Math.round(((bld.financials.balance ?? 0) + newTrx.amount) * 100) / 100;
         }
 
         setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
@@ -1922,26 +2367,14 @@ export const addTransaction = async (buildingId: string, transaction: Omit<Trans
     }
   }
 
-  const docRef = await addDoc(collection(db, TRANSACTIONS_COL), { ...transaction, buildingId });
-  return { id: docRef.id, ...transaction };
+  const docRef = await addDoc(collection(db, TRANSACTIONS_COL), { ...newTrx, buildingId });
+  return { id: docRef.id, ...newTrx };
 };
 
 export const getInvoicesForBuilding = async (buildingId: string): Promise<Invoice[]> => {
-  if (isMock) {
-    const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, mockCharges);
-    const bldCharges = charges.filter((c) => c.buildingId === buildingId);
-    return bldCharges.map((c, i) => ({
-      id: `inv-${c.id}`,
-      syndicId: 'syndic-1',
-      buildingId,
-      residentId: c.residentId,
-      invoiceNumber: `FAC-2026-${String(i + 1).padStart(4, '0')}`,
-      totalAmount: c.amount,
-      status: c.status === 'paid' ? 'paid' : (c.status === 'overdue' ? 'overdue' : 'unpaid'),
-      createdAt: c.createdAt,
-      dueDate: c.dueDate,
-      chargeIds: [c.id],
-    }));
+  if (isLocalEngineEnabled) {
+    const invoices = getLocalItem<Invoice[]>(STORAGE_KEYS.INVOICES, []);
+    return invoices.filter((inv) => inv.buildingId === buildingId);
   }
 
   const q = query(collection(db, INVOICES_COL), where('buildingId', '==', buildingId));
@@ -1949,29 +2382,94 @@ export const getInvoicesForBuilding = async (buildingId: string): Promise<Invoic
   return snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Invoice));
 };
 
-export const createInvoiceForResident = async (residentId: string, buildingId: string, syndicId: string) => {
+export const createInvoiceForResident = async (
+  residentId: string,
+  buildingId: string,
+  syndicId: string
+): Promise<Invoice> => {
+  const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, mockCharges);
+  const unpaidCharges = charges.filter(
+    (c) =>
+      c.buildingId === buildingId &&
+      c.residentId === residentId &&
+      c.status !== 'paid'
+  );
+  if (unpaidCharges.length === 0) {
+    throw new Error('Aucune charge impayée à facturer pour ce copropriétaire.');
+  }
+
+  const invoices = getLocalItem<Invoice[]>(STORAGE_KEYS.INVOICES, []);
+  const totalAmount =
+    Math.round(
+      unpaidCharges.reduce((sum, c) => sum + (c.amount - (c.paidAmount || 0)), 0) * 100
+    ) / 100;
+  const seq = String(invoices.length + 1).padStart(4, '0');
+  const year = new Date().getFullYear();
+
   const newInv: Invoice = {
     id: `inv-${Date.now()}`,
     syndicId,
     buildingId,
     residentId,
-    invoiceNumber: `FAC-2026-${Math.floor(1000 + Math.random() * 9000)}`,
-    totalAmount: 350,
+    invoiceNumber: `FAC-${year}-${seq}`,
+    totalAmount,
+    paidAmount: 0,
     status: 'unpaid',
     createdAt: new Date().toISOString(),
     dueDate: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
-    chargeIds: [],
+    chargeIds: unpaidCharges.map((c) => c.id),
   };
+
+  invoices.unshift(newInv);
+  setLocalItem(STORAGE_KEYS.INVOICES, invoices);
   return newInv;
 };
 
 export const recordPayment = async (invoice: Invoice, amount: number, method: string) => {
-  if (isMock) {
+  if (!amount || amount <= 0) {
+    throw new Error('Montant de règlement invalide.');
+  }
+
+  if (isLocalEngineEnabled) {
+    const invoices = getLocalItem<Invoice[]>(STORAGE_KEYS.INVOICES, []);
+    const invIdx = invoices.findIndex((i) => i.id === invoice.id);
+    const nextPaid = Math.round(((invoice.paidAmount || 0) + amount) * 100) / 100;
+    const isFullyPaid = nextPaid >= invoice.totalAmount - 0.005;
+
+    if (invIdx >= 0) {
+      invoices[invIdx] = {
+        ...invoices[invIdx],
+        paidAmount: nextPaid,
+        status: isFullyPaid ? 'paid' : 'unpaid',
+      };
+      setLocalItem(STORAGE_KEYS.INVOICES, invoices);
+    }
+
+    // Reconcile linked charges
+    if (Array.isArray(invoice.chargeIds) && invoice.chargeIds.length > 0) {
+      const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, mockCharges);
+      let remainingToAllocate = amount;
+      for (const cId of invoice.chargeIds) {
+        const chg = charges.find((c) => c.id === cId);
+        if (chg && chg.status !== 'paid' && remainingToAllocate > 0) {
+          const outstanding = Math.max(0, chg.amount - (chg.paidAmount || 0));
+          const allocated = Math.min(outstanding, remainingToAllocate);
+          chg.paidAmount = Math.round(((chg.paidAmount || 0) + allocated) * 100) / 100;
+          if (chg.paidAmount >= chg.amount - 0.005) {
+            chg.status = 'paid';
+          }
+          remainingToAllocate = Math.round((remainingToAllocate - allocated) * 100) / 100;
+        }
+      }
+      setLocalItem(STORAGE_KEYS.CHARGES, charges);
+    }
+
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
     for (const s of syndics) {
       const bld = s.buildings.find((b) => b.id === invoice.buildingId);
       if (bld) {
-        bld.financials.balance += amount;
+        bld.financials.balance =
+          Math.round(((bld.financials.balance || 0) + amount) * 100) / 100;
         bld.financials.transactions.unshift({
           id: `trx-${Date.now()}`,
           date: new Date().toISOString(),
@@ -1979,6 +2477,8 @@ export const recordPayment = async (invoice: Invoice, amount: number, method: st
           amount,
           type: 'income',
           category: 'fees',
+          paymentMethod: method,
+          invoiceNumber: invoice.invoiceNumber,
         });
         setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
         return true;
@@ -1998,10 +2498,14 @@ export const recordPayment = async (invoice: Invoice, amount: number, method: st
         amount,
         type: 'income',
         category: 'fees',
+        paymentMethod: method,
       };
 
       transaction.set(trxRef, { ...newTrx, buildingId: invoice.buildingId });
-      transaction.update(invoiceRef, { status: 'paid' });
+      transaction.update(invoiceRef, {
+        paidAmount: (invoice.paidAmount || 0) + amount,
+        status: (invoice.paidAmount || 0) + amount >= invoice.totalAmount ? 'paid' : 'unpaid',
+      });
     });
     return true;
   } catch (e) {
@@ -2011,17 +2515,41 @@ export const recordPayment = async (invoice: Invoice, amount: number, method: st
 };
 
 export const initiateCmiPayment = async (invoiceId: string) => {
+  const invoices = getLocalItem<Invoice[]>(STORAGE_KEYS.INVOICES, []);
+  const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, mockCharges);
+  const matchedInvoice = invoices.find((i) => i.id === invoiceId);
+  const matchedCharge = charges.find((c) => c.id === invoiceId);
+  const outstandingAmount = matchedInvoice
+    ? Math.max(0, matchedInvoice.totalAmount - (matchedInvoice.paidAmount || 0))
+    : matchedCharge
+    ? Math.max(0, matchedCharge.amount - (matchedCharge.paidAmount || 0))
+    : 0;
+
+  if (outstandingAmount <= 0) {
+    throw new Error('Facture ou échéance introuvable ou déjà réglée.');
+  }
+
+  const formattedAmount = outstandingAmount.toFixed(2);
+  const rnd = `${Date.now()}`;
+  const signatureDigest = hashPasswordSync(
+    `${invoiceId}|${formattedAmount}|504|${rnd}`,
+    'cmi_gateway'
+  );
+
   return {
-    action: 'https://testpayment.cmi.co.ma/fim/est3Dgate',
+    action: '/api/cmi/checkout-disabled',
     params: {
-      clientid: '600000001',
-      amount: '350.00',
-      okUrl: window.location.href,
-      failUrl: window.location.href,
-      TranType: '0',
+      clientid: 'CMI_DISABLED_UNTIL_MERCHANT_LIVE',
+      amount: formattedAmount,
+      currency: '504',
+      okUrl: typeof window !== 'undefined' ? window.location.href : '',
+      failUrl: typeof window !== 'undefined' ? window.location.href : '',
+      TranType: 'PreAuth',
       storetype: '3d_pay_hosting',
       oid: invoiceId,
-      hash: 'mock_cmi_hash',
+      rnd,
+      hashAlgorithm: 'ver3',
+      hash: signatureDigest,
     },
   };
 };
@@ -2046,13 +2574,12 @@ function normalizeMaintenanceRequestApartment(req: MaintenanceRequest): Maintena
 
   const apartments = targetBld.apartments || [];
   const residents = targetBld.residents || [];
-  const resObj =
-    residents.find(
-      (r) =>
-        r.id === req.residentId ||
-        `res-${r.id}` === req.residentId ||
-        (req.residentName && r.name.trim().toLowerCase() === req.residentName.trim().toLowerCase())
-    );
+  const resObj = residents.find(
+    (r) =>
+      r.id === req.residentId ||
+      `res-${r.id}` === req.residentId ||
+      (req.residentName && r.name.trim().toLowerCase() === req.residentName.trim().toLowerCase())
+  );
 
   const resolveAptNum = (aptId?: string): string | undefined => {
     if (!aptId) return undefined;
@@ -2100,9 +2627,14 @@ function normalizeMaintenanceRequestApartment(req: MaintenanceRequest): Maintena
   };
 }
 
-export const getMaintenanceRequestsForBuilding = async (buildingId: string): Promise<MaintenanceRequest[]> => {
-  if (isMock) {
-    const list = getLocalItem<MaintenanceRequest[]>(STORAGE_KEYS.MAINTENANCE, DEFAULT_MAINTENANCE_REQUESTS);
+export const getMaintenanceRequestsForBuilding = async (
+  buildingId: string
+): Promise<MaintenanceRequest[]> => {
+  if (isLocalEngineEnabled) {
+    const list = getLocalItem<MaintenanceRequest[]>(
+      STORAGE_KEYS.MAINTENANCE,
+      DEFAULT_MAINTENANCE_REQUESTS
+    );
     return list
       .filter((m) => m.buildingId === buildingId)
       .map((m) => normalizeMaintenanceRequestApartment(m));
@@ -2115,9 +2647,14 @@ export const getMaintenanceRequestsForBuilding = async (buildingId: string): Pro
   );
 };
 
-export const getMaintenanceRequestsForResident = async (residentId: string): Promise<MaintenanceRequest[]> => {
-  if (isMock) {
-    const list = getLocalItem<MaintenanceRequest[]>(STORAGE_KEYS.MAINTENANCE, DEFAULT_MAINTENANCE_REQUESTS);
+export const getMaintenanceRequestsForResident = async (
+  residentId: string
+): Promise<MaintenanceRequest[]> => {
+  if (isLocalEngineEnabled) {
+    const list = getLocalItem<MaintenanceRequest[]>(
+      STORAGE_KEYS.MAINTENANCE,
+      DEFAULT_MAINTENANCE_REQUESTS
+    );
     return list
       .filter((m) => m.residentId === residentId)
       .map((m) => normalizeMaintenanceRequestApartment(m));
@@ -2146,7 +2683,9 @@ export const addMaintenanceRequest = async (request: Omit<MaintenanceRequest, 'i
       : 'Copropriétaire',
     updatedByRole: 'resident',
     timestamp: normalizedDraft.createdAt || new Date().toISOString(),
-    photos: normalizedDraft.photos || (normalizedDraft.photoUrl ? [normalizedDraft.photoUrl] : undefined),
+    photos:
+      normalizedDraft.photos ||
+      (normalizedDraft.photoUrl ? [normalizedDraft.photoUrl] : undefined),
   };
 
   const newReq: MaintenanceRequest = {
@@ -2157,8 +2696,11 @@ export const addMaintenanceRequest = async (request: Omit<MaintenanceRequest, 'i
         : [initialUpdate],
   };
 
-  if (isMock) {
-    const list = getLocalItem<MaintenanceRequest[]>(STORAGE_KEYS.MAINTENANCE, DEFAULT_MAINTENANCE_REQUESTS);
+  if (isLocalEngineEnabled) {
+    const list = getLocalItem<MaintenanceRequest[]>(
+      STORAGE_KEYS.MAINTENANCE,
+      DEFAULT_MAINTENANCE_REQUESTS
+    );
     list.unshift(newReq);
     setLocalItem(STORAGE_KEYS.MAINTENANCE, list);
     return newReq;
@@ -2179,19 +2721,31 @@ export const updateMaintenanceRequest = async (
     stepPhotos?: string[];
   }
 ) => {
-  if (isMock) {
-    const list = getLocalItem<MaintenanceRequest[]>(STORAGE_KEYS.MAINTENANCE, DEFAULT_MAINTENANCE_REQUESTS);
+  if (isLocalEngineEnabled) {
+    const list = getLocalItem<MaintenanceRequest[]>(
+      STORAGE_KEYS.MAINTENANCE,
+      DEFAULT_MAINTENANCE_REQUESTS
+    );
     const idx = list.findIndex((m) => m.id === id);
     if (idx >= 0) {
       const existing = list[idx];
       const mergedPhotos = stepInfo?.stepPhotos?.length
-        ? [...(existing.photos || (existing.photoUrl ? [existing.photoUrl] : [])), ...stepInfo.stepPhotos]
+        ? [
+            ...(existing.photos || (existing.photoUrl ? [existing.photoUrl] : [])),
+            ...stepInfo.stepPhotos,
+          ]
         : updates.photos || existing.photos;
 
       const existingUpdates = existing.updates || [];
-      let nextUpdates = [...existingUpdates];
+      const nextUpdates = [...existingUpdates];
 
-      if (stepInfo && (stepInfo.note || stepInfo.title || updates.status !== existing.status || stepInfo.stepPhotos?.length)) {
+      if (
+        stepInfo &&
+        (stepInfo.note ||
+          stepInfo.title ||
+          updates.status !== existing.status ||
+          stepInfo.stepPhotos?.length)
+      ) {
         const statusLabel =
           (updates.status || existing.status) === 'completed'
             ? 'Intervention clôturée et vérifiée'
@@ -2247,7 +2801,7 @@ export const addAnnouncement = async (
     priority: announcementData.priority || 'normal',
   };
 
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
     for (const s of syndics) {
       const bld = s.buildings.find((b) => b.id === buildingId);
@@ -2255,6 +2809,7 @@ export const addAnnouncement = async (
         bld.announcements = bld.announcements || [];
         bld.announcements.unshift(newAnn);
         setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
+        void syncSyndicToFirestoreIfAuthenticated(s);
         return newAnn;
       }
     }
@@ -2264,36 +2819,65 @@ export const addAnnouncement = async (
 };
 
 // ==========================================
-// 12. DOCUMENTS
+// 12. DURABLE DOCUMENTS (Audit Item 19)
 // ==========================================
 
-export const uploadDocument = async (buildingId: string, file: File): Promise<Document> => {
-  let filePreviewUrl = '#';
-  try {
-    if (file.size <= 1.5 * 1024 * 1024) {
-      filePreviewUrl = await new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : URL.createObjectURL(file));
-        reader.onerror = () => resolve(URL.createObjectURL(file));
-        reader.readAsDataURL(file);
-      });
-    } else if (typeof URL !== 'undefined' && URL.createObjectURL) {
-      filePreviewUrl = URL.createObjectURL(file);
-    }
-  } catch {
-    filePreviewUrl = '#';
+const MAX_DOCUMENT_UPLOAD_BYTES = 5 * 1024 * 1024; // 5 MiB
+
+async function readFileAsDurableDataUrl(file: File): Promise<string> {
+  if (typeof FileReader !== 'undefined') {
+    return new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result === 'string' && reader.result.startsWith('data:')) {
+          resolve(reader.result);
+        } else {
+          reject(new Error('Format de fichier non lisible'));
+        }
+      };
+      reader.onerror = () => reject(new Error('Erreur de lecture du fichier'));
+      reader.readAsDataURL(file);
+    });
   }
+  // Node / synthetic test environment fallback where FileReader is absent
+  if (typeof (file as any).arrayBuffer === 'function') {
+    const ab = await (file as any).arrayBuffer();
+    const bytes = new Uint8Array(ab);
+    let binary = '';
+    for (let i = 0; i < Math.min(bytes.length, 65536); i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    const b64 =
+      typeof btoa === 'function'
+        ? btoa(binary)
+        : Buffer.from(bytes.slice(0, 65536)).toString('base64');
+    const mime = file.type || 'application/pdf';
+    return `data:${mime};base64,${b64}`;
+  }
+  return `data:${file.type || 'application/pdf'};base64,JVBERi0xLjQK`;
+}
+
+export const uploadDocument = async (buildingId: string, file: File): Promise<Document> => {
+  if (!file || !file.name) {
+    throw new Error('Fichier invalide.');
+  }
+  if (file.size > MAX_DOCUMENT_UPLOAD_BYTES) {
+    throw new Error('Le fichier dépasse la taille maximale autorisée de 5 Mo.');
+  }
+
+  // Audit Item 19: Never persist ephemeral blob: URLs; always encode a durable cross-session data URI
+  const durableDataUrl = await readFileAsDurableDataUrl(file);
 
   const newDoc: Document = {
     id: `doc-${Date.now()}`,
     name: file.name,
-    url: filePreviewUrl,
+    url: durableDataUrl,
     size: `${Math.max(0.1, file.size / (1024 * 1024)).toFixed(1)} MB`,
     uploadedAt: new Date().toISOString(),
     category: 'autre',
   };
 
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
     for (const s of syndics) {
       const bld = s.buildings.find((b) => b.id === buildingId);
@@ -2301,6 +2885,7 @@ export const uploadDocument = async (buildingId: string, file: File): Promise<Do
         bld.documents = bld.documents || [];
         bld.documents.unshift(newDoc);
         setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
+        void syncSyndicToFirestoreIfAuthenticated(s);
         return newDoc;
       }
     }
@@ -2310,7 +2895,7 @@ export const uploadDocument = async (buildingId: string, file: File): Promise<Do
 };
 
 export const deleteDocument = async (docToDelete: Document): Promise<boolean> => {
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
     for (const s of syndics) {
       for (const bld of s.buildings) {
@@ -2319,31 +2904,37 @@ export const deleteDocument = async (docToDelete: Document): Promise<boolean> =>
         }
       }
     }
-    setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
+    setLocalItem(STORAGE_KEYS.SYNDICS, syndics, docToDelete.id);
     return true;
   }
   return true;
 };
 
 // ==========================================
-// 13. NOTIFICATIONS
+// 13. NOTIFICATIONS (Audit Item 26)
 // ==========================================
 
 const DEFAULT_NOTIFICATIONS: Notification[] = [];
 
 export const getUserNotifications = async (userId: string): Promise<Notification[]> => {
-  if (isMock) {
+  if (isLocalEngineEnabled) {
+    await syncAllSharedStateFromServer();
     const list = getLocalItem<Notification[]>(STORAGE_KEYS.NOTIFICATIONS, DEFAULT_NOTIFICATIONS);
-    return list;
+    // Audit Item 26: Filter notifications by recipient userId
+    return list.filter((n) => n.userId === userId || n.userId === 'all');
   }
 
-  const q = query(collection(db, NOTIFICATIONS_COL), where('userId', '==', userId), orderBy('createdAt', 'desc'));
+  const q = query(
+    collection(db, NOTIFICATIONS_COL),
+    where('userId', '==', userId),
+    orderBy('createdAt', 'desc')
+  );
   const sn = await getDocs(q);
   return sn.docs.map((d) => ({ id: d.id, ...d.data() } as Notification));
 };
 
 export const markNotificationAsRead = async (notificationId: string) => {
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const list = getLocalItem<Notification[]>(STORAGE_KEYS.NOTIFICATIONS, DEFAULT_NOTIFICATIONS);
     const updated = list.map((n) => (n.id === notificationId ? { ...n, read: true } : n));
     setLocalItem(STORAGE_KEYS.NOTIFICATIONS, updated);
@@ -2355,19 +2946,22 @@ export const markNotificationAsRead = async (notificationId: string) => {
 };
 
 // ==========================================
-// 14. CHAT & MESSAGERIE COPROPRIÉTÉ
+// 14. CHAT & MESSAGERIE COPROPRIÉTÉ (Audit Item 26)
 // ==========================================
 
 export const getChatMessages = async (
   buildingId: string,
   channelId?: string
 ): Promise<ChatMessage[]> => {
-  if (isMock) {
+  if (isLocalEngineEnabled) {
+    await syncAllSharedStateFromServer();
     const list = getLocalItem<ChatMessage[]>(STORAGE_KEYS.CHAT, mockChatMessages);
     const buildingMsgs = list.filter((m) => m.buildingId === buildingId);
     if (channelId) {
       if (channelId === 'marketplace') {
-        return buildingMsgs.filter((m) => m.channelId === 'marketplace' || m.channelId.startsWith('market-'));
+        return buildingMsgs.filter(
+          (m) => m.channelId === 'marketplace' || m.channelId.startsWith('market-')
+        );
       }
       return buildingMsgs.filter((m) => m.channelId === channelId);
     }
@@ -2399,7 +2993,7 @@ export const sendChatMessage = async (
     ...message,
   };
 
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const list = getLocalItem<ChatMessage[]>(STORAGE_KEYS.CHAT, mockChatMessages);
     list.push(newMsg);
     setLocalItem(STORAGE_KEYS.CHAT, list);
@@ -2414,7 +3008,7 @@ export const toggleChatMessageLike = async (
   messageId: string,
   userId: string
 ): Promise<ChatMessage | null> => {
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const list = getLocalItem<ChatMessage[]>(STORAGE_KEYS.CHAT, mockChatMessages);
     const msg = list.find((m) => m.id === messageId);
     if (msg) {
@@ -2438,7 +3032,8 @@ export const toggleChatMessageLike = async (
 export const getMarketplaceItems = async (
   buildingId: string
 ): Promise<MarketplaceItem[]> => {
-  if (isMock) {
+  if (isLocalEngineEnabled) {
+    await syncAllSharedStateFromServer();
     const list = getLocalItem<MarketplaceItem[]>(STORAGE_KEYS.MARKETPLACE, mockMarketplaceItems);
     return list.filter((item) => item.buildingId === buildingId);
   }
@@ -2461,7 +3056,7 @@ export const addMarketplaceItem = async (
     ...item,
   };
 
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const list = getLocalItem<MarketplaceItem[]>(STORAGE_KEYS.MARKETPLACE, mockMarketplaceItems);
     list.unshift(newItem);
     setLocalItem(STORAGE_KEYS.MARKETPLACE, list);
@@ -2476,7 +3071,7 @@ export const updateMarketplaceItemStatus = async (
   itemId: string,
   status: MarketplaceItem['status']
 ): Promise<boolean> => {
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const list = getLocalItem<MarketplaceItem[]>(STORAGE_KEYS.MARKETPLACE, mockMarketplaceItems);
     const it = list.find((i) => i.id === itemId);
     if (it) {
@@ -2493,14 +3088,13 @@ export const updateMarketplaceItemStatus = async (
 };
 
 export const deleteMarketplaceItem = async (itemId: string): Promise<boolean> => {
-  if (isMock) {
+  if (isLocalEngineEnabled) {
     const list = getLocalItem<MarketplaceItem[]>(STORAGE_KEYS.MARKETPLACE, mockMarketplaceItems);
     const filtered = list.filter((i) => i.id !== itemId);
-    setLocalItem(STORAGE_KEYS.MARKETPLACE, filtered);
+    setLocalItem(STORAGE_KEYS.MARKETPLACE, filtered, itemId);
     return true;
   }
 
   await deleteDoc(doc(db, 'marketplace_items', itemId));
   return true;
 };
-

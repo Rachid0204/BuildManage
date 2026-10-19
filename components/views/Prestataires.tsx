@@ -360,7 +360,7 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
     setIce(p.ice || '');
     setRc(p.rc || '');
     setNotes(p.notes || '');
-    setHourlyRate(p.hourlyRate || '');
+    setHourlyRate(p.hourlyRate !== undefined && p.hourlyRate !== null ? String(p.hourlyRate) : '');
     setIsEmergency247(!!p.isEmergency247);
     setIsVerifiedBySyndic(p.isVerifiedBySyndic ?? true);
     setGenerateCredentials(false);

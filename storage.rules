@@ -1,0 +1,28 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isSameTenant(syndicId) {
+      return isSignedIn() && (
+        request.auth.uid == syndicId ||
+        request.auth.token.syndicId == syndicId ||
+        request.auth.token.role == 'admin'
+      );
+    }
+
+    match /tenants/{syndicId}/buildings/{buildingId}/documents/{fileName} {
+      allow read: if isSameTenant(syndicId);
+      allow write: if isSameTenant(syndicId)
+        && request.resource.size <= 10 * 1024 * 1024
+        && request.resource.contentType.matches('application/pdf|image/.*|application/msword|application/vnd.openxmlformats-officedocument.*');
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
