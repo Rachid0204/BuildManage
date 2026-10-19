@@ -214,11 +214,19 @@ const ResidentDashboard: React.FC = () => {
         ...data,
         buildingId: activeBuilding?.id || userProfile?.buildingId || '',
         residentId: currentResident?.id || userProfile?.uid || '',
+        residentName:
+          currentResident?.name ||
+          userProfile?.displayName ||
+          tr('Copropriétaire', 'مالك مشترك'),
+        apartmentNumber: currentApartment?.number
+          ? `${tr('Lot', 'شقة')} ${currentApartment.number}`
+          : undefined,
         status: 'pending',
         createdAt: new Date().toISOString(),
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['maintenance', currentResident?.id] });
+      queryClient.invalidateQueries({ queryKey: ['maintenance', activeBuilding?.id] });
       setIsReportModalOpen(false);
       setMaintDesc('');
     },
@@ -478,7 +486,11 @@ const ResidentDashboard: React.FC = () => {
             isResidentPortal={true}
             currentResidentId={currentResident?.id}
             currentResidentName={currentResident?.name}
-            currentApartmentNumber={`${tr('Lot', 'شقة')} ${currentApartment?.number || 'A-102'}`}
+            currentApartmentNumber={
+              currentApartment?.number
+                ? `${tr('Lot', 'شقة')} ${currentApartment.number}`
+                : tr('Copropriétaire', 'مالك مشترك')
+            }
           />
         )}
 
@@ -487,7 +499,11 @@ const ResidentDashboard: React.FC = () => {
             building={activeBuilding}
             residentId={currentResident?.id}
             residentName={currentResident?.name}
-            apartmentNumber={`${tr('Lot', 'شقة')} ${currentApartment?.number || 'A-102'}`}
+            apartmentNumber={
+              currentApartment?.number
+                ? `${tr('Lot', 'شقة')} ${currentApartment.number}`
+                : tr('Copropriétaire', 'مالك مشترك')
+            }
             isResidentPortal={true}
           />
         )}
@@ -497,8 +513,12 @@ const ResidentDashboard: React.FC = () => {
             building={activeBuilding}
             currentResidentId={currentResident?.id}
             currentResidentName={currentResident?.name}
-            currentApartmentNumber={`${tr('Lot', 'شقة')} ${currentApartment?.number || 'A-102'}`}
-            currentPhone={currentResident?.phone || '0661 22 33 44'}
+            currentApartmentNumber={
+              currentApartment?.number
+                ? `${tr('Lot', 'شقة')} ${currentApartment.number}`
+                : tr('Copropriétaire', 'مالك مشترك')
+            }
+            currentPhone={currentResident?.phone || ''}
             isResidentPortal={true}
           />
         )}
@@ -518,7 +538,11 @@ const ResidentDashboard: React.FC = () => {
             isResidentPortal={true}
             currentResidentId={currentResident?.id}
             currentResidentName={currentResident?.name}
-            currentApartmentNumber={`${tr('Lot', 'شقة')} ${currentApartment?.number || 'A-102'}`}
+            currentApartmentNumber={
+              currentApartment?.number
+                ? `${tr('Lot', 'شقة')} ${currentApartment.number}`
+                : tr('Parties Communes', 'الأجزاء المشتركة')
+            }
           />
         )}
 

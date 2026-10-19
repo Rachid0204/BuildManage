@@ -568,6 +568,7 @@ export const addApartment = async (apartmentData: Omit<Apartment, 'id'>) => {
         }
 
         setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
+        void syncSyndicToFirestoreIfAuthenticated(syndic);
         return newApt;
       }
     }
@@ -616,6 +617,7 @@ export const addApartmentsBulk = async (
         });
 
         setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
+        void syncSyndicToFirestoreIfAuthenticated(syndic);
         return createdApartments;
       }
     }
@@ -648,6 +650,7 @@ export const rebalanceBuildingTantiemes = async (buildingId: string) => {
           return { ...apt, tantiemes: share };
         });
         setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
+        void syncSyndicToFirestoreIfAuthenticated(syndic);
         return bld.apartments;
       }
     }
@@ -700,6 +703,7 @@ export const updateApartment = async (apartment: Apartment) => {
           }
 
           setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
+          void syncSyndicToFirestoreIfAuthenticated(syndic);
           return apartment;
         }
       }
@@ -2028,46 +2032,129 @@ export const initiateCmiPayment = async (invoiceId: string) => {
 
 const DEFAULT_MAINTENANCE_REQUESTS: MaintenanceRequest[] = [];
 
+function normalizeMaintenanceRequestApartment(req: MaintenanceRequest): MaintenanceRequest {
+  const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
+  let targetBld: Building | undefined;
+  for (const s of syndics) {
+    const found = s.buildings.find((b) => b.id === req.buildingId);
+    if (found) {
+      targetBld = found;
+      break;
+    }
+  }
+  if (!targetBld) return req;
+
+  const apartments = targetBld.apartments || [];
+  const residents = targetBld.residents || [];
+  const resObj =
+    residents.find(
+      (r) =>
+        r.id === req.residentId ||
+        `res-${r.id}` === req.residentId ||
+        (req.residentName && r.name.trim().toLowerCase() === req.residentName.trim().toLowerCase())
+    );
+
+  const resolveAptNum = (aptId?: string): string | undefined => {
+    if (!aptId) return undefined;
+    const direct = apartments.find((a) => a.id === aptId);
+    if (direct?.number && !direct.number.startsWith('apt-')) {
+      return direct.number.replace(/^(Lot|شقة)\s+/i, '').trim();
+    }
+    const idxMatch = aptId.match(/apt-\d+-(\d+)/);
+    if (idxMatch) {
+      const idx = parseInt(idxMatch[1], 10);
+      const byIdx = apartments[idx];
+      if (byIdx?.number && !byIdx.number.startsWith('apt-')) {
+        return byIdx.number.replace(/^(Lot|شقة)\s+/i, '').trim();
+      }
+      return String(idx + 1);
+    }
+    return undefined;
+  };
+
+  let resolvedNumber = req.apartmentNumber;
+  const linkedApt =
+    (resObj?.apartmentId && apartments.find((a) => a.id === resObj.apartmentId)) ||
+    apartments.find(
+      (a) =>
+        a.ownerId === req.residentId ||
+        a.tenantId === req.residentId ||
+        (resObj && (a.ownerId === resObj.id || a.tenantId === resObj.id))
+    );
+
+  if (linkedApt?.number && !linkedApt.number.startsWith('apt-')) {
+    resolvedNumber = `Lot ${linkedApt.number.replace(/^(Lot|شقة)\s+/i, '').trim()}`;
+  } else if (req.apartmentNumber && /apt-[\w-]+/.test(req.apartmentNumber)) {
+    const idMatch = req.apartmentNumber.match(/apt-[\w-]+/);
+    const num = resolveAptNum(idMatch?.[0]) || resolveAptNum(resObj?.apartmentId);
+    if (num) resolvedNumber = `Lot ${num}`;
+  } else if (!req.apartmentNumber && resObj?.apartmentId) {
+    const num = resolveAptNum(resObj.apartmentId);
+    if (num) resolvedNumber = `Lot ${num}`;
+  }
+
+  return {
+    ...req,
+    residentName: req.residentName || resObj?.name,
+    apartmentNumber: resolvedNumber,
+  };
+}
+
 export const getMaintenanceRequestsForBuilding = async (buildingId: string): Promise<MaintenanceRequest[]> => {
   if (isMock) {
     const list = getLocalItem<MaintenanceRequest[]>(STORAGE_KEYS.MAINTENANCE, DEFAULT_MAINTENANCE_REQUESTS);
-    return list.filter((m) => m.buildingId === buildingId);
+    return list
+      .filter((m) => m.buildingId === buildingId)
+      .map((m) => normalizeMaintenanceRequestApartment(m));
   }
 
   const q = query(collection(db, MAINTENANCE_COL), where('buildingId', '==', buildingId));
   const snapshot = await getDocs(q);
-  return snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as MaintenanceRequest));
+  return snapshot.docs.map((d) =>
+    normalizeMaintenanceRequestApartment({ id: d.id, ...d.data() } as MaintenanceRequest)
+  );
 };
 
 export const getMaintenanceRequestsForResident = async (residentId: string): Promise<MaintenanceRequest[]> => {
   if (isMock) {
     const list = getLocalItem<MaintenanceRequest[]>(STORAGE_KEYS.MAINTENANCE, DEFAULT_MAINTENANCE_REQUESTS);
-    return list.filter((m) => m.residentId === residentId);
+    return list
+      .filter((m) => m.residentId === residentId)
+      .map((m) => normalizeMaintenanceRequestApartment(m));
   }
 
   const q = query(collection(db, MAINTENANCE_COL), where('residentId', '==', residentId));
   const snapshot = await getDocs(q);
-  return snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as MaintenanceRequest));
+  return snapshot.docs.map((d) =>
+    normalizeMaintenanceRequestApartment({ id: d.id, ...d.data() } as MaintenanceRequest)
+  );
 };
 
 export const addMaintenanceRequest = async (request: Omit<MaintenanceRequest, 'id'>) => {
+  const normalizedDraft = normalizeMaintenanceRequestApartment({
+    id: `maint-${Date.now()}`,
+    ...request,
+  });
+
   const initialUpdate: MaintenanceStepUpdate = {
     id: `upd-${Date.now()}`,
-    status: request.status || 'pending',
+    status: normalizedDraft.status || 'pending',
     title: 'Signalement créé et transmis au Syndic',
-    note: request.description,
-    updatedBy: request.residentName
-      ? `${request.residentName}${request.apartmentNumber ? ` (${request.apartmentNumber})` : ''}`
+    note: normalizedDraft.description,
+    updatedBy: normalizedDraft.residentName
+      ? `${normalizedDraft.residentName}${normalizedDraft.apartmentNumber ? ` (${normalizedDraft.apartmentNumber})` : ''}`
       : 'Copropriétaire',
     updatedByRole: 'resident',
-    timestamp: request.createdAt || new Date().toISOString(),
-    photos: request.photos || (request.photoUrl ? [request.photoUrl] : undefined),
+    timestamp: normalizedDraft.createdAt || new Date().toISOString(),
+    photos: normalizedDraft.photos || (normalizedDraft.photoUrl ? [normalizedDraft.photoUrl] : undefined),
   };
 
   const newReq: MaintenanceRequest = {
-    id: `maint-${Date.now()}`,
-    ...request,
-    updates: request.updates && request.updates.length > 0 ? request.updates : [initialUpdate],
+    ...normalizedDraft,
+    updates:
+      normalizedDraft.updates && normalizedDraft.updates.length > 0
+        ? normalizedDraft.updates
+        : [initialUpdate],
   };
 
   if (isMock) {
@@ -2181,10 +2268,26 @@ export const addAnnouncement = async (
 // ==========================================
 
 export const uploadDocument = async (buildingId: string, file: File): Promise<Document> => {
+  let filePreviewUrl = '#';
+  try {
+    if (file.size <= 1.5 * 1024 * 1024) {
+      filePreviewUrl = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : URL.createObjectURL(file));
+        reader.onerror = () => resolve(URL.createObjectURL(file));
+        reader.readAsDataURL(file);
+      });
+    } else if (typeof URL !== 'undefined' && URL.createObjectURL) {
+      filePreviewUrl = URL.createObjectURL(file);
+    }
+  } catch {
+    filePreviewUrl = '#';
+  }
+
   const newDoc: Document = {
     id: `doc-${Date.now()}`,
     name: file.name,
-    url: '#',
+    url: filePreviewUrl,
     size: `${Math.max(0.1, file.size / (1024 * 1024)).toFixed(1)} MB`,
     uploadedAt: new Date().toISOString(),
     category: 'autre',

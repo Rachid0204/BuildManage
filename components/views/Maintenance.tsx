@@ -302,9 +302,114 @@ const Maintenance: React.FC<MaintenanceProps> = ({
   });
 
   const residentMap = useMemo(
-    () => new Map(building.residents.map((r) => [r.id, r])),
+    () => new Map((building.residents || []).map((r) => [r.id, r])),
     [building.residents]
   );
+
+  const apartmentMap = useMemo(
+    () => new Map((building.apartments || []).map((a) => [a.id, a])),
+    [building.apartments]
+  );
+
+  const findResidentForRequest = (req: MaintenanceRequest) => {
+    if (!req) return undefined;
+    const direct =
+      residentMap.get(req.residentId) ||
+      (req.residentId?.startsWith('res-res-')
+        ? residentMap.get(req.residentId.replace(/^res-res-/, 'res-'))
+        : undefined);
+    if (direct) return direct;
+
+    if (req.residentName) {
+      const targetName = req.residentName.trim().toLowerCase();
+      return (building.residents || []).find(
+        (r) => r.name.trim().toLowerCase() === targetName
+      );
+    }
+    return undefined;
+  };
+
+  const resolveApartmentNumberFromId = (rawAptId?: string): string | undefined => {
+    if (!rawAptId) return undefined;
+    const exactApt = apartmentMap.get(rawAptId);
+    if (exactApt?.number && !exactApt.number.startsWith('apt-')) {
+      return exactApt.number.replace(/^(Lot|شقة)\s+/i, '').trim();
+    }
+    const indexMatch = rawAptId.match(/apt-\d+-(\d+)/);
+    if (indexMatch) {
+      const idx = parseInt(indexMatch[1], 10);
+      const indexedApt = (building.apartments || [])[idx];
+      if (indexedApt?.number && !indexedApt.number.startsWith('apt-')) {
+        return indexedApt.number.replace(/^(Lot|شقة)\s+/i, '').trim();
+      }
+      return String(idx + 1);
+    }
+    return undefined;
+  };
+
+  const resolveDisplayLot = (
+    req: MaintenanceRequest,
+    resObj?: (typeof building.residents)[number]
+  ): string => {
+    // 1. Check apartment linked to the resident in building.apartments
+    const linkedApt =
+      (resObj?.apartmentId && apartmentMap.get(resObj.apartmentId)) ||
+      (building.apartments || []).find(
+        (a) =>
+          a.ownerId === req.residentId ||
+          a.tenantId === req.residentId ||
+          (resObj && (a.ownerId === resObj.id || a.tenantId === resObj.id))
+      );
+
+    if (linkedApt?.number && !linkedApt.number.startsWith('apt-')) {
+      const cleanNum = linkedApt.number.replace(/^(Lot|شقة)\s+/i, '').trim();
+      return `${tr('Lot', 'شقة')} ${cleanNum}`;
+    }
+
+    // 2. Check if req.apartmentNumber contains an internal 'apt-...' identifier
+    if (req.apartmentNumber) {
+      const idMatch = req.apartmentNumber.match(/apt-[\w-]+/);
+      if (idMatch) {
+        const resolvedNum =
+          resolveApartmentNumberFromId(idMatch[0]) ||
+          resolveApartmentNumberFromId(resObj?.apartmentId);
+        if (resolvedNum) {
+          return `${tr('Lot', 'شقة')} ${resolvedNum}`;
+        }
+      } else {
+        return req.apartmentNumber;
+      }
+    }
+
+    // 3. Fallback to resolving resObj.apartmentId (including index-based lookup in building.apartments)
+    if (resObj?.apartmentId) {
+      const resolvedNum = resolveApartmentNumberFromId(resObj.apartmentId);
+      if (resolvedNum) {
+        return `${tr('Lot', 'شقة')} ${resolvedNum}`;
+      }
+    }
+
+    return tr('Parties Communes', 'الأجزاء المشتركة');
+  };
+
+  const formatUpdatedBy = (
+    rawUpdatedBy: string | undefined,
+    displayResident: string,
+    displayLot: string
+  ): string => {
+    if (!rawUpdatedBy || rawUpdatedBy === 'Copropriétaire') {
+      return `${displayResident} (${displayLot})`;
+    }
+    const idMatch = rawUpdatedBy.match(/apt-[\w-]+/);
+    if (idMatch) {
+      const resolvedNum = resolveApartmentNumberFromId(idMatch[0]);
+      if (resolvedNum) {
+        return rawUpdatedBy.replace(idMatch[0], resolvedNum);
+      }
+      return `${displayResident} (${displayLot})`;
+    }
+    return rawUpdatedBy;
+  };
 
   const updateMutation = useMutation({
     mutationFn: (variables: {
@@ -635,9 +740,9 @@ const Maintenance: React.FC<MaintenanceProps> = ({
         {filteredRequests.map((req) => {
           const catMeta = CATEGORY_META[req.category] || CATEGORY_META.other;
           const catLabel = isAr ? catMeta.labelAr : catMeta.labelFr;
-          const resObj = residentMap.get(req.residentId);
+          const resObj = findResidentForRequest(req);
           const displayResident = req.residentName || resObj?.name || tr('Copropriétaire', 'مالك مشترك');
-          const displayLot = req.apartmentNumber || (resObj?.apartmentId ? `${tr('Lot', 'شقة')} ${resObj.apartmentId}` : tr('Parties Communes', 'الأجزاء المشتركة'));
+          const displayLot = resolveDisplayLot(req, resObj);
           const isExpanded = !!expandedTicketIds[req.id];
           const allPhotos = req.photos && req.photos.length > 0 ? req.photos : req.photoUrl ? [req.photoUrl] : [];
           const updatesList = req.updates || [];
@@ -860,7 +965,10 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                         <p className="text-slate-700 leading-relaxed">{upd.note}</p>
 
                         <div className="flex items-center justify-between text-[11px] text-slate-500 pt-1">
-                          <span>{tr('Par :', 'بواسطة:')} {upd.updatedBy}</span>
+                          <span>
+                            {tr('Par :', 'بواسطة:')}{' '}
+                            {formatUpdatedBy(upd.updatedBy, displayResident, displayLot)}
+                          </span>
                           {upd.assignedTo && (
                             <span className="font-semibold text-teal-800">
                               {tr('Artisan :', 'المهني:')} {upd.assignedTo}

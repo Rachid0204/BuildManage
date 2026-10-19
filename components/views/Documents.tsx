@@ -1,5 +1,6 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { Eye, Download, FileText } from 'lucide-react';
 import type { Building, Document } from '../../types';
 import Card from '../common/Card';
 import Button from '../common/Button';
@@ -7,6 +8,10 @@ import Modal from '../common/Modal';
 import { PlusIcon, TrashIcon, DocumentsIcon } from '../icons/IconComponents';
 import { useI18n } from '../../hooks/useI18n';
 import { uploadDocument, deleteDocument } from '../../firebase/services';
+import {
+  generateArchiveDocumentPDFBlobUrl,
+  downloadArchiveDocumentPDF,
+} from '../../services/pdfService';
 import { useToast } from '../common/Toast';
 
 const Documents: React.FC<{
@@ -26,17 +31,74 @@ const Documents: React.FC<{
     (a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime()
   );
 
+  // Resolve an in-browser preview URL for the selected document
+  const resolvedPreviewUrl = useMemo(() => {
+    if (!previewDoc) return null;
+    if (
+      previewDoc.url &&
+      previewDoc.url !== '#' &&
+      (previewDoc.url.startsWith('data:') ||
+        previewDoc.url.startsWith('blob:') ||
+        previewDoc.url.startsWith('http'))
+    ) {
+      return previewDoc.url;
+    }
+    return generateArchiveDocumentPDFBlobUrl(previewDoc, building);
+  }, [previewDoc, building]);
+
+  const isImagePreview = useMemo(() => {
+    if (!previewDoc) return false;
+    const lower = previewDoc.name.toLowerCase();
+    return (
+      lower.endsWith('.jpg') ||
+      lower.endsWith('.jpeg') ||
+      lower.endsWith('.png') ||
+      lower.endsWith('.webp') ||
+      Boolean(previewDoc.url?.startsWith('data:image/'))
+    );
+  }, [previewDoc]);
+
+  const handleDownloadDoc = (docItem: Document) => {
+    if (
+      docItem.url &&
+      docItem.url !== '#' &&
+      (docItem.url.startsWith('data:') ||
+        docItem.url.startsWith('blob:') ||
+        docItem.url.startsWith('http'))
+    ) {
+      const link = document.createElement('a');
+      link.href = docItem.url;
+      link.download = docItem.name;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } else {
+      downloadArchiveDocumentPDF(docItem, building);
+    }
+    showToast(
+      tr(
+        `Téléchargement de « ${docItem.name} » lancé.`,
+        `تم بدء تحميل « ${docItem.name} ».`
+      ),
+      'info'
+    );
+  };
+
   const uploadMutation = useMutation({
     mutationFn: (file: File) => uploadDocument(building.id, file),
     onMutate: () => setIsUploading(true),
-    onSuccess: () => {
+    onSuccess: (createdDoc) => {
       queryClient.invalidateQueries({ queryKey: ['syndics'] });
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
       showToast(
-        tr('Document déposé dans les archives de la copropriété.', 'تم إيداع الوثيقة في أرشيف الإقامة.'),
+        tr(
+          'Document déposé dans les archives de la copropriété.',
+          'تم إيداع الوثيقة في أرشيف الإقامة.'
+        ),
         'success'
       );
+      setPreviewDoc(createdDoc);
     },
     onError: (error) => {
       console.error('Upload failed', error);
@@ -61,7 +123,10 @@ const Documents: React.FC<{
       const file = e.target.files[0];
       if (file.size > 10 * 1024 * 1024) {
         showToast(
-          tr('Le fichier dépasse la taille maximale autorisée (10 Mo).', 'يتجاوز الملف الحجم الأقصى المسموح به (10 ميغابايت).'),
+          tr(
+            'Le fichier dépasse la taille maximale autorisée (10 Mo).',
+            'يتجاوز الملف الحجم الأقصى المسموح به (10 ميغابايت).'
+          ),
           'warning'
         );
         return;
@@ -149,15 +214,9 @@ const Documents: React.FC<{
                     <button
                       type="button"
                       onClick={() => setPreviewDoc(docItem)}
-                      className="flex items-center hover:underline text-start"
+                      className="flex items-center gap-2 hover:underline text-start"
                     >
-                      <svg
-                        className="w-4 h-4 me-2 text-teal-600 shrink-0"
-                        fill="currentColor"
-                        viewBox="0 0 20 20"
-                      >
-                        <path d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" />
-                      </svg>
+                      <FileText className="w-4 h-4 text-teal-600 shrink-0" />
                       <span>{docItem.name}</span>
                     </button>
                   </td>
@@ -172,9 +231,19 @@ const Documents: React.FC<{
                       <button
                         type="button"
                         onClick={() => setPreviewDoc(docItem)}
-                        className="px-2.5 py-1 rounded bg-teal-50 hover:bg-teal-100 text-teal-800 font-bold text-xs transition-colors"
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-800 font-bold text-xs transition-colors border border-teal-200"
                       >
-                        {tr('Consulter', 'اطلاع')}
+                        <Eye className="w-3.5 h-3.5" />
+                        <span>{tr('Aperçu PDF', 'معاينة PDF')}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadDoc(docItem)}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs transition-colors"
+                        title={tr('Télécharger', 'تحميل')}
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">{tr('Télécharger', 'تحميل')}</span>
                       </button>
                       <Button
                         variant="danger"
@@ -211,34 +280,66 @@ const Documents: React.FC<{
         <Modal
           isOpen={!!previewDoc}
           onClose={() => setPreviewDoc(null)}
-          title={`${tr('Archive Documentaire', 'الأرشيف الوثائقي')} — ${previewDoc.name}`}
+          maxWidthClass="sm:max-w-4xl"
+          title={`${tr('Aperçu Documentaire', 'معاينة الوثيقة')} — ${previewDoc.name}`}
           footer={
-            <div className="flex justify-end gap-2">
-              <Button variant="secondary" onClick={() => setPreviewDoc(null)}>
-                {tr('Fermer', 'إغلاق')}
-              </Button>
+            <div className="flex flex-wrap items-center justify-between w-full gap-2">
+              <span className="text-xs text-slate-500 font-mono">
+                {tr('Lecture directe sans téléchargement obligatoire', 'معاينة مباشرة في المتصفح دون الحاجة للتحميل')}
+              </span>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="secondary"
+                  onClick={() => handleDownloadDoc(previewDoc)}
+                  icon={<Download className="w-4 h-4" />}
+                >
+                  {tr('Télécharger une copie', 'تحميل نسخة')}
+                </Button>
+                <Button onClick={() => setPreviewDoc(null)}>
+                  {tr('Fermer', 'إغلاق')}
+                </Button>
+              </div>
             </div>
           }
         >
-          <div className="p-5 bg-slate-50 rounded-xl border border-slate-200 space-y-3 text-xs text-slate-700">
-            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+          <div className="space-y-4">
+            <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
-                <h4 className="font-bold text-slate-900 text-sm">{previewDoc.name}</h4>
+                <h4 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-teal-700 shrink-0" />
+                  <span>{previewDoc.name}</span>
+                </h4>
                 <p className="text-[11px] text-slate-500 font-mono mt-0.5">
                   {tr('Taille :', 'الحجم :')} {previewDoc.size} · {tr('Déposé le', 'أودع بتاريخ')}{' '}
-                  {new Date(previewDoc.uploadedAt).toLocaleDateString(isAr ? 'ar-MA' : 'fr-MA')}
+                  {new Date(previewDoc.uploadedAt).toLocaleDateString(isAr ? 'ar-MA' : 'fr-MA')} ·{' '}
+                  {building.name}
                 </p>
               </div>
-              <span className="px-2.5 py-1 rounded bg-teal-100 text-teal-800 font-mono font-bold text-[11px]">
+              <span className="px-2.5 py-1 rounded bg-teal-100 text-teal-800 font-mono font-bold text-[11px] self-start sm:self-center">
                 {tr('Certifié Loi 18-00', 'معتمد قانون 18-00')}
               </span>
             </div>
-            <p className="leading-relaxed">
-              {tr(
-                `Ce document officiel de la résidence ${building.name} (${building.address}, ${building.city}) est partagé automatiquement dans l'espace numérique de tous les copropriétaires.`,
-                `هذه الوثيقة الرسمية الخاصة بإقامة ${building.name} (${building.address}، ${building.city}) متاحة تلقائياً في الفضاء الرقمي لجميع الملاك المشتركين.`
-              )}
-            </p>
+
+            {/* Embedded In-Browser PDF / Image Viewer */}
+            {resolvedPreviewUrl && (
+              <div className="rounded-xl overflow-hidden border border-slate-300 bg-slate-900 shadow-inner">
+                {isImagePreview ? (
+                  <div className="flex items-center justify-center p-4 max-h-[65vh] overflow-auto">
+                    <img
+                      src={resolvedPreviewUrl}
+                      alt={previewDoc.name}
+                      className="max-w-full max-h-[60vh] object-contain rounded"
+                    />
+                  </div>
+                ) : (
+                  <iframe
+                    src={resolvedPreviewUrl}
+                    title={previewDoc.name}
+                    className="w-full h-[62vh] bg-white border-0"
+                  />
+                )}
+              </div>
+            )}
           </div>
         </Modal>
       )}

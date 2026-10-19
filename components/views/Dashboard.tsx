@@ -19,7 +19,10 @@ import {
   getMaintenanceRequestsForBuilding,
   getQuittancesForBuilding,
 } from '../../firebase/services';
+import { exportBuildingSummaryReportPDF } from '../../services/pdfService';
 import { useI18n } from '../../hooks/useI18n';
+import { useToast } from '../common/Toast';
+import { FileDown } from 'lucide-react';
 
 interface DashboardProps {
   building: Building;
@@ -59,6 +62,7 @@ const StatCard: React.FC<{
 
 const Dashboard: React.FC<DashboardProps> = ({ building, syndic }) => {
   const { t, tr, language } = useI18n();
+  const { showToast } = useToast();
   const navigate = useNavigate();
 
   const { data: charges = [] } = useQuery({
@@ -215,6 +219,27 @@ const Dashboard: React.FC<DashboardProps> = ({ building, syndic }) => {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="secondary"
+            onClick={() => {
+              exportBuildingSummaryReportPDF(building, syndic, {
+                ...financialStats,
+                quittancesCount: quittances.length,
+                charges,
+                maintenanceRequests,
+              });
+              showToast(
+                tr(
+                  'Rapport PDF de synthèse téléchargé avec succès.',
+                  'تم تحميل تقرير الملخص بصيغة PDF بنجاح.'
+                ),
+                'success'
+              );
+            }}
+            icon={<FileDown className="w-4 h-4" />}
+          >
+            {tr('Télécharger Rapport PDF', 'تحميل تقرير PDF')}
+          </Button>
           <Button variant="secondary" onClick={() => navigate('/ag')} icon={<AGIcon />}>
             {t('dashboard.conveneAg')}
           </Button>

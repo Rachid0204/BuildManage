@@ -73,62 +73,74 @@ const LandingPage: React.FC<LandingPageProps> = ({ onLoginClick, onSelectPlan })
 
       {/* Hero Section */}
       <div className="relative bg-white overflow-hidden border-b border-slate-200">
-        <div className="max-w-7xl mx-auto">
-          <div className="relative z-10 pb-8 bg-white sm:pb-16 md:pb-20 lg:max-w-2xl lg:w-full lg:pb-28 xl:pb-32">
-            <svg
-              className="hidden lg:block absolute right-0 inset-y-0 h-full w-48 text-white transform translate-x-1/2"
-              fill="currentColor"
-              viewBox="0 0 100 100"
-              preserveAspectRatio="none"
-              aria-hidden="true"
-            >
-              <polygon points="50,0 100,0 50,100 0,100" />
-            </svg>
-
-            <main className="mt-10 mx-auto max-w-7xl px-4 sm:mt-12 sm:px-6 md:mt-16 lg:mt-20 lg:px-8 xl:mt-24">
-              <div className="sm:text-center lg:text-start">
-                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-teal-50 border border-teal-200 text-teal-800 text-xs font-bold uppercase tracking-wider mb-4">
-                  🏢 {tr('Plateforme B2B2C pour Syndics Professionnels & Bénévoles', 'منصة احترافية لوكلاء الاتحاد (السنديك) المهنيين والمتطوعين')}
-                </span>
-                <h1 className="text-4xl tracking-tight font-extrabold text-slate-900 sm:text-5xl md:text-6xl">
-                  <span className="block xl:inline">{t('landing.hero.title')}</span>{' '}
-                  <span className="block text-teal-700">{t('landing.hero.highlight')}</span>
-                </h1>
-                <p className="mt-3 text-base text-slate-600 sm:mt-5 sm:text-lg sm:max-w-xl sm:mx-auto md:mt-5 md:text-xl lg:mx-0">
-                  {t('landing.hero.subtitle')}
-                </p>
-                <div className="mt-6 sm:mt-8 sm:flex sm:justify-center lg:justify-start gap-3">
-                  <Button
-                    onClick={scrollToPricing}
-                    className="w-full sm:w-auto px-7 py-3.5 text-base font-bold"
-                  >
-                    {tr('Choisir un forfait & Créer mon cabinet Syndic', 'اختر باقة وأنشئ مكتب السنديك')}
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    onClick={onLoginClick}
-                    className="mt-3 sm:mt-0 w-full sm:w-auto px-6 py-3.5 text-base font-semibold"
-                  >
-                    {tr('Accéder à mon espace (Connexion)', 'الولوج إلى فضائي (تسجيل الدخول)')}
-                  </Button>
-                </div>
-                <p className="mt-3 text-xs text-slate-500">
-                  🔒{' '}
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 sm:py-14 lg:py-20">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 items-center">
+            <main className="lg:col-span-7 text-start">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-teal-50 border border-teal-200 text-teal-800 text-xs font-bold uppercase tracking-wider mb-4">
+                🏢{' '}
+                {tr(
+                  'Plateforme B2B2C pour Syndics Professionnels & Bénévoles',
+                  'منصة احترافية لوكلاء الاتحاد (السنديك) المهنيين والمتطوعين'
+                )}
+              </span>
+              <h1 className="text-3xl tracking-tight font-extrabold text-slate-900 sm:text-5xl xl:text-6xl leading-tight">
+                <span className="block">{t('landing.hero.title')}</span>
+                <span className="block text-teal-700 mt-1">{t('landing.hero.highlight')}</span>
+              </h1>
+              <p className="mt-4 text-base text-slate-600 sm:text-lg md:text-xl max-w-2xl leading-relaxed">
+                {t('landing.hero.subtitle')}
+              </p>
+              <div className="mt-6 sm:mt-8 flex flex-col sm:flex-row sm:items-center gap-3">
+                <Button
+                  onClick={scrollToPricing}
+                  className="w-full sm:w-auto px-7 py-3.5 text-base font-bold"
+                >
                   {tr(
-                    'Accès sécurisé : Les comptes Copropriétaires, Locataires et Prestataires sont créés et délivrés exclusivement par leur Syndic.',
-                    'ولوج آمن : يتم إنشاء وتسليم حسابات الملاك المشتركين والمكترين ومقدمي الخدمات حصرياً من طرف السنديك.'
+                    'Choisir un forfait & Créer mon cabinet Syndic',
+                    'اختر باقة وأنشئ مكتب السنديك'
                   )}
-                </p>
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={onLoginClick}
+                  className="w-full sm:w-auto px-6 py-3.5 text-base font-semibold"
+                >
+                  {tr('Accéder à mon espace (Connexion)', 'الولوج إلى فضائي (تسجيل الدخول)')}
+                </Button>
               </div>
+              <p className="mt-4 text-xs text-slate-500 leading-relaxed">
+                🔒{' '}
+                {tr(
+                  'Accès sécurisé : Les comptes Copropriétaires, Locataires et Prestataires sont créés et délivrés exclusivement par leur Syndic.',
+                  'ولوج آمن : يتم إنشاء وتسليم حسابات الملاك المشتركين والمكترين ومقدمي الخدمات حصرياً من طرف السنديك.'
+                )}
+              </p>
             </main>
+
+            <div className="lg:col-span-5">
+              <div className="relative rounded-2xl overflow-hidden border border-slate-200 shadow-xl bg-slate-100">
+                <img
+                  className="h-64 w-full object-cover sm:h-80 lg:h-[420px]"
+                  src="https://images.unsplash.com/photo-1560448204-e02f11c3d0e2?ixlib=rb-4.0.3&auto=format&fit=crop&w=1470&q=80"
+                  alt={tr(
+                    'Immeuble résidentiel moderne au Maroc',
+                    'إقامة سكنية حديثة بالمغرب'
+                  )}
+                />
+                <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/85 via-slate-950/40 to-transparent p-4 text-white">
+                  <p className="text-xs font-bold uppercase tracking-wider text-teal-300">
+                    {tr('Conformité Marocaine Loi 18-00 & 106-12', 'مطابقة تامة للقانون المغربي 18-00 و 106-12')}
+                  </p>
+                  <p className="text-xs text-slate-200 mt-0.5">
+                    {tr(
+                      'Comptabilité tantièmes, fonds de réserve, AG et quittances certifiées.',
+                      'محاسبة الحصص (التانتييم)، صندوق الاحتياط، الجمع العام والوصولات الرسمية.'
+                    )}
+                  </p>
+                </div>
+              </div>
+            </div>
           </div>
-        </div>
-        <div className="lg:absolute lg:inset-y-0 lg:right-0 lg:w-1/2 bg-slate-100 flex items-center justify-center">
-          <img
-            className="h-56 w-full object-cover sm:h-72 md:h-96 lg:w-full lg:h-full"
-            src="https://images.unsplash.com/photo-1560448204-e02f11c3d0e2?ixlib=rb-4.0.3&auto=format&fit=crop&w=1470&q=80"
-            alt="Immeuble résidentiel moderne au Maroc"
-          />
         </div>
       </div>
 

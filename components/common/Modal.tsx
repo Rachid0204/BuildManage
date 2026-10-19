@@ -6,9 +6,17 @@ interface ModalProps {
     title: string;
     children: React.ReactNode;
     footer?: React.ReactNode;
+    maxWidthClass?: string;
 }
 
-const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, footer }) => {
+const Modal: React.FC<ModalProps> = ({
+    isOpen,
+    onClose,
+    title,
+    children,
+    footer,
+    maxWidthClass = 'sm:max-w-lg',
+}) => {
     const modalRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
@@ -40,7 +48,7 @@ const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, footer 
         >
             <div 
                 ref={modalRef}
-                className="relative bg-white rounded-t-2xl sm:rounded-xl shadow-2xl transform transition-all w-full sm:max-w-lg max-h-[92vh] sm:max-h-[88vh] flex flex-col outline-none overflow-hidden" 
+                className={`relative bg-white rounded-t-2xl sm:rounded-xl shadow-2xl transform transition-all w-full ${maxWidthClass} max-h-[92vh] sm:max-h-[90vh] flex flex-col outline-none overflow-hidden`} 
                 onClick={(e) => e.stopPropagation()}
                 tabIndex={-1}
             >

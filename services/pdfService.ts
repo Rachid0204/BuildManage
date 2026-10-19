@@ -1,5 +1,18 @@
 import { jsPDF } from "jspdf";
-import type { Invoice, Building, Resident, Syndic, Quittance, AssembleeGenerale, Apartment, Transaction, Prestataire } from "../types";
+import type {
+  Invoice,
+  Building,
+  Resident,
+  Syndic,
+  Quittance,
+  AssembleeGenerale,
+  Apartment,
+  Transaction,
+  Prestataire,
+  Charge,
+  MaintenanceRequest,
+  Document as BuildingDocument,
+} from "../types";
 
 const currencyFormatter = new Intl.NumberFormat('fr-MA', {
   style: 'currency',
@@ -1836,4 +1849,348 @@ export const exportPrestataireCredentialsPDF = (
   doc.save(`Fiche_Acces_Prestataire_${safeName}.pdf`);
 };
 
+/**
+ * Generates an executive PDF Summary Report for the Building Dashboard:
+ * 1. Current Financial Status (Working Fund, Reserve Fund, Collection Rate, Charges & Quittances)
+ * 2. Occupancy & Tantièmes Summary (Lots, Occupied vs Vacant, Owners vs Tenants, Total Shares)
+ * 3. Pending & Active Maintenance Requests
+ */
+export const exportBuildingSummaryReportPDF = (
+  building: Building,
+  syndic?: Syndic | null,
+  summaryData?: {
+    workingBalance: number;
+    reserveBalance: number;
+    collectionRate: number;
+    totalChargesAmount: number;
+    paidChargesAmount: number;
+    overdueChargesCount: number;
+    pendingProofsCount: number;
+    quittancesCount: number;
+    charges?: Charge[];
+    maintenanceRequests?: MaintenanceRequest[];
+  }
+) => {
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4',
+  });
 
+  const issueDate = new Date().toLocaleDateString('fr-MA', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
+
+  const apartments = building.apartments || [];
+  const residents = building.residents || [];
+  const occupiedApartments = apartments.filter(
+    (apt) =>
+      Boolean(apt.ownerId || apt.tenantId) ||
+      residents.some((r) => r.apartmentId === apt.id)
+  );
+  const vacantApartmentsCount = Math.max(0, apartments.length - occupiedApartments.length);
+  const occupancyRate =
+    apartments.length > 0 ? Math.round((occupiedApartments.length / apartments.length) * 100) : 0;
+  const ownersCount = residents.filter((r) => r.isOwner).length;
+  const tenantsCount = residents.filter((r) => !r.isOwner).length;
+  const totalTantiemes =
+    apartments.reduce((sum, a) => sum + (Number(a.tantiemes) || 0), 0) ||
+    building.totalTantiemes ||
+    1000;
+
+  const openMaintenance = (summaryData?.maintenanceRequests || []).filter(
+    (m) => m.status !== 'completed'
+  );
+
+  // Header Banner
+  doc.setFillColor(15, 118, 110); // Teal 700
+  doc.rect(0, 0, 210, 38, 'F');
+  doc.setFillColor(15, 23, 42); // Slate 900 accent bar
+  doc.rect(0, 38, 210, 2.5, 'F');
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text('ROYAUME DU MAROC · SYNDICAT DES COPROPRIÉTAIRES (LOI 18-00 & 106-12)', 14, 12);
+
+  doc.setFontSize(16);
+  doc.text('RAPPORT DE SYNTHÈSE DE LA COPROPRIÉTÉ', 14, 22);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9.5);
+  doc.text(
+    `Résidence : ${building.name} — ${building.address}, ${building.city || 'Maroc'}`,
+    14,
+    30
+  );
+  doc.setFontSize(8.5);
+  doc.text(
+    `Édité le ${issueDate} · Gestionnaire : ${syndic?.name || building.managerName || 'Cabinet Syndic'}`,
+    14,
+    35.5
+  );
+
+  let y = 48;
+
+  // SECTION 1: FINANCIAL STATUS
+  doc.setFillColor(241, 245, 249);
+  doc.rect(14, y, 182, 8, 'F');
+  doc.setTextColor(15, 118, 110);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.text('1. SITUATION FINANCIÈRE & TRÉSORERIE (MAD)', 18, y + 5.5);
+
+  y += 11;
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(203, 213, 225);
+  doc.rect(14, y, 182, 38, 'FD');
+
+  doc.setTextColor(30, 41, 59);
+  doc.setFontSize(9);
+  doc.setFont('helvetica', 'bold');
+  doc.text('Fonds de Roulement (Courant) :', 18, y + 8);
+  doc.setTextColor(15, 118, 110);
+  doc.text(currencyFormatter.format(summaryData?.workingBalance ?? 0), 75, y + 8);
+
+  doc.setTextColor(30, 41, 59);
+  doc.text('Fonds de Réserve (Loi 106-12) :', 18, y + 16);
+  doc.setTextColor(67, 56, 202);
+  doc.text(currencyFormatter.format(summaryData?.reserveBalance ?? 0), 75, y + 16);
+
+  doc.setTextColor(30, 41, 59);
+  doc.setFont('helvetica', 'normal');
+  doc.text(
+    `Total Appels de Fonds : ${currencyFormatter.format(summaryData?.totalChargesAmount ?? 0)}`,
+    18,
+    y + 24
+  );
+  doc.text(
+    `Montant Encaissé : ${currencyFormatter.format(summaryData?.paidChargesAmount ?? 0)}`,
+    18,
+    y + 31
+  );
+
+  doc.setFont('helvetica', 'bold');
+  doc.text(`Taux de Recouvrement : ${summaryData?.collectionRate ?? 0}%`, 115, y + 8);
+  doc.setFont('helvetica', 'normal');
+  doc.text(`Appels en retard (Impayés) : ${summaryData?.overdueChargesCount ?? 0}`, 115, y + 16);
+  doc.text(`Justificatifs en attente : ${summaryData?.pendingProofsCount ?? 0}`, 115, y + 24);
+  doc.text(`Quittances officielles émises : ${summaryData?.quittancesCount ?? 0}`, 115, y + 31);
+
+  y += 45;
+
+  // SECTION 2: OCCUPANCY & LOTS SUMMARY
+  doc.setFillColor(241, 245, 249);
+  doc.rect(14, y, 182, 8, 'F');
+  doc.setTextColor(15, 118, 110);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.text("2. ÉTAT D'OCCUPATION & RÉPARTITION DES LOTS", 18, y + 5.5);
+
+  y += 11;
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(203, 213, 225);
+  doc.rect(14, y, 182, 32, 'FD');
+
+  doc.setTextColor(30, 41, 59);
+  doc.setFontSize(9);
+  doc.setFont('helvetica', 'bold');
+  doc.text(`Nombre total de lots : ${apartments.length}`, 18, y + 8);
+  doc.setFont('helvetica', 'normal');
+  doc.text(
+    `Lots occupés : ${occupiedApartments.length}  |  Lots vacants : ${vacantApartmentsCount}`,
+    18,
+    y + 16
+  );
+  doc.text(`Quote-part totale : ${totalTantiemes} / 1000 tantièmes`, 18, y + 24);
+
+  doc.setFont('helvetica', 'bold');
+  doc.text(`Taux d'Occupation : ${occupancyRate}%`, 115, y + 8);
+  doc.setFont('helvetica', 'normal');
+  doc.text(`Copropriétaires inscrits : ${ownersCount}`, 115, y + 16);
+  doc.text(`Locataires déclarés : ${tenantsCount}`, 115, y + 24);
+
+  y += 40;
+
+  // SECTION 3: PENDING & IN-PROGRESS MAINTENANCE REQUESTS
+  doc.setFillColor(241, 245, 249);
+  doc.rect(14, y, 182, 8, 'F');
+  doc.setTextColor(15, 118, 110);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.text(
+    `3. TRAVAUX & DEMANDES D'INTERVENTION EN ATTENTE (${openMaintenance.length})`,
+    18,
+    y + 5.5
+  );
+
+  y += 11;
+
+  if (openMaintenance.length === 0) {
+    doc.setFillColor(248, 250, 252);
+    doc.setDrawColor(203, 213, 225);
+    doc.rect(14, y, 182, 16, 'FD');
+    doc.setTextColor(100, 116, 139);
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(9);
+    doc.text(
+      'Aucune demande de travaux ou de maintenance en attente pour cet immeuble.',
+      18,
+      y + 10
+    );
+    y += 22;
+  } else {
+    // Table Header
+    doc.setFillColor(15, 23, 42);
+    doc.rect(14, y, 182, 8, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.text('Date', 17, y + 5.5);
+    doc.text('Catégorie', 40, y + 5.5);
+    doc.text('Priorité', 72, y + 5.5);
+    doc.text('Statut', 96, y + 5.5);
+    doc.text('Description / Intervention', 124, y + 5.5);
+    y += 8;
+
+    openMaintenance.slice(0, 10).forEach((req, idx) => {
+      if (y > 260) {
+        doc.addPage();
+        y = 20;
+      }
+      doc.setFillColor(idx % 2 === 0 ? 255 : 248, idx % 2 === 0 ? 255 : 250, idx % 2 === 0 ? 255 : 252);
+      doc.setDrawColor(226, 232, 240);
+      doc.rect(14, y, 182, 9, 'FD');
+
+      doc.setTextColor(30, 41, 59);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      const reqDate = req.createdAt
+        ? new Date(req.createdAt).toLocaleDateString('fr-MA')
+        : issueDate;
+      const statusLabel = req.status === 'in_progress' ? 'En cours' : 'En attente';
+      const priorityLabel =
+        req.priority === 'high' ? 'Urgente' : req.priority === 'medium' ? 'Moyenne' : 'Basse';
+      const descShort =
+        (req.description || '').length > 38
+          ? `${req.description.substring(0, 38)}...`
+          : req.description || '-';
+
+      doc.text(reqDate, 17, y + 6);
+      doc.text(String(req.category || 'Général').toUpperCase(), 40, y + 6);
+      doc.text(priorityLabel, 72, y + 6);
+      doc.text(statusLabel, 96, y + 6);
+      doc.text(descShort, 124, y + 6);
+      y += 9;
+    });
+  }
+
+  // Footer
+  doc.setFontSize(7.5);
+  doc.setTextColor(100, 116, 139);
+  doc.text(
+    `Rapport de Synthèse Copropriété généré via Syndik Maroc — ${building.name} (${issueDate})`,
+    105,
+    287,
+    { align: 'center' }
+  );
+
+  const safeBld = building.name.replace(/[^a-zA-Z0-9_-]/g, '_');
+  doc.save(`Rapport_Synthese_${safeBld}.pdf`);
+};
+
+/**
+ * Generates an official PDF representation for an archived copropriété document
+ * so it can be previewed in-browser via a Blob URL or downloaded.
+ */
+function buildArchiveDocumentJsPDF(docItem: BuildingDocument, building: Building): jsPDF {
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4',
+  });
+
+  const uploadDate = new Date(docItem.uploadedAt || new Date()).toLocaleDateString('fr-MA', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
+
+  doc.setFillColor(15, 118, 110);
+  doc.rect(0, 0, 210, 36, 'F');
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text('ARCHIVES LÉGALES DE LA COPROPRIÉTÉ · LOI N° 18-00 & 106-12', 14, 13);
+
+  doc.setFontSize(14);
+  doc.text(docItem.name, 14, 23);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.text(`Résidence : ${building.name} (${building.address}, ${building.city || 'Maroc'})`, 14, 31);
+
+  let y = 48;
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(203, 213, 225);
+  doc.rect(14, y, 182, 34, 'FD');
+
+  doc.setTextColor(15, 23, 42);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.text('MÉTADONNÉES DU DOCUMENT ARCHIVÉ', 18, y + 9);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.text(`Nom du fichier : ${docItem.name}`, 18, y + 17);
+  doc.text(`Taille : ${docItem.size || '0.4 MB'} · Date de dépôt : ${uploadDate}`, 18, y + 24);
+  doc.text(`Référence Archive : ${docItem.id}`, 18, y + 30);
+
+  y += 44;
+  doc.setTextColor(30, 41, 59);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10.5);
+  doc.text('EXTRAIT CERTIFIÉ DU DOCUMENT DE COPROPRIÉTÉ', 14, y);
+
+  y += 8;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9.5);
+  const lines = doc.splitTextToSize(
+    `Ce document officiel (« ${docItem.name} ») fait partie intégrante du registre d'archives numériques de la copropriété ${building.name}, sise à ${building.address}, ${building.city || 'Maroc'}, conformément aux dispositions de la Loi n° 18-00 relative au statut de la copropriété des immeubles bâtis telle que modifiée et complétée par la Loi n° 106-12.\n\nIl est mis à la disposition des copropriétaires et du syndic pour consultation directe en ligne et conservation légale.`,
+    180
+  );
+  doc.text(lines, 14, y);
+
+  doc.setFontSize(8);
+  doc.setTextColor(100, 116, 139);
+  doc.text(
+    `Archive Numérique Certifiée — ${building.name} — Consultation Directe Syndik`,
+    105,
+    285,
+    { align: 'center' }
+  );
+
+  return doc;
+}
+
+export const generateArchiveDocumentPDFBlobUrl = (
+  docItem: BuildingDocument,
+  building: Building
+): string => {
+  const doc = buildArchiveDocumentJsPDF(docItem, building);
+  return String(doc.output('bloburl'));
+};
+
+export const downloadArchiveDocumentPDF = (
+  docItem: BuildingDocument,
+  building: Building
+): void => {
+  const doc = buildArchiveDocumentJsPDF(docItem, building);
+  const safeName = docItem.name.endsWith('.pdf')
+    ? docItem.name
+    : `${docItem.name.replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
+  doc.save(safeName);
+};
