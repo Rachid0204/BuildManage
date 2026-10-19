@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
 import { I18nProvider } from './hooks/useI18n';
 import { AuthProvider } from './contexts/AuthContext';
+import { ToastProvider } from './components/common/Toast';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -16,18 +17,20 @@ const queryClient = new QueryClient({
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
-  throw new Error("Could not find root element to mount to");
+  throw new Error('Could not find root element to mount to');
 }
 
 const root = ReactDOM.createRoot(rootElement);
 root.render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <I18nProvider>
-          <App />
-        </I18nProvider>
-      </AuthProvider>
+      <I18nProvider>
+        <ToastProvider>
+          <AuthProvider>
+            <App />
+          </AuthProvider>
+        </ToastProvider>
+      </I18nProvider>
     </QueryClientProvider>
   </React.StrictMode>
 );

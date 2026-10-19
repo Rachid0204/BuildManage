@@ -36,13 +36,19 @@ service cloud.firestore {
 
     function isValidSyndic(data) {
       return data.keys().hasAll(['id', 'name', 'email', 'subscriptionPlan', 'subscriptionStatus', 'createdBy', 'buildings']) &&
-        data.keys().hasOnly(['id', 'name', 'email', 'phone', 'subscriptionPlan', 'subscriptionStatus', 'subscriptionExpiresAt', 'createdBy', 'buildings']) &&
+        data.keys().hasOnly(['id', 'name', 'email', 'phone', 'logoUrl', 'ice', 'taxId', 'rc', 'patente', 'subscriptionPlan', 'subscriptionStatus', 'subscriptionExpiry', 'subscriptionExpiresAt', 'createdBy', 'buildings']) &&
         data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.name is string && data.name.size() >= 1 && data.name.size() <= 200 &&
         data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
         (!('phone' in data) || (data.phone is string && data.phone.size() <= 40)) &&
+        (!('logoUrl' in data) || (data.logoUrl is string && data.logoUrl.size() <= 500)) &&
+        (!('ice' in data) || (data.ice is string && data.ice.size() <= 32)) &&
+        (!('taxId' in data) || (data.taxId is string && data.taxId.size() <= 32)) &&
+        (!('rc' in data) || (data.rc is string && data.rc.size() <= 64)) &&
+        (!('patente' in data) || (data.patente is string && data.patente.size() <= 64)) &&
         data.subscriptionPlan is string && data.subscriptionPlan.size() <= 32 && data.subscriptionPlan in ['starter', 'professional', 'enterprise'] &&
         data.subscriptionStatus is string && data.subscriptionStatus.size() <= 32 && data.subscriptionStatus in ['active', 'expired', 'cancelled'] &&
+        (!('subscriptionExpiry' in data) || (data.subscriptionExpiry is string && data.subscriptionExpiry.size() <= 64)) &&
         (!('subscriptionExpiresAt' in data) || (data.subscriptionExpiresAt is string && data.subscriptionExpiresAt.size() <= 64)) &&
         data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128 && data.createdBy.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.buildings is list && data.buildings.size() <= 50 && (data.buildings.size() == 0 || data.buildings[0] is map);
@@ -69,7 +75,7 @@ service cloud.firestore {
 
     function isValidPrestataire(data) {
       return data.keys().hasAll(['id', 'syndicId', 'buildingId', 'name', 'category']) &&
-        data.keys().hasOnly(['id', 'syndicId', 'buildingId', 'name', 'category', 'contactPerson', 'phone', 'email', 'hasAccount', 'generatedPassword', 'credentialsCreatedAt', 'mustChangePassword']) &&
+        data.keys().hasOnly(['id', 'syndicId', 'buildingId', 'name', 'category', 'contactPerson', 'phone', 'email', 'ice', 'rc', 'city', 'address', 'contractRef', 'monthlyRetainer', 'rating', 'status', 'interventionsCount', 'totalPaid', 'notes', 'hasAccount', 'generatedPassword', 'credentialsCreatedAt', 'credentialsSharedAt', 'credentialsLastSharedMethod', 'credentialsAuditLog', 'mustChangePassword']) &&
         data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.syndicId is string && data.syndicId.size() >= 1 && data.syndicId.size() <= 128 &&
         data.buildingId is string && data.buildingId.size() >= 1 && data.buildingId.size() <= 128 &&
@@ -81,6 +87,9 @@ service cloud.firestore {
         (!('hasAccount' in data) || data.hasAccount is bool) &&
         (!('generatedPassword' in data) || (data.generatedPassword is string && data.generatedPassword.size() <= 128)) &&
         (!('credentialsCreatedAt' in data) || (data.credentialsCreatedAt is string && data.credentialsCreatedAt.size() <= 64)) &&
+        (!('credentialsSharedAt' in data) || (data.credentialsSharedAt is string && data.credentialsSharedAt.size() <= 64)) &&
+        (!('credentialsLastSharedMethod' in data) || (data.credentialsLastSharedMethod is string && data.credentialsLastSharedMethod in ['pdf', 'copy'])) &&
+        (!('credentialsAuditLog' in data) || (data.credentialsAuditLog is list && data.credentialsAuditLog.size() <= 50)) &&
         (!('mustChangePassword' in data) || data.mustChangePassword is bool);
     }
 

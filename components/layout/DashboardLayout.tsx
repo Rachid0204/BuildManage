@@ -9,9 +9,9 @@ import Loading from '../common/Loading';
 import {
     DashboardIcon,
     FinancialsIcon,
-    WrenchIcon,
     AGIcon,
 } from '../icons/IconComponents';
+import { Wrench } from 'lucide-react';
 
 // Map routes to View types for Sidebar highlighting
 const getActiveView = (pathname: string): any => {
@@ -115,7 +115,7 @@ const DashboardLayout: React.FC = () => {
                             activeView === 'maintenance' ? 'text-teal-600' : 'text-slate-500 hover:text-slate-900'
                         }`}
                     >
-                        <span className="scale-90"><WrenchIcon /></span>
+                        <Wrench className="w-5 h-5" strokeWidth={1.75} />
                         <span className="truncate max-w-[64px]">{t('mobileNav.maintenance')}</span>
                     </button>
 

@@ -15,6 +15,7 @@ import {
 } from '../../firebase/services';
 import { generatePvAgPDF } from '../../services/pdfService';
 import Loading from '../common/Loading';
+import { useToast } from '../common/Toast';
 
 interface AssembleeGeneraleProps {
   building: Building;
@@ -23,6 +24,7 @@ interface AssembleeGeneraleProps {
 
 const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syndic }) => {
   const { tr, isAr } = useI18n();
+  const { showToast } = useToast();
   const queryClient = useQueryClient();
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -139,7 +141,13 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
   };
 
   const handleCreateAG = () => {
-    if (!newTitle) return alert(tr("Veuillez renseigner le titre de l'assemblée.", 'يرجى إدخال عنوان الجمعية العامة.'));
+    if (!newTitle) {
+      showToast(
+        tr("Veuillez renseigner le titre de l'assemblée.", 'يرجى إدخال عنوان الجمعية العامة.'),
+        'warning'
+      );
+      return;
+    }
 
     const initialAttendees = building.residents.map((res) => {
       const apt = building.apartments.find((a) => a.id === res.apartmentId || a.ownerId === res.id);

@@ -7,6 +7,7 @@ import Modal from '../common/Modal';
 import { PlusIcon, TrashIcon, DocumentsIcon } from '../icons/IconComponents';
 import { useI18n } from '../../hooks/useI18n';
 import { uploadDocument, deleteDocument } from '../../firebase/services';
+import { useToast } from '../common/Toast';
 
 const Documents: React.FC<{
   building: Building;
@@ -14,7 +15,8 @@ const Documents: React.FC<{
   onAddDocument?: () => void;
   onDeleteDocument?: (docId: string) => void;
 }> = ({ building, documents }) => {
-  const { t, tr } = useI18n();
+  const { t, tr, isAr } = useI18n();
+  const { showToast, confirmAction } = useToast();
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -31,10 +33,18 @@ const Documents: React.FC<{
       queryClient.invalidateQueries({ queryKey: ['syndics'] });
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
+      showToast(
+        tr('Document déposé dans les archives de la copropriété.', 'تم إيداع الوثيقة في أرشيف الإقامة.'),
+        'success'
+      );
     },
     onError: (error) => {
       console.error('Upload failed', error);
       setIsUploading(false);
+      showToast(
+        tr('Erreur lors du téléversement du document.', 'حدث خطأ أثناء رفع الوثيقة.'),
+        'error'
+      );
     },
   });
 
@@ -42,6 +52,7 @@ const Documents: React.FC<{
     mutationFn: deleteDocument,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['syndics'] });
+      showToast(tr('Document supprimé.', 'تم حذف الوثيقة.'), 'info');
     },
   });
 
@@ -49,21 +60,28 @@ const Documents: React.FC<{
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
       if (file.size > 10 * 1024 * 1024) {
+        showToast(
+          tr('Le fichier dépasse la taille maximale autorisée (10 Mo).', 'يتجاوز الملف الحجم الأقصى المسموح به (10 ميغابايت).'),
+          'warning'
+        );
         return;
       }
       uploadMutation.mutate(file);
     }
   };
 
-  const handleDelete = (docItem: Document) => {
-    if (
-      confirm(
-        tr(
-          `Voulez-vous vraiment supprimer le document « ${docItem.name} » ?`,
-          `هل تريدون فعلاً حذف الوثيقة « ${docItem.name} » ؟`
-        )
-      )
-    ) {
+  const handleDelete = async (docItem: Document) => {
+    const confirmed = await confirmAction({
+      title: tr('Supprimer le document', 'حذف الوثيقة'),
+      message: tr(
+        `Voulez-vous vraiment supprimer le document « ${docItem.name} » des archives de la copropriété ?`,
+        `هل تريدون فعلاً حذف الوثيقة « ${docItem.name} » من أرشيف الملكية المشتركة ؟`
+      ),
+      confirmLabel: tr('Supprimer', 'حذف'),
+      cancelLabel: tr('Annuler', 'إلغاء'),
+      variant: 'danger',
+    });
+    if (confirmed) {
       deleteMutation.mutate(docItem);
     }
   };
@@ -105,7 +123,7 @@ const Documents: React.FC<{
         </div>
       </div>
 
-      <Card className="border border-slate-200 overflow-hidden">
+      <Card className="border border-slate-200 overflow-hidden !p-0">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-slate-200 text-xs sm:text-sm">
             <thead className="bg-slate-50">
@@ -133,7 +151,11 @@ const Documents: React.FC<{
                       onClick={() => setPreviewDoc(docItem)}
                       className="flex items-center hover:underline text-start"
                     >
-                      <svg className="w-4 h-4 me-2 text-teal-600 shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                      <svg
+                        className="w-4 h-4 me-2 text-teal-600 shrink-0"
+                        fill="currentColor"
+                        viewBox="0 0 20 20"
+                      >
                         <path d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" />
                       </svg>
                       <span>{docItem.name}</span>
@@ -143,25 +165,27 @@ const Documents: React.FC<{
                     {docItem.size}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap font-mono text-xs text-slate-500">
-                    {new Date(docItem.uploadedAt).toLocaleDateString('fr-MA')}
+                    {new Date(docItem.uploadedAt).toLocaleDateString(isAr ? 'ar-MA' : 'fr-MA')}
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-end font-medium space-x-2">
-                    <button
-                      type="button"
-                      onClick={() => setPreviewDoc(docItem)}
-                      className="px-2.5 py-1 rounded bg-teal-50 hover:bg-teal-100 text-teal-800 font-bold text-xs transition-colors"
-                    >
-                      {tr('Consulter', 'اطلاع')}
-                    </button>
-                    <Button
-                      variant="danger"
-                      className="!p-1.5"
-                      onClick={() => handleDelete(docItem)}
-                      aria-label={tr('Supprimer', 'حذف')}
-                      title={tr('Supprimer', 'حذف')}
-                    >
-                      <TrashIcon />
-                    </Button>
+                  <td className="px-6 py-4 whitespace-nowrap text-end font-medium">
+                    <div className="inline-flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setPreviewDoc(docItem)}
+                        className="px-2.5 py-1 rounded bg-teal-50 hover:bg-teal-100 text-teal-800 font-bold text-xs transition-colors"
+                      >
+                        {tr('Consulter', 'اطلاع')}
+                      </button>
+                      <Button
+                        variant="danger"
+                        className="!p-1.5"
+                        onClick={() => handleDelete(docItem)}
+                        aria-label={tr('Supprimer', 'حذف')}
+                        title={tr('Supprimer', 'حذف')}
+                      >
+                        <TrashIcon />
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -169,7 +193,17 @@ const Documents: React.FC<{
           </table>
         </div>
         {documents.length === 0 && (
-          <p className="text-center py-8 text-slate-500 text-xs">{t('documents.noDocuments')}</p>
+          <div className="text-center py-10 px-4">
+            <p className="text-sm font-semibold text-slate-700 mb-1">
+              {t('documents.noDocuments')}
+            </p>
+            <p className="text-xs text-slate-500">
+              {tr(
+                "Déposez le règlement de copropriété, les procès-verbaux d'AG ou les contrats d'assurance.",
+                'أودعوا نظام الملكية المشتركة أو محاضر الجموع العامة أو عقود التأمين.'
+              )}
+            </p>
+          </div>
         )}
       </Card>
 
@@ -192,7 +226,7 @@ const Documents: React.FC<{
                 <h4 className="font-bold text-slate-900 text-sm">{previewDoc.name}</h4>
                 <p className="text-[11px] text-slate-500 font-mono mt-0.5">
                   {tr('Taille :', 'الحجم :')} {previewDoc.size} · {tr('Déposé le', 'أودع بتاريخ')}{' '}
-                  {new Date(previewDoc.uploadedAt).toLocaleDateString('fr-MA')}
+                  {new Date(previewDoc.uploadedAt).toLocaleDateString(isAr ? 'ar-MA' : 'fr-MA')}
                 </p>
               </div>
               <span className="px-2.5 py-1 rounded bg-teal-100 text-teal-800 font-mono font-bold text-[11px]">

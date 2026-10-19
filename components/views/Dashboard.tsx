@@ -1,206 +1,510 @@
-import React from 'react';
-import type { Building } from '../../types';
+import React, { useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+import type { Building, Syndic } from '../../types';
 import Card from '../common/Card';
-import { useI18n } from '../../hooks/useI18n';
+import Button from '../common/Button';
 import {
-  ResidentsIcon,
   ApartmentsIcon,
+  AnnouncementsIcon,
   FinancialsIcon,
+  WrenchIcon,
   AGIcon,
-  PrestatairesIcon,
+  QuittanceIcon,
+  ShieldAlertIcon,
 } from '../icons/IconComponents';
+import {
+  getChargesForBuilding,
+  getPaymentProofsForBuilding,
+  getMaintenanceRequestsForBuilding,
+  getQuittancesForBuilding,
+} from '../../firebase/services';
+import { useI18n } from '../../hooks/useI18n';
+
+interface DashboardProps {
+  building: Building;
+  syndic?: Syndic;
+}
+
+const currencyFormatter = new Intl.NumberFormat('fr-MA', {
+  style: 'currency',
+  currency: 'MAD',
+  minimumFractionDigits: 2,
+});
 
 const StatCard: React.FC<{
-  icon: React.ReactNode;
-  label: string;
+  title: string;
   value: string | number;
   subtitle?: string;
-  color: string;
+  icon: React.ReactNode;
+  accentClass?: string;
   onClick?: () => void;
-}> = ({ icon, label, value, subtitle, color, onClick }) => (
+}> = ({ title, value, subtitle, icon, accentClass = 'bg-teal-50 text-teal-700', onClick }) => (
   <Card
-    className={`p-4 transition-all ${
-      onClick
-        ? 'cursor-pointer hover:shadow-md hover:border-teal-300 border border-slate-200'
-        : 'border border-slate-200'
-    }`}
     onClick={onClick}
+    className={`flex items-start justify-between p-5 border border-slate-200 transition-all ${
+      onClick ? 'cursor-pointer hover:border-teal-400 hover:shadow-md' : ''
+    }`}
   >
-    <div className="flex items-center">
-      <div className={`p-3 rounded-xl ${color} text-white me-3 shrink-0`}>{icon}</div>
-      <div>
-        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">{label}</p>
-        <p className="text-2xl font-bold font-mono text-slate-900 mt-0.5 tabular-nums">{value}</p>
-        {subtitle && <p className="text-[11px] text-slate-500 mt-0.5">{subtitle}</p>}
-      </div>
+    <div className="min-w-0">
+      <p className="text-xs font-bold text-slate-500 uppercase tracking-wider truncate">{title}</p>
+      <p className="text-xl sm:text-2xl font-extrabold text-slate-900 font-mono mt-1 truncate">
+        {value}
+      </p>
+      {subtitle && <p className="text-xs text-slate-500 mt-1 truncate">{subtitle}</p>}
     </div>
+    <div className={`p-3 rounded-xl shrink-0 ms-3 ${accentClass}`}>{icon}</div>
   </Card>
 );
 
-const Dashboard: React.FC<{ building: Building; onNavigate: (view: any) => void }> = ({
-  building,
-  onNavigate,
-}) => {
-  const { t, language } = useI18n();
-  const currencyFormatter = new Intl.NumberFormat(language === 'ar' ? 'ar-MA' : 'fr-MA', {
-    style: 'currency',
-    currency: 'MAD',
-    minimumFractionDigits: 2,
+const Dashboard: React.FC<DashboardProps> = ({ building, syndic }) => {
+  const { t, tr, language } = useI18n();
+  const navigate = useNavigate();
+
+  const { data: charges = [] } = useQuery({
+    queryKey: ['charges', building.id],
+    queryFn: () => getChargesForBuilding(building.id),
   });
 
-  const recentAnnouncements = [...(building.announcements || [])]
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-    .slice(0, 3);
+  const { data: proofs = [] } = useQuery({
+    queryKey: ['proofs', building.id],
+    queryFn: () => getPaymentProofsForBuilding(building.id),
+  });
 
-  const totalTantiemes = building.apartments.reduce((sum, a) => sum + (a.tantiemes || 0), 0);
-  const ownersCount = building.residents.filter((r) => r.isOwner).length;
+  const { data: maintenanceRequests = [] } = useQuery({
+    queryKey: ['maintenance', building.id],
+    queryFn: () => getMaintenanceRequestsForBuilding(building.id),
+  });
+
+  const { data: quittances = [] } = useQuery({
+    queryKey: ['quittances', building.id],
+    queryFn: () => getQuittancesForBuilding(building.id),
+  });
+
+  const apartmentsList = building?.apartments || [];
+  const residentsList = building?.residents || [];
+  const announcementsList = building?.announcements || [];
+  const ledgerTransactions = building?.financials?.transactions || (building as any)?.transactions || [];
+
+  const financialStats = useMemo(() => {
+    const computedWorkingFromTx = ledgerTransactions.reduce((acc: number, trx: any) => {
+      if (trx.fundType === 'reserve') return acc;
+      const amt = Number(trx.amount) || 0;
+      if (trx.type === 'expense') return acc - Math.abs(amt);
+      if (trx.type === 'income') return acc + Math.abs(amt);
+      return acc + amt;
+    }, 0);
+
+    const workingBalance =
+      typeof building?.financials?.balance === 'number' && ledgerTransactions.length === 0
+        ? building.financials.balance
+        : computedWorkingFromTx;
+
+    const reserveTransactions = ledgerTransactions.reduce((acc: number, trx: any) => {
+      if (trx.fundType !== 'reserve') return acc;
+      const amt = Number(trx.amount) || 0;
+      if (trx.type === 'expense') return acc - Math.abs(amt);
+      if (trx.type === 'income') return acc + Math.abs(amt);
+      return acc + amt;
+    }, 0);
+
+    const reserveBalance =
+      (building?.financials?.reserveFundBalance || (building as any)?.reserveFundBalance || 0) +
+      reserveTransactions;
+
+    const totalChargesAmount = charges.reduce((s, c) => s + c.amount, 0);
+    const paidChargesAmount = charges
+      .filter((c) => c.status === 'paid')
+      .reduce((s, c) => s + c.amount, 0);
+    const collectionRate =
+      totalChargesAmount > 0 ? Math.round((paidChargesAmount / totalChargesAmount) * 100) : 0;
+
+    const pendingProofsCount = proofs.filter(
+      (p) => p.status === 'pending' || (p.status as string) === 'pending_review'
+    ).length;
+    const overdueChargesCount = charges.filter((c) => c.status === 'overdue').length;
+
+    return {
+      workingBalance,
+      reserveBalance,
+      collectionRate,
+      pendingProofsCount,
+      overdueChargesCount,
+      paidChargesAmount,
+      totalChargesAmount,
+    };
+  }, [building, ledgerTransactions, charges, proofs]);
+
+  const onboardingSteps = useMemo(() => {
+    const hasBuilding = true;
+    const hasApartments = apartmentsList.length > 0;
+    const hasResidents = residentsList.length > 0;
+    const hasCharges = charges.length > 0;
+    const completedCount = [hasBuilding, hasApartments, hasResidents, hasCharges].filter(
+      Boolean
+    ).length;
+
+    return {
+      completedCount,
+      isComplete: completedCount === 4,
+      steps: [
+        {
+          id: 'building',
+          done: hasBuilding,
+          label: tr('1. Immeuble & RIB configurés', '1. إعداد الإقامة والحساب البنكي'),
+          actionLabel: tr('Modifier', 'تعديل'),
+          path: '/buildings',
+        },
+        {
+          id: 'apartments',
+          done: hasApartments,
+          label: tr(
+            `2. Créer les lots & tantièmes (${apartmentsList.length})`,
+            `2. إنشاء الشقق والحصص العقارية (${apartmentsList.length})`
+          ),
+          actionLabel: tr('Gérer les lots', 'إدارة الشقق'),
+          path: '/apartments',
+        },
+        {
+          id: 'residents',
+          done: hasResidents,
+          label: tr(
+            `3. Inscrire les résidents & accès PDF (${residentsList.length})`,
+            `3. تسجيل السكان وبطاقات الولوج (${residentsList.length})`
+          ),
+          actionLabel: tr('Ajouter résident', 'إضافة ساكن'),
+          path: '/residents',
+        },
+        {
+          id: 'charges',
+          done: hasCharges,
+          label: tr(
+            `4. Émettre le 1er appel de fonds (${charges.length})`,
+            `4. إصدار أول طلب مساهمة (${charges.length})`
+          ),
+          actionLabel: tr('Ouvrir Comptabilité', 'فتح المحاسبة'),
+          path: '/financials',
+        },
+      ],
+    };
+  }, [apartmentsList.length, residentsList.length, charges.length, tr]);
+
+  const recentAnnouncements = announcementsList.slice(0, 3);
+  const recentTransactions = ledgerTransactions.slice(0, 5);
+  const openMaintenance = maintenanceRequests.filter((m) => m.status !== 'completed');
+  const dateLocale = language === 'ar' ? 'ar-MA' : 'fr-MA';
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="pb-2 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+      {/* Header Banner */}
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
-            {building.name}
-          </h1>
-          <p className="text-xs text-slate-500 mt-0.5">
-            {building.address}, {building.city} · {t('dashboard.coproprieteLaw')}
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
+              {building.name}
+            </h1>
+            <span className="px-2.5 py-0.5 text-xs font-semibold rounded-md bg-teal-50 text-teal-800 border border-teal-200">
+              {building.city || 'Maroc'} • {building.totalTantiemes || 1000}{' '}
+              {t('dashboard.tantiemes')}
+            </span>
+          </div>
+          <p className="text-xs sm:text-sm text-slate-500 mt-1">
+            {building.address} — {t('dashboard.managedBy')}{' '}
+            <strong className="text-slate-700">{syndic?.name || 'Cabinet Syndic'}</strong>
           </p>
         </div>
-        <div className="flex items-center gap-2 text-xs">
-          <span className="font-mono bg-teal-50 text-teal-800 border border-teal-200 px-2.5 py-1 rounded font-semibold">
-            {t('dashboard.totalShare', { total: String(totalTantiemes) })}
-          </span>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="secondary" onClick={() => navigate('/ag')} icon={<AGIcon />}>
+            {t('dashboard.conveneAg')}
+          </Button>
+          <Button onClick={() => navigate('/financials')} icon={<FinancialsIcon />}>
+            {t('dashboard.treasuryQuittances')}
+          </Button>
         </div>
       </div>
 
-      {/* KPI Stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* Guided Onboarding Checklist for New Syndics / Buildings */}
+      {!onboardingSteps.isComplete && (
+        <Card className="border-2 border-teal-600/30 bg-gradient-to-r from-teal-950 to-slate-900 text-white p-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+            <div>
+              <span className="text-[11px] font-mono uppercase tracking-widest text-teal-300 font-bold">
+                {tr('ASSISTANT DE DÉMARRAGE LOI 18-00', 'دليل الإعداد السريع — قانون 18-00')}
+              </span>
+              <h2 className="text-base sm:text-lg font-bold text-white mt-0.5">
+                {tr(
+                  `Configuration de la résidence ${building.name} (${onboardingSteps.completedCount}/4 étapes)`,
+                  `إعداد إقامة ${building.name} (${onboardingSteps.completedCount}/4 مراحل)`
+                )}
+              </h2>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-32 bg-slate-800 h-2 rounded-full overflow-hidden">
+                <div
+                  className="bg-teal-400 h-full transition-all duration-500"
+                  style={{ width: `${(onboardingSteps.completedCount / 4) * 100}%` }}
+                />
+              </div>
+              <span className="text-xs font-mono font-bold text-teal-300">
+                {Math.round((onboardingSteps.completedCount / 4) * 100)}%
+              </span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            {onboardingSteps.steps.map((step) => (
+              <div
+                key={step.id}
+                className={`p-3.5 rounded-xl border flex flex-col justify-between gap-3 ${
+                  step.done
+                    ? 'bg-emerald-950/40 border-emerald-700/50 text-emerald-100'
+                    : 'bg-slate-800/90 border-slate-700 text-white'
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <span className="text-xs font-bold leading-snug">{step.label}</span>
+                  <span
+                    className={`w-5 h-5 rounded-full text-xs flex items-center justify-center font-bold shrink-0 ${
+                      step.done ? 'bg-emerald-500 text-white' : 'bg-slate-700 text-slate-300'
+                    }`}
+                  >
+                    {step.done ? '✓' : '•'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => navigate(step.path)}
+                  className={`w-full py-1.5 px-3 rounded-lg text-xs font-bold text-center transition-colors ${
+                    step.done
+                      ? 'bg-white/10 hover:bg-white/20 text-white'
+                      : 'bg-teal-500 hover:bg-teal-400 text-slate-950'
+                  }`}
+                >
+                  {step.actionLabel} →
+                </button>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {/* Primary KPI Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
         <StatCard
+          title={t('dashboard.workingFund')}
+          value={currencyFormatter.format(financialStats.workingBalance)}
+          subtitle={`RIB: ${building.bankName || 'Banque'} (${building.bankRib?.slice(-6) || 'N/A'})`}
           icon={<FinancialsIcon />}
-          label={t('dashboard.balanceLabel')}
-          value={currencyFormatter.format(building.financials.balance)}
-          subtitle={t('dashboard.balanceSubtitle')}
-          color="bg-teal-700"
-          onClick={() => onNavigate('financials')}
+          accentClass="bg-teal-100 text-teal-800"
+          onClick={() => navigate('/financials')}
         />
         <StatCard
+          title={t('dashboard.reserveFund')}
+          value={currencyFormatter.format(financialStats.reserveBalance)}
+          subtitle={t('dashboard.reserveRateSubtitle', {
+            rate: String(building.reserveFundRate || 5),
+          })}
+          icon={<QuittanceIcon />}
+          accentClass="bg-indigo-100 text-indigo-800"
+          onClick={() => navigate('/financials')}
+        />
+        <StatCard
+          title={t('dashboard.collectionRate')}
+          value={`${financialStats.collectionRate}%`}
+          subtitle={
+            financialStats.pendingProofsCount > 0
+              ? t('dashboard.proofsToVerify', {
+                  count: String(financialStats.pendingProofsCount),
+                })
+              : t('dashboard.overdueCount', {
+                  count: String(financialStats.overdueChargesCount),
+                })
+          }
+          icon={<ShieldAlertIcon />}
+          accentClass={
+            financialStats.overdueChargesCount > 0
+              ? 'bg-amber-100 text-amber-800'
+              : 'bg-emerald-100 text-emerald-800'
+          }
+          onClick={() => navigate('/financials')}
+        />
+        <StatCard
+          title={t('dashboard.lotsAndCopro')}
+          value={`${residentsList.length} / ${apartmentsList.length}`}
+          subtitle={t('dashboard.openMaintCount', { count: String(openMaintenance.length) })}
           icon={<ApartmentsIcon />}
-          label={t('dashboard.lotsLabel')}
-          value={t('dashboard.lotsCount', { count: String(building.apartments.length) })}
-          subtitle={t('dashboard.lotsSubtitle', { total: String(totalTantiemes) })}
-          color="bg-slate-800"
-          onClick={() => onNavigate('apartments')}
-        />
-        <StatCard
-          icon={<ResidentsIcon />}
-          label={t('dashboard.ownersLabel')}
-          value={building.residents.length}
-          subtitle={t('dashboard.ownersSubtitle', { count: String(ownersCount) })}
-          color="bg-indigo-600"
-          onClick={() => onNavigate('residents')}
-        />
-        <StatCard
-          icon={<AGIcon />}
-          label={t('dashboard.agLabel')}
-          value={t('dashboard.agValue')}
-          subtitle={t('dashboard.agSubtitle')}
-          color="bg-emerald-600"
-          onClick={() => onNavigate('ag')}
+          accentClass="bg-slate-200 text-slate-800"
+          onClick={() => navigate('/apartments')}
         />
       </div>
 
-      {/* Two columns */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Recent Announcements */}
-        <Card className="p-5 border border-slate-200">
-          <div className="flex justify-between items-center pb-3 border-b border-slate-200">
-            <h2 className="font-bold text-slate-900 text-sm">{t('dashboard.recentAnnouncements')}</h2>
-            <button
-              onClick={() => onNavigate('announcements')}
-              className="text-xs text-teal-700 hover:text-teal-900 font-semibold"
-            >
-              {t('dashboard.viewAll')}
-            </button>
-          </div>
-          <div className="space-y-3.5 mt-3">
-            {recentAnnouncements.length > 0 ? (
-              recentAnnouncements.map((ann) => (
-                <div key={ann.id} className="border-b border-slate-100 pb-3 last:border-b-0 last:pb-0">
-                  <p className="font-semibold text-slate-900 text-xs sm:text-sm">{ann.title}</p>
-                  <p className="text-[11px] text-slate-400 font-mono mt-0.5">
-                    {new Date(ann.date).toLocaleDateString(language === 'ar' ? 'ar-MA' : 'fr-MA')}
-                  </p>
-                  <p className="text-xs text-slate-600 mt-1 line-clamp-2">{ann.content}</p>
-                </div>
-              ))
-            ) : (
-              <p className="text-slate-500 text-xs py-4 text-center">
-                {t('dashboard.noRecentAnnouncements')}
-              </p>
-            )}
-          </div>
-        </Card>
-
-        {/* Quick Actions & Legal Modules */}
-        <Card className="p-5 border border-slate-200">
-          <h2 className="font-bold text-slate-900 text-sm pb-3 border-b border-slate-200">
-            {t('dashboard.quickActionsTitle')}
-          </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
-            <button
-              onClick={() => onNavigate('financials')}
-              className="p-3 rounded-lg border border-slate-200 hover:border-teal-300 hover:bg-slate-50 text-start transition-colors flex items-start gap-2.5"
-            >
-              <div className="p-2 rounded bg-teal-50 text-teal-700">
-                <FinancialsIcon />
-              </div>
+      {/* Main Content Split */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Left 2 Columns: Recent Ledger & Maintenance */}
+        <div className="lg:col-span-2 space-y-6">
+          <Card className="border border-slate-200">
+            <div className="flex items-center justify-between mb-4">
               <div>
-                <p className="font-bold text-slate-900 text-xs">{t('dashboard.verifyTransfersTitle')}</p>
-                <p className="text-[11px] text-slate-500">{t('dashboard.verifyTransfersDesc')}</p>
+                <h2 className="text-lg font-bold text-slate-900">{t('dashboard.recentLedger')}</h2>
+                <p className="text-xs text-slate-500">
+                  {t('dashboard.quittancesIssuedCount', { count: String(quittances.length) })}
+                </p>
               </div>
-            </button>
+              <button
+                type="button"
+                onClick={() => navigate('/financials')}
+                className="text-xs font-semibold text-teal-700 hover:text-teal-900"
+              >
+                {t('dashboard.openFullLedger')} →
+              </button>
+            </div>
+            <div className="divide-y divide-slate-100">
+              {recentTransactions.length > 0 ? (
+                recentTransactions.map((trx: any) => {
+                  const isIncome = trx.type === 'income' || (trx.type !== 'expense' && trx.amount >= 0);
+                  return (
+                    <div key={trx.id} className="py-3 flex justify-between items-center gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-slate-800 truncate">
+                          {trx.description}
+                        </p>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className="text-xs text-slate-400 font-mono">
+                            {new Date(trx.date).toLocaleDateString(dateLocale)}
+                          </span>
+                          <span
+                            className={`text-[10px] px-1.5 py-0.5 rounded font-semibold uppercase ${
+                              trx.fundType === 'reserve'
+                                ? 'bg-indigo-50 text-indigo-700'
+                                : 'bg-slate-100 text-slate-600'
+                            }`}
+                          >
+                            {trx.fundType === 'reserve'
+                              ? t('dashboard.fundReserveBadge')
+                              : t('dashboard.fundWorkingBadge')}
+                          </span>
+                        </div>
+                      </div>
+                      <span
+                        className={`text-sm font-bold font-mono shrink-0 ${
+                          isIncome ? 'text-emerald-600' : 'text-rose-600'
+                        }`}
+                      >
+                        {isIncome ? '+' : '-'}
+                        {currencyFormatter.format(Math.abs(trx.amount || 0))}
+                      </span>
+                    </div>
+                  );
+                })
+              ) : (
+                <p className="text-slate-500 py-6 text-center text-sm">
+                  {t('dashboard.noTransactions')}
+                </p>
+              )}
+            </div>
+          </Card>
 
-            <button
-              onClick={() => onNavigate('ag')}
-              className="p-3 rounded-lg border border-slate-200 hover:border-teal-300 hover:bg-slate-50 text-start transition-colors flex items-start gap-2.5"
-            >
-              <div className="p-2 rounded bg-emerald-50 text-emerald-700">
-                <AGIcon />
-              </div>
-              <div>
-                <p className="font-bold text-slate-900 text-xs">{t('dashboard.agActionTitle')}</p>
-                <p className="text-[11px] text-slate-500">{t('dashboard.agActionDesc')}</p>
-              </div>
-            </button>
+          <Card className="border border-slate-200">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                <WrenchIcon />
+                <span>{t('dashboard.activeMaintenance')}</span>
+              </h2>
+              <button
+                type="button"
+                onClick={() => navigate('/maintenance')}
+                className="text-xs font-semibold text-teal-700 hover:text-teal-900"
+              >
+                {t('dashboard.manageInterventions')} →
+              </button>
+            </div>
+            <div className="space-y-3">
+              {openMaintenance.length > 0 ? (
+                openMaintenance.slice(0, 3).map((req) => (
+                  <div
+                    key={req.id}
+                    className="p-3.5 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-between gap-4"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`w-2 h-2 rounded-full ${
+                            req.priority === 'high' ? 'bg-rose-500' : 'bg-amber-500'
+                          }`}
+                        />
+                        <p className="text-sm font-semibold text-slate-900 truncate">{req.title}</p>
+                      </div>
+                      <p className="text-xs text-slate-500 truncate mt-0.5">{req.description}</p>
+                    </div>
+                    <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 shrink-0">
+                      {req.status === 'in_progress'
+                        ? t('dashboard.statusInProgress')
+                        : t('dashboard.statusPending')}
+                    </span>
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-slate-500 py-4 text-center">
+                  {t('dashboard.noActiveMaintenance')}
+                </p>
+              )}
+            </div>
+          </Card>
+        </div>
 
-            <button
-              onClick={() => onNavigate('prestataires')}
-              className="p-3 rounded-lg border border-slate-200 hover:border-teal-300 hover:bg-slate-50 text-start transition-colors flex items-start gap-2.5"
-            >
-              <div className="p-2 rounded bg-indigo-50 text-indigo-700">
-                <PrestatairesIcon />
-              </div>
-              <div>
-                <p className="font-bold text-slate-900 text-xs">{t('dashboard.providersActionTitle')}</p>
-                <p className="text-[11px] text-slate-500">{t('dashboard.providersActionDesc')}</p>
-              </div>
-            </button>
+        {/* Right Column: Official Notices & Concierge Card */}
+        <div className="space-y-6">
+          <Card className="border border-slate-200 bg-slate-900 text-white">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-teal-400">
+              {t('dashboard.siteContactTitle')}
+            </h3>
+            <p className="text-lg font-bold mt-1">{building.managerName}</p>
+            <p className="text-sm text-slate-300 font-mono mt-0.5">{building.managerPhone}</p>
+            <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
+              <span>{t('dashboard.monthlyFeeLabel')}</span>
+              <span className="font-mono font-bold text-white">
+                {currencyFormatter.format(building.monthlySyndicFees || 0)} / {t('dashboard.perMonth')}
+              </span>
+            </div>
+          </Card>
 
-            <button
-              onClick={() => onNavigate('apartments')}
-              className="p-3 rounded-lg border border-slate-200 hover:border-teal-300 hover:bg-slate-50 text-start transition-colors flex items-start gap-2.5"
-            >
-              <div className="p-2 rounded bg-slate-100 text-slate-700">
-                <ApartmentsIcon />
-              </div>
-              <div>
-                <p className="font-bold text-slate-900 text-xs">{t('dashboard.tantiemesActionTitle')}</p>
-                <p className="text-[11px] text-slate-500">{t('dashboard.tantiemesActionDesc')}</p>
-              </div>
-            </button>
-          </div>
-        </Card>
+          <Card className="border border-slate-200">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                <AnnouncementsIcon />
+                <span>{t('dashboard.recentAnnouncements')}</span>
+              </h2>
+              <button
+                type="button"
+                onClick={() => navigate('/announcements')}
+                className="text-xs font-semibold text-teal-700 hover:text-teal-900"
+              >
+                {tr('Publier', 'نشر')} →
+              </button>
+            </div>
+            <div className="space-y-4">
+              {recentAnnouncements.length > 0 ? (
+                recentAnnouncements.map((ann) => (
+                  <div
+                    key={ann.id}
+                    className="p-3.5 bg-slate-50 rounded-lg border border-slate-200/80"
+                  >
+                    <h3 className="font-bold text-sm text-slate-800">{ann.title}</h3>
+                    <p className="text-xs text-slate-600 mt-1 line-clamp-2">{ann.content}</p>
+                    <p className="text-[11px] text-slate-400 mt-2 font-mono">
+                      {new Date(ann.date).toLocaleDateString(dateLocale)}
+                    </p>
+                  </div>
+                ))
+              ) : (
+                <p className="text-slate-500 py-4 text-center text-sm">
+                  {t('dashboard.noAnnouncements')}
+                </p>
+              )}
+            </div>
+          </Card>
+        </div>
       </div>
     </div>
   );

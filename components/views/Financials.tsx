@@ -30,6 +30,7 @@ import {
 } from '../../services/pdfService';
 import Loading from '../common/Loading';
 import { useI18n } from '../../hooks/useI18n';
+import { useToast } from '../common/Toast';
 
 interface FinancialsProps {
   building: Building;
@@ -58,6 +59,7 @@ const MOROCCAN_BANKS = [
 
 const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
   const { tr, isAr } = useI18n();
+  const { showToast } = useToast();
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<TabType>('transactions');
   const [isTrxModalOpen, setIsTrxModalOpen] = useState(false);
@@ -235,7 +237,10 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
       queryClient.invalidateQueries({ queryKey: ['charges', building.id] });
       queryClient.invalidateQueries({ queryKey: ['syndics'] });
       setIsGenerateModalOpen(false);
-      alert(tr('Appel de fonds généré avec succès.', 'تم إصدار طلب المساهمات بنجاح.'));
+      showToast(
+        tr('Appel de fonds généré avec succès.', 'تم إصدار طلب المساهمات بنجاح.'),
+        'success'
+      );
     },
   });
 

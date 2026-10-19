@@ -13,18 +13,27 @@ import {
   Legend,
   ResponsiveContainer,
 } from 'recharts';
-import { getInvoicesForBuilding, getMaintenanceRequestsForBuilding } from '../../firebase/services';
+import {
+  getChargesForBuilding,
+  getMaintenanceRequestsForBuilding,
+} from '../../firebase/services';
 import type { Building } from '../../types';
 import Card from '../common/Card';
 import { useI18n } from '../../hooks/useI18n';
-import Loading from '../common/Loading';
+import { DashboardSkeleton } from '../common/Skeleton';
+
+const currencyFormatter = new Intl.NumberFormat('fr-MA', {
+  style: 'currency',
+  currency: 'MAD',
+  maximumFractionDigits: 0,
+});
 
 const Analytics: React.FC<{ building: Building }> = ({ building }) => {
   const { t, tr, language } = useI18n();
 
-  const { data: invoices = [], isLoading: loadingInvoices } = useQuery({
-    queryKey: ['invoices', building.id],
-    queryFn: () => getInvoicesForBuilding(building.id),
+  const { data: charges = [], isLoading: loadingCharges } = useQuery({
+    queryKey: ['charges', building.id],
+    queryFn: () => getChargesForBuilding(building.id),
   });
 
   const { data: maintenance = [], isLoading: loadingMaintenance } = useQuery({
@@ -32,24 +41,27 @@ const Analytics: React.FC<{ building: Building }> = ({ building }) => {
     queryFn: () => getMaintenanceRequestsForBuilding(building.id),
   });
 
+  const apartmentsList = building?.apartments || [];
+  const ledgerTransactions = building?.financials?.transactions || (building as any)?.transactions || [];
+
   const occupancyData = useMemo(() => {
-    const total = building.apartments.length;
-    const occupied = building.apartments.filter((a) => a.tenantId || a.ownerId).length;
-    const vacant = total - occupied;
+    const total = apartmentsList.length;
+    const occupied = apartmentsList.filter((a) => a.tenantId || a.ownerId).length;
+    const vacant = Math.max(0, total - occupied);
     return [
       { name: t('analytics.occupied'), value: occupied },
       { name: t('analytics.vacant'), value: vacant },
     ];
-  }, [building.apartments, t]);
+  }, [apartmentsList, t]);
 
-  const invoiceData = useMemo(() => {
+  const chargeStatusData = useMemo(() => {
     let paid = 0;
     let unpaid = 0;
     let overdue = 0;
 
-    invoices.forEach((inv) => {
-      if (inv.status === 'paid') paid++;
-      else if (inv.status === 'overdue') overdue++;
+    charges.forEach((ch) => {
+      if (ch.status === 'paid') paid++;
+      else if (ch.status === 'overdue') overdue++;
       else unpaid++;
     });
 
@@ -58,7 +70,18 @@ const Analytics: React.FC<{ building: Building }> = ({ building }) => {
       { name: t('analytics.unpaid'), value: unpaid },
       { name: t('analytics.overdue'), value: overdue },
     ];
-  }, [invoices, t]);
+  }, [charges, t]);
+
+  const financialSummary = useMemo(() => {
+    const totalBilled = charges.reduce((sum, c) => sum + c.amount, 0);
+    const totalPaid = charges
+      .filter((c) => c.status === 'paid')
+      .reduce((sum, c) => sum + c.amount, 0);
+    const totalPending = totalBilled - totalPaid;
+    const collectionRate = totalBilled > 0 ? Math.round((totalPaid / totalBilled) * 100) : 0;
+
+    return { totalBilled, totalPaid, totalPending, collectionRate };
+  }, [charges]);
 
   const maintenanceCostData = useMemo(() => {
     const months: Record<string, number> = {};
@@ -72,119 +95,208 @@ const Analytics: React.FC<{ building: Building }> = ({ building }) => {
     }
 
     maintenance.forEach((req) => {
-      if (req.status === 'completed' && req.cost && req.completedAt) {
-        const d = new Date(req.completedAt);
+      if ((req.status === 'completed' || req.cost) && (req.completedAt || req.createdAt)) {
+        const d = new Date(req.completedAt || req.createdAt);
         const key = d.toLocaleString(locale, { month: 'short' });
         if (months[key] !== undefined) {
-          months[key] += req.cost;
+          months[key] += req.cost ?? 0;
         }
       }
     });
+
+    ledgerTransactions
+      .filter((tx: any) => tx.amount < 0 || tx.type === 'expense')
+      .forEach((tx: any) => {
+        const d = new Date(tx.date);
+        const key = d.toLocaleString(locale, { month: 'short' });
+        if (months[key] !== undefined) {
+          months[key] += Math.abs(tx.amount || 0);
+        }
+      });
 
     return Object.keys(months).map((key) => ({
       name: key,
       cost: months[key],
     }));
-  }, [maintenance, language]);
+  }, [maintenance, ledgerTransactions, language]);
 
-  const COLORS_OCCUPANCY = ['#10B981', '#E5E7EB'];
-  const COLORS_INVOICE = ['#10B981', '#FBBF24', '#EF4444'];
+  const COLORS_OCCUPANCY = ['#0D9488', '#E2E8F0'];
+  const COLORS_CHARGES = ['#10B981', '#F59E0B', '#EF4444'];
 
-  if (loadingInvoices || loadingMaintenance)
-    return <Loading message={tr('Chargement des statistiques...', 'جاري تحميل الإحصائيات...')} />;
+  if (loadingCharges || loadingMaintenance) {
+    return <DashboardSkeleton />;
+  }
+
+  const occupancyPct =
+    apartmentsList.length > 0
+      ? Math.round((occupancyData[0].value / apartmentsList.length) * 100)
+      : 0;
 
   return (
-    <div>
-      <h1 className="text-3xl font-bold text-gray-800 mb-6">
-        {t('analytics.title', { buildingName: building.name })}
-      </h1>
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-200">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
+            {t('analytics.title', { buildingName: building.name })}
+          </h1>
+          <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
+            {tr(
+              'Indicateurs de recouvrement Loi 18-00, occupation des lots et évolution des charges',
+              'مؤشرات التحصيل المالي قانون 18-00، نسبة شغل الشقق وتطور المصاريف'
+            )}
+          </p>
+        </div>
+      </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
-        <Card>
-          <h2 className="text-xl font-semibold mb-4 text-gray-700">
-            {t('analytics.occupancyRate')}
-          </h2>
-          <div className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={occupancyData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={60}
-                  outerRadius={80}
-                  paddingAngle={5}
-                  dataKey="value"
-                >
-                  {occupancyData.map((entry, index) => (
-                    <Cell
-                      key={`cell-${index}`}
-                      fill={COLORS_OCCUPANCY[index % COLORS_OCCUPANCY.length]}
-                    />
-                  ))}
-                </Pie>
-                <Tooltip />
-                <Legend />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-          <div className="text-center mt-2">
-            <span className="text-3xl font-bold text-primary-600">
-              {building.apartments.length > 0
-                ? Math.round((occupancyData[0].value / building.apartments.length) * 100)
-                : 0}
-              %
-            </span>
-            <span className="text-gray-500 text-sm ms-2">
-              {t('analytics.occupied')}
-            </span>
-          </div>
+      {/* KPI Strip */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <Card className="p-5 border border-slate-200">
+          <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
+            {tr('Taux de Recouvrement', 'نسبة التحصيل')}
+          </p>
+          <p className="text-2xl font-extrabold font-mono text-teal-700 mt-1">
+            {financialSummary.collectionRate}%
+          </p>
+          <p className="text-[11px] text-slate-500 mt-1 font-mono">
+            {currencyFormatter.format(financialSummary.totalPaid)} /{' '}
+            {currencyFormatter.format(financialSummary.totalBilled)}
+          </p>
         </Card>
 
-        <Card>
-          <h2 className="text-xl font-semibold mb-4 text-gray-700">
-            {t('analytics.paymentStatus')}
-          </h2>
-          <div className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={invoiceData}
-                  cx="50%"
-                  cy="50%"
-                  outerRadius={80}
-                  dataKey="value"
-                >
-                  {invoiceData.map((entry, index) => (
-                    <Cell
-                      key={`cell-${index}`}
-                      fill={COLORS_INVOICE[index % COLORS_INVOICE.length]}
-                    />
-                  ))}
-                </Pie>
-                <Tooltip />
-                <Legend />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
+        <Card className="p-5 border border-slate-200">
+          <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
+            {tr('Reste à Recouvrer', 'الباقي استخلاصه')}
+          </p>
+          <p className="text-2xl font-extrabold font-mono text-amber-700 mt-1">
+            {currencyFormatter.format(financialSummary.totalPending)}
+          </p>
+          <p className="text-[11px] text-slate-500 mt-1">
+            {charges.filter((c) => c.status !== 'paid').length}{' '}
+            {tr('appels en attente', 'مساهمات قيد الانتظار')}
+          </p>
+        </Card>
+
+        <Card className="p-5 border border-slate-200">
+          <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
+            {t('analytics.occupancyRate')}
+          </p>
+          <p className="text-2xl font-extrabold font-mono text-slate-900 mt-1">{occupancyPct}%</p>
+          <p className="text-[11px] text-slate-500 mt-1">
+            {occupancyData[0].value} / {apartmentsList.length}{' '}
+            {tr('lots attribués', 'شقق معينة')}
+          </p>
+        </Card>
+
+        <Card className="p-5 border border-slate-200">
+          <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
+            {tr('Interventions Maintenance', 'تدخلات الصيانة')}
+          </p>
+          <p className="text-2xl font-extrabold font-mono text-indigo-700 mt-1">
+            {maintenance.length}
+          </p>
+          <p className="text-[11px] text-slate-500 mt-1">
+            {maintenance.filter((m) => m.status === 'completed').length}{' '}
+            {tr('clôturées', 'منجزة')}
+          </p>
         </Card>
       </div>
 
-      <Card>
-        <h2 className="text-xl font-semibold mb-4 text-gray-700">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <Card className="border border-slate-200">
+          <h2 className="text-base font-bold mb-4 text-slate-900">
+            {t('analytics.occupancyRate')}
+          </h2>
+          {apartmentsList.length > 0 ? (
+            <>
+              <div className="h-64">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={occupancyData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={60}
+                      outerRadius={80}
+                      paddingAngle={5}
+                      dataKey="value"
+                    >
+                      {occupancyData.map((_, index) => (
+                        <Cell
+                          key={`cell-${index}`}
+                          fill={COLORS_OCCUPANCY[index % COLORS_OCCUPANCY.length]}
+                        />
+                      ))}
+                    </Pie>
+                    <Tooltip />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="text-center mt-2">
+                <span className="text-2xl font-bold font-mono text-teal-700">{occupancyPct}%</span>
+                <span className="text-slate-500 text-xs ms-2">{t('analytics.occupied')}</span>
+              </div>
+            </>
+          ) : (
+            <div className="h-64 flex items-center justify-center text-xs text-slate-500">
+              {tr('Aucun lot enregistré pour cet immeuble.', 'لا توجد شقق مسجلة لهذه الإقامة.')}
+            </div>
+          )}
+        </Card>
+
+        <Card className="border border-slate-200">
+          <h2 className="text-base font-bold mb-4 text-slate-900">
+            {t('analytics.paymentStatus')}
+          </h2>
+          {charges.length > 0 ? (
+            <div className="h-64">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={chargeStatusData}
+                    cx="50%"
+                    cy="50%"
+                    outerRadius={80}
+                    dataKey="value"
+                  >
+                    {chargeStatusData.map((_, index) => (
+                      <Cell
+                        key={`cell-${index}`}
+                        fill={COLORS_CHARGES[index % COLORS_CHARGES.length]}
+                      />
+                    ))}
+                  </Pie>
+                  <Tooltip />
+                  <Legend />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <div className="h-64 flex items-center justify-center text-xs text-slate-500">
+              {tr(
+                'Aucun appel de fonds émis pour le moment.',
+                'لم يتم إصدار أي طلب مساهمة حتى الآن.'
+              )}
+            </div>
+          )}
+        </Card>
+      </div>
+
+      <Card className="border border-slate-200">
+        <h2 className="text-base font-bold mb-4 text-slate-900">
           {t('analytics.maintenanceCosts')}
         </h2>
-        <div className="h-80">
+        <div className="h-72">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart
               data={maintenanceCostData}
-              margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+              margin={{ top: 5, right: 20, left: 10, bottom: 5 }}
             >
               <CartesianGrid strokeDasharray="3 3" vertical={false} />
               <XAxis dataKey="name" />
               <YAxis />
               <Tooltip formatter={(value) => `${value} MAD`} />
-              <Bar dataKey="cost" fill="#6366F1" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="cost" fill="#0D9488" radius={[6, 6, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>

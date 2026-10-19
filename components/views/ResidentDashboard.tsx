@@ -139,17 +139,12 @@ const ResidentDashboard: React.FC = () => {
           foundSyndic.buildings.find((b) => b.id === userProfile.buildingId)) ||
         foundSyndic.buildings[0];
     }
-    if (!foundResident && foundBuilding) {
-      foundResident = foundBuilding.residents[1] || foundBuilding.residents[0];
-    }
-
-    const foundApt =
-      foundBuilding?.apartments.find(
-        (a) =>
-          (foundResident?.apartmentId && a.id === foundResident.apartmentId) ||
-          (userProfile?.apartmentId && a.id === userProfile.apartmentId) ||
-          (foundResident && (a.ownerId === foundResident.id || a.tenantId === foundResident.id))
-      ) || foundBuilding?.apartments[0];
+    const foundApt = foundBuilding?.apartments.find(
+      (a) =>
+        (foundResident?.apartmentId && a.id === foundResident.apartmentId) ||
+        (userProfile?.apartmentId && a.id === userProfile.apartmentId) ||
+        (foundResident && (a.ownerId === foundResident.id || a.tenantId === foundResident.id))
+    );
 
     return {
       activeSyndic: foundSyndic,
@@ -217,8 +212,8 @@ const ResidentDashboard: React.FC = () => {
     mutationFn: (data: any) =>
       addMaintenanceRequest({
         ...data,
-        buildingId: activeBuilding?.id || 'bld-1',
-        residentId: currentResident?.id || 'res-2',
+        buildingId: activeBuilding?.id || userProfile?.buildingId || '',
+        residentId: currentResident?.id || userProfile?.uid || '',
         status: 'pending',
         createdAt: new Date().toISOString(),
       }),
