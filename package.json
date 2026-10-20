@@ -9,9 +9,12 @@
     "build:functions": "tsc -p functions/tsconfig.json",
     "typecheck": "tsc --noEmit && tsc -p functions/tsconfig.json --noEmit",
     "lint": "eslint firestore.rules",
-    "test:verify": "tsx tests/verifyProduction.ts",
+    "test:verify": "node --import ./tests/helpers/networkGuard.mjs --import tsx tests/verifyProduction.ts",
     "start": "tsx server.ts",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:business": "node --import ./tests/helpers/networkGuard.mjs --import tsx tests/paymentBoundaries.ts",
+    "test:security": "node --import ./tests/helpers/networkGuard.mjs --import tsx tests/httpBoundaries.ts",
+    "check:local": "npm run typecheck && npm run lint && npm run test:verify && npm run test:business && npm run test:security && npm run build:functions && npm run build"
   },
   "dependencies": {
     "@google/genai": "^0.2.0",

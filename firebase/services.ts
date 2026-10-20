@@ -1,3 +1,4 @@
+import { applyResidentVote, evaluateResolutionStatus } from '../utils/agVoting';
 import {
   collection,
   getDocs,
@@ -1801,6 +1802,7 @@ export const reconcileBankStatementCSV = async (
       continue;
     }
     const cleanAmt = Math.round(rawAmt * 100) / 100;
+    if (cleanAmt <= 0) { unmatchedCount += 1; continue; }
     const upperLabel = (row.label || '').trim().toUpperCase();
     const cleanRef = (row.reference || '').trim().toUpperCase();
     const bankEventKey = cleanRef
@@ -1813,24 +1815,19 @@ export const reconcileBankStatementCSV = async (
       continue;
     }
 
-    // Match by (apartment number OR resident name) AND exact remaining charge amount
-    const matchedCharge = charges.find((c) => {
-      if (c.status === 'paid') return false;
-      const apt = targetBuilding!.apartments.find((a) => a.id === c.apartmentId);
-      const res = targetBuilding!.residents.find((r) => r.id === c.residentId);
-      const rem = Math.max(0, c.amount - (c.paidAmount || 0));
-      const amountMatches = Math.abs(rem - cleanAmt) < 0.01;
-      if (!amountMatches) return false;
-      const lotMatched = Boolean(apt?.number && upperLabel.includes(apt.number.toUpperCase()));
-      const nameMatched = Boolean(
-        res?.name &&
-          res.name
-            .toUpperCase()
-            .split(/\s+/)
-            .some((tok) => tok.length >= 3 && upperLabel.includes(tok))
-      );
-      return lotMatched || nameMatched;
+    const tokenMatch = (label: string, value: string) => {
+      const escaped = value.trim().toUpperCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return escaped.length > 0 && new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}($|[^\\p{L}\\p{N}])`, 'u').test(label);
+    };
+    const eligible = charges.filter((c) => c.status !== 'paid' &&
+      Math.round((c.amount - (c.paidAmount || 0)) * 100) === Math.round(cleanAmt * 100));
+    const lots = eligible.filter((c) => tokenMatch(upperLabel,
+      targetBuilding!.apartments.find((a) => a.id === c.apartmentId)?.number || ''));
+    const names = lots.length ? lots : eligible.filter((c) => {
+      const name = targetBuilding!.residents.find((r) => r.id === c.residentId)?.name || '';
+      return name.trim().length >= 3 && tokenMatch(upperLabel, name);
     });
+    const matchedCharge = names.length === 1 ? names[0] : undefined;
 
     if (matchedCharge) {
       seenBankEventKeys.add(bankEventKey);
@@ -1873,172 +1870,43 @@ export const reviewPaymentProof = async (
   decision: 'approved' | 'rejected' | 'approve' | 'reject',
   rejectionReason?: string
 ): Promise<{ proof: PaymentProof; quittance?: Quittance; success: boolean }> => {
-  const normalizedDecision: 'approved' | 'rejected' =
-    decision === 'approve' || decision === 'approved' ? 'approved' : 'rejected';
-
-  if (isLocalEngineEnabled) {
-    const proofs = getLocalItem<PaymentProof[]>(STORAGE_KEYS.PROOFS, mockPaymentProofs);
-    const proof = proofs.find((p) => p.id === proofId);
-    if (!proof) throw new Error('Payment proof not found');
-
-    // Audit Item 13: State-transition guard — never re-approve or reject an already processed proof!
-    if (proof.status !== 'pending') {
-      if (proof.status === 'approved') {
-        const quittances = getLocalItem<Quittance[]>(STORAGE_KEYS.QUITTANCES, mockQuittances);
-        const existingQuittance = quittances.find(
-          (q) => q.id === `quit-prf-${proof.id}` || q.chargeId === proof.chargeId
-        );
-        return { proof, quittance: existingQuittance, success: true };
-      }
-      if (normalizedDecision === 'rejected') {
-        return { proof, success: true };
-      }
-      throw new Error('Ce justificatif a déjà été traité et ne peut pas être modifié.');
-    }
-
-    proof.status = normalizedDecision;
-    proof.reviewedAt = new Date().toISOString();
-    if (rejectionReason) proof.rejectionReason = rejectionReason;
-    setLocalItem(STORAGE_KEYS.PROOFS, proofs);
-
-    let generatedQuittance: Quittance | undefined;
-
-    if (normalizedDecision === 'approved') {
-      const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, mockCharges);
-      const charge = charges.find((c) => c.id === proof.chargeId);
-
-      // Reconcile proof amount against charge outstanding balance (Audit Item 13)
-      if (charge) {
-        const prevPaid = charge.paidAmount ?? (charge.status === 'paid' ? charge.amount : 0);
-        const nextPaid = Math.round((prevPaid + proof.amount) * 100) / 100;
-        charge.paidAmount = nextPaid;
-        if (nextPaid >= charge.amount - 0.005) {
-          charge.status = 'paid';
-        } else {
-          charge.status = 'unpaid';
-        }
-        setLocalItem(STORAGE_KEYS.CHARGES, charges);
-      }
-
-      const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
-      let targetBuilding: Building | undefined;
-      let targetSyndic: Syndic | undefined;
-      for (const s of syndics) {
-        const bld = s.buildings.find((b) => b.id === proof.buildingId);
-        if (bld) {
-          targetBuilding = bld;
-          targetSyndic = s;
-          break;
-        }
-      }
-
-      const quittances = getLocalItem<Quittance[]>(STORAGE_KEYS.QUITTANCES, mockQuittances);
-      const stableQuittanceId = `quit-prf-${proof.id}`;
-      const existingQuit = quittances.find((q) => q.id === stableQuittanceId);
-
-      if (existingQuit) {
-        generatedQuittance = existingQuit;
-      } else {
-        const quittanceNumber = `QUIT-${new Date().getFullYear()}-${String(quittances.length + 1).padStart(5, '0')}`;
-        const apt = targetBuilding?.apartments.find(
-          (a) => a.number === proof.apartmentNumber || a.id === charge?.apartmentId
-        );
-        const res = targetBuilding?.residents.find((r) => r.id === proof.residentId);
-
-        // Audit Item 16: Use the building's configured reserveFundPercentage / reserveFundRate (default 5%) consistently
-        const reserveRate =
-          targetBuilding?.reserveFundPercentage ?? targetBuilding?.reserveFundRate ?? 5;
-        const {
-          reserveFundAmount: reserveShare,
-          chargesCourantesAmount: courantesShare,
-        } = splitChargeReserveAndOperating(proof.amount, reserveRate);
-
-        generatedQuittance = {
-          id: stableQuittanceId,
-          quittanceNumber,
-          chargeId: proof.chargeId,
-          buildingId: proof.buildingId,
-          buildingName: targetBuilding?.name || 'Résidence',
-          syndicId: proof.syndicId,
-          syndicName: targetSyndic?.name || 'Cabinet Syndic',
-          residentId: proof.residentId,
-          residentName: proof.residentName,
-          residentCin: res?.cin,
-          apartmentId: apt?.id || charge?.apartmentId,
-          apartmentNumber: proof.apartmentNumber,
-          tantiemes: apt?.tantiemes || charge?.tantiemesApplied || 100,
-          amount: proof.amount,
-          chargesCourantesAmount: courantesShare,
-          reserveFundAmount: reserveShare,
-          periodCovered:
-            charge?.period ||
-            new Date().toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }),
-          paymentDate: new Date().toISOString(),
-          paymentMethod: proof.paymentMethod === 'cheque' ? 'cheque' : 'virement',
-          referenceNumber: proof.referenceNumber,
-          bankName: proof.bankName,
-          createdAt: new Date().toISOString(),
-        };
-
-        quittances.unshift(generatedQuittance);
-        setLocalItem(STORAGE_KEYS.QUITTANCES, quittances);
-
-        // Post operating & reserve transactions to building ledger with stable IDs so retries never duplicate income
-        if (targetBuilding) {
-          targetBuilding.financials.transactions = targetBuilding.financials.transactions || [];
-          const stableTrxId = `trx-prf-${proof.id}`;
-          const stableReserveTrxId = `trx-prf-res-${proof.id}`;
-          if (!targetBuilding.financials.transactions.some((t) => t.id === stableTrxId)) {
-            const nowTrxIso = new Date().toISOString();
-            if (reserveShare > 0) {
-              targetBuilding.financials.reserveFundBalance =
-                Math.round(((targetBuilding.financials.reserveFundBalance || 0) + reserveShare) * 100) /
-                100;
-              targetBuilding.financials.transactions.unshift({
-                id: stableReserveTrxId,
-                date: nowTrxIso,
-                description: `Dotation fonds de réserve (${reserveRate}%) Lot ${proof.apartmentNumber} (${proof.residentName}) - Réf: ${proof.referenceNumber}`,
-                amount: reserveShare,
-                type: 'income',
-                category: 'fees',
-                fundType: 'reserve',
-                paymentMethod: proof.paymentMethod === 'cheque' ? 'cheque' : 'virement',
-                reference: proof.referenceNumber,
-                documentType: 'quittance',
-                invoiceNumber: generatedQuittance.quittanceNumber,
-                thirdPartyName: proof.residentName,
-                lotNumber: proof.apartmentNumber,
-                bankName: proof.bankName,
-              });
-            }
-            targetBuilding.financials.balance =
-              Math.round(((targetBuilding.financials.balance || 0) + courantesShare) * 100) / 100;
-            targetBuilding.financials.transactions.unshift({
-              id: stableTrxId,
-              date: nowTrxIso,
-              description: `Encaissement charges Lot ${proof.apartmentNumber} (${proof.residentName}) - Réf: ${proof.referenceNumber}`,
-              amount: courantesShare,
-              type: 'income',
-              category: 'fees',
-              fundType: 'courant',
-              paymentMethod: proof.paymentMethod === 'cheque' ? 'cheque' : 'virement',
-              reference: proof.referenceNumber,
-              documentType: 'quittance',
-              invoiceNumber: generatedQuittance.quittanceNumber,
-              thirdPartyName: proof.residentName,
-              lotNumber: proof.apartmentNumber,
-              bankName: proof.bankName,
-            });
-            setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
-          }
-        }
-      }
-    }
-
-    return { proof, quittance: generatedQuittance, success: true };
+  if (!['approved', 'approve', 'rejected', 'reject'].includes(decision)) throw new Error('Décision invalide.');
+  const approved = decision === 'approved' || decision === 'approve';
+  const proofs = getLocalItem<PaymentProof[]>(STORAGE_KEYS.PROOFS, mockPaymentProofs);
+  const proof = proofs.find((p) => p.id === proofId);
+  if (!proof) throw new Error('Justificatif introuvable.');
+  if (proof.status !== 'pending') {
+    if ((proof.status === 'approved') !== approved) throw new Error('Ce justificatif a déjà été traité.');
+    const existing = getLocalItem<Quittance[]>(STORAGE_KEYS.QUITTANCES, mockQuittances)
+      .find((q) => q.paymentId === `proof:${proof.id}` || q.id === `quit-prf-${proof.id}`);
+    if (!approved || existing) return { proof, success: true, quittance: existing };
+    // A missing receipt can be rebuilt from its stable posted payment without posting again.
   }
+  let quittance: Quittance | undefined;
+  if (approved) {
+    const charge = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, mockCharges).find((c) => c.id === proof.chargeId);
+    const syndic = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics)
+      .find((s) => s.id === charge?.syndicId);
+    const building = syndic?.buildings.find((b) => b.id === proof.buildingId);
+    if (!charge || !syndic || !building || charge.buildingId !== building.id || charge.residentId !== proof.residentId ||
+      (proof.syndicId && proof.syndicId !== syndic.id)) throw new Error('Justificatif non lié à cette charge.');
+    const apartment = building.apartments.find((a) => a.id === charge.apartmentId);
+    if (!apartment || (proof.apartmentId && proof.apartmentId !== apartment.id) || proof.apartmentNumber !== apartment.number) {
+      throw new Error('Lot non lié au justificatif.');
+    }
+    quittance = await createQuittance({ paymentId: `proof:${proof.id}`, chargeId: charge.id,
+      buildingId: building.id, buildingName: building.name, syndicId: syndic.id, syndicName: syndic.name,
+      residentId: proof.residentId, residentName: building.residents.find((r) => r.id === proof.residentId)?.name || proof.residentName,
+      apartmentId: apartment.id, apartmentNumber: apartment.number, amount: proof.amount,
+      paymentDate: proof.submissionDate, paymentMethod: proof.paymentMethod, periodCovered: charge.period || '',
+      bankName: proof.bankName, referenceNumber: proof.referenceNumber, addTransactionToLedger: true });
+  }
+  // Validation/posting must finish before the proof becomes approved.
+  proof.status = approved ? 'approved' : 'rejected'; proof.reviewedAt = new Date().toISOString();
+  if (!approved) proof.rejectionReason = rejectionReason;
+  setLocalItem(STORAGE_KEYS.PROOFS, proofs);
+  return { proof, quittance, success: true };
 
-  return { proof: {} as any, success: true };
 };
 
 // ==========================================
@@ -2067,132 +1935,95 @@ export const getQuittancesForResident = async (residentId: string): Promise<Quit
   return snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Quittance));
 };
 
+function centimes(amount: number): number {
+  if (!Number.isFinite(amount) || amount < 0 || !Number.isSafeInteger(Math.round(amount * 100))) throw new Error('Montant invalide.');
+  return Math.round(amount * 100);
+}
+function paidAmount(charge: Charge): number { return charge.paidAmount ?? (charge.status === 'paid' ? charge.amount : 0); }
+function outstanding(charge: Charge): number { return Math.max(0, centimes(charge.amount) - centimes(paidAmount(charge))); }
+function postIncome(building: Building, amount: number, paymentId: string, details: Partial<Transaction>) {
+  const split = splitChargeReserveAndOperating(amount, building.reserveFundPercentage ?? building.reserveFundRate ?? 5);
+  building.financials.transactions ||= [];
+  for (const [fundType, value] of [['courant', split.chargesCourantesAmount], ['reserve', split.reserveFundAmount]] as const) {
+    if (value === 0) continue;
+    building.financials.transactions.unshift({ ...details, id: `trx-${paymentId}-${fundType}`, paymentId,
+      date: details.date || new Date().toISOString(), description: details.description || 'Encaissement',
+      amount: value, type: 'income', category: 'fees', fundType });
+  }
+  building.financials.balance = Math.round(((building.financials.balance ?? 0) + split.chargesCourantesAmount) * 100) / 100;
+  building.financials.reserveFundBalance = Math.round(((building.financials.reserveFundBalance ?? 0) + split.reserveFundAmount) * 100) / 100;
+  return split;
+}
 export const createQuittance = async (
-  quittanceInput: Omit<Quittance, 'id' | 'quittanceNumber' | 'createdAt'> & {
-    quittanceNumber?: string;
-    addTransactionToLedger?: boolean;
-  }
+  input: Omit<Quittance, 'id' | 'quittanceNumber' | 'createdAt'> & { quittanceNumber?: string; addTransactionToLedger?: boolean }
 ): Promise<Quittance> => {
-  const { addTransactionToLedger = true, ...coreData } = quittanceInput;
-  const quittances = getLocalItem<Quittance[]>(STORAGE_KEYS.QUITTANCES, mockQuittances);
+  const { addTransactionToLedger = true, ...core } = input;
+  const amount = centimes(core.amount);
+  if (amount <= 0) throw new Error('Montant du paiement invalide.');
+  const receipts = getLocalItem<Quittance[]>(STORAGE_KEYS.QUITTANCES, mockQuittances);
+  const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
+  const building = syndics.find((s) => s.id === core.syndicId)?.buildings.find((b) => b.id === core.buildingId);
+  if (!building) throw new Error('Immeuble hors du cabinet.');
   const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, mockCharges);
-  const linkedCharge = coreData.chargeId
-    ? charges.find((c) => c.id === coreData.chargeId)
-    : undefined;
-
-  // If a full quittance already exists for this chargeId, return it to prevent duplicate receipts/postings
-  if (coreData.chargeId) {
-    const existingForCharge = quittances.find((q) => q.chargeId === coreData.chargeId);
-    if (
-      existingForCharge &&
-      (!addTransactionToLedger ||
-        linkedCharge?.status === 'paid' ||
-        existingForCharge.amount >= (linkedCharge?.amount ?? coreData.amount) - 0.005)
-    ) {
-      return existingForCharge;
-    }
+  const matches = charges.filter((c) => c.buildingId === core.buildingId && c.syndicId === core.syndicId &&
+    c.residentId === core.residentId && (!core.apartmentId || c.apartmentId === core.apartmentId) &&
+    (core.chargeId ? c.id === core.chargeId : normalizeBillingPeriodKey(c.period || '') === normalizeBillingPeriodKey(core.periodCovered)));
+  const charge = matches.length === 1 ? matches[0] : undefined;
+  if (!charge) throw new Error('Sélectionnez une charge unique liée à ce paiement.');
+  const lot = building.apartments.find((a) => a.id === charge.apartmentId);
+  if (!building.residents.some((r) => r.id === core.residentId) || !lot || lot.number !== core.apartmentNumber) {
+    throw new Error('Copropriétaire ou lot non lié à cette charge.');
   }
-
-  const seq = String(quittances.length + 1).padStart(5, '0');
-  const year = new Date().getFullYear();
-
-  const newQuittance: Quittance = {
-    ...coreData,
-    id: `quit-${Date.now()}`,
-    quittanceNumber: coreData.quittanceNumber || `QUIT-${year}-${seq}`,
-    createdAt: new Date().toISOString(),
-  };
-
-  if (isLocalEngineEnabled) {
-    quittances.unshift(newQuittance);
-    setLocalItem(STORAGE_KEYS.QUITTANCES, quittances);
-
-    // Check if linked charge was ALREADY paid before this call; only mutate charge when addTransactionToLedger !== false
-    let wasChargeAlreadyPaid = false;
-    if (linkedCharge) {
-      wasChargeAlreadyPaid = linkedCharge.status === 'paid';
-      if (addTransactionToLedger && !wasChargeAlreadyPaid) {
-        const prevPaid = linkedCharge.paidAmount ?? 0;
-        const nextPaid = Math.min(
-          linkedCharge.amount,
-          Math.round((prevPaid + coreData.amount) * 100) / 100
-        );
-        linkedCharge.paidAmount = nextPaid;
-        linkedCharge.status = nextPaid >= linkedCharge.amount - 0.005 ? 'paid' : 'unpaid';
-        setLocalItem(STORAGE_KEYS.CHARGES, charges);
-      }
+  core.chargeId = charge.id; core.amount = amount / 100;
+  const paymentId = addTransactionToLedger ? (core.paymentId || (core.referenceNumber?.trim() ?
+    `manual:${core.buildingId}:${charge.id}:${core.paymentMethod}:${core.referenceNumber.trim()}` : undefined)) : core.paymentId;
+  if (addTransactionToLedger && !paymentId) throw new Error('Référence unique de paiement obligatoire.');
+  const existing = receipts.find((q) => paymentId ? q.paymentId === paymentId :
+    q.chargeId === charge.id && centimes(q.amount) === amount);
+  if (existing) {
+    if (existing.buildingId !== core.buildingId || existing.syndicId !== core.syndicId || existing.residentId !== core.residentId ||
+      existing.chargeId !== charge.id || centimes(existing.amount) !== amount || existing.paymentMethod !== core.paymentMethod) {
+      throw new Error('Référence de paiement déjà utilisée avec des données différentes.');
     }
-
-    // Audit Item 14: Never add duplicate ledger income if charge was already paid or addTransactionToLedger is false
-    if (addTransactionToLedger && !wasChargeAlreadyPaid) {
-      const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
-      for (const s of syndics) {
-        const bld = s.buildings.find((b) => b.id === coreData.buildingId);
-        if (bld) {
-          bld.financials.transactions = bld.financials.transactions || [];
-          const reserveRate = bld.reserveFundPercentage ?? bld.reserveFundRate ?? 5;
-          const computedSplit = splitChargeReserveAndOperating(coreData.amount, reserveRate);
-          const reserveShare =
-            typeof coreData.reserveFundAmount === 'number' &&
-            typeof coreData.chargesCourantesAmount === 'number' &&
-            Math.abs(
-              coreData.reserveFundAmount + coreData.chargesCourantesAmount - coreData.amount
-            ) < 0.02
-              ? Math.round(coreData.reserveFundAmount * 100) / 100
-              : computedSplit.reserveFundAmount;
-          const courantesShare = Math.round((coreData.amount - reserveShare) * 100) / 100;
-          const trxDate = coreData.paymentDate || new Date().toISOString();
-
-          if (reserveShare > 0) {
-            bld.financials.reserveFundBalance =
-              Math.round(((bld.financials.reserveFundBalance || 0) + reserveShare) * 100) / 100;
-            bld.financials.transactions.unshift({
-              id: `trx-quit-res-${newQuittance.id}`,
-              date: trxDate,
-              description: `Dotation fonds de réserve (${reserveRate}%) - Quittance ${newQuittance.quittanceNumber} Lot ${coreData.apartmentNumber}`,
-              amount: reserveShare,
-              type: 'income',
-              category: 'fees',
-              fundType: 'reserve',
-              paymentMethod: coreData.paymentMethod,
-              reference: coreData.referenceNumber || newQuittance.quittanceNumber,
-              documentType: 'quittance',
-              invoiceNumber: newQuittance.quittanceNumber,
-              thirdPartyName: coreData.residentName,
-              lotNumber: coreData.apartmentNumber,
-              bankName: coreData.bankName || bld.bankName,
-            });
-          }
-
-          bld.financials.balance =
-            Math.round(((bld.financials.balance || 0) + courantesShare) * 100) / 100;
-          bld.financials.transactions.unshift({
-            id: `trx-quit-${newQuittance.id}`,
-            date: trxDate,
-            description: `Quittance ${newQuittance.quittanceNumber} - Lot ${coreData.apartmentNumber} (${coreData.residentName}) - ${coreData.periodCovered}`,
-            amount: courantesShare,
-            type: 'income',
-            category: 'fees',
-            fundType: 'courant',
-            paymentMethod: coreData.paymentMethod,
-            reference: coreData.referenceNumber || newQuittance.quittanceNumber,
-            documentType: 'quittance',
-            invoiceNumber: newQuittance.quittanceNumber,
-            thirdPartyName: coreData.residentName,
-            lotNumber: coreData.apartmentNumber,
-            bankName: coreData.bankName || bld.bankName,
-          });
-          setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
-          break;
-        }
-      }
-    }
-
-    return newQuittance;
+    return existing;
   }
-
-  const docRef = await addDoc(collection(db, QUITTANCES_COL), newQuittance);
-  return { id: docRef.id, ...newQuittance };
+  const posted = building.financials.transactions.filter((t) => paymentId && t.paymentId === paymentId);
+  if (posted.length && (posted.some((t) => t.sourceChargeId !== charge.id || t.type !== 'income') ||
+    posted.reduce((sum, t) => sum + centimes(t.amount), 0) !== amount)) throw new Error('Référence de paiement déjà utilisée.');
+  let split = splitChargeReserveAndOperating(core.amount, building.reserveFundPercentage ?? building.reserveFundRate ?? 5);
+  const invoices = getLocalItem<Invoice[]>(STORAGE_KEYS.INVOICES, []);
+  if (addTransactionToLedger && !posted.length) {
+    if (amount > outstanding(charge)) throw new Error('Le paiement dépasse le solde restant de la charge.');
+    const linked = invoices.filter((i) => i.chargeIds.includes(charge.id) && i.status !== 'cancelled');
+    if (linked.length > 1) throw new Error('Plusieurs factures couvrent cette charge : rapprochement nécessaire.');
+    const invoice = linked[0];
+    if (invoice && (invoice.syndicId !== core.syndicId || invoice.buildingId !== core.buildingId ||
+      invoice.residentId !== core.residentId || amount > centimes(invoice.totalAmount) - centimes(invoice.paidAmount ?? 0))) {
+      throw new Error('Facture liée incompatible avec ce paiement.');
+    }
+    charge.paidAmount = (centimes(paidAmount(charge)) + amount) / 100;
+    charge.status = outstanding(charge) === 0 ? 'paid' : 'unpaid'; charge.paidAt = core.paymentDate; charge.paymentMethod = core.paymentMethod;
+    if (invoice) {
+      invoice.paidAmount = (centimes(invoice.paidAmount ?? 0) + amount) / 100;
+      invoice.status = centimes(invoice.paidAmount) === centimes(invoice.totalAmount) ? 'paid' : 'unpaid';
+      invoice.paymentIds = [...(invoice.paymentIds || []), paymentId!]; charge.invoiceId = invoice.id;
+    }
+    split = postIncome(building, core.amount, paymentId!, { sourceChargeId: charge.id, sourceInvoiceId: invoice?.id,
+      date: core.paymentDate, paymentMethod: core.paymentMethod, reference: core.referenceNumber,
+      description: `Paiement lot ${lot.number}`, documentType: 'quittance' });
+    setLocalItem(STORAGE_KEYS.CHARGES, charges); setLocalItem(STORAGE_KEYS.INVOICES, invoices); setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
+  } else if (!posted.length && amount > centimes(paidAmount(charge))) {
+    throw new Error('Aucun paiement suffisant enregistré pour ce reçu.');
+  }
+  if (posted.length) {
+    const reserve = posted.filter((t) => t.fundType === 'reserve').reduce((sum, t) => sum + centimes(t.amount), 0) / 100;
+    split = { reserveFundAmount: reserve, chargesCourantesAmount: core.amount - reserve, reservePercentageUsed: 0 };
+  }
+  const receipt: Quittance = { ...core, paymentId, reserveFundAmount: split.reserveFundAmount,
+    chargesCourantesAmount: split.chargesCourantesAmount, id: `quit-${paymentId || crypto.randomUUID()}`,
+    quittanceNumber: core.quittanceNumber || `QUIT-${new Date().getFullYear()}-${String(receipts.length + 1).padStart(5, '0')}`,
+    createdAt: new Date().toISOString() };
+  setLocalItem(STORAGE_KEYS.QUITTANCES, [receipt, ...receipts]); return receipt;
 };
 
 export const generateQuittanceForCharge = async (
@@ -2240,8 +2071,8 @@ export const generateQuittanceForCharge = async (
   // Audit Item 16: Use the building's configured reserveFundPercentage / reserveFundRate (default 5%) instead of hardcoded 15%
   const reserveRate =
     targetBuilding?.reserveFundPercentage ?? targetBuilding?.reserveFundRate ?? 5;
-  const reserveShare = Math.round(charge.amount * (reserveRate / 100) * 100) / 100;
-  const courantesShare = Math.round((charge.amount - reserveShare) * 100) / 100;
+  const reserveShare = Math.round(paidAmount(charge) * (reserveRate / 100) * 100) / 100;
+  const courantesShare = Math.round((paidAmount(charge) - reserveShare) * 100) / 100;
 
   // Audit Item 14: Generating a missing receipt for a paid charge MUST NOT post income again!
   const shouldPostToLedger = charge.status !== 'paid';
@@ -2258,7 +2089,7 @@ export const generateQuittanceForCharge = async (
     apartmentId: charge.apartmentId,
     apartmentNumber: apt?.number || 'Lot',
     tantiemes: apt?.tantiemes || charge.tantiemesApplied || 100,
-    amount: charge.amount,
+    amount: paidAmount(charge),
     chargesCourantesAmount: courantesShare,
     reserveFundAmount: reserveShare,
     periodCovered:
@@ -2269,7 +2100,7 @@ export const generateQuittanceForCharge = async (
     referenceNumber: referenceNumber || `QUIT-${Date.now().toString().slice(-6)}`,
     bankName: bankName || targetBuilding?.bankName || 'Attijariwafa Bank',
     remarks: 'Cotisation copropriété - Récépissé libératoire (Loi 18-00 / 106-12)',
-    addTransactionToLedger: shouldPostToLedger,
+    addTransactionToLedger: false,
   });
 };
 
@@ -2277,48 +2108,6 @@ export const generateQuittanceForCharge = async (
 // 8. ASSEMBLÉES GÉNÉRALES (AG) & WEIGHTED VOTING (Audit Item 20)
 // ==========================================
 
-function evaluateResolutionStatus(res: AGResolution, ag: AssembleeGenerale): AGResolution['status'] {
-  const totalTantiemes = ag.totalTantiemes || 1000;
-  const maj = res.majorityType;
-  const isUnanimity = maj === 'unanimity' || maj === 'unanimite';
-  const isThreeQuarters = maj === 'three_quarters' || maj === 'trois_quarts_26';
-  const isAbsolute = maj === 'absolute' || maj === 'absolue_25';
-
-  // Audit Item 20: Resolution cannot be approved if quorum is not reached
-  if (!ag.quorumReached) {
-    if (isUnanimity && res.votesAgainst > 0) {
-      return 'rejected';
-    }
-    return 'pending';
-  }
-
-  if (isUnanimity) {
-    if (res.votesFor >= totalTantiemes) return 'approved';
-    if (res.votesAgainst > 0) return 'rejected';
-    return 'pending';
-  }
-
-  if (isThreeQuarters) {
-    const threshold = Math.ceil(totalTantiemes * 0.75);
-    if (res.votesFor >= threshold) return 'approved';
-    if (res.votesAgainst > totalTantiemes - threshold) return 'rejected';
-    return 'pending';
-  }
-
-  if (isAbsolute) {
-    const threshold = Math.floor(totalTantiemes / 2) + 1; // 501 / 1000
-    if (res.votesFor >= threshold) return 'approved';
-    if (res.votesAgainst >= totalTantiemes - threshold + 1) return 'rejected';
-    return 'pending';
-  }
-
-  // Majorité simple (Art. 21): majorité des voix exprimées des présents ou représentés
-  const expressed = res.votesFor + res.votesAgainst;
-  if (expressed > 0) {
-    return res.votesFor > res.votesAgainst ? 'approved' : 'rejected';
-  }
-  return 'pending';
-}
 
 export const getAssembleesGeneralesForBuilding = async (
   buildingId: string
@@ -2405,139 +2194,29 @@ export const castResidentAGVote = async (
     : choiceArg || 'for';
   const comment = isObjectCall ? residentIdOrPayload.comment : commentArg;
 
-  if (isLocalEngineEnabled) {
-    const agList = getLocalItem<AssembleeGenerale[]>(STORAGE_KEYS.AG, mockAssembleesGenerales);
-    const ag = agList.find((item) => item.id === agId);
-    if (!ag) throw new Error('Assemblée Générale introuvable');
-
-    // Audit Item 20: Reject votes on closed sessions or completed AGs
-    if (ag.status === 'completed' || ag.status === 'closed' || ag.isVotingOpen === false) {
-      throw new Error('Le scrutin est clôturé pour cette Assemblée Générale.');
-    }
-
-    const res = ag.resolutions.find((r) => r.id === resolutionId);
-    if (!res) throw new Error('Résolution introuvable');
-
-    // Audit Item 20: Verify voter eligibility in attendance sheet & building records, and derive authoritative weight
-    // Require exact residentId match on the attendance sheet (never allow an unauthorized residentId to claim another lot by passing apartmentNumber)
-    const attendee = (ag.attendees || []).find((a) => a.residentId === residentId);
-    if (!attendee) {
-      throw new Error(
-        'Vote refusé : le copropriétaire doit être inscrit comme présent ou représenté sur la feuille de présence.'
-      );
-    }
-    if (
-      apartmentNumber &&
-      attendee.apartmentNumber &&
-      apartmentNumber.trim().toLowerCase() !== attendee.apartmentNumber.trim().toLowerCase()
-    ) {
-      throw new Error(
-        'Vote refusé : le numéro de lot indiqué ne correspond pas au lot rattaché à ce copropriétaire sur la feuille de présence.'
-      );
-    }
-
-    // Look up authoritative tantièmes from building apartment or attendance sheet (never trust caller-supplied weight)
-    const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
-    let authoritativeAptTantiemes: number | undefined;
-    let canonicalApartmentId = apartmentId;
-    let canonicalApartmentNumber = attendee.apartmentNumber || apartmentNumber;
-    for (const s of syndics) {
-      const bld = s.buildings.find((b) => b.id === ag.buildingId);
-      if (bld) {
-        const resRecord = bld.residents.find((r) => r.id === residentId);
-        if (resRecord && resRecord.isOwner === false) {
-          throw new Error(
-            'Vote refusé (Loi 18-00) : seuls les copropriétaires (ou leurs mandataires) disposent du droit de vote en Assemblée Générale.'
-          );
-        }
-        const apt = bld.apartments.find(
-          (a) =>
-            (resRecord?.apartmentId && a.id === resRecord.apartmentId) ||
-            a.ownerId === residentId ||
-            (attendee.apartmentNumber && a.number === attendee.apartmentNumber) ||
-            (apartmentId && a.id === apartmentId)
-        );
-        if (apt) {
-          if (apt.ownerId && apt.ownerId !== residentId) {
-            throw new Error(
-              'Vote refusé : ce lot appartient à un autre copropriétaire.'
-            );
-          }
-          canonicalApartmentId = apt.id;
-          canonicalApartmentNumber = apt.number || canonicalApartmentNumber;
-          if (typeof apt.tantiemes === 'number' && apt.tantiemes > 0) {
-            authoritativeAptTantiemes = apt.tantiemes;
-          }
-        }
-        break;
-      }
-    }
-
-    // Automatically check-in an eligible copropriétaire casting a remote electronic vote on an open session
-    if (attendee.status === 'absent') {
-      attendee.status = 'present';
-    }
-
-    const authoritativeWeight = authoritativeAptTantiemes ?? attendee.tantiemes ?? 0;
-    if (authoritativeWeight <= 0) {
-      throw new Error('Droit de vote invalide : tantièmes non configurés pour ce lot.');
-    }
-
-    res.voterChoices = res.voterChoices || [];
-    const existingVoteIdx = res.voterChoices.findIndex(
-      (v) =>
-        v.residentId === residentId ||
-        (canonicalApartmentId && v.apartmentId === canonicalApartmentId) ||
-        (canonicalApartmentNumber && v.apartmentNumber === canonicalApartmentNumber)
-    );
-
-    const nowIso = new Date().toISOString();
-    const voteRecord: AGVoteCast = {
-      residentId,
-      residentName: attendee.residentName || residentName,
-      apartmentId: canonicalApartmentId,
-      apartmentNumber: canonicalApartmentNumber,
-      tantiemes: authoritativeWeight,
-      choice,
-      vote: choice,
-      comment,
-      votedAt: nowIso,
-      castAt: nowIso,
-    };
-
-    if (existingVoteIdx >= 0) {
-      res.voterChoices[existingVoteIdx] = voteRecord;
-    } else {
-      res.voterChoices.push(voteRecord);
-    }
-    res.voters = res.voterChoices;
-
-    // Recompute totals strictly from authoritative voterChoices
-    res.votesFor = res.voterChoices
-      .filter((v) => (v.choice || v.vote) === 'for')
-      .reduce((acc, v) => acc + v.tantiemes, 0);
-    res.votesAgainst = res.voterChoices
-      .filter((v) => (v.choice || v.vote) === 'against')
-      .reduce((acc, v) => acc + v.tantiemes, 0);
-    res.votesAbstain = res.voterChoices
-      .filter((v) => (v.choice || v.vote) === 'abstain')
-      .reduce((acc, v) => acc + v.tantiemes, 0);
-
-    // Recompute quorum from present/represented attendees
-    const presentTantiemes = (ag.attendees || [])
-      .filter((a) => a.status === 'present' || a.status === 'represented')
-      .reduce((sum, a) => sum + (a.tantiemes || 0), 0);
-
-    ag.presentTantiemes = presentTantiemes;
-    ag.quorumReached = presentTantiemes >= ag.quorumRequired;
-
-    res.status = evaluateResolutionStatus(res, ag);
-
-    setLocalItem(STORAGE_KEYS.AG, agList);
-    return ag;
+  if (typeof window !== 'undefined') {
+    const response = await fetch('/api/ag/vote', { method: 'POST', headers: getAuthenticatedRequestHeaders(),
+      body: JSON.stringify({ agId, resolutionId, residentId, apartmentId, choice, comment }) });
+    const data = await response.json();
+    if (!response.ok || !data.ag) throw new Error(data.error || 'Le vote a échoué.');
+    const list = getLocalItem<AssembleeGenerale[]>(STORAGE_KEYS.AG, mockAssembleesGenerales);
+    const index = list.findIndex((a) => a.id === agId);
+    if (index >= 0) list[index] = data.ag; else list.push(data.ag);
+    localStorage.setItem(STORAGE_KEYS.AG, JSON.stringify(list));
+    notifyStateUpdated(STORAGE_KEYS.AG);
+    return data.ag;
   }
+  const list = getLocalItem<AssembleeGenerale[]>(STORAGE_KEYS.AG, mockAssembleesGenerales);
+  const index = list.findIndex((a) => a.id === agId);
+  const building = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics)
+    .flatMap((x) => x.buildings).find((b) => b.id === list[index]?.buildingId);
+  if (index < 0 || !building) throw new Error('Assemblée introuvable.');
+  if (apartmentNumber && !building.apartments.some((a) => a.ownerId === residentId && a.number === apartmentNumber)) {
+    throw new Error('Lot non lié au copropriétaire.');
+  }
+  const result = applyResidentVote(list[index], building, residentId, resolutionId, choice, apartmentId || undefined, comment);
+  list[index] = result; setLocalItem(STORAGE_KEYS.AG, list); return result;
 
-  return {} as any;
 };
 
 export const toggleAGVoting = async (agId: string, isOpen: boolean): Promise<AssembleeGenerale> => {
@@ -3178,136 +2857,67 @@ export const createInvoiceForResident = async (
   buildingId: string,
   syndicId: string
 ): Promise<Invoice> => {
+  const building = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics).find((s) => s.id === syndicId)?.buildings.find((b) => b.id === buildingId);
+  if (!building?.residents.some((r) => r.id === residentId)) throw new Error('Copropriétaire hors de cet immeuble.');
   const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, mockCharges);
-  const unpaidCharges = charges.filter(
-    (c) =>
-      c.buildingId === buildingId &&
-      c.residentId === residentId &&
-      c.status !== 'paid'
-  );
-  if (unpaidCharges.length === 0) {
-    throw new Error('Aucune charge impayée à facturer pour ce copropriétaire.');
-  }
-
   const invoices = getLocalItem<Invoice[]>(STORAGE_KEYS.INVOICES, []);
-  const totalAmount =
-    Math.round(
-      unpaidCharges.reduce((sum, c) => sum + (c.amount - (c.paidAmount || 0)), 0) * 100
-    ) / 100;
-  const seq = String(invoices.length + 1).padStart(4, '0');
-  const year = new Date().getFullYear();
-
-  const newInv: Invoice = {
-    id: `inv-${Date.now()}`,
-    syndicId,
-    buildingId,
-    residentId,
-    invoiceNumber: `FAC-${year}-${seq}`,
-    totalAmount,
-    paidAmount: 0,
-    status: 'unpaid',
-    createdAt: new Date().toISOString(),
-    dueDate: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
-    chargeIds: unpaidCharges.map((c) => c.id),
-  };
-
-  invoices.unshift(newInv);
-  setLocalItem(STORAGE_KEYS.INVOICES, invoices);
-  return newInv;
+  const eligible = charges.filter((c) => c.syndicId === syndicId && c.buildingId === buildingId &&
+    c.residentId === residentId && !c.invoiceId && outstanding(c) > 0);
+  if (!eligible.length) {
+    const existing = invoices.find((i) => i.syndicId === syndicId && i.buildingId === buildingId && i.residentId === residentId &&
+      i.status !== 'paid' && i.status !== 'cancelled');
+    if (existing) return existing;
+    throw new Error('Aucune nouvelle charge impayée à facturer.');
+  }
+  const invoice: Invoice = { id: `inv-${crypto.randomUUID()}`, syndicId, buildingId, residentId,
+    invoiceNumber: `FAC-${new Date().getFullYear()}-${String(invoices.length + 1).padStart(4, '0')}`,
+    totalAmount: eligible.reduce((sum, c) => sum + outstanding(c), 0) / 100, paidAmount: 0, status: 'unpaid',
+    createdAt: new Date().toISOString(), dueDate: new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10),
+    chargeIds: eligible.map((c) => c.id) };
+  for (const charge of eligible) charge.invoiceId = invoice.id;
+  setLocalItem(STORAGE_KEYS.CHARGES, charges); setLocalItem(STORAGE_KEYS.INVOICES, [invoice, ...invoices]);
+  return invoice;
 };
 
-export const recordPayment = async (invoice: Invoice, amount: number, method: string) => {
-  if (!amount || amount <= 0) {
-    throw new Error('Montant de règlement invalide.');
-  }
-
-  if (isLocalEngineEnabled) {
-    const invoices = getLocalItem<Invoice[]>(STORAGE_KEYS.INVOICES, []);
-    const invIdx = invoices.findIndex((i) => i.id === invoice.id);
-    const storedInvoice = invIdx >= 0 ? invoices[invIdx] : invoice;
-    const prevPaid = Math.max(storedInvoice.paidAmount || 0, invoice.paidAmount || 0);
-    const totalAmount = storedInvoice.totalAmount ?? invoice.totalAmount;
-    const nextPaid = Math.round((prevPaid + amount) * 100) / 100;
-    const isFullyPaid = nextPaid >= totalAmount - 0.005;
-
-    if (invIdx >= 0) {
-      invoices[invIdx] = {
-        ...invoices[invIdx],
-        paidAmount: nextPaid,
-        status: isFullyPaid ? 'paid' : 'unpaid',
-      };
-      setLocalItem(STORAGE_KEYS.INVOICES, invoices);
-    }
-    invoice.paidAmount = nextPaid;
-    invoice.status = isFullyPaid ? 'paid' : 'unpaid';
-
-    // Reconcile linked charges
-    if (Array.isArray(invoice.chargeIds) && invoice.chargeIds.length > 0) {
-      const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, mockCharges);
-      let remainingToAllocate = amount;
-      for (const cId of invoice.chargeIds) {
-        const chg = charges.find((c) => c.id === cId);
-        if (chg && chg.status !== 'paid' && remainingToAllocate > 0) {
-          const outstanding = Math.max(0, chg.amount - (chg.paidAmount || 0));
-          const allocated = Math.min(outstanding, remainingToAllocate);
-          chg.paidAmount = Math.round(((chg.paidAmount || 0) + allocated) * 100) / 100;
-          if (chg.paidAmount >= chg.amount - 0.005) {
-            chg.status = 'paid';
-          }
-          remainingToAllocate = Math.round((remainingToAllocate - allocated) * 100) / 100;
-        }
-      }
-      setLocalItem(STORAGE_KEYS.CHARGES, charges);
-    }
-
-    const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
-    for (const s of syndics) {
-      const bld = s.buildings.find((b) => b.id === invoice.buildingId);
-      if (bld) {
-        bld.financials.balance =
-          Math.round(((bld.financials.balance || 0) + amount) * 100) / 100;
-        bld.financials.transactions.unshift({
-          id: `trx-${Date.now()}`,
-          date: new Date().toISOString(),
-          description: `Règlement facture #${invoice.invoiceNumber} (${method})`,
-          amount,
-          type: 'income',
-          category: 'fees',
-          paymentMethod: method,
-          invoiceNumber: invoice.invoiceNumber,
-        });
-        setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
-        return true;
-      }
-    }
+export const recordPayment = async (invoice: Invoice, amount: number, method: string, paymentReference?: string) => {
+  const cents = centimes(amount);
+  if (cents <= 0) throw new Error('Montant invalide.');
+  const invoices = getLocalItem<Invoice[]>(STORAGE_KEYS.INVOICES, []);
+  const current = invoices.find((i) => i.id === invoice.id);
+  if (!current || current.status === 'cancelled') throw new Error('Facture introuvable ou annulée.');
+  const paymentId = paymentReference || `invoice:${crypto.randomUUID()}`;
+  const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
+  const building = syndics.find((s) => s.id === current.syndicId)?.buildings.find((b) => b.id === current.buildingId);
+  if (!building) throw new Error('Immeuble hors du cabinet.');
+  const previous = building.financials.transactions.filter((t) => t.paymentId === paymentId);
+  if (previous.length) {
+    if (previous.some((t) => t.sourceInvoiceId !== current.id || t.paymentMethod !== method) ||
+      previous.reduce((sum, t) => sum + centimes(t.amount), 0) !== cents) throw new Error('Référence déjà utilisée.');
     return true;
   }
-
-  try {
-    await runTransaction(db, async (transaction) => {
-      const invoiceRef = doc(db, INVOICES_COL, invoice.id);
-      const trxRef = doc(collection(db, TRANSACTIONS_COL));
-
-      const newTrx: Omit<Transaction, 'id'> = {
-        date: new Date().toISOString(),
-        description: `Payment for Invoice #${invoice.invoiceNumber}`,
-        amount,
-        type: 'income',
-        category: 'fees',
-        paymentMethod: method,
-      };
-
-      transaction.set(trxRef, { ...newTrx, buildingId: invoice.buildingId });
-      transaction.update(invoiceRef, {
-        paidAmount: (invoice.paidAmount || 0) + amount,
-        status: (invoice.paidAmount || 0) + amount >= invoice.totalAmount ? 'paid' : 'unpaid',
-      });
-    });
-    return true;
-  } catch (e) {
-    console.error('Payment transaction failed:', e);
-    throw e;
+  if (cents > centimes(current.totalAmount) - centimes(current.paidAmount ?? 0)) throw new Error('Paiement supérieur au solde de la facture.');
+  const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, mockCharges);
+  const linked = [...new Set(current.chargeIds)].map((id) => {
+    const c = charges.find((charge) => charge.id === id);
+    if (!c || c.syndicId !== current.syndicId || c.buildingId !== current.buildingId || c.residentId !== current.residentId ||
+      (c.invoiceId && c.invoiceId !== current.id)) throw new Error('Charge non liée à la facture.');
+    return c;
+  });
+  if (cents > linked.reduce((sum, c) => sum + outstanding(c), 0)) throw new Error('Paiement supérieur aux charges dues.');
+  let remaining = cents;
+  for (const charge of linked) {
+    const allocated = Math.min(remaining, outstanding(charge));
+    charge.paidAmount = (centimes(paidAmount(charge)) + allocated) / 100;
+    charge.status = outstanding(charge) === 0 ? 'paid' : 'unpaid'; charge.invoiceId = current.id;
+    remaining -= allocated;
   }
+  current.paidAmount = (centimes(current.paidAmount ?? 0) + cents) / 100;
+  current.status = centimes(current.paidAmount) === centimes(current.totalAmount) ? 'paid' : 'unpaid';
+  current.paymentIds = [...(current.paymentIds || []), paymentId];
+  postIncome(building, cents / 100, paymentId, { sourceInvoiceId: current.id, paymentMethod: method,
+    description: `Paiement facture ${current.invoiceNumber}`, invoiceNumber: current.invoiceNumber });
+  setLocalItem(STORAGE_KEYS.INVOICES, invoices); setLocalItem(STORAGE_KEYS.CHARGES, charges); setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
+  return true;
 };
 
 export const initiateCmiPayment = async (invoiceId: string) => {

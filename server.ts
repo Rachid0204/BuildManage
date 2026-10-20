@@ -3,6 +3,12 @@ import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
+import { isDeepStrictEqual } from 'node:util';
+import { getApps, initializeApp } from 'firebase-admin/app';
+import { getAuth } from 'firebase-admin/auth';
+import firebaseConfig from './firebase-applet-config.json';
+import { applyResidentVote } from './utils/agVoting';
+import type { AssembleeGenerale, Building } from './types';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
 import {
@@ -15,7 +21,7 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const DATA_DIR = path.join(__dirname, '.data');
+const DATA_DIR = process.env.SYNDIK_DATA_DIR || path.join(__dirname, '.data');
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 const STATE_FILE = path.join(DATA_DIR, 'shared-state.json');
 
@@ -475,101 +481,55 @@ function lookupCandidateProfilesInStore(
  * role/tenant/building strictly to authoritative store records or server-signed HMAC tokens.
  * Never accepts arbitrary 3-part unsigned JWTs or fabricated session headers.
  */
-function extractAndVerifyCaller(
-  req: express.Request,
-  store: ServerStore
-): AuthCallerContext | null {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return null;
-  }
-  const token = authHeader.slice('Bearer '.length).trim();
-  if (!token || token.length < 16) {
-    return null;
-  }
+async function verifiedFirebaseIdentity(token: string) {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3 || JSON.parse(Buffer.from(parts[0], 'base64url').toString()).alg !== 'RS256') return null;
+    const app = getApps().find((a) => a.name === 'buildmanage-server') ||
+      initializeApp({ projectId: firebaseConfig.projectId }, 'buildmanage-server');
+    return await getAuth(app).verifyIdToken(token);
+  } catch { return null; }
+}
 
-  const headerUid = String(req.headers['x-syndik-uid'] || '').trim();
-  const headerRole = String(req.headers['x-syndik-role'] || '').trim();
-  const headerTenant = req.headers['x-syndik-tenant']
-    ? String(req.headers['x-syndik-tenant']).trim()
-    : undefined;
-  const headerBuilding = req.headers['x-syndik-building']
-    ? String(req.headers['x-syndik-building']).trim()
-    : undefined;
+function invitationExpired(store: ServerStore, identity: Record<string, any>): boolean {
+  if (!['resident', 'provider'].includes(identity.role)) return false;
+  const id = identity.role === 'resident' ? identity.residentId : identity.prestataireId;
+  const account = (store[identity.role === 'resident' ? 'syndik_prod_resident_accounts_v1' : 'syndik_prod_prestataire_accounts_v1'] || [])
+    .find((a: any) => identity.role === 'resident' ? a.residentId === id : a.prestataireId === id);
+  const resource = identity.role === 'resident' ? (store.syndik_prod_syndics_v1 || [])
+    .flatMap((s: any) => s.buildings || []).flatMap((b: any) => b.residents || []).find((r: any) => r.id === id) :
+    (store.syndik_prod_prestataires_v1 || []).find((p: any) => p.id === id);
+  const expiry = resource?.invitationExpiresAt || account?.invitationExpiresAt;
+  return (account?.mustChangePassword ?? resource?.mustChangePassword ?? true) && Boolean(expiry) && Date.parse(expiry) < Date.now();
+}
 
-  // 1. Server-issued HMAC session token (syndik-srv1.<payload>.<hmac>)
+async function extractAndVerifyCaller(
+  req: express.Request, store: ServerStore
+): Promise<AuthCallerContext | null> {
+  const token = String(req.headers.authorization || '').replace(/^Bearer /, '');
+  if (!token || !String(req.headers.authorization || '').startsWith('Bearer ')) return null;
+  let identity: AuthCallerContext | null = null;
   if (token.startsWith('syndik-srv1.')) {
-    const verified = verifyServerSessionToken(token);
-    if (!verified) return null;
-    if (headerUid && headerUid !== verified.uid) return null;
-    if (headerRole && headerRole !== verified.role) return null;
-    if (headerTenant && verified.syndicId && headerTenant !== verified.syndicId) return null;
-    if (
-      headerBuilding &&
-      (verified.role === 'resident' || verified.role === 'provider') &&
-      verified.buildingId &&
-      headerBuilding !== verified.buildingId
-    ) {
-      return null;
+    identity = verifyServerSessionToken(token);
+  } else {
+    // A client-computable signature is never an authentication credential.
+    // Firebase signature, issuer, audience and expiry are verified by the Admin SDK.
+    const decoded = await verifiedFirebaseIdentity(token);
+    if (!decoded) return null;
+    let candidates = lookupCandidateProfilesInStore(store, decoded.uid);
+    if (!candidates.length && decoded.email_verified && decoded.email) {
+      const registered = (store.syndik_prod_registered_users_v1 || []).find((u: any) =>
+        u.email?.trim().toLowerCase() === decoded.email!.toLowerCase());
+      if (registered) candidates = lookupCandidateProfilesInStore(store, registered.uid);
     }
-    return verified;
+    identity = candidates.length ? candidates[0] as AuthCallerContext : null;
   }
-
-  // 2. Client session signature token — MUST match an existing user in store AND pass cryptographic signature verification
-  if (token.startsWith('syndik-sess-')) {
-    if (!headerUid) return null;
-    const expectedPrefix = `syndik-sess-${headerUid}-`;
-    if (!token.startsWith(expectedPrefix)) {
-      return null;
-    }
-    const suppliedSig = token.slice(expectedPrefix.length).trim();
-    const headerSig = String(req.headers['x-syndik-sig'] || '').trim();
-    if (!suppliedSig || !suppliedSig.startsWith('sha256$v1$')) {
-      return null;
-    }
-    if (headerSig && !timingSafeStringEqual(headerSig, suppliedSig)) {
-      return null;
-    }
-
-    const candidates = lookupCandidateProfilesInStore(store, headerUid);
-    if (candidates.length === 0) {
-      return null;
-    }
-
-    for (const candidate of candidates) {
-      const expectedSig = computeSessionSignature(candidate as any);
-      if (timingSafeStringEqual(suppliedSig, expectedSig)) {
-        if (headerRole && headerRole !== candidate.role) {
-          return null;
-        }
-        if (headerTenant && candidate.syndicId && headerTenant !== candidate.syndicId) {
-          return null;
-        }
-        if (
-          headerBuilding &&
-          (candidate.role === 'resident' || candidate.role === 'provider') &&
-          candidate.buildingId &&
-          headerBuilding !== candidate.buildingId
-        ) {
-          return null;
-        }
-        return {
-          uid: String(candidate.uid),
-          email: candidate.email ? String(candidate.email).toLowerCase() : undefined,
-          role: String(candidate.role),
-          syndicId: candidate.syndicId ? String(candidate.syndicId) : undefined,
-          buildingId: candidate.buildingId ? String(candidate.buildingId) : undefined,
-          residentId: candidate.residentId ? String(candidate.residentId) : undefined,
-          prestataireId: candidate.prestataireId ? String(candidate.prestataireId) : undefined,
-        };
-      }
-    }
-
-    return null;
-  }
-
-  // Reject all unverified 3-part JWTs or unknown token formats (fail closed — Audit P0-2)
-  return null;
+  if (!identity) return null;
+  // Resolve current trusted membership on every request; a token does not grant a caller-selected tenant.
+  const current = lookupCandidateProfilesInStore(store, identity.uid).find((p) =>
+    p.role === identity!.role && p.email === identity!.email);
+  if (!current || invitationExpired(store, current)) return null;
+  return current as AuthCallerContext;
 }
 
 interface AuthorizedScope {
@@ -812,6 +772,11 @@ function filterStoreForCaller(store: ServerStore, caller: AuthCallerContext): Re
       continue;
     }
 
+    if (Array.isArray(val) && caller.role === 'resident' &&
+      ['syndik_prod_charges_v1', 'syndik_prod_proofs_v1', 'syndik_prod_quittances_v1', 'syndik_prod_invoices_v1'].includes(key)) {
+      result[key] = val.filter((item: any) => scope.authorizedBuildingIds.has(item.buildingId) && item.residentId === scope.callerResId);
+      continue;
+    }
     if (Array.isArray(val)) {
       if (scope.isAdmin) {
         result[key] = val;
@@ -833,7 +798,6 @@ function filterStoreForCaller(store: ServerStore, caller: AuthCallerContext): Re
 
 const RESIDENT_WRITABLE_KEYS = new Set([
   'syndik_prod_proofs_v1',
-  'syndik_prod_ag_v1',
   'syndik_prod_maintenance_v1',
   'syndik_prod_chat_v1',
   'syndik_prod_marketplace_v1',
@@ -911,6 +875,9 @@ function validateWriteForCaller(
       if (!s || !s.id) continue;
       const existing = existingSyndics.find((ex) => ex?.id === s.id);
       if (existing) {
+        for (const field of ['createdBy', 'subscriptionPlan', 'subscriptionStatus', 'subscriptionExpiry', 'subscriptionExpiresAt']) {
+          if (field in s && s[field] !== existing[field]) return { allowed: false, status: 403, error: 'Forbidden: protected cabinet field' };
+        }
         if (
           existing.createdBy !== caller.uid &&
           (!caller.syndicId || existing.id !== caller.syndicId)
@@ -938,29 +905,27 @@ function validateWriteForCaller(
   }
 
   if (key === 'syndik_prod_registered_users_v1') {
-    if (caller.role !== 'syndic') {
-      return { allowed: false, status: 403, error: 'Forbidden' };
-    }
-    const incomingUsers = Array.isArray(value) ? value : [];
-    for (const u of incomingUsers) {
-      const uUid = u?.uid || u?.profile?.uid;
-      const uRole = u?.role || u?.profile?.role;
-      const uSyndicId = u?.syndicId || u?.profile?.syndicId;
-      const uBldId = u?.buildingId || u?.profile?.buildingId;
-      if (uRole === 'admin') {
-        return { allowed: false, status: 403, error: 'Forbidden: cannot write admin user' };
+    if (caller.role !== 'syndic' || !Array.isArray(value)) return { allowed: false, status: 403, error: 'Forbidden' };
+    const existingUsers: any[] = store[key] || [];
+    for (const u of value) {
+      if (!u?.profile || !u.uid || u.profile.uid !== u.uid ||
+        (u.role && u.role !== u.profile.role) || (u.syndicId && u.syndicId !== u.profile.syndicId) ||
+        (u.buildingId && u.buildingId !== u.profile.buildingId) ||
+        !['syndic', 'resident', 'provider'].includes(u.profile.role)) {
+        return { allowed: false, status: 403, error: 'Forbidden: conflicting or privileged identity fields' };
       }
-      const isSelf = uUid === caller.uid;
-      const isOwnTenant =
-        (uSyndicId &&
-          (scope.authorizedSyndicIds.has(uSyndicId) || uSyndicId === caller.syndicId)) ||
-        (uBldId && scope.authorizedBuildingIds.has(uBldId));
-      if (!isSelf && !isOwnTenant) {
-        return {
-          allowed: false,
-          status: 403,
-          error: 'Forbidden: cross-cabinet user write denied',
-        };
+      const previous = existingUsers.find((p) => p.uid === u.uid);
+      if (previous && (previous.profile?.role !== u.profile.role ||
+          previous.profile?.syndicId !== u.profile.syndicId || previous.profile?.buildingId !== u.profile.buildingId)) {
+        return { allowed: false, status: 403, error: 'Forbidden: membership changes require a separate authorized operation' };
+      }
+      if (u.profile.role === 'syndic' && u.uid !== caller.uid) return { allowed: false, status: 403, error: 'Forbidden' };
+      if (!scope.authorizedSyndicIds.has(u.profile.syndicId) ||
+          (u.profile.buildingId && !scope.authorizedBuildingIds.has(u.profile.buildingId))) {
+        return { allowed: false, status: 403, error: 'Forbidden: account outside cabinet' };
+      }
+      if (previous && previous.profile?.syndicId && !scope.authorizedSyndicIds.has(previous.profile.syndicId)) {
+        return { allowed: false, status: 403, error: 'Forbidden: existing account outside cabinet' };
       }
     }
     return { allowed: true };
@@ -968,6 +933,24 @@ function validateWriteForCaller(
 
   if (key === 'syndik_prod_notifications_v1') {
     return { allowed: true };
+  }
+
+  if (caller.role === 'resident' && key === 'syndik_prod_proofs_v1') {
+    if (deletedId || !Array.isArray(value)) return { allowed: false, status: 403, error: 'Forbidden' };
+    for (const proof of value) {
+      const charge = (store.syndik_prod_charges_v1 || []).find((c: any) => c.id === proof.chargeId);
+      const previous = (store[key] || []).find((p: any) => p.id === proof.id);
+      if (previous) {
+        if (!isDeepStrictEqual(previous, proof)) return { allowed: false, status: 403, error: 'Forbidden: proof review belongs to the manager' };
+        continue;
+      }
+      if (!charge || charge.residentId !== scope.callerResId || proof.residentId !== scope.callerResId ||
+        proof.status !== 'pending' || proof.buildingId !== charge.buildingId || !scope.authorizedBuildingIds.has(charge.buildingId) ||
+        !Number.isFinite(proof.amount) || proof.amount <= 0 ||
+        Math.round(proof.amount * 100) > Math.round((charge.amount - (charge.paidAmount || 0)) * 100)) {
+        return { allowed: false, status: 403, error: 'Forbidden: invalid payment proof ownership or amount' };
+      }
+    }
   }
 
   // Building-scoped collections
@@ -1064,7 +1047,7 @@ async function startServer() {
 
   // Server-side authentication endpoint for Syndics, Residents (Email or CIN), and Providers (Prestataires)
   // Allows unauthenticated clients (new browser, incognito, mobile) to verify credentials against sharedStore
-  app.post('/api/auth/login', (req, res) => {
+  app.post('/api/auth/login', async (req, res) => {
     const identifier = String(req.body?.identifier || req.body?.email || '')
       .trim()
       .toLowerCase();
@@ -1404,62 +1387,109 @@ async function startServer() {
     return res.status(404).json({ ok: false, notFound: true });
   });
 
+  app.post('/api/auth/firebase-session', async (req, res) => {
+    const token = String(req.headers.authorization || '').replace(/^Bearer /, '');
+    const decoded = await verifiedFirebaseIdentity(token);
+    if (!decoded || !decoded.email || decoded.email_verified !== true) {
+      return res.status(401).json({ error: 'Une identité Firebase avec email vérifié est requise.' });
+    }
+    let candidates = lookupCandidateProfilesInStore(sharedStore, decoded.uid);
+    const registered: any[] = sharedStore.syndik_prod_registered_users_v1 || [];
+    if (!candidates.length) {
+      const known = registered.find((u) => u.email?.trim().toLowerCase() === decoded.email!.toLowerCase());
+      if (known) candidates = lookupCandidateProfilesInStore(sharedStore, known.uid);
+    }
+    let profile = candidates[0];
+    if (profile && invitationExpired(sharedStore, profile)) return res.status(403).json({ error: 'Invitation expirée.' });
+    if (!profile) {
+      // A new verified Google/Firebase identity owns a fresh cabinet, with no existing tenant claims.
+      const syndicId = `syndic-${crypto.randomUUID()}`;
+      profile = { uid: decoded.uid, email: decoded.email.toLowerCase(), role: 'syndic', syndicId,
+        displayName: String(decoded.name || decoded.email.split('@')[0]).slice(0, 150) };
+      registered.push({ uid: decoded.uid, email: profile.email, profile, createdAt: new Date().toISOString() });
+      sharedStore.syndik_prod_registered_users_v1 = registered;
+      sharedStore.syndik_prod_syndics_v1 = [...(sharedStore.syndik_prod_syndics_v1 || []), {
+        id: syndicId, name: `Cabinet ${profile.displayName}`, email: profile.email, createdBy: decoded.uid,
+        subscriptionPlan: 'starter', subscriptionStatus: 'trialing',
+        subscriptionExpiry: new Date(Date.now() + 30 * 86400000).toISOString(), buildings: [] }];
+      savePersistedState(sharedStore);
+    }
+    const storedProfile = registered.find((u) => u.uid === profile.uid)?.profile || {};
+    profile = { ...storedProfile, ...profile,
+      displayName: storedProfile.displayName || profile.displayName || decoded.name || decoded.email.split('@')[0] };
+    return res.json({ ok: true, profile, token: issueServerSessionToken(profile) });
+  });
+
   // Self-registration endpoint for new non-admin accounts (Syndic / Resident / Provider)
-  app.post('/api/auth/register', (req, res) => {
-    const { uid, email, password, profile, syndic } = req.body || {};
-    const emailNorm = String(email || profile?.email || '')
-      .trim()
-      .toLowerCase();
-    const rawPass = String(password || '').trim();
-    const role = String(profile?.role || 'syndic');
-
-    if (!uid || !emailNorm || rawPass.length < 6 || isAlreadyHashedPassword(rawPass)) {
-      return res.status(400).json({ ok: false, error: 'Invalid registration payload' });
+  app.post('/api/auth/register', async (req, res) => {
+    const { email, password, profile = {}, syndic } = req.body || {};
+    const initial = syndic?.initialBuilding;
+    if (initial && (!Number.isInteger(initial.apartmentsCount) || initial.apartmentsCount < 0 || initial.apartmentsCount > 500 ||
+      !Number.isFinite(initial.monthlyFees) || initial.monthlyFees < 0 || typeof initial.name !== 'string' || !initial.name.trim())) {
+      return res.status(400).json({ error: 'Configuration initiale de l’immeuble invalide.' });
     }
-    if (!['syndic', 'resident', 'provider'].includes(role)) {
-      return res.status(403).json({ ok: false, error: 'Forbidden: cannot self-register privileged role' });
+    const emailNorm = String(email || '').trim().toLowerCase();
+    const rawPass = String(password || '');
+    const role = String(profile.role || 'syndic');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailNorm) || rawPass.length < 6 || isAlreadyHashedPassword(rawPass)) {
+      return res.status(400).json({ ok: false, error: 'Identifiants d’inscription invalides.' });
     }
-
-    const regUsers: any[] = Array.isArray(sharedStore.syndik_prod_registered_users_v1)
-      ? sharedStore.syndik_prod_registered_users_v1
-      : [];
-    if (regUsers.some((u) => u?.email?.trim().toLowerCase() === emailNorm)) {
-      return res.status(409).json({ ok: false, error: 'Account already exists' });
+    if (!['syndic', 'resident', 'provider'].includes(role) || (req.body.role && req.body.role !== role)) {
+      return res.status(403).json({ ok: false, error: 'Rôle non autorisé.' });
     }
-
-    const passwordHash = hashPasswordSync(rawPass, emailNorm);
-    const cleanProfile = {
-      ...profile,
-      uid: String(uid),
-      email: emailNorm,
-      role,
-    };
-    regUsers.push({
-      uid: String(uid),
-      email: emailNorm,
-      passwordHash,
-      profile: cleanProfile,
-      createdAt: new Date().toISOString(),
-    });
-    sharedStore.syndik_prod_registered_users_v1 = regUsers;
-
-    if (role === 'syndic' && syndic && syndic.id && syndic.createdBy === uid) {
-      const tombstones = getTombstones(sharedStore, 'syndik_prod_syndics_v1');
-      sharedStore.syndik_prod_syndics_v1 = mergeSyndicsList(
-        sharedStore.syndik_prod_syndics_v1 || [],
-        [syndic],
-        tombstones
-      );
+    const registered: any[] = sharedStore.syndik_prod_registered_users_v1 || [];
+    const cabinets: any[] = sharedStore.syndik_prod_syndics_v1 || [];
+    const accountEmails = [...registered, ...(sharedStore.syndik_prod_resident_accounts_v1 || []),
+      ...(sharedStore.syndik_prod_prestataire_accounts_v1 || [])];
+    if (accountEmails.some((u: any) => u.email?.trim().toLowerCase() === emailNorm)) {
+      return res.status(409).json({ ok: false, error: 'Ce compte existe déjà. Connectez-vous avec vos identifiants ou votre invitation.' });
     }
-
+    if ((profile.syndicId && cabinets.some((s) => s.id === profile.syndicId)) ||
+        (syndic?.id && cabinets.some((s) => s.id === syndic.id)) ||
+        (role !== 'syndic' && (profile.syndicId || profile.buildingId || profile.residentId || profile.prestataireId))) {
+      return res.status(403).json({ ok: false, error: 'Une invitation du syndic est nécessaire pour rejoindre un cabinet existant.' });
+    }
+    const uid = `usr-${crypto.randomUUID()}`;
+    const cleanProfile: Record<string, any> = { uid, email: emailNorm, role,
+      displayName: String(profile.displayName || emailNorm.split('@')[0]).slice(0, 150),
+      phone: String(profile.phone || '').slice(0, 40) };
+    let createdSyndic: any;
+    if (role === 'syndic') {
+      const syndicId = `syndic-${crypto.randomUUID()}`;
+      const plan = ['starter', 'professional', 'enterprise'].includes(syndic?.subscriptionPlan) ? syndic.subscriptionPlan : 'starter';
+      createdSyndic = { id: syndicId, createdBy: uid, name: String(syndic?.name || cleanProfile.displayName).slice(0, 200),
+        email: emailNorm, phone: cleanProfile.phone, city: String(syndic?.city || '').slice(0, 100), logoUrl: '',
+        subscriptionPlan: plan, subscriptionStatus: 'trialing', subscriptionExpiry: new Date(Date.now() + 30 * 86400000).toISOString(),
+        buildings: [] };
+      if (initial) {
+        const buildingId = `bld-${crypto.randomUUID()}`;
+        const count = initial.apartmentsCount;
+        const apartments = Array.from({ length: count }, (_, i) => ({
+          id: `apt-${crypto.randomUUID()}`, buildingId, number: `${Math.floor(i / 4) + 1}0${i % 4 + 1}`,
+          floor: Math.floor(i / 4) + 1, area: 80, tantiemes: Math.floor(1000 / count) + (i === 0 ? 1000 % count : 0),
+          coproType: 'apartment', ownerId: null, tenantId: null, monthlyFees: initial.monthlyFees }));
+        createdSyndic.buildings = [{ id: buildingId, syndicId, name: initial.name.trim().slice(0, 200),
+          address: String(initial.address || '').slice(0, 300), city: createdSyndic.city,
+          monthlySyndicFees: initial.monthlyFees, reserveFundPercentage: 5, reserveFundRate: 5,
+          apartments, residents: [], announcements: [], documents: [],
+          financials: { balance: 0, reserveFundBalance: 0, transactions: [] } }];
+        cleanProfile.buildingId = buildingId; cleanProfile.buildingName = createdSyndic.buildings[0].name;
+      }
+      cleanProfile.syndicId = syndicId;
+      cabinets.push(createdSyndic);
+    }
+    // Resident/provider public accounts remain unassigned; an existing invitation uses the login flow.
+    registered.push({ uid, email: emailNorm, passwordHash: hashPasswordSync(rawPass, emailNorm), profile: cleanProfile, createdAt: new Date().toISOString() });
+    sharedStore.syndik_prod_registered_users_v1 = registered;
+    sharedStore.syndik_prod_syndics_v1 = cabinets;
     savePersistedState(sharedStore);
-    const token = issueServerSessionToken(cleanProfile);
-    return res.json({ ok: true, profile: cleanProfile, token, revision: sharedStore.__revision });
+    return res.json({ ok: true, profile: cleanProfile, syndic: createdSyndic,
+      token: issueServerSessionToken(cleanProfile), revision: sharedStore.__revision });
   });
 
   // Server-side password update endpoint — strictly bound to the authenticated caller (Audit P0-3)
-  app.post('/api/auth/change-password', (req, res) => {
-    const caller = extractAndVerifyCaller(req, sharedStore);
+  app.post('/api/auth/change-password', async (req, res) => {
+    const caller = await extractAndVerifyCaller(req, sharedStore);
     if (!caller) {
       return res.status(401).json({ ok: false, error: 'Unauthorized: authentication required' });
     }
@@ -1602,9 +1632,33 @@ async function startServer() {
     return res.json({ ok: true, revision: sharedStore.__revision });
   });
 
+  app.post('/api/ag/vote', async (req, res) => {
+    const caller = await extractAndVerifyCaller(req, sharedStore);
+    if (!caller) return res.status(401).json({ error: 'Authentification requise.' });
+    const list: AssembleeGenerale[] = sharedStore.syndik_prod_ag_v1 || [];
+    const index = list.findIndex((a) => a.id === req.body.agId);
+    const ag = list[index];
+    const scope = getAuthorizedScopeForCaller(sharedStore, caller);
+    if (!ag || (!scope.isAdmin && !scope.authorizedBuildingIds.has(ag.buildingId))) return res.status(403).json({ error: 'Accès refusé.' });
+    const residentId = caller.role === 'resident' ? scope.callerResId :
+      ['admin', 'syndic'].includes(caller.role) ? String(req.body.residentId || '') : '';
+    if (!residentId || (caller.role === 'resident' && req.body.residentId && req.body.residentId !== residentId)) {
+      return res.status(403).json({ error: 'Identité du votant non autorisée.' });
+    }
+    const building: Building | undefined = (sharedStore.syndik_prod_syndics_v1 || [])
+      .flatMap((s: any) => s.buildings || []).find((b: Building) => b.id === ag.buildingId);
+    if (!building) return res.status(404).json({ error: 'Immeuble introuvable.' });
+    try {
+      const result = applyResidentVote(ag, building, residentId, String(req.body.resolutionId || ''),
+        req.body.choice, req.body.apartmentId, typeof req.body.comment === 'string' ? req.body.comment : undefined);
+      list[index] = result; sharedStore.syndik_prod_ag_v1 = list; savePersistedState(sharedStore);
+      return res.json({ ag: result, revision: sharedStore.__revision });
+    } catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : 'Vote invalide.' }); }
+  });
+
   // Audit Item 02: Authenticated shared-state GET with ETag & sinceRevision delta sync
-  app.get('/api/shared-state', (req, res) => {
-    const caller = extractAndVerifyCaller(req, sharedStore);
+  app.get('/api/shared-state', async (req, res) => {
+    const caller = await extractAndVerifyCaller(req, sharedStore);
     if (!caller) {
       return res.status(401).json({ ok: false, error: 'Unauthorized: authentication required' });
     }
@@ -1640,8 +1694,8 @@ async function startServer() {
   });
 
   // Binary Document & Receipt Offload Endpoints (/api/uploads) with building-scoped auth (Audit P1-5)
-  app.post('/api/uploads', (req, res) => {
-    const caller = extractAndVerifyCaller(req, sharedStore);
+  app.post('/api/uploads', async (req, res) => {
+    const caller = await extractAndVerifyCaller(req, sharedStore);
     if (!caller) {
       return res.status(401).json({ ok: false, error: 'Unauthorized' });
     }
@@ -1708,8 +1762,8 @@ async function startServer() {
     }
   });
 
-  app.get('/api/uploads/:fileId', (req, res) => {
-    const caller = extractAndVerifyCaller(req, sharedStore);
+  app.get('/api/uploads/:fileId', async (req, res) => {
+    const caller = await extractAndVerifyCaller(req, sharedStore);
     if (!caller) {
       return res.status(401).json({ ok: false, error: 'Unauthorized' });
     }
@@ -1749,8 +1803,8 @@ async function startServer() {
   });
 
   // Audit Item 02, 17, 18 & P0-4: Authenticated, role/tenant-scoped, monotonic item-level merged shared-state POST
-  app.post('/api/shared-state', (req, res) => {
-    const caller = extractAndVerifyCaller(req, sharedStore);
+  app.post('/api/shared-state', async (req, res) => {
+    const caller = await extractAndVerifyCaller(req, sharedStore);
     if (!caller) {
       return res.status(401).json({ ok: false, error: 'Unauthorized: authentication required' });
     }
@@ -1847,8 +1901,8 @@ async function startServer() {
   });
 
   // Audit Item 02: Restrict reset strictly to authenticated admin callers
-  app.post('/api/shared-state/reset', (req, res) => {
-    const caller = extractAndVerifyCaller(req, sharedStore);
+  app.post('/api/shared-state/reset', async (req, res) => {
+    const caller = await extractAndVerifyCaller(req, sharedStore);
     if (!caller) {
       return res.status(401).json({ ok: false, error: 'Unauthorized: authentication required' });
     }
@@ -1866,7 +1920,7 @@ async function startServer() {
 
   // Audit Item 27: Server-side Gemini AI announcement generator (keeps API key on server)
   app.post('/api/ai/announcement', async (req, res) => {
-    const caller = extractAndVerifyCaller(req, sharedStore);
+    const caller = await extractAndVerifyCaller(req, sharedStore);
     if (!caller) {
       return res.status(401).json({ ok: false, error: 'Unauthorized: authentication required' });
     }
@@ -1909,7 +1963,7 @@ async function startServer() {
 
   // Phase 3: AI OCR / Verification for Moroccan bank transfer receipts (PaymentProof)
   app.post('/api/ai/verify-proof', async (req, res) => {
-    const caller = extractAndVerifyCaller(req, sharedStore);
+    const caller = await extractAndVerifyCaller(req, sharedStore);
     if (!caller) {
       return res.status(401).json({ ok: false, error: 'Unauthorized' });
     }
@@ -1973,7 +2027,7 @@ async function startServer() {
   } else {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
-    app.get('*all', (req, res) => {
+    app.get('*all', async (req, res) => {
       if (req.path.startsWith('/api/')) {
         return res.status(404).json({ ok: false, error: 'API route not found' });
       }

@@ -12,6 +12,19 @@ Application complète de gestion de copropriété adaptée au cadre juridique et
 
 ---
 
+## Vérification locale sans secrets
+
+```bash
+npm ci
+npm run check:local
+```
+
+Cette commande vérifie le typage, les règles, les services, les frontières HTTP, les paiements et les builds. Les tests utilisent des données synthétiques et bloquent les appels externes. Aucun secret de paiement, Firebase Admin, email ou IA n'est nécessaire pour ces vérifications.
+
+L'authentification de l'API utilise une identité vérifiée côté serveur. L'inscription crée un nouveau cabinet avec ses identifiants et son essai de 30 jours côté serveur. Les comptes invités se connectent avec les identifiants fournis par leur syndic. Les signatures calculables dans le navigateur ne donnent aucun droit serveur.
+
+Consultez LOCAL_FIX_NOTES.md pour les limites restantes : la migration de la persistance financière canonique, les transactions multi-appareils et les intégrations déployées restent à vérifier.
+
 ## 2. Installation & Démarrage Rapide (Windows PowerShell / CMD / Bash)
 
 ```bash
@@ -56,7 +69,7 @@ npm run build
 
 ## 4. Architecture & Modèle de Données
 
-- **Base de données canonique** : Cloud Firestore (base nommée configurée via `VITE_FIRESTORE_DATABASE_ID` / `FIRESTORE_DATABASE_ID`).
+- **Persistance actuelle** : cache local, état partagé serveur et miroirs Firestore. La migration vers une autorité financière canonique et transactionnelle reste à terminer.
 - **Authentification & Rôles** :
   - `admin` : Super-administrateur plateforme.
   - `syndic` : Gestionnaire de cabinet de syndic (essai initial de 30 jours créé côté serveur / inscription, limites d'immeubles par forfait vérifiées).
