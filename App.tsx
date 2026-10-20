@@ -992,6 +992,7 @@ const AppContent: React.FC = () => {
                 selectedBuilding ? (
                   <Dashboard
                     building={selectedBuilding}
+                    syndic={syndic || undefined}
                     onNavigate={(view: View) => {
                       const target = VIEW_TO_ROUTE[view] || '/';
                       navigate(target);

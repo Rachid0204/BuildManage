@@ -2202,3 +2202,239 @@ export const downloadArchiveDocumentPDF = (
     : `${docItem.name.replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
   doc.save(safeName);
 };
+
+// Phase 2.2: Arabic-safe Latin transliteration fallback for jsPDF standard Helvetica font
+const ARABIC_TRANSLIT_MAP: Record<string, string> = {
+  ا: 'a', أ: 'a', إ: 'i', آ: 'aa', ب: 'b', ت: 't', ث: 'th', ج: 'j', ح: 'h', خ: 'kh',
+  د: 'd', ذ: 'dh', ر: 'r', ز: 'z', س: 's', ش: 'sh', ص: 's', ض: 'd', ط: 't', ظ: 'z',
+  ع: 'a', غ: 'gh', ف: 'f', ق: 'q', ك: 'k', ل: 'l', م: 'm', ن: 'n', ه: 'h', و: 'w',
+  ي: 'y', ى: 'a', ة: 'a', ء: '', ئ: 'i', ؤ: 'u',
+};
+
+export function sanitizePdfText(input?: string | null): string {
+  if (!input) return '';
+  if (!/[\u0600-\u06FF]/.test(input)) return input;
+  return Array.from(input)
+    .map((ch) => (ch in ARABIC_TRANSLIT_MAP ? ARABIC_TRANSLIT_MAP[ch] : ch))
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Phase 4.2: État de Répartition Annuel & Clôture d'Exercice (Loi 18-00 Art. 24 & 37 / Loi 106-12)
+ */
+export const exportAnnualRepartitionPDF = (
+  building: Building,
+  syndic?: Syndic,
+  charges: Charge[] = [],
+  quittances: Quittance[] = [],
+  fiscalYear: number = new Date().getFullYear()
+) => {
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const reserveRate = building.reserveFundPercentage ?? building.reserveFundRate ?? 5;
+
+  doc.setFillColor(15, 118, 110);
+  doc.rect(0, 0, 210, 38, 'F');
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.text('ROYAUME DU MAROC · SYNDICAT DES COPROPRIÉTAIRES (LOI 18-00 & 106-12)', 105, 13, {
+    align: 'center',
+  });
+  doc.setFontSize(14);
+  doc.text(
+    `ÉTAT DE RÉPARTITION ANNUEL & CLÔTURE D'EXERCICE ${fiscalYear}`,
+    105,
+    23,
+    { align: 'center' }
+  );
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.text(
+    `Copropriété : ${sanitizePdfText(building.name)} · ${sanitizePdfText(building.address)}, ${sanitizePdfText(building.city)}`,
+    105,
+    31,
+    { align: 'center' }
+  );
+
+  let y = 46;
+  doc.setTextColor(30, 41, 59);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.text(
+    `Syndic Gestionnaire : ${sanitizePdfText(syndic?.name || 'Cabinet Syndic')}   |   Taux Fonds de Réserve Loi 106-12 : ${reserveRate}%`,
+    14,
+    y
+  );
+
+  y += 8;
+  doc.setFillColor(241, 245, 249);
+  doc.rect(14, y, 182, 8, 'F');
+  doc.setFontSize(8.5);
+  doc.text('Lot', 17, y + 5.5);
+  doc.text('Copropriétaire', 35, y + 5.5);
+  doc.text('Tantièmes', 92, y + 5.5);
+  doc.text('Appelé (MAD)', 116, y + 5.5);
+  doc.text('Réglé (MAD)', 144, y + 5.5);
+  doc.text('Dont Réserve', 168, y + 5.5);
+
+  y += 12;
+  doc.setFont('helvetica', 'normal');
+  let sumCalled = 0;
+  let sumPaid = 0;
+  let sumReserve = 0;
+
+  for (const apt of building.apartments) {
+    if (y > 265) {
+      doc.addPage();
+      y = 20;
+    }
+    const owner = building.residents.find(
+      (r) => r.id === apt.ownerId || r.apartmentId === apt.id
+    );
+    const aptCharges = charges.filter((c) => c.apartmentId === apt.id);
+    const called = aptCharges.reduce((s, c) => s + (c.amount || 0), 0);
+    const paid = aptCharges.reduce(
+      (s, c) => s + (c.paidAmount ?? (c.status === 'paid' ? c.amount : 0)),
+      0
+    );
+    const reserveContrib = Math.round(paid * (reserveRate / 100) * 100) / 100;
+
+    sumCalled += called;
+    sumPaid += paid;
+    sumReserve += reserveContrib;
+
+    doc.text(String(apt.number), 17, y);
+    doc.text(sanitizePdfText(owner?.name || 'Non assigné').slice(0, 26), 35, y);
+    doc.text(`${apt.tantiemes || 100}/1000`, 92, y);
+    doc.text(called.toFixed(2), 116, y);
+    doc.text(paid.toFixed(2), 144, y);
+    doc.text(reserveContrib.toFixed(2), 168, y);
+
+    doc.setDrawColor(226, 232, 240);
+    doc.line(14, y + 2, 196, y + 2);
+    y += 7;
+  }
+
+  y += 4;
+  doc.setFont('helvetica', 'bold');
+  doc.setFillColor(240, 253, 250);
+  doc.rect(14, y - 4, 182, 9, 'F');
+  doc.text('TOTAL EXERCICE', 17, y + 1.5);
+  doc.text(`${sumCalled.toFixed(2)} MAD`, 116, y + 1.5);
+  doc.text(`${sumPaid.toFixed(2)} MAD`, 144, y + 1.5);
+  doc.text(`${sumReserve.toFixed(2)} MAD`, 168, y + 1.5);
+
+  doc.setFontSize(8);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(100, 116, 139);
+  doc.text(
+    `Arrêté des comptes certifié conforme aux articles 24 et 37 de la Loi 18-00 — Quittances émises : ${quittances.length}`,
+    105,
+    284,
+    { align: 'center' }
+  );
+
+  doc.save(`Etat_Repartition_Annuel_${building.name.replace(/\s+/g, '_')}_${fiscalYear}.pdf`);
+};
+
+/**
+ * Phase 5.2: Mise en Demeure Officielle de Payer (Article 25 de la Loi n° 18-00 modifiée par la Loi 106-12)
+ */
+export const exportMiseEnDemeurePDF = (
+  building: Building,
+  syndic: Syndic | undefined,
+  resident: Resident,
+  apartment: Apartment | undefined,
+  unpaidCharges: Charge[]
+) => {
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const totalDue = unpaidCharges.reduce(
+    (s, c) => s + Math.max(0, c.amount - (c.paidAmount || 0)),
+    0
+  );
+  const issueDate = new Date().toLocaleDateString('fr-MA');
+
+  doc.setFillColor(153, 27, 27); // Rose/Red 800
+  doc.rect(0, 0, 210, 38, 'F');
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.text('ROYAUME DU MAROC · PROCÉDURE LÉGALE DE RECOUVREMENT (LOI 18-00 ART. 25)', 105, 13, {
+    align: 'center',
+  });
+  doc.setFontSize(15);
+  doc.text('MISE EN DEMEURE DE PAYER LES CHARGES DE COPROPRIÉTÉ', 105, 23, {
+    align: 'center',
+  });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.text(
+    `Lettre recommandée avec accusé de réception · Délai légal de 30 jours avant injonction de payer`,
+    105,
+    31,
+    { align: 'center' }
+  );
+
+  let y = 50;
+  doc.setTextColor(30, 41, 59);
+  doc.setFontSize(10);
+  doc.setFont('helvetica', 'bold');
+  doc.text(`Émetteur : ${sanitizePdfText(syndic?.name || 'Syndic de Copropriété')}`, 14, y);
+  doc.setFont('helvetica', 'normal');
+  doc.text(`Immeuble : ${sanitizePdfText(building.name)} (${sanitizePdfText(building.address)}, ${sanitizePdfText(building.city)})`, 14, y + 6);
+  doc.text(`Date d'émission : ${issueDate}`, 14, y + 12);
+
+  doc.setFont('helvetica', 'bold');
+  doc.text(`Destinataire Débiteur : ${sanitizePdfText(resident.name)}`, 115, y);
+  doc.setFont('helvetica', 'normal');
+  doc.text(`Lot N° : ${apartment?.number || 'N/A'} (${apartment?.tantiemes || 100}/1000 tantièmes)`, 115, y + 6);
+  if (resident.cin) doc.text(`CIN : ${resident.cin}`, 115, y + 12);
+
+  y += 24;
+  const bodyText = doc.splitTextToSize(
+    `Madame, Monsieur,\n\nMalgré nos précédents rappels amiables, nous constatons qu'à la date du ${issueDate}, votre compte copropriétaire au sein de la résidence « ${sanitizePdfText(building.name)} » présente un solde débiteur exigible de ${currencyFormatter.format(totalDue)} au titre des cotisations votées en Assemblée Générale.\n\nPar la présente, nous vous mettons formellement en demeure, conformément à l'article 25 de la Loi n° 18-00 (telle que modifiée par la Loi n° 106-12), de régulariser ce montant sous un délai de trente (30) jours à compter de la réception de cet avis.`,
+    180
+  );
+  doc.text(bodyText, 14, y);
+
+  y += 42;
+  doc.setFillColor(241, 245, 249);
+  doc.rect(14, y, 182, 8, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text('Période / Désignation de la charge impayée', 18, y + 5.5);
+  doc.text('Échéance', 125, y + 5.5);
+  doc.text('Reste dû (MAD)', 160, y + 5.5);
+
+  y += 13;
+  doc.setFont('helvetica', 'normal');
+  for (const chg of unpaidCharges.slice(0, 12)) {
+    const rem = Math.max(0, chg.amount - (chg.paidAmount || 0));
+    doc.text(sanitizePdfText(chg.description || chg.period || 'Appel de charges').slice(0, 52), 18, y);
+    doc.text(new Date(chg.dueDate).toLocaleDateString('fr-MA'), 125, y);
+    doc.text(currencyFormatter.format(rem), 160, y);
+    y += 7;
+  }
+
+  y += 5;
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(153, 27, 27);
+  doc.setFontSize(11);
+  doc.text(`TOTAL EXIGIBLE : ${currencyFormatter.format(totalDue)}`, 125, y);
+
+  doc.setTextColor(100, 116, 139);
+  doc.setFontSize(8);
+  doc.setFont('helvetica', 'normal');
+  doc.text(
+    "À défaut de règlement dans le délai de 30 jours, le Président du Tribunal de Première Instance sera saisi d'une requête en injonction de payer (Art. 25 bis Loi 18-00).",
+    105,
+    283,
+    { align: 'center' }
+  );
+
+  doc.save(`Mise_En_Demeure_Lot_${apartment?.number || resident.id}.pdf`);
+};

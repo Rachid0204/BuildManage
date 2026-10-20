@@ -141,6 +141,9 @@ export interface PaymentProof {
   status: 'pending' | 'approved' | 'rejected';
   reviewedAt?: string;
   rejectionReason?: string;
+  matchScore?: number;
+  matchStatus?: 'exact_match' | 'partial_match' | 'unmatched';
+  matchedChargeAmount?: number;
 }
 
 export interface Quittance {
@@ -324,6 +327,8 @@ export interface AGResolution {
     | 'trois_quarts_26'
     | 'unanimite';
   budgetAmount?: number;
+  chargesGeneratedAt?: string;
+  generatedChargesCount?: number;
   votesFor: number;
   votesAgainst: number;
   votesAbstain: number;

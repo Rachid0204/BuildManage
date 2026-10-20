@@ -12,6 +12,7 @@ import {
   updateAGAttendee,
   castResidentAGVote,
   toggleAGVoting,
+  generateChargesFromAGResolution,
 } from '../../firebase/services';
 import { generatePvAgPDF } from '../../services/pdfService';
 import Loading from '../common/Loading';
@@ -658,7 +659,60 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                           </button>
                         </div>
 
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          {res.status === 'approved' && (
+                            <Button
+                              variant="secondary"
+                              onClick={async () => {
+                                try {
+                                  if (!res.budgetAmount || res.budgetAmount <= 0) {
+                                    const rawBudget = prompt(
+                                      tr(
+                                        'Montant total du budget voté à répartir aux tantièmes (MAD) :',
+                                        'إجمالي الميزانية المصوت عليها لتوزيعها حسب الحصص (درهم):'
+                                      ),
+                                      '25000'
+                                    );
+                                    const parsed = Number(rawBudget);
+                                    if (!parsed || parsed <= 0) return;
+                                    res.budgetAmount = parsed;
+                                    await saveAssembleeGenerale(selectedAG);
+                                  }
+                                  const out = await generateChargesFromAGResolution(
+                                    selectedAG.id,
+                                    res.id
+                                  );
+                                  await queryClient.invalidateQueries({
+                                    queryKey: ['charges', building.id],
+                                  });
+                                  await queryClient.invalidateQueries({
+                                    queryKey: ['ag', building.id],
+                                  });
+                                  showToast(
+                                    tr(
+                                      `${out.createdCharges.length} appels de fonds générés (${out.totalAllocatedMad} MAD répartis aux tantièmes).`,
+                                      `تم إصدار ${out.createdCharges.length} طلبات مساهمة (${out.totalAllocatedMad} درهم موزعة حسب الحصص).`
+                                    ),
+                                    'success'
+                                  );
+                                } catch (err: any) {
+                                  showToast(
+                                    err?.message ||
+                                      tr('Erreur lors de la répartition', 'خطأ أثناء التوزيع'),
+                                    'error'
+                                  );
+                                }
+                              }}
+                              className="text-xs border-teal-300 text-teal-800 hover:bg-teal-50 font-semibold px-3 py-1.5"
+                            >
+                              {res.chargesGeneratedAt
+                                ? tr('✓ Appels de fonds émis', '✓ تم إصدار المساهمات')
+                                : tr(
+                                    '⚡ Générer Appels de Fonds (Tantièmes)',
+                                    '⚡ إصدار المساهمات (حسب الحصص)'
+                                  )}
+                            </Button>
+                          )}
                           <Button
                             onClick={() => handleOpenRecordVoteModal(res)}
                             className="text-xs bg-teal-700 hover:bg-teal-800 text-white font-bold px-3 py-1.5 flex items-center gap-1.5"

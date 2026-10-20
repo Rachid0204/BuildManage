@@ -15,6 +15,8 @@ import {
   getChargesForBuilding,
   getPaymentProofsForBuilding,
   reviewPaymentProof,
+  approvePaymentProofsBatch,
+  reconcileBankStatementCSV,
   getQuittancesForBuilding,
   createQuittance,
   generateQuittanceForCharge,
@@ -27,6 +29,7 @@ import {
   generateQuittancePDF,
   generateMiseEnDemeurePDF,
   generateTransactionVoucherPDF,
+  exportAnnualRepartitionPDF,
 } from '../../services/pdfService';
 import {
   computeBuildingFundBalances,
@@ -618,6 +621,22 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
         <div className="flex items-center gap-2.5">
           <Button
             variant="secondary"
+            onClick={() =>
+              exportAnnualRepartitionPDF(
+                building,
+                syndic,
+                charges,
+                quittances,
+                new Date().getFullYear()
+              )
+            }
+            className="text-xs sm:text-sm flex items-center gap-1.5"
+          >
+            <DocumentsIcon />
+            <span>{tr('Clôture Annuelle (PDF)', 'الحصيلة السنوية (PDF)')}</span>
+          </Button>
+          <Button
+            variant="secondary"
             onClick={() => setIsGenerateModalOpen(true)}
             className="text-xs sm:text-sm flex items-center gap-1.5"
           >
@@ -1168,16 +1187,89 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
       {/* TAB 3: VÉRIFICATION DES VIREMENTS */}
       {activeTab === 'verifications' && (
         <Card className="overflow-hidden border border-slate-200">
-          <div className="p-4 bg-slate-50 border-b border-slate-200">
-            <h3 className="font-semibold text-slate-800 text-sm">
-              {tr("File d'Attente des Justificatifs de Virement", 'قائمة انتظار إثباتات التحويل البنكي')}
-            </h3>
-            <p className="text-xs text-slate-500">
-              {tr(
-                'Vérifiez les virements reçus des copropriétaires avant de délivrer la quittance officielle',
-                'تحقق من التحويلات البنكية المرسلة من طرف الملاك المشتركين قبل تسليم وصل الأداء الرسمي'
+          <div className="p-4 bg-slate-50 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h3 className="font-semibold text-slate-800 text-sm">
+                {tr("File d'Attente des Justificatifs de Virement", 'قائمة انتظار إثباتات التحويل البنكي')}
+              </h3>
+              <p className="text-xs text-slate-500">
+                {tr(
+                  'Vérifiez les virements reçus ou validez en 1 clic les justificatifs pré-vérifiés (montant exact)',
+                  'تحقق من التحويلات البنكية أو صادق بنقرة واحدة على التحويلات المطابقة تلقائياً'
+                )}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="cursor-pointer inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-semibold transition-colors">
+                <span>📥 {tr('Import Relevé CSV Bancaire', 'استيراد كشف بنكي CSV')}</span>
+                <input
+                  type="file"
+                  accept=".csv,.txt"
+                  className="hidden"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    try {
+                      const text = await file.text();
+                      const lines = text
+                        .split(/\r?\n/)
+                        .map((l) => l.trim())
+                        .filter(Boolean);
+                      const parsedRows = lines
+                        .slice(lines[0]?.toLowerCase().includes('montant') || lines[0]?.toLowerCase().includes('amount') ? 1 : 0)
+                        .map((line) => {
+                          const cols = line.split(/[;,]/).map((c) => c.trim().replace(/^"|"$/g, ''));
+                          const numCol = cols.find((c) => /^-?\d+([.,]\d+)?$/.test(c.replace(/\s/g, '')));
+                          return {
+                            date: cols[0] || new Date().toISOString(),
+                            label: cols[1] || line,
+                            amount: numCol ? parseFloat(numCol.replace(',', '.')) : 0,
+                            reference: cols[2] || undefined,
+                          };
+                        })
+                        .filter((r) => r.amount > 0);
+                      const res = await reconcileBankStatementCSV(building.id, parsedRows);
+                      await queryClient.invalidateQueries({ queryKey: ['charges', building.id] });
+                      await queryClient.invalidateQueries({ queryKey: ['proofs', building.id] });
+                      await queryClient.invalidateQueries({ queryKey: ['quittances', building.id] });
+                      await queryClient.invalidateQueries({ queryKey: ['syndics'] });
+                      showToast(
+                        tr(
+                          `Rapprochement bancaire terminé : ${res.matchedCount} virement(s) lettré(s) (${res.totalReconciledMad} MAD).`,
+                          `تمت المطابقة البنكية: ${res.matchedCount} تحويلات مطابقة (${res.totalReconciledMad} درهم).`
+                        ),
+                        'success'
+                      );
+                    } catch (err: any) {
+                      showToast(err?.message || 'Erreur lors de la lecture du CSV', 'error');
+                    } finally {
+                      e.target.value = '';
+                    }
+                  }}
+                />
+              </label>
+              {stats.pendingProofsCount > 0 && (
+                <Button
+                  onClick={async () => {
+                    const res = await approvePaymentProofsBatch(building.id);
+                    await queryClient.invalidateQueries({ queryKey: ['proofs', building.id] });
+                    await queryClient.invalidateQueries({ queryKey: ['charges', building.id] });
+                    await queryClient.invalidateQueries({ queryKey: ['quittances', building.id] });
+                    await queryClient.invalidateQueries({ queryKey: ['syndics'] });
+                    showToast(
+                      tr(
+                        `${res.approvedCount} justificatif(s) conforme(s) validé(s) (${res.totalAmountMad} MAD).`,
+                        `تمت المصادقة على ${res.approvedCount} إثباتات مطابقة (${res.totalAmountMad} درهم).`
+                      ),
+                      res.approvedCount > 0 ? 'success' : 'info'
+                    );
+                  }}
+                  className="text-xs bg-teal-700 hover:bg-teal-800 text-white font-bold"
+                >
+                  ✓ {tr('Valider les virements conformes (1-clic)', 'تأكيد التحويلات المطابقة (نقرة واحدة)')}
+                </Button>
               )}
-            </p>
+            </div>
           </div>
 
           <div className="divide-y divide-slate-100">

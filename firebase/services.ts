@@ -182,6 +182,10 @@ export function sanitizeAccountRecordsInStorage(): void {
   }
 }
 
+let lastKnownServerRevision = 0;
+let lastSyncTimestampMs = 0;
+let inflightSyncPromise: Promise<Record<string, any> | null> | null = null;
+
 export async function pushKeyToSharedServer<T>(
   key: string,
   val: T,
@@ -203,6 +207,10 @@ export async function pushKeyToSharedServer<T>(
       const contentType = res.headers.get('content-type') || '';
       if (contentType.includes('application/json')) {
         const data = await res.json();
+        if (typeof data?.revision === 'number') {
+          lastKnownServerRevision = data.revision;
+          lastSyncTimestampMs = Date.now();
+        }
         if (data && data.ok && data.value !== undefined && data.value !== null) {
           const cleanServerVal = stripPlaintextCredentialsForStorage(key, data.value as T);
           try {
@@ -221,57 +229,85 @@ export async function pushKeyToSharedServer<T>(
 }
 
 export async function syncAllSharedStateFromServer(): Promise<Record<string, any> | null> {
-  try {
-    const headers = getAuthenticatedRequestHeaders();
-    if (!headers['Authorization']) {
-      return null;
-    }
-    const res = await fetch('/api/shared-state', {
-      method: 'GET',
-      headers,
-      cache: 'no-store',
-    });
-    if (!res.ok) return null;
-    const contentType = res.headers.get('content-type') || '';
-    if (!contentType.includes('application/json')) return null;
+  const headers = getAuthenticatedRequestHeaders();
+  if (!headers['Authorization']) {
+    return null;
+  }
 
-    const data = await res.json();
-    if (!data || !data.ok || !data.store) return null;
+  // Coalesce concurrent sync requests fired on view mount
+  if (inflightSyncPromise) {
+    return inflightSyncPromise;
+  }
+  if (Date.now() - lastSyncTimestampMs < 1200 && lastKnownServerRevision > 0) {
+    return null;
+  }
 
-    const serverStore = data.store as Record<string, any>;
-    const trackedKeys = Object.values(STORAGE_KEYS);
+  inflightSyncPromise = (async () => {
+    try {
+      const url =
+        lastKnownServerRevision > 0
+          ? `/api/shared-state?sinceRevision=${lastKnownServerRevision}`
+          : '/api/shared-state';
+      const res = await fetch(url, {
+        method: 'GET',
+        headers,
+        cache: 'no-store',
+      });
+      if (!res.ok) return null;
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) return null;
 
-    if (typeof window !== 'undefined' && serverStore.__resetAt) {
-      const localResetAt = localStorage.getItem('syndik_prod_last_reset_at');
-      if (localResetAt !== serverStore.__resetAt) {
-        for (const k of trackedKeys) {
-          localStorage.removeItem(k);
-        }
-        localStorage.setItem('syndik_prod_last_reset_at', String(serverStore.__resetAt));
+      const data = await res.json();
+      if (!data || !data.ok) return null;
+
+      if (typeof data.revision === 'number') {
+        lastKnownServerRevision = data.revision;
       }
-    }
+      lastSyncTimestampMs = Date.now();
 
-    for (const key of trackedKeys) {
-      const serverVal = serverStore[key];
-      if (serverVal !== undefined && serverVal !== null) {
-        const cleanVal = stripPlaintextCredentialsForStorage(key, serverVal);
-        localStorage.setItem(key, JSON.stringify(cleanVal));
-      } else {
-        const localRaw = localStorage.getItem(key);
-        if (localRaw) {
-          try {
-            const parsed = JSON.parse(localRaw);
-            void pushKeyToSharedServer(key, parsed);
-          } catch {
-            // ignore
+      if (data.unchanged || !data.store) {
+        return null;
+      }
+
+      const serverStore = data.store as Record<string, any>;
+      const trackedKeys = Object.values(STORAGE_KEYS);
+
+      if (typeof window !== 'undefined' && serverStore.__resetAt) {
+        const localResetAt = localStorage.getItem('syndik_prod_last_reset_at');
+        if (localResetAt !== serverStore.__resetAt) {
+          for (const k of trackedKeys) {
+            localStorage.removeItem(k);
+          }
+          localStorage.setItem('syndik_prod_last_reset_at', String(serverStore.__resetAt));
+        }
+      }
+
+      for (const key of trackedKeys) {
+        const serverVal = serverStore[key];
+        if (serverVal !== undefined && serverVal !== null) {
+          const cleanVal = stripPlaintextCredentialsForStorage(key, serverVal);
+          localStorage.setItem(key, JSON.stringify(cleanVal));
+        } else {
+          const localRaw = localStorage.getItem(key);
+          if (localRaw) {
+            try {
+              const parsed = JSON.parse(localRaw);
+              void pushKeyToSharedServer(key, parsed);
+            } catch {
+              // ignore
+            }
           }
         }
       }
+      return serverStore;
+    } catch {
+      return null;
+    } finally {
+      inflightSyncPromise = null;
     }
-    return serverStore;
-  } catch {
-    return null;
-  }
+  })();
+
+  return inflightSyncPromise;
 }
 
 export async function resetAllProductionData(): Promise<void> {
@@ -1400,10 +1436,39 @@ export const submitPaymentProof = async (
   if (!proofData.amount || proofData.amount <= 0) {
     throw new Error('Le montant du justificatif doit être supérieur à 0 MAD.');
   }
+
+  // Phase 3.1: Pre-compute confidence score against target Charge for 1-click batch approval
+  let matchScore = 70;
+  let matchStatus: PaymentProof['matchStatus'] = 'partial_match';
+  let matchedChargeAmount: number | undefined;
+  try {
+    const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, mockCharges);
+    const targetCharge = charges.find((c) => c.id === proofData.chargeId);
+    if (targetCharge) {
+      const remaining = Math.max(0, targetCharge.amount - (targetCharge.paidAmount || 0));
+      matchedChargeAmount = remaining;
+      if (Math.abs(proofData.amount - remaining) < 0.01) {
+        matchScore = proofData.referenceNumber && proofData.referenceNumber.trim().length >= 3 ? 98 : 92;
+        matchStatus = 'exact_match';
+      } else if (proofData.amount <= remaining) {
+        matchScore = 82;
+        matchStatus = 'partial_match';
+      } else {
+        matchScore = 45;
+        matchStatus = 'unmatched';
+      }
+    }
+  } catch {
+    // ignore
+  }
+
   const newProof: PaymentProof = {
-    id: `prf-${Date.now()}`,
+    id: `prf-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     submissionDate: new Date().toISOString(),
     status: 'pending',
+    matchScore,
+    matchStatus,
+    matchedChargeAmount,
     ...proofData,
   };
 
@@ -1416,6 +1481,138 @@ export const submitPaymentProof = async (
 
   const docRef = await addDoc(collection(db, PROOFS_COL), newProof);
   return { id: docRef.id, ...newProof };
+};
+
+export const approvePaymentProofsBatch = async (
+  buildingId: string,
+  proofIds?: string[]
+): Promise<{ approvedCount: number; totalAmountMad: number; quittances: Quittance[] }> => {
+  const proofs = getLocalItem<PaymentProof[]>(STORAGE_KEYS.PROOFS, mockPaymentProofs);
+  const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, mockCharges);
+  const candidates = proofs.filter((p) => {
+    if (p.buildingId !== buildingId || p.status !== 'pending') return false;
+    if (Array.isArray(proofIds) && proofIds.length > 0) {
+      return proofIds.includes(p.id);
+    }
+    if (p.matchStatus === 'exact_match' || (p.matchScore && p.matchScore >= 90)) return true;
+    const chg = charges.find((c) => c.id === p.chargeId);
+    if (!chg) return false;
+    const remaining = Math.max(0, chg.amount - (chg.paidAmount || 0));
+    return Math.abs(p.amount - remaining) < 0.01;
+  });
+
+  let approvedCount = 0;
+  let totalAmountMad = 0;
+  const quittances: Quittance[] = [];
+
+  for (const cand of candidates) {
+    const res = await reviewPaymentProof(cand.id, 'approved');
+    if (res.success) {
+      approvedCount += 1;
+      totalAmountMad = Math.round((totalAmountMad + cand.amount) * 100) / 100;
+      if (res.quittance) quittances.push(res.quittance);
+    }
+  }
+
+  return { approvedCount, totalAmountMad, quittances };
+};
+
+export interface BankStatementCSVRow {
+  date: string;
+  label: string;
+  amount: number;
+  reference?: string;
+  bankName?: string;
+}
+
+export const reconcileBankStatementCSV = async (
+  buildingId: string,
+  rows: BankStatementCSVRow[]
+): Promise<{
+  matchedCount: number;
+  unmatchedCount: number;
+  totalReconciledMad: number;
+  quittances: Quittance[];
+}> => {
+  const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
+  let targetBuilding: Building | undefined;
+  let targetSyndic: Syndic | undefined;
+  for (const s of syndics) {
+    const bld = s.buildings.find((b) => b.id === buildingId);
+    if (bld) {
+      targetBuilding = bld;
+      targetSyndic = s;
+      break;
+    }
+  }
+  if (!targetBuilding) {
+    throw new Error('Immeuble introuvable pour le rapprochement bancaire.');
+  }
+
+  const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, mockCharges).filter(
+    (c) => c.buildingId === buildingId && c.status !== 'paid'
+  );
+
+  let matchedCount = 0;
+  let unmatchedCount = 0;
+  let totalReconciledMad = 0;
+  const generatedQuittances: Quittance[] = [];
+
+  for (const row of rows) {
+    const cleanAmt = Math.abs(Number(row.amount) || 0);
+    if (cleanAmt <= 0) continue;
+    const upperLabel = (row.label || '').toUpperCase();
+
+    // Match by apartment number or resident name + amount
+    const matchedCharge = charges.find((c) => {
+      if (c.status === 'paid') return false;
+      const apt = targetBuilding!.apartments.find((a) => a.id === c.apartmentId);
+      const res = targetBuilding!.residents.find((r) => r.id === c.residentId);
+      const rem = Math.max(0, c.amount - (c.paidAmount || 0));
+      const amountMatches = Math.abs(rem - cleanAmt) < 0.05;
+      const lotMatched = apt?.number && upperLabel.includes(apt.number.toUpperCase());
+      const nameMatched =
+        res?.name &&
+        res.name
+          .toUpperCase()
+          .split(/\s+/)
+          .some((tok) => tok.length >= 3 && upperLabel.includes(tok));
+      return (lotMatched && amountMatches) || (nameMatched && amountMatches) || lotMatched;
+    });
+
+    if (matchedCharge) {
+      const apt = targetBuilding.apartments.find((a) => a.id === matchedCharge.apartmentId);
+      const res = targetBuilding.residents.find((r) => r.id === matchedCharge.residentId);
+      const submitted = await submitPaymentProof({
+        chargeId: matchedCharge.id,
+        buildingId,
+        syndicId: targetSyndic?.id,
+        residentId: matchedCharge.residentId,
+        residentName: res?.name || 'Copropriétaire',
+        apartmentId: matchedCharge.apartmentId,
+        apartmentNumber: apt?.number || 'Lot',
+        amount: cleanAmt,
+        paymentMethod: 'virement',
+        bankName: row.bankName || targetBuilding.bankName || 'Banque Copropriété',
+        referenceNumber: row.reference || `CSV-${Date.now().toString(36).toUpperCase()}`,
+        receiptNote: `Rapprochement CSV bancaire : ${row.label}`,
+      });
+      const approved = await reviewPaymentProof(submitted.id, 'approved');
+      if (approved.quittance) generatedQuittances.push(approved.quittance);
+      matchedCharge.status = 'paid';
+      matchedCount += 1;
+      totalReconciledMad = Math.round((totalReconciledMad + cleanAmt) * 100) / 100;
+    } else {
+      unmatchedCount += 1;
+    }
+  }
+
+  return {
+    matchedCount,
+    unmatchedCount,
+    totalReconciledMad,
+    quittances: generatedQuittances,
+  };
 };
 
 export const reviewPaymentProof = async (
@@ -2010,6 +2207,99 @@ export const toggleAGVoting = async (agId: string, isOpen: boolean): Promise<Ass
   const docRef = doc(db, AG_COL, agId);
   await updateDoc(docRef, { isVotingOpen: isOpen });
   return {} as any;
+};
+
+/**
+ * Phase 4.1: Generates prorated calls for funds (Appels de fonds Loi 18-00 Art. 24 / 37)
+ * across all building lots using exact centime allocation when an AG resolution with a budget is adopted.
+ */
+export const generateChargesFromAGResolution = async (
+  agId: string,
+  resolutionId: string
+): Promise<{ createdCharges: Charge[]; totalAllocatedMad: number }> => {
+  const agList = getLocalItem<AssembleeGenerale[]>(STORAGE_KEYS.AG, mockAssembleesGenerales);
+  const ag = agList.find((item) => item.id === agId);
+  if (!ag) throw new Error('Assemblée Générale introuvable');
+
+  const res = ag.resolutions.find((r) => r.id === resolutionId);
+  if (!res) throw new Error('Résolution introuvable');
+  if (res.status !== 'approved') {
+    throw new Error('Seules les résolutions adoptées peuvent générer des appels de fonds.');
+  }
+  const budgetMad = Number(res.budgetAmount) || 0;
+  if (budgetMad <= 0) {
+    throw new Error('Aucun budget (MAD) n’est associé à cette résolution.');
+  }
+
+  const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
+  let targetBuilding: Building | undefined;
+  let targetSyndicId = ag.syndicId;
+  for (const s of syndics) {
+    const bld = s.buildings.find((b) => b.id === ag.buildingId);
+    if (bld) {
+      targetBuilding = bld;
+      targetSyndicId = s.id;
+      break;
+    }
+  }
+  if (!targetBuilding || targetBuilding.apartments.length === 0) {
+    throw new Error('Aucun lot configuré dans cet immeuble pour répartir le budget voté.');
+  }
+
+  const lots = targetBuilding.apartments.map((a) => ({
+    id: a.id,
+    tantiemes: a.tantiemes || 100,
+  }));
+  const allocations = allocateBudgetInCentimes(
+    budgetMad,
+    lots,
+    targetBuilding.totalTantiemes || 1000
+  );
+
+  const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, mockCharges);
+  const nowIso = new Date().toISOString();
+  const dueDate = new Date(Date.now() + 30 * 86400000).toISOString();
+  const createdCharges: Charge[] = [];
+  let totalAllocatedMad = 0;
+
+  for (const apt of targetBuilding.apartments) {
+    const shareMad = allocations.get(apt.id) || 0;
+    if (shareMad <= 0) continue;
+    const residentId =
+      apt.ownerId ||
+      apt.tenantId ||
+      targetBuilding.residents.find((r) => r.apartmentId === apt.id)?.id ||
+      `owner-${apt.id}`;
+    const deterministicId = `chg-ag-${ag.id}-${res.id}-${apt.id}`;
+    if (charges.some((c) => c.id === deterministicId)) continue;
+
+    const newCharge: Charge = {
+      id: deterministicId,
+      syndicId: targetSyndicId,
+      buildingId: targetBuilding.id,
+      apartmentId: apt.id,
+      residentId,
+      amount: shareMad,
+      paidAmount: 0,
+      dueDate,
+      status: 'unpaid',
+      period: `AG ${new Date(ag.date).getFullYear()} - Rés. #${res.number}`,
+      description: `Appel de fonds AG (${ag.title}) — Résolution #${res.number}: ${res.title}`,
+      chargeType: 'exceptionnelle_travaux',
+      tantiemesApplied: apt.tantiemes || 100,
+      createdAt: nowIso,
+    };
+    charges.unshift(newCharge);
+    createdCharges.push(newCharge);
+    totalAllocatedMad = Math.round((totalAllocatedMad + shareMad) * 100) / 100;
+  }
+
+  setLocalItem(STORAGE_KEYS.CHARGES, charges);
+  res.chargesGeneratedAt = nowIso;
+  res.generatedChargesCount = createdCharges.length;
+  setLocalItem(STORAGE_KEYS.AG, agList);
+
+  return { createdCharges, totalAllocatedMad };
 };
 
 export const recordAGVote = async (
@@ -2882,13 +3172,37 @@ export const uploadDocument = async (buildingId: string, file: File): Promise<Do
     throw new Error('Le fichier dépasse la taille maximale autorisée de 5 Mo.');
   }
 
-  // Audit Item 19: Never persist ephemeral blob: URLs; always encode a durable cross-session data URI
+  // Audit Item 19 & Phase 1.2: Offload binary payload to /api/uploads when server session is active
+  // so localStorage never overflows 5MB, while keeping durable data URI fallback for isolated/offline runs.
   const durableDataUrl = await readFileAsDurableDataUrl(file);
+  let resolvedUrl = durableDataUrl;
+  try {
+    const headers = getAuthenticatedRequestHeaders();
+    if (headers['Authorization'] && typeof fetch === 'function') {
+      const res = await fetch('/api/uploads', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          name: file.name,
+          dataUrl: durableDataUrl,
+          buildingId,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.ok && typeof data.url === 'string') {
+          resolvedUrl = data.url;
+        }
+      }
+    }
+  } catch {
+    // Fallback to durableDataUrl in offline or isolated test environments
+  }
 
   const newDoc: Document = {
     id: `doc-${Date.now()}`,
     name: file.name,
-    url: durableDataUrl,
+    url: resolvedUrl,
     size: `${Math.max(0.1, file.size / (1024 * 1024)).toFixed(1)} MB`,
     uploadedAt: new Date().toISOString(),
     category: 'autre',

@@ -13,6 +13,7 @@ export default defineConfig({
           firebase: ['firebase/app', 'firebase/auth', 'firebase/firestore', 'firebase/functions'],
           pdf: ['jspdf'],
           charts: ['recharts'],
+          icons: ['lucide-react'],
         },
       },
     },

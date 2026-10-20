@@ -51,11 +51,14 @@ import {
   getChargesForBuilding,
   submitPaymentProof,
   reviewPaymentProof,
+  approvePaymentProofsBatch,
+  reconcileBankStatementCSV,
   getQuittancesForBuilding,
   generateQuittanceForCharge,
   addTransaction,
   createAssembleeGenerale,
   castResidentAGVote,
+  generateChargesFromAGResolution,
   STORAGE_KEYS,
 } from '../firebase/services';
 import type { Syndic, UserProfile } from '../types';
@@ -430,6 +433,49 @@ async function runVerification() {
     `Authoritative tantièmes (500) must override caller-supplied weight (999), got ${updatedAg?.resolutions[0].votesFor}`
   );
   console.log('✅ [20] AG voting session status, attendee eligibility & authoritative tantième weight checks passed.');
+
+  // 8b. AG Adopted Resolution -> Prorated Calls for Funds & Batch Proof / CSV Reconciliation
+  updatedAg.resolutions[0].budgetAmount = 2000;
+  updatedAg.resolutions[0].status = 'approved';
+  localStorage.setItem(STORAGE_KEYS.AG, JSON.stringify([updatedAg]));
+  const agChargesOut = await generateChargesFromAGResolution(updatedAg.id, 'res-open-1');
+  assert(
+    agChargesOut.createdCharges.length === 2 && agChargesOut.totalAllocatedMad === 2000,
+    `Expected 2 prorated AG charges totaling 2000 MAD, got ${agChargesOut.createdCharges.length} (${agChargesOut.totalAllocatedMad} MAD)`
+  );
+
+  const csvReconciled = await reconcileBankStatementCSV(createdBld.id, [
+    {
+      date: new Date().toISOString(),
+      label: 'VIREMENT LOT A1 YOUSSEF ALAMI',
+      amount: 1000,
+      reference: 'VIR-CSV-001',
+    },
+  ]);
+  assert(
+    csvReconciled.matchedCount === 1 && csvReconciled.totalReconciledMad === 1000,
+    `Expected 1 CSV wire reconciled for 1000 MAD, got ${csvReconciled.matchedCount}`
+  );
+
+  const remainingAgCharge = agChargesOut.createdCharges.find((c) => c.apartmentId === apt2.id)!;
+  await submitPaymentProof({
+    chargeId: remainingAgCharge.id,
+    residentId: resident1.id,
+    residentName: resident1.name,
+    apartmentId: apt2.id,
+    apartmentNumber: apt2.number,
+    buildingId: createdBld.id,
+    amount: 1000,
+    paymentMethod: 'virement',
+    bankName: 'CIH Bank',
+    referenceNumber: 'VIR-BATCH-002',
+  });
+  const batchApproved = await approvePaymentProofsBatch(createdBld.id);
+  assert(
+    batchApproved.approvedCount === 1 && batchApproved.totalAmountMad === 1000,
+    `Expected 1 exact-match proof batch-approved for 1000 MAD, got ${batchApproved.approvedCount}`
+  );
+  console.log('✅ [Phase 3/4] AG budget-to-charges allocation, CSV bank reconciliation & batch proof approval passed.');
 
   // 9. Building Deletion Tombstones (Audit Item 18)
   await deleteBuilding(createdBld.id);

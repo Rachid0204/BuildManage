@@ -23,6 +23,7 @@ import { exportBuildingSummaryReportPDF } from '../../services/pdfService';
 import { computeBuildingFundBalances } from '../../utils/security';
 import { useI18n } from '../../hooks/useI18n';
 import { useToast } from '../common/Toast';
+import { useBuilding } from '../../contexts/BuildingContext';
 import { FileDown } from 'lucide-react';
 
 interface DashboardProps {
@@ -65,7 +66,29 @@ const StatCard: React.FC<{
 const Dashboard: React.FC<DashboardProps> = ({ building, syndic }) => {
   const { t, tr, language } = useI18n();
   const { showToast } = useToast();
+  const { setSelectedBuilding } = useBuilding();
   const navigate = useNavigate();
+
+  const portfolioSummary = useMemo(() => {
+    const blds = syndic?.buildings || [];
+    if (blds.length <= 1) return null;
+    let totalPortfolioOperating = 0;
+    let totalPortfolioReserve = 0;
+    let totalPortfolioLots = 0;
+    for (const b of blds) {
+      const bal = computeBuildingFundBalances(b);
+      totalPortfolioOperating += bal.operatingBalance;
+      totalPortfolioReserve += bal.reserveBalance;
+      totalPortfolioLots += b.apartments?.length || 0;
+    }
+    return {
+      buildingsCount: blds.length,
+      totalPortfolioOperating,
+      totalPortfolioReserve,
+      totalPortfolioLots,
+      buildings: blds,
+    };
+  }, [syndic]);
 
   const { data: charges = [] } = useQuery({
     queryKey: ['charges', building.id],
@@ -180,6 +203,58 @@ const Dashboard: React.FC<DashboardProps> = ({ building, syndic }) => {
 
   return (
     <div className="space-y-6">
+      {/* Phase 5.1: Multi-Building Portfolio Cockpit for Professional Syndics */}
+      {portfolioSummary && (
+        <Card className="bg-slate-900 text-white p-4 border border-slate-800 shadow-sm">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-mono uppercase tracking-widest px-2 py-0.5 rounded bg-teal-500/20 text-teal-300 border border-teal-500/30 font-bold">
+                  {tr('VUE PORTEFEUILLE CABINET', 'نظرة شاملة لمحفظة مكتب السنديك')}
+                </span>
+                <span className="text-xs text-slate-400">
+                  {portfolioSummary.buildingsCount} {tr('immeubles gérés', 'عمارات مُسيّرة')} •{' '}
+                  {portfolioSummary.totalPortfolioLots} {tr('lots', 'وحدة')}
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-4 text-xs pt-1">
+                <span>
+                  {tr('Trésorerie Globale :', 'الخزينة الإجمالية:')}{' '}
+                  <strong className="font-mono text-emerald-400">
+                    {currencyFormatter.format(portfolioSummary.totalPortfolioOperating)}
+                  </strong>
+                </span>
+                <span>
+                  {tr('Fonds de Réserve Global (Loi 106-12) :', 'صندوق الاحتياط الإجمالي:')}{' '}
+                  <strong className="font-mono text-indigo-300">
+                    {currencyFormatter.format(portfolioSummary.totalPortfolioReserve)}
+                  </strong>
+                </span>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+              {portfolioSummary.buildings.map((b) => {
+                const isCurrent = b.id === building.id;
+                return (
+                  <button
+                    key={b.id}
+                    type="button"
+                    onClick={() => setSelectedBuilding(b)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-all border ${
+                      isCurrent
+                        ? 'bg-teal-500 text-slate-950 border-teal-400'
+                        : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
+                    }`}
+                  >
+                    🏢 {b.name}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </Card>
+      )}
+
       {/* Header Banner */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
