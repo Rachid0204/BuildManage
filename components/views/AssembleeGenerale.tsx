@@ -676,10 +676,10 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                                     const parsed = Number(rawBudget);
                                     if (!parsed || parsed <= 0) return;
                                     res.budgetAmount = parsed;
-                                    await saveAssembleeGenerale(selectedAG);
+                                    await saveAssembleeGenerale(activeAG);
                                   }
                                   const out = await generateChargesFromAGResolution(
-                                    selectedAG.id,
+                                    activeAG.id,
                                     res.id
                                   );
                                   await queryClient.invalidateQueries({

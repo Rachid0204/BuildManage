@@ -27,11 +27,18 @@ service cloud.firestore {
     }
 
     function isBootstrappedAdmin() {
-      return isSignedIn() && request.auth.token.email_verified == true && request.auth.token.email == 'wahbi.rachid@gmail.com';
+      return isVerified() && request.auth.token.email == 'wahbi.rachid@gmail.com';
     }
 
     function isAdmin() {
       return isBootstrappedAdmin() || (isVerified() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+    }
+
+    function isSyndicOwner(syndicId) {
+      return isVerified() &&
+        isValidId(syndicId) &&
+        exists(/databases/$(database)/documents/syndics/$(syndicId)) &&
+        get(/databases/$(database)/documents/syndics/$(syndicId)).data.createdBy == request.auth.uid;
     }
 
     function isValidSyndic(data) {
@@ -86,7 +93,9 @@ service cloud.firestore {
     }
 
     function isValidPrestataire(data) {
-      return data.keys().hasAll(['id', 'syndicId', 'buildingId', 'name', 'category']) &&
+      return !('password' in data) &&
+        !('generatedPassword' in data) &&
+        data.keys().hasAll(['id', 'syndicId', 'buildingId', 'name', 'category']) &&
         data.keys().hasOnly(['id', 'syndicId', 'buildingId', 'name', 'category', 'contactPerson', 'phone', 'whatsapp', 'email', 'ice', 'rc', 'city', 'address', 'contractRef', 'monthlyRetainer', 'hourlyRate', 'rating', 'status', 'active', 'isEmergency247', 'isVerifiedBySyndic', 'verified', 'reviewsCount', 'reviews', 'completedJobsCount', 'interventionsCount', 'totalPaid', 'description', 'specialties', 'contractType', 'availability', 'responseTimeHours', 'notes', 'hasAccount', 'invitationCode', 'invitationToken', 'invitationStatus', 'invitationExpiresAt', 'credentialsCreatedAt', 'credentialsSharedAt', 'credentialsLastSharedMethod', 'credentialsAuditLog', 'mustChangePassword']) &&
         data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.syndicId is string && data.syndicId.size() >= 1 && data.syndicId.size() <= 128 &&
@@ -108,15 +117,6 @@ service cloud.firestore {
         (!('mustChangePassword' in data) || data.mustChangePassword is bool);
     }
 
-    function isValidAccountCredential(data) {
-      return !('password' in data) &&
-        !('generatedPassword' in data) &&
-        data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
-        data.passwordHash is string && (data.passwordHash.matches('^pbkdf2\\$.*') || data.passwordHash.size() >= 16) && data.passwordHash.size() <= 256 &&
-        data.syndicId is string && data.syndicId.size() >= 1 && data.syndicId.size() <= 128 &&
-        data.buildingId is string && data.buildingId.size() >= 1 && data.buildingId.size() <= 128;
-    }
-
     function isValidNotification(data) {
       return data.keys().hasAll(['userId', 'title', 'message', 'type', 'read', 'createdAt']) &&
         data.keys().hasOnly(['id', 'userId', 'title', 'message', 'type', 'read', 'createdAt']) &&
@@ -135,8 +135,21 @@ service cloud.firestore {
     }
 
     match /syndics/{syndicId} {
-      allow get, list: if true;
-      allow create, update: if isValidId(syndicId) && isValidSyndic(incoming()) && incoming().id == syndicId;
+      allow get: if isSignedIn() && isValidId(syndicId) && (existing().createdBy == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().createdBy == request.auth.uid || isBootstrappedAdmin());
+      allow create: if isVerified() && isValidId(syndicId) && isValidSyndic(incoming()) && incoming().id == syndicId && incoming().createdBy == request.auth.uid && (
+        isAdmin() ||
+        (incoming().subscriptionPlan == 'starter' && incoming().subscriptionStatus == 'trialing')
+      );
+      allow update: if isVerified() && isValidId(syndicId) && isValidSyndic(incoming()) && incoming().id == existing().id && incoming().createdBy == existing().createdBy && (
+        isAdmin() ||
+        (
+          existing().createdBy == request.auth.uid &&
+          incoming().subscriptionPlan == existing().subscriptionPlan &&
+          incoming().subscriptionStatus == existing().subscriptionStatus &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'email', 'phone', 'city', 'address', 'logoUrl', 'ice', 'taxId', 'rc', 'patente', 'syndicType', 'bankName', 'rib', 'updatedAt', 'buildings'])
+        )
+      );
       allow delete: if isVerified() && isValidId(syndicId) && isAdmin();
     }
 
@@ -155,21 +168,11 @@ service cloud.firestore {
     }
 
     match /prestataires/{prestataireId} {
-      allow get, list: if true;
-      allow create, update: if isValidId(prestataireId) && isValidPrestataire(incoming()) && incoming().id == prestataireId;
-      allow delete: if isSignedIn() && isValidId(prestataireId);
-    }
-
-    match /resident_accounts/{residentId} {
-      allow get, list: if true;
-      allow create, update: if isValidId(residentId) && isValidAccountCredential(incoming());
-      allow delete: if isSignedIn() && isValidId(residentId);
-    }
-
-    match /prestataire_accounts/{prestataireId} {
-      allow get, list: if true;
-      allow create, update: if isValidId(prestataireId) && isValidAccountCredential(incoming());
-      allow delete: if isSignedIn() && isValidId(prestataireId);
+      allow get: if isSignedIn() && isValidId(prestataireId) && (isSyndicOwner(existing().syndicId) || isAdmin());
+      allow list: if isSignedIn() && (isSyndicOwner(existing().syndicId) || isBootstrappedAdmin());
+      allow create: if isVerified() && isValidId(prestataireId) && isValidPrestataire(incoming()) && incoming().id == prestataireId && (isSyndicOwner(incoming().syndicId) || isAdmin());
+      allow update: if isVerified() && isValidId(prestataireId) && isValidPrestataire(incoming()) && incoming().id == existing().id && incoming().syndicId == existing().syndicId && incoming().buildingId == existing().buildingId && (isSyndicOwner(existing().syndicId) || isAdmin());
+      allow delete: if isVerified() && isValidId(prestataireId) && (isSyndicOwner(existing().syndicId) || isAdmin());
     }
 
     match /notifications/{notificationId} {

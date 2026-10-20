@@ -55,8 +55,10 @@ import {
 } from '../utils/validation';
 import {
   hashPasswordSync,
+  isAlreadyHashedPassword,
   getAuthenticatedRequestHeaders,
   allocateBudgetInCentimes,
+  splitChargeReserveAndOperating,
   generateSecureRandomDigits,
 } from '../utils/security';
 
@@ -152,7 +154,11 @@ function stripPlaintextCredentialsForStorage<T>(key: string, val: T): T {
       const emailNorm = (acc?.email || '').trim().toLowerCase();
       const passwordHash =
         acc?.passwordHash ||
-        (typeof acc?.password === 'string' ? hashPasswordSync(acc.password, emailNorm) : '');
+        (typeof acc?.password === 'string'
+          ? isAlreadyHashedPassword(acc.password)
+            ? acc.password
+            : hashPasswordSync(acc.password, emailNorm)
+          : '');
       const { password: _pw, generatedPassword: _gp, ...cleanAcc } = acc || {};
       return { ...cleanAcc, passwordHash };
     }) as unknown as T;
@@ -189,43 +195,99 @@ let inflightSyncPromise: Promise<Record<string, any> | null> | null = null;
 export async function pushKeyToSharedServer<T>(
   key: string,
   val: T,
-  deletedId?: string
+  deletedId?: string,
+  options?: { background?: boolean }
 ): Promise<T> {
   const sanitizedVal = stripPlaintextCredentialsForStorage(key, val);
-  try {
-    const headers = getAuthenticatedRequestHeaders();
-    // Only call authenticated shared-state endpoint if caller has an active session header
-    if (!headers['Authorization']) {
-      return sanitizedVal;
+  const headers = getAuthenticatedRequestHeaders();
+  const isNetworkBlockedSim =
+    typeof localStorage !== 'undefined' &&
+    localStorage.getItem('syndik_simulate_network_offline') === 'true';
+
+  if (isNetworkBlockedSim) {
+    try {
+      localStorage.setItem('syndik_sync_status_v1', 'failed');
+    } catch {
+      // ignore
     }
+    if (!options?.background) {
+      throw new Error('Synchronisation serveur interrompue (réseau hors ligne).');
+    }
+    return sanitizedVal;
+  }
+
+  // In isolated Node unit tests with native fetch and no active session, skip network call unless fetch is mocked
+  const isNativeUnconfiguredNodeFetch =
+    typeof window === 'undefined' &&
+    !headers['Authorization'] &&
+    (typeof fetch === 'undefined' || fetch.toString().includes('[native code]'));
+
+  if (isNativeUnconfiguredNodeFetch) {
+    return sanitizedVal;
+  }
+
+  try {
     const res = await fetch('/api/shared-state', {
       method: 'POST',
       headers,
       body: JSON.stringify({ key, value: sanitizedVal, deletedId }),
     });
-    if (res.ok) {
-      const contentType = res.headers.get('content-type') || '';
-      if (contentType.includes('application/json')) {
-        const data = await res.json();
-        if (typeof data?.revision === 'number') {
-          lastKnownServerRevision = data.revision;
-          lastSyncTimestampMs = Date.now();
+    if (!res.ok) {
+      try {
+        localStorage.setItem('syndik_sync_status_v1', 'failed');
+      } catch {
+        // ignore
+      }
+      if (!options?.background) {
+        throw new Error(`Échec d’écriture serveur durable (HTTP ${res.status})`);
+      }
+      return sanitizedVal;
+    }
+    try {
+      localStorage.setItem('syndik_sync_status_v1', 'synced');
+    } catch {
+      // ignore
+    }
+    const contentType = res.headers?.get?.('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const data = await res.json();
+      if (typeof data?.revision === 'number') {
+        lastKnownServerRevision = data.revision;
+        lastSyncTimestampMs = Date.now();
+      }
+      if (data && data.ok && data.value !== undefined && data.value !== null) {
+        const cleanServerVal = stripPlaintextCredentialsForStorage(key, data.value as T);
+        try {
+          localStorage.setItem(key, JSON.stringify(cleanServerVal));
+        } catch {
+          // ignore
         }
-        if (data && data.ok && data.value !== undefined && data.value !== null) {
-          const cleanServerVal = stripPlaintextCredentialsForStorage(key, data.value as T);
-          try {
-            localStorage.setItem(key, JSON.stringify(cleanServerVal));
-          } catch {
-            // ignore
-          }
-          return cleanServerVal;
-        }
+        return cleanServerVal;
       }
     }
-  } catch {
-    // Server endpoint may be unavailable in static/isolated tests; localStorage + Firestore remain active
+    return sanitizedVal;
+  } catch (err: any) {
+    const msg = String(err?.message || err || '');
+    const causeCode = String(err?.cause?.code || '');
+    const isRelativeUrlNodeError =
+      causeCode === 'ERR_INVALID_URL' ||
+      msg.includes('Failed to parse URL') ||
+      msg.includes('Invalid URL');
+    if (isRelativeUrlNodeError) {
+      return sanitizedVal;
+    }
+    try {
+      localStorage.setItem('syndik_sync_status_v1', 'failed');
+    } catch {
+      // ignore
+    }
+    if (!options?.background) {
+      throw err instanceof Error
+        ? err
+        : new Error('Échec de synchronisation durable avec le serveur.');
+    }
+    return sanitizedVal;
   }
-  return sanitizedVal;
 }
 
 export async function syncAllSharedStateFromServer(
@@ -274,11 +336,9 @@ export async function syncAllSharedStateFromServer(
       const serverStore = data.store as Record<string, any>;
       const trackedKeys = Object.values(STORAGE_KEYS);
 
-      let wasReset = false;
       if (typeof window !== 'undefined' && serverStore.__resetAt) {
         const localResetAt = localStorage.getItem('syndik_prod_last_reset_at');
         if (localResetAt !== String(serverStore.__resetAt)) {
-          wasReset = true;
           for (const k of trackedKeys) {
             localStorage.removeItem(k);
           }
@@ -286,56 +346,17 @@ export async function syncAllSharedStateFromServer(
         }
       }
 
-      const mergeIdKeys: Record<string, string> = {
-        [STORAGE_KEYS.REGISTERED_USERS]: 'uid',
-        [STORAGE_KEYS.RESIDENT_ACCOUNTS]: 'residentId',
-        [STORAGE_KEYS.PRESTATAIRE_ACCOUNTS]: 'prestataireId',
-        [STORAGE_KEYS.SYNDICS]: 'id',
-      };
-
-      const rawTombstones =
-        typeof localStorage !== 'undefined'
-          ? localStorage.getItem('syndik_deleted_building_ids_v1')
-          : null;
-      const tombstones = new Set<string>(rawTombstones ? JSON.parse(rawTombstones) : []);
-
       for (const key of trackedKeys) {
         const serverVal = serverStore[key];
         if (serverVal !== undefined && serverVal !== null) {
-          let cleanVal = stripPlaintextCredentialsForStorage(key, serverVal);
-          const idField = mergeIdKeys[key];
-          if (!wasReset && idField && Array.isArray(cleanVal)) {
-            try {
-              const localRaw = localStorage.getItem(key);
-              const localArr = localRaw ? JSON.parse(localRaw) : [];
-              if (Array.isArray(localArr) && localArr.length > 0) {
-                const mergedMap = new Map<string, any>();
-                for (const item of localArr) {
-                  const idVal = item?.[idField];
-                  if (idVal && !tombstones.has(idVal)) {
-                    mergedMap.set(idVal, item);
-                  }
-                }
-                for (const item of cleanVal as any[]) {
-                  const idVal = item?.[idField];
-                  if (idVal && !tombstones.has(idVal)) {
-                    const prev = mergedMap.get(idVal);
-                    mergedMap.set(idVal, prev ? { ...prev, ...item } : item);
-                  }
-                }
-                cleanVal = Array.from(mergedMap.values()) as any;
-              }
-            } catch {
-              // fallback to cleanVal
-            }
-          }
+          const cleanVal = stripPlaintextCredentialsForStorage(key, serverVal);
           localStorage.setItem(key, JSON.stringify(cleanVal));
         } else {
           const localRaw = localStorage.getItem(key);
           if (localRaw) {
             try {
               const parsed = JSON.parse(localRaw);
-              void pushKeyToSharedServer(key, parsed);
+              void pushKeyToSharedServer(key, parsed, undefined, { background: true });
             } catch {
               // ignore
             }
@@ -408,7 +429,7 @@ function getLocalItem<T>(key: string, defaultVal: T): T {
     if (!item) {
       const cleanDefault = stripPlaintextCredentialsForStorage(key, defaultVal);
       localStorage.setItem(key, JSON.stringify(cleanDefault));
-      void pushKeyToSharedServer(key, cleanDefault);
+      void pushKeyToSharedServer(key, cleanDefault, undefined, { background: true });
       return cleanDefault;
     }
     return JSON.parse(item) as T;
@@ -430,7 +451,7 @@ function setLocalItem<T>(key: string, val: T, deletedId?: string): void {
     }
     const sanitized = stripPlaintextCredentialsForStorage(key, val);
     localStorage.setItem(key, JSON.stringify(sanitized));
-    void pushKeyToSharedServer(key, sanitized, deletedId);
+    void pushKeyToSharedServer(key, sanitized, deletedId, { background: true });
     notifyStateUpdated(key);
   } catch (e) {
     console.error(`Error writing ${key} to localStorage:`, e);
@@ -451,33 +472,32 @@ const PROOFS_COL = 'payment_proofs';
 const QUITTANCES_COL = 'quittances';
 const AG_COL = 'assemblees_generales';
 const PRESTATAIRES_COL = 'prestataires';
-const RESIDENT_ACCOUNTS_COL = 'resident_accounts';
-const PRESTATAIRE_ACCOUNTS_COL = 'prestataire_accounts';
 
 async function syncSyndicToFirestoreIfAuthenticated(syndic: Syndic): Promise<void> {
   if (isMock) return;
   const user = auth.currentUser;
+  if (!user || !user.emailVerified) return;
 
   const cleanSyndic = stripPlaintextCredentialsForStorage(STORAGE_KEYS.SYNDICS, [syndic])[0];
   const payload = {
     id: String(cleanSyndic.id).slice(0, 128),
     name: String(cleanSyndic.name || 'Cabinet Syndic').slice(0, 200),
     logoUrl: String(cleanSyndic.logoUrl ?? '').slice(0, 2048),
-    email: String(cleanSyndic.email || user?.email || 'contact@syndik.ma').slice(0, 254),
+    email: String(cleanSyndic.email || user.email || 'contact@syndik.ma').slice(0, 254),
     ...(cleanSyndic.phone ? { phone: String(cleanSyndic.phone).slice(0, 40) } : {}),
     ...(cleanSyndic.city ? { city: String(cleanSyndic.city).slice(0, 100) } : {}),
     ...(cleanSyndic.ice ? { ice: String(cleanSyndic.ice).slice(0, 32) } : {}),
     ...(cleanSyndic.rc ? { rc: String(cleanSyndic.rc).slice(0, 64) } : {}),
     subscriptionPlan: ['starter', 'professional', 'enterprise'].includes(cleanSyndic.subscriptionPlan)
       ? cleanSyndic.subscriptionPlan
-      : 'professional',
+      : 'starter',
     subscriptionStatus: ['active', 'expired', 'cancelled', 'trialing'].includes(cleanSyndic.subscriptionStatus)
       ? cleanSyndic.subscriptionStatus
       : 'trialing',
     ...(cleanSyndic.subscriptionExpiry
       ? { subscriptionExpiresAt: String(cleanSyndic.subscriptionExpiry).slice(0, 64) }
       : {}),
-    createdBy: String(cleanSyndic.createdBy || user?.uid || 'syndic-owner')
+    createdBy: String(cleanSyndic.createdBy || user.uid)
       .replace(/[^a-zA-Z0-9_\-]/g, '-')
       .slice(0, 128),
     buildings: Array.isArray(cleanSyndic.buildings) ? cleanSyndic.buildings.slice(0, 50) : [],
@@ -491,142 +511,19 @@ async function syncSyndicToFirestoreIfAuthenticated(syndic: Syndic): Promise<voi
 }
 
 export async function syncAuthAccountsFromFirestore(): Promise<void> {
-  if (isMock) return;
-  try {
-    const [resSnap, prestSnap, syndicsSnap, prestDocsSnap] = await Promise.allSettled([
-      getDocs(collection(db, RESIDENT_ACCOUNTS_COL)),
-      getDocs(collection(db, PRESTATAIRE_ACCOUNTS_COL)),
-      getDocs(collection(db, SYNDICS_COL)),
-      getDocs(collection(db, PRESTATAIRES_COL)),
-    ]);
-
-    if (resSnap.status === 'fulfilled' && !resSnap.value.empty) {
-      const localRes = getLocalItem<ResidentAccountRecord[]>(STORAGE_KEYS.RESIDENT_ACCOUNTS, []);
-      const resMap = new Map<string, ResidentAccountRecord>();
-      for (const item of localRes) {
-        if (item?.residentId) resMap.set(item.residentId, item);
-      }
-      for (const docSnap of resSnap.value.docs) {
-        const data = docSnap.data() as ResidentAccountRecord;
-        const id = data.residentId || docSnap.id;
-        resMap.set(id, { ...resMap.get(id), ...data, residentId: id });
-      }
-      setLocalItem(STORAGE_KEYS.RESIDENT_ACCOUNTS, Array.from(resMap.values()));
-    }
-
-    if (prestSnap.status === 'fulfilled' && !prestSnap.value.empty) {
-      const localPrestAcc = getLocalItem<PrestataireAccountRecord[]>(
-        STORAGE_KEYS.PRESTATAIRE_ACCOUNTS,
-        []
-      );
-      const prestAccMap = new Map<string, PrestataireAccountRecord>();
-      for (const item of localPrestAcc) {
-        if (item?.prestataireId) prestAccMap.set(item.prestataireId, item);
-      }
-      for (const docSnap of prestSnap.value.docs) {
-        const data = docSnap.data() as PrestataireAccountRecord;
-        const id = data.prestataireId || docSnap.id;
-        prestAccMap.set(id, { ...prestAccMap.get(id), ...data, prestataireId: id });
-      }
-      setLocalItem(STORAGE_KEYS.PRESTATAIRE_ACCOUNTS, Array.from(prestAccMap.values()));
-    }
-
-    if (syndicsSnap.status === 'fulfilled' && !syndicsSnap.value.empty) {
-      const rawTombstones = localStorage.getItem('syndik_deleted_building_ids_v1');
-      const tombstones = new Set<string>(rawTombstones ? JSON.parse(rawTombstones) : []);
-      const localSyndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
-      const syndicMap = new Map<string, Syndic>();
-      for (const s of localSyndics) {
-        if (s?.id && !tombstones.has(s.id)) syndicMap.set(s.id, s);
-      }
-      for (const docSnap of syndicsSnap.value.docs) {
-        if (tombstones.has(docSnap.id)) continue;
-        const data = docSnap.data() as any;
-        const existing = syndicMap.get(docSnap.id);
-        const buildings = Array.isArray(data.buildings)
-          ? data.buildings.filter((b: any) => b?.id && !tombstones.has(b.id))
-          : existing?.buildings || [];
-        syndicMap.set(docSnap.id, {
-          ...existing,
-          ...data,
-          id: docSnap.id,
-          logoUrl: data.logoUrl ?? existing?.logoUrl ?? '',
-          subscriptionExpiry:
-            data.subscriptionExpiresAt ||
-            data.subscriptionExpiry ||
-            existing?.subscriptionExpiry ||
-            new Date(Date.now() + 30 * 86400000).toISOString(),
-          buildings,
-        });
-      }
-      setLocalItem(STORAGE_KEYS.SYNDICS, Array.from(syndicMap.values()));
-    }
-
-    if (prestDocsSnap.status === 'fulfilled' && !prestDocsSnap.value.empty) {
-      const localPrests = getLocalItem<Prestataire[]>(STORAGE_KEYS.PRESTATAIRES, mockPrestataires);
-      const prestMap = new Map<string, Prestataire>();
-      for (const p of localPrests) {
-        if (p?.id) prestMap.set(p.id, p);
-      }
-      for (const docSnap of prestDocsSnap.value.docs) {
-        const data = docSnap.data() as Prestataire;
-        const id = data.id || docSnap.id;
-        prestMap.set(id, { ...prestMap.get(id), ...data, id });
-      }
-      setLocalItem(STORAGE_KEYS.PRESTATAIRES, Array.from(prestMap.values()));
-    }
-  } catch {
-    // Firestore may be offline or restricted; local & shared-state remain active
-  }
+  // Audit P0-1: Account credentials and password hashes are verified server-side (/api/auth/login)
+  // and are NEVER stored in or fetched from public Firestore collections.
+  return;
 }
 
-export async function syncPasswordChangeToFirestore(params: {
+export async function syncPasswordChangeToFirestore(_params: {
   role: 'resident' | 'provider' | 'syndic' | 'admin';
   residentId?: string;
   prestataireId?: string;
   passwordHash: string;
 }): Promise<void> {
-  if (isMock) return;
-  try {
-    if (params.role === 'resident' && params.residentId) {
-      await setDoc(
-        doc(db, RESIDENT_ACCOUNTS_COL, params.residentId),
-        {
-          residentId: params.residentId,
-          passwordHash: params.passwordHash,
-          mustChangePassword: false,
-        },
-        { merge: true }
-      );
-      const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
-      for (const s of syndics) {
-        if (s.buildings.some((b) => b.residents.some((r) => r.id === params.residentId))) {
-          await syncSyndicToFirestoreIfAuthenticated(s);
-        }
-      }
-    }
-    if (params.role === 'provider' && params.prestataireId) {
-      await setDoc(
-        doc(db, PRESTATAIRE_ACCOUNTS_COL, params.prestataireId),
-        {
-          prestataireId: params.prestataireId,
-          passwordHash: params.passwordHash,
-          mustChangePassword: false,
-        },
-        { merge: true }
-      );
-      await setDoc(
-        doc(db, PRESTATAIRES_COL, params.prestataireId),
-        {
-          invitationStatus: 'accepted',
-          mustChangePassword: false,
-        },
-        { merge: true }
-      );
-    }
-  } catch {
-    // ignore
-  }
+  // Audit P0-1: Password hashes are updated via authenticated /api/auth/change-password, never written to public Firestore collections.
+  return;
 }
 
 // ==========================================
@@ -1119,6 +1016,7 @@ export interface ResidentAccountRecord {
   apartmentId?: string;
   createdAt: string;
   mustChangePassword?: boolean;
+  invitationExpiresAt?: string;
 }
 
 const RESIDENT_ACCOUNTS_KEY = STORAGE_KEYS.RESIDENT_ACCOUNTS;
@@ -1150,6 +1048,7 @@ function saveResidentCredentialAccount(resident: Resident, rawPassword: string):
     apartmentId: resident.apartmentId,
     createdAt: resident.credentialsCreatedAt || new Date().toISOString(),
     mustChangePassword: resident.mustChangePassword ?? true,
+    invitationExpiresAt: resident.invitationExpiresAt,
   };
   const existingIdx = accounts.findIndex(
     (a) => a.residentId === resident.id || a.email.toLowerCase() === emailNorm
@@ -1160,13 +1059,6 @@ function saveResidentCredentialAccount(resident: Resident, rawPassword: string):
     accounts.push(record);
   }
   setLocalItem(RESIDENT_ACCOUNTS_KEY, accounts);
-
-  if (!isMock) {
-    const cleanRecord = JSON.parse(JSON.stringify(record));
-    void setDoc(doc(db, RESIDENT_ACCOUNTS_COL, resident.id), cleanRecord, { merge: true }).catch(
-      () => {}
-    );
-  }
 
   // Also synchronize any matching entry in REGISTERED_USERS so all local registries carry the complete Resident UserProfile
   try {
@@ -1362,14 +1254,9 @@ export const updateResident = async (resident: Resident): Promise<Resident> => {
                   name: mergedResident.name,
                   isOwner: mergedResident.isOwner,
                   apartmentId: mergedResident.apartmentId,
+                  invitationExpiresAt: mergedResident.invitationExpiresAt,
                 };
                 setLocalItem(RESIDENT_ACCOUNTS_KEY, accounts);
-                if (!isMock) {
-                  const cleanRecord = JSON.parse(JSON.stringify(accounts[accIdx]));
-                  void setDoc(doc(db, RESIDENT_ACCOUNTS_COL, mergedResident.id), cleanRecord, {
-                    merge: true,
-                  }).catch(() => {});
-                }
               }
             }
           }
@@ -1526,6 +1413,70 @@ export type GenerateChargesResult = Charge[] & {
   skippedCount: number;
 };
 
+const FRENCH_MONTHS_TO_NUM: Record<string, string> = {
+  janvier: '01',
+  jan: '01',
+  fevrier: '02',
+  février: '02',
+  fev: '02',
+  fév: '02',
+  mars: '03',
+  mar: '03',
+  avril: '04',
+  avr: '04',
+  mai: '05',
+  juin: '06',
+  juillet: '07',
+  juil: '07',
+  aout: '08',
+  août: '08',
+  septembre: '09',
+  sep: '09',
+  sept: '09',
+  octobre: '10',
+  oct: '10',
+  novembre: '11',
+  nov: '11',
+  decembre: '12',
+  décembre: '12',
+  dec: '12',
+  déc: '12',
+};
+
+export function normalizeBillingPeriodKey(periodStr: string): string {
+  const cleaned = (periodStr || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  if (!cleaned) return '';
+
+  // Match ISO YYYY-MM or YYYY/MM
+  const isoMatch = cleaned.match(/^(\d{4})[-/](\d{1,2})$/);
+  if (isoMatch) {
+    return `${isoMatch[1]}-${isoMatch[2].padStart(2, '0')}`;
+  }
+
+  // Match MM/YYYY or MM-YYYY
+  const revIsoMatch = cleaned.match(/^(\d{1,2})[-/](\d{4})$/);
+  if (revIsoMatch) {
+    return `${revIsoMatch[2]}-${revIsoMatch[1].padStart(2, '0')}`;
+  }
+
+  // Match French month + year (e.g. "octobre 2026" or "2026 octobre")
+  const tokens = cleaned.split(/[\s\-_/]+/);
+  let foundYear: string | undefined;
+  let foundMonth: string | undefined;
+  for (const tok of tokens) {
+    if (/^\d{4}$/.test(tok)) {
+      foundYear = tok;
+    } else if (FRENCH_MONTHS_TO_NUM[tok]) {
+      foundMonth = FRENCH_MONTHS_TO_NUM[tok];
+    }
+  }
+  if (foundYear && foundMonth) {
+    return `${foundYear}-${foundMonth}`;
+  }
+
+  return cleaned;
+}
+
 export const generateMonthlyCharges = async (
   buildingId: string,
   syndicId: string,
@@ -1566,7 +1517,7 @@ export const generateMonthlyCharges = async (
       : normalizedMaybeOptions;
 
   const resolvedChargeType: Charge['chargeType'] = opts.chargeType || 'courante';
-  const normalizedPeriodKey = resolvedPeriod.toLowerCase().replace(/\s+/g, ' ');
+  const normalizedPeriodKey = normalizeBillingPeriodKey(resolvedPeriod);
 
   if (isLocalEngineEnabled) {
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
@@ -1617,7 +1568,7 @@ export const generateMonthlyCharges = async (
         (existing) =>
           existing.buildingId === buildingId &&
           existing.apartmentId === apt.id &&
-          (existing.period || '').trim().toLowerCase().replace(/\s+/g, ' ') === normalizedPeriodKey &&
+          normalizeBillingPeriodKey(existing.period || '') === normalizedPeriodKey &&
           (existing.chargeType || 'courante') === resolvedChargeType
       );
       if (alreadyBilled) {
@@ -1828,6 +1779,14 @@ export const reconcileBankStatementCSV = async (
   const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, mockCharges).filter(
     (c) => c.buildingId === buildingId && c.status !== 'paid'
   );
+  const existingProofs = getLocalItem<PaymentProof[]>(STORAGE_KEYS.PROOFS, mockPaymentProofs).filter(
+    (p) => p.buildingId === buildingId
+  );
+  const seenBankEventKeys = new Set<string>(
+    existingProofs
+      .map((p) => (p.referenceNumber || '').trim().toUpperCase())
+      .filter(Boolean)
+  );
 
   let matchedCount = 0;
   let unmatchedCount = 0;
@@ -1835,28 +1794,46 @@ export const reconcileBankStatementCSV = async (
   const generatedQuittances: Quittance[] = [];
 
   for (const row of rows) {
-    const cleanAmt = Math.abs(Number(row.amount) || 0);
-    if (cleanAmt <= 0) continue;
-    const upperLabel = (row.label || '').toUpperCase();
+    const rawAmt = Number(row.amount);
+    // Reject non-positive (debit/zero/NaN) rows — never Math.abs() a bank debit into an income receipt
+    if (!Number.isFinite(rawAmt) || rawAmt <= 0) {
+      unmatchedCount += 1;
+      continue;
+    }
+    const cleanAmt = Math.round(rawAmt * 100) / 100;
+    const upperLabel = (row.label || '').trim().toUpperCase();
+    const cleanRef = (row.reference || '').trim().toUpperCase();
+    const bankEventKey = cleanRef
+      ? cleanRef
+      : `CSV-${buildingId}-${(row.date || '').trim()}-${cleanAmt.toFixed(2)}-${upperLabel.replace(/[^A-Z0-9]/g, '_').slice(0, 48)}`;
 
-    // Match by apartment number or resident name + amount
+    // Bank-event idempotency: never reconcile the same bank row twice across repeated imports or within the same file
+    if (seenBankEventKeys.has(bankEventKey)) {
+      unmatchedCount += 1;
+      continue;
+    }
+
+    // Match by (apartment number OR resident name) AND exact remaining charge amount
     const matchedCharge = charges.find((c) => {
       if (c.status === 'paid') return false;
       const apt = targetBuilding!.apartments.find((a) => a.id === c.apartmentId);
       const res = targetBuilding!.residents.find((r) => r.id === c.residentId);
       const rem = Math.max(0, c.amount - (c.paidAmount || 0));
-      const amountMatches = Math.abs(rem - cleanAmt) < 0.05;
-      const lotMatched = apt?.number && upperLabel.includes(apt.number.toUpperCase());
-      const nameMatched =
+      const amountMatches = Math.abs(rem - cleanAmt) < 0.01;
+      if (!amountMatches) return false;
+      const lotMatched = Boolean(apt?.number && upperLabel.includes(apt.number.toUpperCase()));
+      const nameMatched = Boolean(
         res?.name &&
-        res.name
-          .toUpperCase()
-          .split(/\s+/)
-          .some((tok) => tok.length >= 3 && upperLabel.includes(tok));
-      return (lotMatched && amountMatches) || (nameMatched && amountMatches) || lotMatched;
+          res.name
+            .toUpperCase()
+            .split(/\s+/)
+            .some((tok) => tok.length >= 3 && upperLabel.includes(tok))
+      );
+      return lotMatched || nameMatched;
     });
 
     if (matchedCharge) {
+      seenBankEventKeys.add(bankEventKey);
       const apt = targetBuilding.apartments.find((a) => a.id === matchedCharge.apartmentId);
       const res = targetBuilding.residents.find((r) => r.id === matchedCharge.residentId);
       const submitted = await submitPaymentProof({
@@ -1870,7 +1847,7 @@ export const reconcileBankStatementCSV = async (
         amount: cleanAmt,
         paymentMethod: 'virement',
         bankName: row.bankName || targetBuilding.bankName || 'Banque Copropriété',
-        referenceNumber: row.reference || `CSV-${Date.now().toString(36).toUpperCase()}`,
+        referenceNumber: bankEventKey,
         receiptNote: `Rapprochement CSV bancaire : ${row.label}`,
       });
       const approved = await reviewPaymentProof(submitted.id, 'approved');
@@ -1971,8 +1948,10 @@ export const reviewPaymentProof = async (
         // Audit Item 16: Use the building's configured reserveFundPercentage / reserveFundRate (default 5%) consistently
         const reserveRate =
           targetBuilding?.reserveFundPercentage ?? targetBuilding?.reserveFundRate ?? 5;
-        const reserveShare = Math.round(proof.amount * (reserveRate / 100) * 100) / 100;
-        const courantesShare = Math.round((proof.amount - reserveShare) * 100) / 100;
+        const {
+          reserveFundAmount: reserveShare,
+          chargesCourantesAmount: courantesShare,
+        } = splitChargeReserveAndOperating(proof.amount, reserveRate);
 
         generatedQuittance = {
           id: stableQuittanceId,
@@ -2004,18 +1983,41 @@ export const reviewPaymentProof = async (
         quittances.unshift(generatedQuittance);
         setLocalItem(STORAGE_KEYS.QUITTANCES, quittances);
 
-        // Post transaction to building ledger with stable ID so retries never duplicate income
+        // Post operating & reserve transactions to building ledger with stable IDs so retries never duplicate income
         if (targetBuilding) {
           targetBuilding.financials.transactions = targetBuilding.financials.transactions || [];
           const stableTrxId = `trx-prf-${proof.id}`;
+          const stableReserveTrxId = `trx-prf-res-${proof.id}`;
           if (!targetBuilding.financials.transactions.some((t) => t.id === stableTrxId)) {
+            const nowTrxIso = new Date().toISOString();
+            if (reserveShare > 0) {
+              targetBuilding.financials.reserveFundBalance =
+                Math.round(((targetBuilding.financials.reserveFundBalance || 0) + reserveShare) * 100) /
+                100;
+              targetBuilding.financials.transactions.unshift({
+                id: stableReserveTrxId,
+                date: nowTrxIso,
+                description: `Dotation fonds de réserve (${reserveRate}%) Lot ${proof.apartmentNumber} (${proof.residentName}) - Réf: ${proof.referenceNumber}`,
+                amount: reserveShare,
+                type: 'income',
+                category: 'fees',
+                fundType: 'reserve',
+                paymentMethod: proof.paymentMethod === 'cheque' ? 'cheque' : 'virement',
+                reference: proof.referenceNumber,
+                documentType: 'quittance',
+                invoiceNumber: generatedQuittance.quittanceNumber,
+                thirdPartyName: proof.residentName,
+                lotNumber: proof.apartmentNumber,
+                bankName: proof.bankName,
+              });
+            }
             targetBuilding.financials.balance =
-              Math.round(((targetBuilding.financials.balance || 0) + proof.amount) * 100) / 100;
+              Math.round(((targetBuilding.financials.balance || 0) + courantesShare) * 100) / 100;
             targetBuilding.financials.transactions.unshift({
               id: stableTrxId,
-              date: new Date().toISOString(),
+              date: nowTrxIso,
               description: `Encaissement charges Lot ${proof.apartmentNumber} (${proof.residentName}) - Réf: ${proof.referenceNumber}`,
-              amount: proof.amount,
+              amount: courantesShare,
               type: 'income',
               category: 'fees',
               fundType: 'courant',
@@ -2073,11 +2075,20 @@ export const createQuittance = async (
 ): Promise<Quittance> => {
   const { addTransactionToLedger = true, ...coreData } = quittanceInput;
   const quittances = getLocalItem<Quittance[]>(STORAGE_KEYS.QUITTANCES, mockQuittances);
+  const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, mockCharges);
+  const linkedCharge = coreData.chargeId
+    ? charges.find((c) => c.id === coreData.chargeId)
+    : undefined;
 
-  // If a quittance already exists for this chargeId, return it to prevent duplicate receipts/postings
+  // If a full quittance already exists for this chargeId, return it to prevent duplicate receipts/postings
   if (coreData.chargeId) {
     const existingForCharge = quittances.find((q) => q.chargeId === coreData.chargeId);
-    if (existingForCharge) {
+    if (
+      existingForCharge &&
+      (!addTransactionToLedger ||
+        linkedCharge?.status === 'paid' ||
+        existingForCharge.amount >= (linkedCharge?.amount ?? coreData.amount) - 0.005)
+    ) {
       return existingForCharge;
     }
   }
@@ -2096,15 +2107,18 @@ export const createQuittance = async (
     quittances.unshift(newQuittance);
     setLocalItem(STORAGE_KEYS.QUITTANCES, quittances);
 
-    // Check if linked charge was ALREADY paid before this call
+    // Check if linked charge was ALREADY paid before this call; only mutate charge when addTransactionToLedger !== false
     let wasChargeAlreadyPaid = false;
-    if (coreData.chargeId) {
-      const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, mockCharges);
-      const targetCharge = charges.find((c) => c.id === coreData.chargeId);
-      if (targetCharge) {
-        wasChargeAlreadyPaid = targetCharge.status === 'paid';
-        targetCharge.status = 'paid';
-        targetCharge.paidAmount = targetCharge.amount;
+    if (linkedCharge) {
+      wasChargeAlreadyPaid = linkedCharge.status === 'paid';
+      if (addTransactionToLedger && !wasChargeAlreadyPaid) {
+        const prevPaid = linkedCharge.paidAmount ?? 0;
+        const nextPaid = Math.min(
+          linkedCharge.amount,
+          Math.round((prevPaid + coreData.amount) * 100) / 100
+        );
+        linkedCharge.paidAmount = nextPaid;
+        linkedCharge.status = nextPaid >= linkedCharge.amount - 0.005 ? 'paid' : 'unpaid';
         setLocalItem(STORAGE_KEYS.CHARGES, charges);
       }
     }
@@ -2116,13 +2130,47 @@ export const createQuittance = async (
         const bld = s.buildings.find((b) => b.id === coreData.buildingId);
         if (bld) {
           bld.financials.transactions = bld.financials.transactions || [];
+          const reserveRate = bld.reserveFundPercentage ?? bld.reserveFundRate ?? 5;
+          const computedSplit = splitChargeReserveAndOperating(coreData.amount, reserveRate);
+          const reserveShare =
+            typeof coreData.reserveFundAmount === 'number' &&
+            typeof coreData.chargesCourantesAmount === 'number' &&
+            Math.abs(
+              coreData.reserveFundAmount + coreData.chargesCourantesAmount - coreData.amount
+            ) < 0.02
+              ? Math.round(coreData.reserveFundAmount * 100) / 100
+              : computedSplit.reserveFundAmount;
+          const courantesShare = Math.round((coreData.amount - reserveShare) * 100) / 100;
+          const trxDate = coreData.paymentDate || new Date().toISOString();
+
+          if (reserveShare > 0) {
+            bld.financials.reserveFundBalance =
+              Math.round(((bld.financials.reserveFundBalance || 0) + reserveShare) * 100) / 100;
+            bld.financials.transactions.unshift({
+              id: `trx-quit-res-${newQuittance.id}`,
+              date: trxDate,
+              description: `Dotation fonds de réserve (${reserveRate}%) - Quittance ${newQuittance.quittanceNumber} Lot ${coreData.apartmentNumber}`,
+              amount: reserveShare,
+              type: 'income',
+              category: 'fees',
+              fundType: 'reserve',
+              paymentMethod: coreData.paymentMethod,
+              reference: coreData.referenceNumber || newQuittance.quittanceNumber,
+              documentType: 'quittance',
+              invoiceNumber: newQuittance.quittanceNumber,
+              thirdPartyName: coreData.residentName,
+              lotNumber: coreData.apartmentNumber,
+              bankName: coreData.bankName || bld.bankName,
+            });
+          }
+
           bld.financials.balance =
-            Math.round(((bld.financials.balance || 0) + coreData.amount) * 100) / 100;
+            Math.round(((bld.financials.balance || 0) + courantesShare) * 100) / 100;
           bld.financials.transactions.unshift({
             id: `trx-quit-${newQuittance.id}`,
-            date: coreData.paymentDate || new Date().toISOString(),
+            date: trxDate,
             description: `Quittance ${newQuittance.quittanceNumber} - Lot ${coreData.apartmentNumber} (${coreData.residentName}) - ${coreData.periodCovered}`,
-            amount: coreData.amount,
+            amount: courantesShare,
             type: 'income',
             category: 'fees',
             fundType: 'courant',
@@ -2371,20 +2419,28 @@ export const castResidentAGVote = async (
     if (!res) throw new Error('Résolution introuvable');
 
     // Audit Item 20: Verify voter eligibility in attendance sheet & building records, and derive authoritative weight
-    const attendee = (ag.attendees || []).find(
-      (a) =>
-        a.residentId === residentId ||
-        (apartmentNumber && a.apartmentNumber === apartmentNumber)
-    );
+    // Require exact residentId match on the attendance sheet (never allow an unauthorized residentId to claim another lot by passing apartmentNumber)
+    const attendee = (ag.attendees || []).find((a) => a.residentId === residentId);
     if (!attendee) {
       throw new Error(
         'Vote refusé : le copropriétaire doit être inscrit comme présent ou représenté sur la feuille de présence.'
+      );
+    }
+    if (
+      apartmentNumber &&
+      attendee.apartmentNumber &&
+      apartmentNumber.trim().toLowerCase() !== attendee.apartmentNumber.trim().toLowerCase()
+    ) {
+      throw new Error(
+        'Vote refusé : le numéro de lot indiqué ne correspond pas au lot rattaché à ce copropriétaire sur la feuille de présence.'
       );
     }
 
     // Look up authoritative tantièmes from building apartment or attendance sheet (never trust caller-supplied weight)
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
     let authoritativeAptTantiemes: number | undefined;
+    let canonicalApartmentId = apartmentId;
+    let canonicalApartmentNumber = attendee.apartmentNumber || apartmentNumber;
     for (const s of syndics) {
       const bld = s.buildings.find((b) => b.id === ag.buildingId);
       if (bld) {
@@ -2396,12 +2452,22 @@ export const castResidentAGVote = async (
         }
         const apt = bld.apartments.find(
           (a) =>
-            (apartmentId && a.id === apartmentId) ||
-            a.number === attendee.apartmentNumber ||
-            a.ownerId === residentId
+            (resRecord?.apartmentId && a.id === resRecord.apartmentId) ||
+            a.ownerId === residentId ||
+            (attendee.apartmentNumber && a.number === attendee.apartmentNumber) ||
+            (apartmentId && a.id === apartmentId)
         );
-        if (apt && typeof apt.tantiemes === 'number' && apt.tantiemes > 0) {
-          authoritativeAptTantiemes = apt.tantiemes;
+        if (apt) {
+          if (apt.ownerId && apt.ownerId !== residentId) {
+            throw new Error(
+              'Vote refusé : ce lot appartient à un autre copropriétaire.'
+            );
+          }
+          canonicalApartmentId = apt.id;
+          canonicalApartmentNumber = apt.number || canonicalApartmentNumber;
+          if (typeof apt.tantiemes === 'number' && apt.tantiemes > 0) {
+            authoritativeAptTantiemes = apt.tantiemes;
+          }
         }
         break;
       }
@@ -2419,15 +2485,18 @@ export const castResidentAGVote = async (
 
     res.voterChoices = res.voterChoices || [];
     const existingVoteIdx = res.voterChoices.findIndex(
-      (v) => v.residentId === residentId || (apartmentId && v.apartmentId === apartmentId)
+      (v) =>
+        v.residentId === residentId ||
+        (canonicalApartmentId && v.apartmentId === canonicalApartmentId) ||
+        (canonicalApartmentNumber && v.apartmentNumber === canonicalApartmentNumber)
     );
 
     const nowIso = new Date().toISOString();
     const voteRecord: AGVoteCast = {
       residentId,
       residentName: attendee.residentName || residentName,
-      apartmentId,
-      apartmentNumber: attendee.apartmentNumber || apartmentNumber,
+      apartmentId: canonicalApartmentId,
+      apartmentNumber: canonicalApartmentNumber,
       tantiemes: authoritativeWeight,
       choice,
       vote: choice,
@@ -2679,6 +2748,7 @@ export interface PrestataireAccountRecord {
   buildingId: string;
   createdAt: string;
   mustChangePassword?: boolean;
+  invitationExpiresAt?: string;
 }
 
 const PRESTATAIRE_ACCOUNTS_KEY = STORAGE_KEYS.PRESTATAIRE_ACCOUNTS;
@@ -2716,6 +2786,7 @@ function savePrestataireCredentialAccount(
     buildingId: prestataire.buildingId,
     createdAt: prestataire.credentialsCreatedAt || new Date().toISOString(),
     mustChangePassword: prestataire.mustChangePassword ?? true,
+    invitationExpiresAt: prestataire.invitationExpiresAt,
   };
   const existingIdx = accounts.findIndex(
     (a) =>
@@ -2728,13 +2799,6 @@ function savePrestataireCredentialAccount(
     accounts.push(record);
   }
   setLocalItem(PRESTATAIRE_ACCOUNTS_KEY, accounts);
-
-  if (!isMock) {
-    const cleanRecord = JSON.parse(JSON.stringify(record));
-    void setDoc(doc(db, PRESTATAIRE_ACCOUNTS_COL, prestataire.id), cleanRecord, {
-      merge: true,
-    }).catch(() => {});
-  }
 
   // Synchronize REGISTERED_USERS so all local registries carry the complete Provider UserProfile
   try {
@@ -2841,6 +2905,7 @@ export const savePrestataire = async (
 
     if (generateCredentials && finalPrestataire.email) {
       const nowIso = new Date().toISOString();
+      const inviteExpiresAt = new Date(Date.now() + 7 * 86400000).toISOString();
       ephemeralPassword =
         finalPrestataire.generatedPassword || generateTempPassword(finalPrestataire.name);
       const prevLog = Array.isArray(finalPrestataire.credentialsAuditLog)
@@ -2855,6 +2920,7 @@ export const savePrestataire = async (
         invitationStatus: 'pending',
         invitationToken: ephemeralPassword,
         invitationCode: ephemeralPassword,
+        invitationExpiresAt: finalPrestataire.invitationExpiresAt || inviteExpiresAt,
         credentialsCreatedAt: nowIso,
         credentialsAuditLog: [
           { action: actionType, timestamp: nowIso },
@@ -2868,6 +2934,8 @@ export const savePrestataire = async (
       ephemeralPassword = finalPrestataire.generatedPassword;
       finalPrestataire.invitationToken = finalPrestataire.invitationToken || ephemeralPassword;
       finalPrestataire.invitationCode = finalPrestataire.invitationCode || ephemeralPassword;
+      finalPrestataire.invitationExpiresAt =
+        finalPrestataire.invitationExpiresAt || new Date(Date.now() + 7 * 86400000).toISOString();
       delete (finalPrestataire as any).generatedPassword;
       savePrestataireCredentialAccount(finalPrestataire, ephemeralPassword);
     } else if (finalPrestataire.hasAccount && finalPrestataire.email) {
@@ -2889,14 +2957,9 @@ export const savePrestataire = async (
             category: finalPrestataire.category,
             syndicId: finalPrestataire.syndicId,
             buildingId: finalPrestataire.buildingId,
+            invitationExpiresAt: finalPrestataire.invitationExpiresAt,
           };
           setLocalItem(PRESTATAIRE_ACCOUNTS_KEY, accounts);
-          if (!isMock) {
-            const cleanRecord = JSON.parse(JSON.stringify(accounts[accIdx]));
-            void setDoc(doc(db, PRESTATAIRE_ACCOUNTS_COL, finalPrestataire.id), cleanRecord, {
-              merge: true,
-            }).catch(() => {});
-          }
         }
       }
     }
@@ -2933,6 +2996,7 @@ export const regeneratePrestataireCredentials = async (
     if (idx >= 0) {
       const prest = list[idx];
       const nowIso = new Date().toISOString();
+      const inviteExpiresAt = new Date(Date.now() + 7 * 86400000).toISOString();
       const fallbackEmail =
         prest.email?.trim() ||
         `contact@${
@@ -2953,6 +3017,7 @@ export const regeneratePrestataireCredentials = async (
         invitationStatus: 'pending',
         invitationToken: newPassword,
         invitationCode: newPassword,
+        invitationExpiresAt: inviteExpiresAt,
         credentialsCreatedAt: nowIso,
         credentialsAuditLog: [
           { action: actionType, timestamp: nowIso },
@@ -3159,8 +3224,11 @@ export const recordPayment = async (invoice: Invoice, amount: number, method: st
   if (isLocalEngineEnabled) {
     const invoices = getLocalItem<Invoice[]>(STORAGE_KEYS.INVOICES, []);
     const invIdx = invoices.findIndex((i) => i.id === invoice.id);
-    const nextPaid = Math.round(((invoice.paidAmount || 0) + amount) * 100) / 100;
-    const isFullyPaid = nextPaid >= invoice.totalAmount - 0.005;
+    const storedInvoice = invIdx >= 0 ? invoices[invIdx] : invoice;
+    const prevPaid = Math.max(storedInvoice.paidAmount || 0, invoice.paidAmount || 0);
+    const totalAmount = storedInvoice.totalAmount ?? invoice.totalAmount;
+    const nextPaid = Math.round((prevPaid + amount) * 100) / 100;
+    const isFullyPaid = nextPaid >= totalAmount - 0.005;
 
     if (invIdx >= 0) {
       invoices[invIdx] = {
@@ -3170,6 +3238,8 @@ export const recordPayment = async (invoice: Invoice, amount: number, method: st
       };
       setLocalItem(STORAGE_KEYS.INVOICES, invoices);
     }
+    invoice.paidAmount = nextPaid;
+    invoice.status = isFullyPaid ? 'paid' : 'unpaid';
 
     // Reconcile linked charges
     if (Array.isArray(invoice.chargeIds) && invoice.chargeIds.length > 0) {
@@ -3569,14 +3639,17 @@ async function readFileAsDurableDataUrl(file: File): Promise<string> {
   if (typeof (file as any).arrayBuffer === 'function') {
     const ab = await (file as any).arrayBuffer();
     const bytes = new Uint8Array(ab);
-    let binary = '';
-    for (let i = 0; i < Math.min(bytes.length, 65536); i++) {
-      binary += String.fromCharCode(bytes[i]);
+    let b64: string;
+    if (typeof Buffer !== 'undefined') {
+      b64 = Buffer.from(bytes).toString('base64');
+    } else {
+      const chunkSize = 0x8000;
+      let binary = '';
+      for (let i = 0; i < bytes.length; i += chunkSize) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+      }
+      b64 = btoa(binary);
     }
-    const b64 =
-      typeof btoa === 'function'
-        ? btoa(binary)
-        : Buffer.from(bytes.slice(0, 65536)).toString('base64');
     const mime = file.type || 'application/pdf';
     return `data:${mime};base64,${b64}`;
   }

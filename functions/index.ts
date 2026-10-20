@@ -798,6 +798,7 @@ export const onUserCreate = functions.auth.user().onCreate(async (user) => {
 });
 
 export const onInvoiceCreated = functions.firestore
+  .database(FIRESTORE_DATABASE_ID)
   .document('invoices/{invoiceId}')
   .onCreate(async (snap) => {
     const invoice = snap.data();
@@ -822,6 +823,7 @@ export const onInvoiceCreated = functions.firestore
   });
 
 export const onMaintenanceUpdated = functions.firestore
+  .database(FIRESTORE_DATABASE_ID)
   .document('maintenance/{requestId}')
   .onUpdate(async (change) => {
     const newData = change.after.data();
@@ -849,6 +851,7 @@ export const onMaintenanceUpdated = functions.firestore
   });
 
 export const onAnnouncementCreated = functions.firestore
+  .database(FIRESTORE_DATABASE_ID)
   .document('buildings/{buildingId}/announcements/{announcementId}')
   .onCreate(async (snap, context) => {
     const buildingId = context.params.buildingId;

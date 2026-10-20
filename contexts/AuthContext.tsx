@@ -29,6 +29,7 @@ import type { UserProfile, UserRole, SubscriptionPlan, Syndic, Prestataire } fro
 import {
   hashPasswordSync,
   verifyPasswordSync,
+  isAlreadyHashedPassword,
   createSignedSessionEnvelope,
   verifySignedSessionEnvelope,
   setActiveAuthContext,
@@ -233,7 +234,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const persistSession = (profile: UserProfile | null, firebaseUser?: User | null) => {
+  const persistSession = (
+    profile: UserProfile | null,
+    firebaseUser?: User | null,
+    serverToken?: string
+  ) => {
     if (!profile) {
       localStorage.removeItem(SESSION_STORAGE_KEY);
       setActiveAuthContext(null, null);
@@ -244,9 +249,21 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (!firebaseUser && auth.currentUser && auth.currentUser.uid !== profile.uid) {
       void signOut(auth).catch(() => {});
     }
-    const envelope = createSignedSessionEnvelope(profile);
+    const existingEnvelopeRaw = localStorage.getItem(SESSION_STORAGE_KEY);
+    let preservedServerToken = serverToken;
+    if (!preservedServerToken && existingEnvelopeRaw) {
+      try {
+        const parsedPrev = JSON.parse(existingEnvelopeRaw);
+        if (parsedPrev?.profile?.uid === profile.uid && typeof parsedPrev.serverToken === 'string') {
+          preservedServerToken = parsedPrev.serverToken;
+        }
+      } catch {
+        // ignore
+      }
+    }
+    const envelope = createSignedSessionEnvelope(profile, preservedServerToken);
     localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(envelope));
-    setActiveAuthContext(profile, null);
+    setActiveAuthContext(profile, preservedServerToken || null);
     setUserProfile(profile);
     setUser(firebaseUser || createVerifiedIdentityAdapter(profile));
   };
@@ -263,7 +280,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         const parsed = JSON.parse(savedSession);
         const verifiedProfile = verifySignedSessionEnvelope(parsed);
         if (verifiedProfile) {
-          setActiveAuthContext(verifiedProfile, null);
+          setActiveAuthContext(
+            verifiedProfile,
+            typeof parsed.serverToken === 'string' ? parsed.serverToken : null
+          );
           setUserProfile(verifiedProfile);
           setUser(createVerifiedIdentityAdapter(verifiedProfile));
           setLoading(false);
@@ -423,6 +443,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         );
       }
 
+      // Reject raw hash strings supplied as a candidate password (hash-as-password bypass prevention)
+      if (isAlreadyHashedPassword(trimmedPass)) {
+        throw new Error('Identifiants ou format de mot de passe invalides.');
+      }
+
       // 0. Server-side authentication (/api/auth/login) for cross-browser / incognito / mobile devices
       let serverAuthError: string | null = null;
       try {
@@ -436,7 +461,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           const data = await res.json();
           if (res.ok && data?.ok && data?.profile) {
             const serverProfile = data.profile as UserProfile;
-            persistSession(serverProfile);
+            persistSession(
+              serverProfile,
+              undefined,
+              typeof data.token === 'string' ? data.token : undefined
+            );
             await syncAllSharedStateFromServer(true);
             return serverProfile;
           } else if (res.status === 401 && data?.error) {
@@ -494,6 +523,18 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         const storedSecret = matchedResAccount?.passwordHash || matchedResAccount?.password;
         const mustChange =
           matchedResAccount?.mustChangePassword ?? resObj?.mustChangePassword ?? true;
+        const inviteExpiresAt =
+          resObj?.invitationExpiresAt || matchedResAccount?.invitationExpiresAt;
+
+        if (
+          mustChange !== false &&
+          inviteExpiresAt &&
+          new Date(inviteExpiresAt).getTime() < Date.now()
+        ) {
+          throw new Error(
+            'Cette invitation résident a expiré. Veuillez demander au syndic de régénérer vos identifiants.'
+          );
+        }
 
         let verified = verifyPasswordSync(trimmedPass, storedSecret, accountEmailSalt);
         if (
@@ -595,6 +636,18 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         const storedSecret = matchedPrestAccount?.passwordHash || matchedPrestAccount?.password;
         const mustChange =
           matchedPrestAccount?.mustChangePassword ?? matchedPrestObj?.mustChangePassword ?? true;
+        const inviteExpiresAt =
+          matchedPrestObj?.invitationExpiresAt || matchedPrestAccount?.invitationExpiresAt;
+
+        if (
+          mustChange !== false &&
+          inviteExpiresAt &&
+          new Date(inviteExpiresAt).getTime() < Date.now()
+        ) {
+          throw new Error(
+            'Cette invitation prestataire a expiré. Veuillez demander au syndic de régénérer vos identifiants.'
+          );
+        }
 
         let verified = verifyPasswordSync(trimmedPass, storedSecret, accountEmailSalt);
         if (
@@ -795,6 +848,12 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
       if (!normalizedEmail || trimmedPass.length < 6) {
         throw new Error('Le mot de passe doit contenir au moins 6 caractères.');
+      }
+      if (isAlreadyHashedPassword(trimmedPass)) {
+        throw new Error('Format de mot de passe non valide.');
+      }
+      if (input.role === 'admin') {
+        throw new Error('La création directe de compte administrateur n’est pas autorisée.');
       }
 
       const existingUsers = getStoredRegisteredUsers();
@@ -1087,7 +1146,12 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
                 (normalizedEmail && r.email?.trim().toLowerCase() === normalizedEmail)
             );
             if (rIdx >= 0) {
-              const { generatedPassword: _gp, ...cleanRes } = bld.residents[rIdx] as any;
+              const {
+                generatedPassword: _gp,
+                invitationToken: _it,
+                invitationCode: _ic,
+                ...cleanRes
+              } = bld.residents[rIdx] as any;
               bld.residents[rIdx] = {
                 ...cleanRes,
                 invitationStatus: 'accepted',
@@ -1133,7 +1197,12 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             (normalizedEmail && p.email?.trim().toLowerCase() === normalizedEmail)
         );
         if (pIdx >= 0) {
-          const { generatedPassword: _gp, ...cleanPrest } = list[pIdx] as any;
+          const {
+            generatedPassword: _gp,
+            invitationToken: _it,
+            invitationCode: _ic,
+            ...cleanPrest
+          } = list[pIdx] as any;
           list[pIdx] = {
             ...cleanPrest,
             invitationStatus: 'accepted',

@@ -3,6 +3,12 @@ import type { Building, UserProfile } from '../types';
 const HASH_PREFIX = 'sha256$v1$';
 const SESSION_SECRET_SALT = 'immogest_syndik_auth_v1_9f4b2c8e';
 
+export function isAlreadyHashedPassword(value: string | undefined): boolean {
+  return Boolean(
+    value && (value.startsWith(HASH_PREFIX) || value.startsWith('pbkdf2$'))
+  );
+}
+
 /**
  * Synchronous deterministic FNV-1a / DJB2 256-bit hex digest so both sync & async callers
  * can hash and verify credentials without storing plaintext passwords in localStorage or server state.
@@ -10,9 +16,6 @@ const SESSION_SECRET_SALT = 'immogest_syndik_auth_v1_9f4b2c8e';
 export function hashPasswordSync(password: string, emailSalt = ''): string {
   const normalizedSalt = emailSalt.trim().toLowerCase();
   const raw = `${SESSION_SECRET_SALT}:${normalizedSalt}:${password}`;
-  if (password.startsWith(HASH_PREFIX)) {
-    return password;
-  }
 
   const seeds = [
     0x811c9dc5, 0x9e3779b9, 0x85ebca6b, 0xc2b2ae35,
@@ -51,6 +54,10 @@ export function verifyPasswordSync(
   emailSalt = ''
 ): boolean {
   if (!candidatePassword || !storedHashOrLegacy) return false;
+  // Never allow a stored hash string to authenticate as a plaintext password (Audit P0-2 / P0-3)
+  if (isAlreadyHashedPassword(candidatePassword)) {
+    return false;
+  }
   const candidateHash = hashPasswordSync(candidatePassword, emailSalt);
   if (storedHashOrLegacy.startsWith(HASH_PREFIX)) {
     return candidateHash === storedHashOrLegacy;
@@ -98,13 +105,18 @@ export interface SignedSessionEnvelope {
   profile: UserProfile;
   signature: string;
   issuedAt: number;
+  serverToken?: string;
 }
 
-export function createSignedSessionEnvelope(profile: UserProfile): SignedSessionEnvelope {
+export function createSignedSessionEnvelope(
+  profile: UserProfile,
+  serverToken?: string
+): SignedSessionEnvelope {
   return {
     profile,
     signature: computeSessionSignature(profile),
     issuedAt: Date.now(),
+    ...(serverToken ? { serverToken } : {}),
   };
 }
 
@@ -183,10 +195,15 @@ export function getAuthenticatedRequestHeaders(): Record<string, string> {
     try {
       const raw = localStorage.getItem('syndik_auth_session_v1');
       if (raw) {
-        const verified = verifySignedSessionEnvelope(raw);
+        const parsedObj = JSON.parse(raw);
+        const verified = verifySignedSessionEnvelope(parsedObj);
         if (verified) {
           const sig = computeSessionSignature(verified);
-          headers['Authorization'] = `Bearer syndik-sess-${verified.uid}-${sig}`;
+          const tokenToUse =
+            typeof parsedObj?.serverToken === 'string' && parsedObj.serverToken
+              ? parsedObj.serverToken
+              : `syndik-sess-${verified.uid}-${sig}`;
+          headers['Authorization'] = `Bearer ${tokenToUse}`;
           headers['X-Syndik-Uid'] = verified.uid;
           headers['X-Syndik-Role'] = verified.role;
           headers['X-Syndik-Sig'] = sig;
@@ -203,9 +220,10 @@ export function getAuthenticatedRequestHeaders(): Record<string, string> {
 }
 
 /**
- * Shared financial balance selector (Audit Item 15).
+ * Shared financial balance selector (Audit Item 15 & P1-2).
  * Derives workingBalance/operatingBalance and reserveBalance consistently without double-counting
  * reserve transactions on top of an already-incremented reserveFundBalance,
+ * preserves legacy opening balances stored in financials.balance,
  * and NEVER invents a 20% reserve balance when reserve balance is legitimately 0.
  */
 export function computeBuildingFinancialBalances(building?: Building | null): {
@@ -223,8 +241,8 @@ export function computeBuildingFinancialBalances(building?: Building | null): {
   const openingReserve = Number(building.financials?.openingReserveBalance ?? 0) || 0;
 
   if (transactions.length > 0) {
-    let workingFromTx = openingWorking;
-    let reserveFromTx = openingReserve;
+    let txWorkingDelta = 0;
+    let txReserveDelta = 0;
 
     for (const trx of transactions) {
       const rawAmt = Number(trx.amount) || 0;
@@ -236,14 +254,24 @@ export function computeBuildingFinancialBalances(building?: Building | null): {
           : rawAmt;
 
       if (trx.fundType === 'reserve') {
-        reserveFromTx += signedAmt;
+        txReserveDelta += signedAmt;
       } else {
-        workingFromTx += signedAmt;
+        txWorkingDelta += signedAmt;
       }
     }
 
-    const working = Math.round(workingFromTx * 100) / 100;
-    const reserve = Math.round(reserveFromTx * 100) / 100;
+    const storedWorking = Number(building.financials?.balance ?? 0) || 0;
+    const storedReserve = Number(building.financials?.reserveFundBalance ?? 0) || 0;
+    const inferredLegacyOpeningWorking = Math.round((storedWorking - txWorkingDelta) * 100) / 100;
+    const inferredLegacyOpeningReserve = Math.round((storedReserve - txReserveDelta) * 100) / 100;
+
+    const effectiveOpeningWorking =
+      openingWorking !== 0 ? openingWorking : inferredLegacyOpeningWorking;
+    const effectiveOpeningReserve =
+      openingReserve !== 0 ? openingReserve : inferredLegacyOpeningReserve;
+
+    const working = Math.round((effectiveOpeningWorking + txWorkingDelta) * 100) / 100;
+    const reserve = Math.round((effectiveOpeningReserve + txReserveDelta) * 100) / 100;
     return {
       workingBalance: working,
       operatingBalance: working,

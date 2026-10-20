@@ -15,6 +15,7 @@ import {
   pushKeyToSharedServer,
   resetAllProductionData,
 } from '../../firebase/services';
+import { hashPasswordSync, generateSecureRandomDigits } from '../../utils/security';
 import type { Syndic, SubscriptionPlan, SubscriptionStatus, Apartment } from '../../types';
 import { BuildingsIcon, ResidentsIcon, FinancialsIcon, PlusIcon, TrashIcon } from '../icons/IconComponents';
 
@@ -40,7 +41,7 @@ const AdminDashboard: React.FC = () => {
   const [newCabinetName, setNewCabinetName] = useState('');
   const [newManagerName, setNewManagerName] = useState('');
   const [newEmail, setNewEmail] = useState('');
-  const [newPassword, setNewPassword] = useState('Syndik-2026');
+  const [newPassword, setNewPassword] = useState(() => `Syndik-${generateSecureRandomDigits(6)}!`);
   const [newPhone, setNewPhone] = useState('+212 6 00 00 00 00');
   const [newCity, setNewCity] = useState('Casablanca');
   const [newPlan, setNewPlan] = useState<SubscriptionPlan>('professional');
@@ -150,14 +151,17 @@ const AdminDashboard: React.FC = () => {
         apartments: initialApts,
       });
 
-      // Register login credentials for this Syndic cabinet so they can sign in immediately
+      // Register hashed login credentials for this Syndic cabinet so they can sign in immediately
       try {
         const rawUsers = localStorage.getItem(STORAGE_KEYS.REGISTERED_USERS);
         const existingUsers = rawUsers ? JSON.parse(rawUsers) : [];
         const filtered = existingUsers.filter(
           (u: any) => u.email?.trim().toLowerCase() !== cleanEmail
         );
-        const rawPass = newPassword.trim() || 'password123';
+        const rawPass =
+          newPassword.trim().length >= 6
+            ? newPassword.trim()
+            : `Syndik-${generateSecureRandomDigits(6)}!`;
         const syndicProfile = {
           uid,
           email: cleanEmail,
@@ -171,7 +175,7 @@ const AdminDashboard: React.FC = () => {
         filtered.push({
           uid,
           email: cleanEmail,
-          password: rawPass,
+          passwordHash: hashPasswordSync(rawPass, cleanEmail),
           profile: syndicProfile,
           createdAt: new Date().toISOString(),
         });
