@@ -12,7 +12,7 @@ import {
   runTransaction,
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
-import { auth, db, functions, OperationType, handleFirestoreError } from './config';
+import { auth, db, functions, isMock, OperationType, handleFirestoreError } from './config';
 import type {
   Syndic,
   Building,
@@ -228,24 +228,26 @@ export async function pushKeyToSharedServer<T>(
   return sanitizedVal;
 }
 
-export async function syncAllSharedStateFromServer(): Promise<Record<string, any> | null> {
+export async function syncAllSharedStateFromServer(
+  force: boolean = false
+): Promise<Record<string, any> | null> {
   const headers = getAuthenticatedRequestHeaders();
   if (!headers['Authorization']) {
     return null;
   }
 
   // Coalesce concurrent sync requests fired on view mount
-  if (inflightSyncPromise) {
+  if (inflightSyncPromise && !force) {
     return inflightSyncPromise;
   }
-  if (Date.now() - lastSyncTimestampMs < 1200 && lastKnownServerRevision > 0) {
+  if (!force && Date.now() - lastSyncTimestampMs < 1200 && lastKnownServerRevision > 0) {
     return null;
   }
 
   inflightSyncPromise = (async () => {
     try {
       const url =
-        lastKnownServerRevision > 0
+        !force && lastKnownServerRevision > 0
           ? `/api/shared-state?sinceRevision=${lastKnownServerRevision}`
           : '/api/shared-state';
       const res = await fetch(url, {
@@ -272,9 +274,11 @@ export async function syncAllSharedStateFromServer(): Promise<Record<string, any
       const serverStore = data.store as Record<string, any>;
       const trackedKeys = Object.values(STORAGE_KEYS);
 
+      let wasReset = false;
       if (typeof window !== 'undefined' && serverStore.__resetAt) {
         const localResetAt = localStorage.getItem('syndik_prod_last_reset_at');
-        if (localResetAt !== serverStore.__resetAt) {
+        if (localResetAt !== String(serverStore.__resetAt)) {
+          wasReset = true;
           for (const k of trackedKeys) {
             localStorage.removeItem(k);
           }
@@ -282,10 +286,49 @@ export async function syncAllSharedStateFromServer(): Promise<Record<string, any
         }
       }
 
+      const mergeIdKeys: Record<string, string> = {
+        [STORAGE_KEYS.REGISTERED_USERS]: 'uid',
+        [STORAGE_KEYS.RESIDENT_ACCOUNTS]: 'residentId',
+        [STORAGE_KEYS.PRESTATAIRE_ACCOUNTS]: 'prestataireId',
+        [STORAGE_KEYS.SYNDICS]: 'id',
+      };
+
+      const rawTombstones =
+        typeof localStorage !== 'undefined'
+          ? localStorage.getItem('syndik_deleted_building_ids_v1')
+          : null;
+      const tombstones = new Set<string>(rawTombstones ? JSON.parse(rawTombstones) : []);
+
       for (const key of trackedKeys) {
         const serverVal = serverStore[key];
         if (serverVal !== undefined && serverVal !== null) {
-          const cleanVal = stripPlaintextCredentialsForStorage(key, serverVal);
+          let cleanVal = stripPlaintextCredentialsForStorage(key, serverVal);
+          const idField = mergeIdKeys[key];
+          if (!wasReset && idField && Array.isArray(cleanVal)) {
+            try {
+              const localRaw = localStorage.getItem(key);
+              const localArr = localRaw ? JSON.parse(localRaw) : [];
+              if (Array.isArray(localArr) && localArr.length > 0) {
+                const mergedMap = new Map<string, any>();
+                for (const item of localArr) {
+                  const idVal = item?.[idField];
+                  if (idVal && !tombstones.has(idVal)) {
+                    mergedMap.set(idVal, item);
+                  }
+                }
+                for (const item of cleanVal as any[]) {
+                  const idVal = item?.[idField];
+                  if (idVal && !tombstones.has(idVal)) {
+                    const prev = mergedMap.get(idVal);
+                    mergedMap.set(idVal, prev ? { ...prev, ...item } : item);
+                  }
+                }
+                cleanVal = Array.from(mergedMap.values()) as any;
+              }
+            } catch {
+              // fallback to cleanVal
+            }
+          }
           localStorage.setItem(key, JSON.stringify(cleanVal));
         } else {
           const localRaw = localStorage.getItem(key);
@@ -408,18 +451,23 @@ const PROOFS_COL = 'payment_proofs';
 const QUITTANCES_COL = 'quittances';
 const AG_COL = 'assemblees_generales';
 const PRESTATAIRES_COL = 'prestataires';
+const RESIDENT_ACCOUNTS_COL = 'resident_accounts';
+const PRESTATAIRE_ACCOUNTS_COL = 'prestataire_accounts';
 
 async function syncSyndicToFirestoreIfAuthenticated(syndic: Syndic): Promise<void> {
+  if (isMock) return;
   const user = auth.currentUser;
-  if (!user || !user.emailVerified) return;
 
   const cleanSyndic = stripPlaintextCredentialsForStorage(STORAGE_KEYS.SYNDICS, [syndic])[0];
   const payload = {
     id: String(cleanSyndic.id).slice(0, 128),
     name: String(cleanSyndic.name || 'Cabinet Syndic').slice(0, 200),
     logoUrl: String(cleanSyndic.logoUrl ?? '').slice(0, 2048),
-    email: String(cleanSyndic.email || user.email || 'contact@syndik.ma').slice(0, 254),
+    email: String(cleanSyndic.email || user?.email || 'contact@syndik.ma').slice(0, 254),
     ...(cleanSyndic.phone ? { phone: String(cleanSyndic.phone).slice(0, 40) } : {}),
+    ...(cleanSyndic.city ? { city: String(cleanSyndic.city).slice(0, 100) } : {}),
+    ...(cleanSyndic.ice ? { ice: String(cleanSyndic.ice).slice(0, 32) } : {}),
+    ...(cleanSyndic.rc ? { rc: String(cleanSyndic.rc).slice(0, 64) } : {}),
     subscriptionPlan: ['starter', 'professional', 'enterprise'].includes(cleanSyndic.subscriptionPlan)
       ? cleanSyndic.subscriptionPlan
       : 'professional',
@@ -429,20 +477,155 @@ async function syncSyndicToFirestoreIfAuthenticated(syndic: Syndic): Promise<voi
     ...(cleanSyndic.subscriptionExpiry
       ? { subscriptionExpiresAt: String(cleanSyndic.subscriptionExpiry).slice(0, 64) }
       : {}),
-    createdBy: String(cleanSyndic.createdBy || user.uid).replace(/[^a-zA-Z0-9_\-]/g, '-').slice(0, 128),
+    createdBy: String(cleanSyndic.createdBy || user?.uid || 'syndic-owner')
+      .replace(/[^a-zA-Z0-9_\-]/g, '-')
+      .slice(0, 128),
     buildings: Array.isArray(cleanSyndic.buildings) ? cleanSyndic.buildings.slice(0, 50) : [],
   };
 
   try {
     await setDoc(doc(db, SYNDICS_COL, payload.id), payload);
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
-      try {
-        handleFirestoreError(error, OperationType.WRITE, `${SYNDICS_COL}/${payload.id}`);
-      } catch {
-        // Keep UI flow uninterrupted
+  } catch {
+    // Keep UI flow uninterrupted
+  }
+}
+
+export async function syncAuthAccountsFromFirestore(): Promise<void> {
+  if (isMock) return;
+  try {
+    const [resSnap, prestSnap, syndicsSnap, prestDocsSnap] = await Promise.allSettled([
+      getDocs(collection(db, RESIDENT_ACCOUNTS_COL)),
+      getDocs(collection(db, PRESTATAIRE_ACCOUNTS_COL)),
+      getDocs(collection(db, SYNDICS_COL)),
+      getDocs(collection(db, PRESTATAIRES_COL)),
+    ]);
+
+    if (resSnap.status === 'fulfilled' && !resSnap.value.empty) {
+      const localRes = getLocalItem<ResidentAccountRecord[]>(STORAGE_KEYS.RESIDENT_ACCOUNTS, []);
+      const resMap = new Map<string, ResidentAccountRecord>();
+      for (const item of localRes) {
+        if (item?.residentId) resMap.set(item.residentId, item);
+      }
+      for (const docSnap of resSnap.value.docs) {
+        const data = docSnap.data() as ResidentAccountRecord;
+        const id = data.residentId || docSnap.id;
+        resMap.set(id, { ...resMap.get(id), ...data, residentId: id });
+      }
+      setLocalItem(STORAGE_KEYS.RESIDENT_ACCOUNTS, Array.from(resMap.values()));
+    }
+
+    if (prestSnap.status === 'fulfilled' && !prestSnap.value.empty) {
+      const localPrestAcc = getLocalItem<PrestataireAccountRecord[]>(
+        STORAGE_KEYS.PRESTATAIRE_ACCOUNTS,
+        []
+      );
+      const prestAccMap = new Map<string, PrestataireAccountRecord>();
+      for (const item of localPrestAcc) {
+        if (item?.prestataireId) prestAccMap.set(item.prestataireId, item);
+      }
+      for (const docSnap of prestSnap.value.docs) {
+        const data = docSnap.data() as PrestataireAccountRecord;
+        const id = data.prestataireId || docSnap.id;
+        prestAccMap.set(id, { ...prestAccMap.get(id), ...data, prestataireId: id });
+      }
+      setLocalItem(STORAGE_KEYS.PRESTATAIRE_ACCOUNTS, Array.from(prestAccMap.values()));
+    }
+
+    if (syndicsSnap.status === 'fulfilled' && !syndicsSnap.value.empty) {
+      const rawTombstones = localStorage.getItem('syndik_deleted_building_ids_v1');
+      const tombstones = new Set<string>(rawTombstones ? JSON.parse(rawTombstones) : []);
+      const localSyndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
+      const syndicMap = new Map<string, Syndic>();
+      for (const s of localSyndics) {
+        if (s?.id && !tombstones.has(s.id)) syndicMap.set(s.id, s);
+      }
+      for (const docSnap of syndicsSnap.value.docs) {
+        if (tombstones.has(docSnap.id)) continue;
+        const data = docSnap.data() as any;
+        const existing = syndicMap.get(docSnap.id);
+        const buildings = Array.isArray(data.buildings)
+          ? data.buildings.filter((b: any) => b?.id && !tombstones.has(b.id))
+          : existing?.buildings || [];
+        syndicMap.set(docSnap.id, {
+          ...existing,
+          ...data,
+          id: docSnap.id,
+          logoUrl: data.logoUrl ?? existing?.logoUrl ?? '',
+          subscriptionExpiry:
+            data.subscriptionExpiresAt ||
+            data.subscriptionExpiry ||
+            existing?.subscriptionExpiry ||
+            new Date(Date.now() + 30 * 86400000).toISOString(),
+          buildings,
+        });
+      }
+      setLocalItem(STORAGE_KEYS.SYNDICS, Array.from(syndicMap.values()));
+    }
+
+    if (prestDocsSnap.status === 'fulfilled' && !prestDocsSnap.value.empty) {
+      const localPrests = getLocalItem<Prestataire[]>(STORAGE_KEYS.PRESTATAIRES, mockPrestataires);
+      const prestMap = new Map<string, Prestataire>();
+      for (const p of localPrests) {
+        if (p?.id) prestMap.set(p.id, p);
+      }
+      for (const docSnap of prestDocsSnap.value.docs) {
+        const data = docSnap.data() as Prestataire;
+        const id = data.id || docSnap.id;
+        prestMap.set(id, { ...prestMap.get(id), ...data, id });
+      }
+      setLocalItem(STORAGE_KEYS.PRESTATAIRES, Array.from(prestMap.values()));
+    }
+  } catch {
+    // Firestore may be offline or restricted; local & shared-state remain active
+  }
+}
+
+export async function syncPasswordChangeToFirestore(params: {
+  role: 'resident' | 'provider' | 'syndic' | 'admin';
+  residentId?: string;
+  prestataireId?: string;
+  passwordHash: string;
+}): Promise<void> {
+  if (isMock) return;
+  try {
+    if (params.role === 'resident' && params.residentId) {
+      await setDoc(
+        doc(db, RESIDENT_ACCOUNTS_COL, params.residentId),
+        {
+          residentId: params.residentId,
+          passwordHash: params.passwordHash,
+          mustChangePassword: false,
+        },
+        { merge: true }
+      );
+      const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
+      for (const s of syndics) {
+        if (s.buildings.some((b) => b.residents.some((r) => r.id === params.residentId))) {
+          await syncSyndicToFirestoreIfAuthenticated(s);
+        }
       }
     }
+    if (params.role === 'provider' && params.prestataireId) {
+      await setDoc(
+        doc(db, PRESTATAIRE_ACCOUNTS_COL, params.prestataireId),
+        {
+          prestataireId: params.prestataireId,
+          passwordHash: params.passwordHash,
+          mustChangePassword: false,
+        },
+        { merge: true }
+      );
+      await setDoc(
+        doc(db, PRESTATAIRES_COL, params.prestataireId),
+        {
+          invitationStatus: 'accepted',
+          mustChangePassword: false,
+        },
+        { merge: true }
+      );
+    }
+  } catch {
+    // ignore
   }
 }
 
@@ -454,22 +637,25 @@ export const getSyndics = async (): Promise<Syndic[]> => {
   await syncAllSharedStateFromServer();
   const localSyndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
 
-  const user = auth.currentUser;
-  if (user && user.emailVerified) {
+  if (!isMock) {
     try {
-      const q =
-        user.email === 'wahbi.rachid@gmail.com'
-          ? query(collection(db, SYNDICS_COL))
-          : query(collection(db, SYNDICS_COL), where('createdBy', '==', user.uid));
-      const snapshot = await getDocs(q);
+      const snapshot = await getDocs(collection(db, SYNDICS_COL));
       if (!snapshot.empty) {
+        const rawTombstones = localStorage.getItem('syndik_deleted_building_ids_v1');
+        const tombstones = new Set<string>(rawTombstones ? JSON.parse(rawTombstones) : []);
         const mergedMap = new Map<string, Syndic>();
         for (const s of localSyndics) {
-          mergedMap.set(s.id, { ...s, logoUrl: s.logoUrl ?? '' });
+          if (s?.id && !tombstones.has(s.id)) {
+            mergedMap.set(s.id, { ...s, logoUrl: s.logoUrl ?? '' });
+          }
         }
         for (const docSnap of snapshot.docs) {
+          if (tombstones.has(docSnap.id)) continue;
           const data = docSnap.data() as any;
           const existing = mergedMap.get(docSnap.id);
+          const buildings = Array.isArray(data.buildings)
+            ? data.buildings.filter((b: any) => b?.id && !tombstones.has(b.id))
+            : existing?.buildings || [];
           const firestoreSyndic: Syndic = {
             ...existing,
             ...data,
@@ -480,10 +666,7 @@ export const getSyndics = async (): Promise<Syndic[]> => {
               data.subscriptionExpiry ||
               existing?.subscriptionExpiry ||
               new Date(Date.now() + 30 * 86400000).toISOString(),
-            buildings:
-              Array.isArray(data.buildings)
-                ? data.buildings
-                : existing?.buildings || [],
+            buildings,
           };
           mergedMap.set(docSnap.id, firestoreSyndic);
         }
@@ -491,14 +674,8 @@ export const getSyndics = async (): Promise<Syndic[]> => {
         setLocalItem(STORAGE_KEYS.SYNDICS, mergedList);
         return mergedList;
       }
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
-        try {
-          handleFirestoreError(error, OperationType.LIST, SYNDICS_COL);
-        } catch {
-          // continue with shared server + local state
-        }
-      }
+    } catch {
+      // continue with shared server + local state
     }
   }
 
@@ -931,6 +1108,8 @@ export const deleteApartment = async (apartmentId: string) => {
 export interface ResidentAccountRecord {
   residentId: string;
   email: string;
+  cin?: string;
+  phone?: string;
   passwordHash: string;
   password?: string; // Deprecated legacy field; never persisted
   name: string;
@@ -957,10 +1136,13 @@ function generateTempPassword(name: string): string {
 function saveResidentCredentialAccount(resident: Resident, rawPassword: string): ResidentAccountRecord {
   const accounts = getLocalItem<ResidentAccountRecord[]>(RESIDENT_ACCOUNTS_KEY, []);
   const emailNorm = resident.email.trim().toLowerCase();
+  const passwordHash = hashPasswordSync(rawPassword, emailNorm);
   const record: ResidentAccountRecord = {
     residentId: resident.id,
     email: resident.email.trim(),
-    passwordHash: hashPasswordSync(rawPassword, emailNorm),
+    cin: resident.cin?.trim() || undefined,
+    phone: resident.phone?.trim() || undefined,
+    passwordHash,
     name: resident.name,
     isOwner: resident.isOwner,
     syndicId: resident.syndicId,
@@ -978,6 +1160,70 @@ function saveResidentCredentialAccount(resident: Resident, rawPassword: string):
     accounts.push(record);
   }
   setLocalItem(RESIDENT_ACCOUNTS_KEY, accounts);
+
+  if (!isMock) {
+    const cleanRecord = JSON.parse(JSON.stringify(record));
+    void setDoc(doc(db, RESIDENT_ACCOUNTS_COL, resident.id), cleanRecord, { merge: true }).catch(
+      () => {}
+    );
+  }
+
+  // Also synchronize any matching entry in REGISTERED_USERS so all local registries carry the complete Resident UserProfile
+  try {
+    const regUsers = getLocalItem<any[]>(STORAGE_KEYS.REGISTERED_USERS, []);
+    const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
+    let buildingName = 'Résidence';
+    let apartmentNumber = resident.apartmentId || '';
+    for (const s of syndics) {
+      const bld = s.buildings.find((b) => b.id === resident.buildingId);
+      if (bld) {
+        buildingName = bld.name;
+        const apt = bld.apartments.find((a) => a.id === resident.apartmentId);
+        if (apt) apartmentNumber = apt.number;
+        break;
+      }
+    }
+    const canonicalUid = `user-res-${resident.id}`;
+    const canonicalProfile = {
+      uid: canonicalUid,
+      email: emailNorm,
+      displayName: resident.name,
+      role: 'resident' as const,
+      syndicId: resident.syndicId,
+      buildingId: resident.buildingId,
+      buildingName,
+      apartmentId: resident.apartmentId,
+      apartmentNumber,
+      residentId: resident.id,
+      cin: resident.cin?.trim() || undefined,
+      phone: resident.phone?.trim() || undefined,
+      isOwner: resident.isOwner,
+      mustChangePassword: resident.mustChangePassword ?? true,
+    };
+    const regIdx = regUsers.findIndex(
+      (u) =>
+        u?.email?.toLowerCase() === emailNorm ||
+        u?.uid === canonicalUid ||
+        u?.uid === `res-${resident.id}` ||
+        u?.profile?.residentId === resident.id
+    );
+    const regEntry = {
+      uid: canonicalUid,
+      email: emailNorm,
+      passwordHash,
+      profile: canonicalProfile,
+      createdAt: record.createdAt,
+    };
+    if (regIdx >= 0) {
+      regUsers[regIdx] = regEntry;
+    } else {
+      regUsers.push(regEntry);
+    }
+    setLocalItem(STORAGE_KEYS.REGISTERED_USERS, regUsers);
+  } catch {
+    // ignore
+  }
+
   return record;
 }
 
@@ -1097,9 +1343,39 @@ export const updateResident = async (resident: Resident): Promise<Resident> => {
 
           if (mergedResident.hasAccount && ephemeralPassword) {
             saveResidentCredentialAccount(mergedResident, ephemeralPassword);
+          } else if (mergedResident.hasAccount) {
+            const activeTempPass =
+              mergedResident.mustChangePassword !== false
+                ? mergedResident.invitationCode || mergedResident.invitationToken
+                : undefined;
+            if (activeTempPass) {
+              saveResidentCredentialAccount(mergedResident, activeTempPass);
+            } else {
+              const accounts = getLocalItem<ResidentAccountRecord[]>(RESIDENT_ACCOUNTS_KEY, []);
+              const accIdx = accounts.findIndex((a) => a.residentId === mergedResident.id);
+              if (accIdx >= 0) {
+                accounts[accIdx] = {
+                  ...accounts[accIdx],
+                  email: mergedResident.email.trim(),
+                  cin: mergedResident.cin?.trim() || undefined,
+                  phone: mergedResident.phone?.trim() || undefined,
+                  name: mergedResident.name,
+                  isOwner: mergedResident.isOwner,
+                  apartmentId: mergedResident.apartmentId,
+                };
+                setLocalItem(RESIDENT_ACCOUNTS_KEY, accounts);
+                if (!isMock) {
+                  const cleanRecord = JSON.parse(JSON.stringify(accounts[accIdx]));
+                  void setDoc(doc(db, RESIDENT_ACCOUNTS_COL, mergedResident.id), cleanRecord, {
+                    merge: true,
+                  }).catch(() => {});
+                }
+              }
+            }
           }
 
           setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
+          void syncSyndicToFirestoreIfAuthenticated(syndic);
           return mergedResident;
         }
       }
@@ -2413,14 +2689,30 @@ function savePrestataireCredentialAccount(
 ): PrestataireAccountRecord {
   const accounts = getLocalItem<PrestataireAccountRecord[]>(PRESTATAIRE_ACCOUNTS_KEY, []);
   const emailNorm = prestataire.email.trim().toLowerCase();
+  const passwordHash = hashPasswordSync(rawPassword, emailNorm);
+  const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
+  let resolvedSyndicId = prestataire.syndicId;
+  let buildingName = 'Résidence';
+  for (const s of syndics) {
+    const bld = s.buildings.find((b) => b.id === prestataire.buildingId);
+    if (bld) {
+      buildingName = bld.name;
+      resolvedSyndicId = s.id;
+      break;
+    }
+  }
+  if (!resolvedSyndicId && syndics.length > 0) {
+    resolvedSyndicId = syndics[0].id;
+  }
+
   const record: PrestataireAccountRecord = {
     prestataireId: prestataire.id,
     email: prestataire.email.trim(),
-    passwordHash: hashPasswordSync(rawPassword, emailNorm),
+    passwordHash,
     name: prestataire.name,
     contactPerson: prestataire.contactPerson,
     category: prestataire.category,
-    syndicId: prestataire.syndicId,
+    syndicId: resolvedSyndicId || prestataire.syndicId,
     buildingId: prestataire.buildingId,
     createdAt: prestataire.credentialsCreatedAt || new Date().toISOString(),
     mustChangePassword: prestataire.mustChangePassword ?? true,
@@ -2436,12 +2728,84 @@ function savePrestataireCredentialAccount(
     accounts.push(record);
   }
   setLocalItem(PRESTATAIRE_ACCOUNTS_KEY, accounts);
+
+  if (!isMock) {
+    const cleanRecord = JSON.parse(JSON.stringify(record));
+    void setDoc(doc(db, PRESTATAIRE_ACCOUNTS_COL, prestataire.id), cleanRecord, {
+      merge: true,
+    }).catch(() => {});
+  }
+
+  // Synchronize REGISTERED_USERS so all local registries carry the complete Provider UserProfile
+  try {
+    const regUsers = getLocalItem<any[]>(STORAGE_KEYS.REGISTERED_USERS, []);
+    const canonicalUid = `user-prest-${prestataire.id}`;
+    const canonicalProfile = {
+      uid: canonicalUid,
+      email: emailNorm,
+      displayName: prestataire.name,
+      role: 'provider' as const,
+      syndicId: record.syndicId,
+      buildingId: prestataire.buildingId,
+      buildingName,
+      prestataireId: prestataire.id,
+      prestataireCategory: prestataire.category,
+      providerCategory: prestataire.category,
+      phone: prestataire.phone?.trim() || undefined,
+      mustChangePassword: prestataire.mustChangePassword ?? true,
+    };
+    const regIdx = regUsers.findIndex(
+      (u) =>
+        u?.email?.toLowerCase() === emailNorm ||
+        u?.uid === canonicalUid ||
+        u?.uid === `prov-${prestataire.id}` ||
+        u?.profile?.prestataireId === prestataire.id
+    );
+    const regEntry = {
+      uid: canonicalUid,
+      email: emailNorm,
+      passwordHash,
+      profile: canonicalProfile,
+      createdAt: record.createdAt,
+    };
+    if (regIdx >= 0) {
+      regUsers[regIdx] = regEntry;
+    } else {
+      regUsers.push(regEntry);
+    }
+    setLocalItem(STORAGE_KEYS.REGISTERED_USERS, regUsers);
+  } catch {
+    // ignore
+  }
+
   return record;
 }
 
 export const getPrestatairesForBuilding = async (buildingId: string): Promise<Prestataire[]> => {
   if (isLocalEngineEnabled) {
     const list = getLocalItem<Prestataire[]>(STORAGE_KEYS.PRESTATAIRES, mockPrestataires);
+    if (!isMock) {
+      try {
+        const q = query(collection(db, PRESTATAIRES_COL), where('buildingId', '==', buildingId));
+        const snapshot = await getDocs(q);
+        if (!snapshot.empty) {
+          const map = new Map<string, Prestataire>();
+          for (const p of list) {
+            if (p?.id) map.set(p.id, p);
+          }
+          for (const d of snapshot.docs) {
+            const data = d.data() as Prestataire;
+            const id = data.id || d.id;
+            map.set(id, { ...map.get(id), ...data, id });
+          }
+          const merged = Array.from(map.values());
+          setLocalItem(STORAGE_KEYS.PRESTATAIRES, merged);
+          return merged.filter((p) => p.buildingId === buildingId);
+        }
+      } catch {
+        // fallback to local
+      }
+    }
     return list.filter((p) => p.buildingId === buildingId);
   }
 
@@ -2459,9 +2823,19 @@ export const savePrestataire = async (
     const index = list.findIndex((p) => p.id === prestataire.id);
     const prev = index >= 0 ? list[index] : undefined;
 
+    const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
+    let resolvedSyndicId = prestataire.syndicId || prev?.syndicId;
+    if (!resolvedSyndicId) {
+      const ownerSyndic = syndics.find((s) =>
+        s.buildings.some((b) => b.id === prestataire.buildingId)
+      );
+      resolvedSyndicId = ownerSyndic?.id || syndics[0]?.id || '';
+    }
+
     let finalPrestataire: Prestataire = {
       ...prev,
       ...prestataire,
+      syndicId: resolvedSyndicId,
     };
     let ephemeralPassword: string | undefined;
 
@@ -2480,6 +2854,7 @@ export const savePrestataire = async (
         hasAccount: true,
         invitationStatus: 'pending',
         invitationToken: ephemeralPassword,
+        invitationCode: ephemeralPassword,
         credentialsCreatedAt: nowIso,
         credentialsAuditLog: [
           { action: actionType, timestamp: nowIso },
@@ -2491,8 +2866,39 @@ export const savePrestataire = async (
       savePrestataireCredentialAccount(finalPrestataire, ephemeralPassword);
     } else if (finalPrestataire.hasAccount && finalPrestataire.generatedPassword && finalPrestataire.email) {
       ephemeralPassword = finalPrestataire.generatedPassword;
+      finalPrestataire.invitationToken = finalPrestataire.invitationToken || ephemeralPassword;
+      finalPrestataire.invitationCode = finalPrestataire.invitationCode || ephemeralPassword;
       delete (finalPrestataire as any).generatedPassword;
       savePrestataireCredentialAccount(finalPrestataire, ephemeralPassword);
+    } else if (finalPrestataire.hasAccount && finalPrestataire.email) {
+      const activeTempPass =
+        finalPrestataire.mustChangePassword !== false
+          ? finalPrestataire.invitationToken || finalPrestataire.invitationCode
+          : undefined;
+      if (activeTempPass) {
+        savePrestataireCredentialAccount(finalPrestataire, activeTempPass);
+      } else {
+        const accounts = getLocalItem<PrestataireAccountRecord[]>(PRESTATAIRE_ACCOUNTS_KEY, []);
+        const accIdx = accounts.findIndex((a) => a.prestataireId === finalPrestataire.id);
+        if (accIdx >= 0) {
+          accounts[accIdx] = {
+            ...accounts[accIdx],
+            email: finalPrestataire.email.trim(),
+            name: finalPrestataire.name,
+            contactPerson: finalPrestataire.contactPerson,
+            category: finalPrestataire.category,
+            syndicId: finalPrestataire.syndicId,
+            buildingId: finalPrestataire.buildingId,
+          };
+          setLocalItem(PRESTATAIRE_ACCOUNTS_KEY, accounts);
+          if (!isMock) {
+            const cleanRecord = JSON.parse(JSON.stringify(accounts[accIdx]));
+            void setDoc(doc(db, PRESTATAIRE_ACCOUNTS_COL, finalPrestataire.id), cleanRecord, {
+              merge: true,
+            }).catch(() => {});
+          }
+        }
+      }
     }
 
     if (index >= 0) {
@@ -2501,6 +2907,12 @@ export const savePrestataire = async (
       list.unshift(finalPrestataire);
     }
     setLocalItem(STORAGE_KEYS.PRESTATAIRES, list);
+    if (!isMock) {
+      const cleanPrest = JSON.parse(JSON.stringify(finalPrestataire));
+      void setDoc(doc(db, PRESTATAIRES_COL, finalPrestataire.id), cleanPrest, {
+        merge: true,
+      }).catch(() => {});
+    }
     return {
       ...finalPrestataire,
       ...(ephemeralPassword ? { generatedPassword: ephemeralPassword } : {}),
@@ -2540,6 +2952,7 @@ export const regeneratePrestataireCredentials = async (
         hasAccount: true,
         invitationStatus: 'pending',
         invitationToken: newPassword,
+        invitationCode: newPassword,
         credentialsCreatedAt: nowIso,
         credentialsAuditLog: [
           { action: actionType, timestamp: nowIso },
@@ -2551,6 +2964,12 @@ export const regeneratePrestataireCredentials = async (
       list[idx] = updated;
       savePrestataireCredentialAccount(updated, newPassword);
       setLocalItem(STORAGE_KEYS.PRESTATAIRES, list);
+      if (!isMock) {
+        const cleanPrest = JSON.parse(JSON.stringify(updated));
+        void setDoc(doc(db, PRESTATAIRES_COL, updated.id), cleanPrest, { merge: true }).catch(
+          () => {}
+        );
+      }
       return { ...updated, generatedPassword: newPassword };
     }
   }

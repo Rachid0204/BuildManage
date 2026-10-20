@@ -23,11 +23,11 @@ service cloud.firestore {
     }
 
     function isVerified() {
-      return isSignedIn() && request.auth.token.email_verified == true;
+      return isSignedIn();
     }
 
     function isBootstrappedAdmin() {
-      return isVerified() && request.auth.token.email == 'wahbi.rachid@gmail.com';
+      return isSignedIn() && request.auth.token.email_verified == true && request.auth.token.email == 'wahbi.rachid@gmail.com';
     }
 
     function isAdmin() {
@@ -36,17 +36,22 @@ service cloud.firestore {
 
     function isValidSyndic(data) {
       return data.keys().hasAll(['id', 'name', 'email', 'subscriptionPlan', 'subscriptionStatus', 'createdBy', 'buildings']) &&
-        data.keys().hasOnly(['id', 'name', 'email', 'phone', 'city', 'logoUrl', 'ice', 'taxId', 'rc', 'patente', 'subscriptionPlan', 'subscriptionStatus', 'subscriptionExpiry', 'subscriptionExpiresAt', 'createdBy', 'buildings']) &&
+        data.keys().hasOnly(['id', 'name', 'email', 'phone', 'city', 'address', 'logoUrl', 'ice', 'taxId', 'rc', 'patente', 'syndicType', 'bankName', 'rib', 'subscriptionPlan', 'subscriptionStatus', 'subscriptionExpiry', 'subscriptionExpiresAt', 'createdBy', 'updatedAt', 'buildings']) &&
         data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.name is string && data.name.size() >= 1 && data.name.size() <= 200 &&
         data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
         (!('phone' in data) || (data.phone is string && data.phone.size() <= 40)) &&
         (!('city' in data) || (data.city is string && data.city.size() <= 100)) &&
+        (!('address' in data) || (data.address is string && data.address.size() <= 300)) &&
         (!('logoUrl' in data) || (data.logoUrl is string && data.logoUrl.size() <= 2048)) &&
         (!('ice' in data) || (data.ice is string && data.ice.size() <= 32)) &&
         (!('taxId' in data) || (data.taxId is string && data.taxId.size() <= 32)) &&
         (!('rc' in data) || (data.rc is string && data.rc.size() <= 64)) &&
         (!('patente' in data) || (data.patente is string && data.patente.size() <= 64)) &&
+        (!('syndicType' in data) || (data.syndicType is string && data.syndicType.size() <= 64)) &&
+        (!('bankName' in data) || (data.bankName is string && data.bankName.size() <= 128)) &&
+        (!('rib' in data) || (data.rib is string && data.rib.size() <= 64)) &&
+        (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 64)) &&
         data.subscriptionPlan is string && data.subscriptionPlan.size() <= 32 && data.subscriptionPlan in ['starter', 'professional', 'enterprise'] &&
         data.subscriptionStatus is string && data.subscriptionStatus.size() <= 32 && data.subscriptionStatus in ['active', 'trialing', 'expired', 'cancelled'] &&
         (!('subscriptionExpiry' in data) || (data.subscriptionExpiry is string && data.subscriptionExpiry.size() <= 64)) &&
@@ -82,7 +87,7 @@ service cloud.firestore {
 
     function isValidPrestataire(data) {
       return data.keys().hasAll(['id', 'syndicId', 'buildingId', 'name', 'category']) &&
-        data.keys().hasOnly(['id', 'syndicId', 'buildingId', 'name', 'category', 'contactPerson', 'phone', 'email', 'ice', 'rc', 'city', 'address', 'contractRef', 'monthlyRetainer', 'rating', 'status', 'interventionsCount', 'totalPaid', 'notes', 'hasAccount', 'invitationCode', 'invitationExpiresAt', 'credentialsCreatedAt', 'credentialsSharedAt', 'credentialsLastSharedMethod', 'credentialsAuditLog', 'mustChangePassword']) &&
+        data.keys().hasOnly(['id', 'syndicId', 'buildingId', 'name', 'category', 'contactPerson', 'phone', 'whatsapp', 'email', 'ice', 'rc', 'city', 'address', 'contractRef', 'monthlyRetainer', 'hourlyRate', 'rating', 'status', 'active', 'isEmergency247', 'isVerifiedBySyndic', 'verified', 'reviewsCount', 'reviews', 'completedJobsCount', 'interventionsCount', 'totalPaid', 'description', 'specialties', 'contractType', 'availability', 'responseTimeHours', 'notes', 'hasAccount', 'invitationCode', 'invitationToken', 'invitationStatus', 'invitationExpiresAt', 'credentialsCreatedAt', 'credentialsSharedAt', 'credentialsLastSharedMethod', 'credentialsAuditLog', 'mustChangePassword']) &&
         data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.syndicId is string && data.syndicId.size() >= 1 && data.syndicId.size() <= 128 &&
         data.buildingId is string && data.buildingId.size() >= 1 && data.buildingId.size() <= 128 &&
@@ -93,12 +98,23 @@ service cloud.firestore {
         (!('email' in data) || (data.email is string && data.email.size() <= 254)) &&
         (!('hasAccount' in data) || data.hasAccount is bool) &&
         (!('invitationCode' in data) || (data.invitationCode is string && data.invitationCode.size() <= 128)) &&
+        (!('invitationToken' in data) || (data.invitationToken is string && data.invitationToken.size() <= 128)) &&
+        (!('invitationStatus' in data) || (data.invitationStatus is string && data.invitationStatus in ['pending', 'accepted', 'sent', 'active', 'expired'])) &&
         (!('invitationExpiresAt' in data) || (data.invitationExpiresAt is string && data.invitationExpiresAt.size() <= 64)) &&
         (!('credentialsCreatedAt' in data) || (data.credentialsCreatedAt is string && data.credentialsCreatedAt.size() <= 64)) &&
         (!('credentialsSharedAt' in data) || (data.credentialsSharedAt is string && data.credentialsSharedAt.size() <= 64)) &&
         (!('credentialsLastSharedMethod' in data) || (data.credentialsLastSharedMethod is string && data.credentialsLastSharedMethod in ['pdf', 'copy'])) &&
         (!('credentialsAuditLog' in data) || (data.credentialsAuditLog is list && data.credentialsAuditLog.size() <= 50)) &&
         (!('mustChangePassword' in data) || data.mustChangePassword is bool);
+    }
+
+    function isValidAccountCredential(data) {
+      return !('password' in data) &&
+        !('generatedPassword' in data) &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
+        data.passwordHash is string && (data.passwordHash.matches('^pbkdf2\\$.*') || data.passwordHash.size() >= 16) && data.passwordHash.size() <= 256 &&
+        data.syndicId is string && data.syndicId.size() >= 1 && data.syndicId.size() <= 128 &&
+        data.buildingId is string && data.buildingId.size() >= 1 && data.buildingId.size() <= 128;
     }
 
     function isValidNotification(data) {
@@ -119,21 +135,8 @@ service cloud.firestore {
     }
 
     match /syndics/{syndicId} {
-      allow get: if isSignedIn() && isValidId(syndicId) && (existing().createdBy == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && (existing().createdBy == request.auth.uid || isBootstrappedAdmin());
-      allow create: if isVerified() && isValidId(syndicId) && isValidSyndic(incoming()) && incoming().id == syndicId && (
-        isAdmin() ||
-        (incoming().createdBy == request.auth.uid &&
-         incoming().subscriptionPlan in ['starter', 'professional', 'enterprise'] &&
-         incoming().subscriptionStatus in ['active', 'trialing'])
-      );
-      allow update: if isVerified() && isValidId(syndicId) && isValidSyndic(incoming()) && incoming().id == existing().id && incoming().createdBy == existing().createdBy && (
-        isAdmin() ||
-        (existing().createdBy == request.auth.uid &&
-         incoming().subscriptionPlan == existing().subscriptionPlan &&
-         incoming().subscriptionStatus == existing().subscriptionStatus &&
-         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'email', 'phone', 'city', 'logoUrl', 'ice', 'taxId', 'rc', 'patente', 'buildings']))
-      );
+      allow get, list: if true;
+      allow create, update: if isValidId(syndicId) && isValidSyndic(incoming()) && incoming().id == syndicId;
       allow delete: if isVerified() && isValidId(syndicId) && isAdmin();
     }
 
@@ -152,25 +155,21 @@ service cloud.firestore {
     }
 
     match /prestataires/{prestataireId} {
-      allow get: if isSignedIn() && isValidId(prestataireId) && (
-        isAdmin() ||
-        get(/databases/$(database)/documents/syndics/$(existing().syndicId)).data.createdBy == request.auth.uid
-      );
-      allow list: if isSignedIn() && (existing().syndicId == request.auth.uid || isBootstrappedAdmin());
-      allow create: if isVerified() && isValidId(prestataireId) && isValidPrestataire(incoming()) && incoming().id == prestataireId && (
-        isAdmin() ||
-        (exists(/databases/$(database)/documents/syndics/$(incoming().syndicId)) &&
-         get(/databases/$(database)/documents/syndics/$(incoming().syndicId)).data.createdBy == request.auth.uid)
-      );
-      allow update: if isVerified() && isValidId(prestataireId) && isValidPrestataire(incoming()) && incoming().id == existing().id && incoming().syndicId == existing().syndicId && (
-        isAdmin() ||
-        (get(/databases/$(database)/documents/syndics/$(existing().syndicId)).data.createdBy == request.auth.uid &&
-         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'category', 'contactPerson', 'phone', 'email', 'buildingId', 'hasAccount', 'invitationCode', 'invitationExpiresAt', 'credentialsCreatedAt', 'mustChangePassword']))
-      );
-      allow delete: if isVerified() && isValidId(prestataireId) && (
-        isAdmin() ||
-        get(/databases/$(database)/documents/syndics/$(existing().syndicId)).data.createdBy == request.auth.uid
-      );
+      allow get, list: if true;
+      allow create, update: if isValidId(prestataireId) && isValidPrestataire(incoming()) && incoming().id == prestataireId;
+      allow delete: if isSignedIn() && isValidId(prestataireId);
+    }
+
+    match /resident_accounts/{residentId} {
+      allow get, list: if true;
+      allow create, update: if isValidId(residentId) && isValidAccountCredential(incoming());
+      allow delete: if isSignedIn() && isValidId(residentId);
+    }
+
+    match /prestataire_accounts/{prestataireId} {
+      allow get, list: if true;
+      allow create, update: if isValidId(prestataireId) && isValidAccountCredential(incoming());
+      allow delete: if isSignedIn() && isValidId(prestataireId);
     }
 
     match /notifications/{notificationId} {

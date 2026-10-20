@@ -1809,7 +1809,10 @@ export const exportPrestataireCredentialsPDF = (
   doc.setFont('courier', 'bold');
   doc.setFontSize(12);
   doc.text(
-    prestataire.generatedPassword || prestataire.invitationToken || 'Syndik-PREST2026!',
+    prestataire.generatedPassword ||
+      prestataire.invitationToken ||
+      prestataire.invitationCode ||
+      '—',
     83,
     y + 38
   );

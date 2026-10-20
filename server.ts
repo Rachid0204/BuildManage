@@ -4,7 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
-import { hashPasswordSync } from './utils/security';
+import { hashPasswordSync, verifyPasswordSync } from './utils/security';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -296,6 +296,15 @@ function filterStoreForCaller(store: ServerStore, caller: AuthCallerContext): Re
   const syndics: any[] = Array.isArray(store.syndik_prod_syndics_v1)
     ? store.syndik_prod_syndics_v1
     : [];
+  const prestatairesList: any[] = Array.isArray(store.syndik_prod_prestataires_v1)
+    ? store.syndik_prod_prestataires_v1
+    : [];
+
+  const callerResId = caller.uid.replace(/^(user-res-|res-)/, '');
+  const callerPrestId = caller.uid.replace(/^(user-prest-|prov-)/, '');
+  const matchedCallerPrest = prestatairesList.find((p) => p?.id === callerPrestId);
+  const effectiveBuildingId = caller.buildingId || matchedCallerPrest?.buildingId;
+  const effectiveSyndicId = caller.syndicId || matchedCallerPrest?.syndicId;
 
   // Determine authorized building IDs for this caller
   const authorizedSyndics =
@@ -304,10 +313,14 @@ function filterStoreForCaller(store: ServerStore, caller: AuthCallerContext): Re
       : syndics.filter(
           (s) =>
             s.createdBy === caller.uid ||
-            (caller.syndicId && s.id === caller.syndicId) ||
-            (caller.buildingId &&
-              Array.isArray(s.buildings) &&
-              s.buildings.some((b: any) => b.id === caller.buildingId))
+            (effectiveSyndicId && s.id === effectiveSyndicId) ||
+            (Array.isArray(s.buildings) &&
+              s.buildings.some(
+                (b: any) =>
+                  (effectiveBuildingId && b.id === effectiveBuildingId) ||
+                  (Array.isArray(b.residents) &&
+                    b.residents.some((r: any) => r?.id === callerResId || r?.id === caller.uid))
+              ))
         );
 
   const authorizedBuildingIds = new Set<string>();
@@ -316,8 +329,8 @@ function filterStoreForCaller(store: ServerStore, caller: AuthCallerContext): Re
       if (b?.id) authorizedBuildingIds.add(b.id);
     }
   }
-  if (caller.buildingId) {
-    authorizedBuildingIds.add(caller.buildingId);
+  if (effectiveBuildingId) {
+    authorizedBuildingIds.add(effectiveBuildingId);
   }
 
   for (const [key, val] of Object.entries(store)) {
@@ -411,6 +424,414 @@ async function startServer() {
   // API Health check
   app.get('/api/health', (_req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  });
+
+  // Server-side authentication endpoint for Syndics, Residents (Email or CIN), and Providers (Prestataires)
+  // Allows unauthenticated clients (new browser, incognito, mobile) to verify credentials against sharedStore
+  app.post('/api/auth/login', (req, res) => {
+    const identifier = String(req.body?.identifier || req.body?.email || '')
+      .trim()
+      .toLowerCase();
+    const trimmedPass = String(req.body?.password || '').trim();
+
+    if (!identifier || !trimmedPass) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Veuillez saisir votre identifiant (email ou CIN) et votre mot de passe.',
+      });
+    }
+
+    const syndics: any[] = Array.isArray(sharedStore.syndik_prod_syndics_v1)
+      ? sharedStore.syndik_prod_syndics_v1
+      : [];
+    const residentAccounts: any[] = Array.isArray(sharedStore.syndik_prod_resident_accounts_v1)
+      ? sharedStore.syndik_prod_resident_accounts_v1
+      : [];
+    const prestataireAccounts: any[] = Array.isArray(
+      sharedStore.syndik_prod_prestataire_accounts_v1
+    )
+      ? sharedStore.syndik_prod_prestataire_accounts_v1
+      : [];
+    const prestataires: any[] = Array.isArray(sharedStore.syndik_prod_prestataires_v1)
+      ? sharedStore.syndik_prod_prestataires_v1
+      : [];
+    const registeredUsers: any[] = Array.isArray(sharedStore.syndik_prod_registered_users_v1)
+      ? sharedStore.syndik_prod_registered_users_v1
+      : [];
+
+    let foundAccountMatch = false;
+    let foundAccountRole: 'resident' | 'provider' | 'syndic' | null = null;
+
+    // 1. Check Resident Accounts & Building Residents (supports Email or Moroccan CIN)
+    let matchedResFromBuilding: { syndic: any; building: any; resident: any } | null = null;
+    for (const s of syndics) {
+      for (const b of s.buildings || []) {
+        const r = (b.residents || []).find(
+          (resItem: any) =>
+            resItem?.email?.trim().toLowerCase() === identifier ||
+            (resItem?.cin && resItem.cin.trim().toLowerCase() === identifier)
+        );
+        if (r) {
+          matchedResFromBuilding = { syndic: s, building: b, resident: r };
+          break;
+        }
+      }
+      if (matchedResFromBuilding) break;
+    }
+
+    const matchedResAccount = residentAccounts.find((a: any) => {
+      if (a?.email?.trim().toLowerCase() === identifier) return true;
+      if (a?.cin?.trim().toLowerCase() === identifier) return true;
+      if (
+        matchedResFromBuilding &&
+        (a?.residentId === matchedResFromBuilding.resident.id ||
+          a?.email?.trim().toLowerCase() ===
+            matchedResFromBuilding.resident.email?.trim().toLowerCase())
+      ) {
+        return true;
+      }
+      return false;
+    });
+
+    if (matchedResAccount || (matchedResFromBuilding && matchedResFromBuilding.resident.hasAccount)) {
+      foundAccountMatch = true;
+      foundAccountRole = 'resident';
+      const resObj = matchedResFromBuilding?.resident;
+      const accountEmail = (matchedResAccount?.email || resObj?.email || '').trim();
+      const accountEmailSalt = accountEmail.toLowerCase();
+      const storedSecret = matchedResAccount?.passwordHash || matchedResAccount?.password;
+      const mustChange =
+        matchedResAccount?.mustChangePassword ?? resObj?.mustChangePassword ?? true;
+
+      let verified = verifyPasswordSync(trimmedPass, storedSecret, accountEmailSalt);
+      if (
+        !verified &&
+        mustChange !== false &&
+        resObj &&
+        ((resObj.invitationCode && resObj.invitationCode.trim() === trimmedPass) ||
+          (resObj.invitationToken && resObj.invitationToken.trim() === trimmedPass))
+      ) {
+        verified = true;
+      }
+
+      if (verified) {
+        const resolvedResId = matchedResAccount?.residentId || resObj?.id;
+        let buildingName = matchedResFromBuilding?.building?.name || 'Résidence';
+        let resolvedBuildingId =
+          matchedResAccount?.buildingId || matchedResFromBuilding?.building?.id;
+        let resolvedSyndicId =
+          matchedResAccount?.syndicId ||
+          matchedResFromBuilding?.syndic?.id ||
+          resObj?.syndicId;
+        const resolvedAptId = matchedResAccount?.apartmentId || resObj?.apartmentId;
+        let apartmentNumber = resolvedAptId || '';
+
+        for (const s of syndics) {
+          const bld = (s.buildings || []).find(
+            (b: any) =>
+              b.id === resolvedBuildingId ||
+              (b.residents || []).some((r: any) => r.id === resolvedResId)
+          );
+          if (bld) {
+            buildingName = bld.name;
+            resolvedBuildingId = bld.id;
+            resolvedSyndicId = s.id;
+            const apt = (bld.apartments || []).find(
+              (a: any) =>
+                a.id === resolvedAptId ||
+                a.ownerId === resolvedResId ||
+                a.tenantId === resolvedResId
+            );
+            if (apt) apartmentNumber = apt.number;
+            break;
+          }
+        }
+
+        const profile = {
+          uid: `user-res-${resolvedResId}`,
+          email: accountEmail,
+          displayName: matchedResAccount?.name || resObj?.name || 'Résident',
+          role: 'resident' as const,
+          syndicId: resolvedSyndicId,
+          buildingId: resolvedBuildingId,
+          buildingName,
+          apartmentId: resolvedAptId,
+          apartmentNumber,
+          residentId: resolvedResId,
+          isOwner: matchedResAccount?.isOwner ?? resObj?.isOwner ?? true,
+          cin: matchedResAccount?.cin || resObj?.cin,
+          phone: matchedResAccount?.phone || resObj?.phone,
+          mustChangePassword: mustChange,
+        };
+        return res.json({ ok: true, profile });
+      }
+    }
+
+    // 2. Check Prestataire Accounts & Prestataire Directory (by Email)
+    const matchedPrestObj = prestataires.find(
+      (p: any) => p?.email?.trim().toLowerCase() === identifier
+    );
+    const matchedPrestAccount = prestataireAccounts.find(
+      (a: any) =>
+        a?.email?.trim().toLowerCase() === identifier ||
+        (matchedPrestObj && a?.prestataireId === matchedPrestObj.id)
+    );
+
+    if (
+      matchedPrestAccount ||
+      (matchedPrestObj &&
+        (matchedPrestObj.hasAccount ||
+          matchedPrestObj.invitationToken ||
+          matchedPrestObj.invitationCode))
+    ) {
+      foundAccountMatch = true;
+      foundAccountRole = 'provider';
+      const accountEmail = (matchedPrestAccount?.email || matchedPrestObj?.email || '').trim();
+      const accountEmailSalt = accountEmail.toLowerCase();
+      const storedSecret = matchedPrestAccount?.passwordHash || matchedPrestAccount?.password;
+      const mustChange =
+        matchedPrestAccount?.mustChangePassword ?? matchedPrestObj?.mustChangePassword ?? true;
+
+      let verified = verifyPasswordSync(trimmedPass, storedSecret, accountEmailSalt);
+      if (
+        !verified &&
+        mustChange !== false &&
+        matchedPrestObj &&
+        ((matchedPrestObj.invitationToken &&
+          matchedPrestObj.invitationToken.trim() === trimmedPass) ||
+          (matchedPrestObj.invitationCode &&
+            matchedPrestObj.invitationCode.trim() === trimmedPass))
+      ) {
+        verified = true;
+      }
+
+      if (verified) {
+        const resolvedPrestId = matchedPrestAccount?.prestataireId || matchedPrestObj?.id;
+        const resolvedBuildingId =
+          matchedPrestAccount?.buildingId || matchedPrestObj?.buildingId;
+        let resolvedSyndicId = matchedPrestAccount?.syndicId || matchedPrestObj?.syndicId;
+        let buildingName = 'Résidence';
+
+        for (const s of syndics) {
+          const bld = (s.buildings || []).find((b: any) => b.id === resolvedBuildingId);
+          if (bld) {
+            buildingName = bld.name;
+            resolvedSyndicId = s.id;
+            break;
+          }
+        }
+        if (!resolvedSyndicId && syndics.length > 0) {
+          resolvedSyndicId = syndics[0].id;
+        }
+
+        const category = matchedPrestAccount?.category || matchedPrestObj?.category || 'other';
+        const profile = {
+          uid: `user-prest-${resolvedPrestId}`,
+          email: accountEmail,
+          displayName: matchedPrestAccount?.name || matchedPrestObj?.name || 'Prestataire',
+          role: 'provider' as const,
+          syndicId: resolvedSyndicId,
+          buildingId: resolvedBuildingId,
+          buildingName,
+          prestataireId: resolvedPrestId,
+          prestataireCategory: category,
+          providerCategory: category,
+          phone: matchedPrestObj?.phone,
+          mustChangePassword: mustChange,
+        };
+        return res.json({ ok: true, profile });
+      }
+    }
+
+    // 3. Check Registered Users (Syndic / Admin / Resident / Provider)
+    const matchedReg = registeredUsers.find(
+      (u: any) =>
+        u?.email?.trim().toLowerCase() === identifier ||
+        u?.profile?.cin?.trim().toLowerCase() === identifier
+    );
+
+    if (matchedReg) {
+      foundAccountMatch = true;
+      const regEmailSalt = String(matchedReg.email || '').trim().toLowerCase();
+      const storedSecret = matchedReg.passwordHash || matchedReg.password;
+      if (verifyPasswordSync(trimmedPass, storedSecret, regEmailSalt)) {
+        const baseProfile = matchedReg.profile || {
+          uid: matchedReg.uid,
+          email: matchedReg.email,
+          displayName: matchedReg.displayName || regEmailSalt.split('@')[0],
+          role: matchedReg.role || 'syndic',
+          syndicId: matchedReg.syndicId,
+          buildingId: matchedReg.buildingId,
+        };
+        const enrichedProfile = { ...baseProfile };
+        if (enrichedProfile.role === 'resident') {
+          const cleanResId =
+            enrichedProfile.residentId ||
+            String(enrichedProfile.uid || '').replace(/^(user-res-|res-)/, '');
+          if (cleanResId) enrichedProfile.residentId = cleanResId;
+          if (matchedResFromBuilding) {
+            enrichedProfile.residentId =
+              enrichedProfile.residentId || matchedResFromBuilding.resident.id;
+            enrichedProfile.buildingId =
+              enrichedProfile.buildingId || matchedResFromBuilding.building.id;
+            enrichedProfile.buildingName =
+              enrichedProfile.buildingName || matchedResFromBuilding.building.name;
+            enrichedProfile.syndicId =
+              enrichedProfile.syndicId || matchedResFromBuilding.syndic.id;
+            enrichedProfile.apartmentId =
+              enrichedProfile.apartmentId || matchedResFromBuilding.resident.apartmentId;
+          }
+        } else if (enrichedProfile.role === 'provider') {
+          const cleanPrestId =
+            enrichedProfile.prestataireId ||
+            String(enrichedProfile.uid || '').replace(/^(user-prest-|prov-)/, '');
+          if (cleanPrestId) enrichedProfile.prestataireId = cleanPrestId;
+          if (matchedPrestObj) {
+            enrichedProfile.prestataireId =
+              enrichedProfile.prestataireId || matchedPrestObj.id;
+            enrichedProfile.buildingId =
+              enrichedProfile.buildingId || matchedPrestObj.buildingId;
+            enrichedProfile.syndicId =
+              enrichedProfile.syndicId || matchedPrestObj.syndicId;
+            enrichedProfile.prestataireCategory =
+              enrichedProfile.prestataireCategory ||
+              enrichedProfile.providerCategory ||
+              matchedPrestObj.category;
+          }
+        }
+        return res.json({ ok: true, profile: enrichedProfile });
+      }
+    }
+
+    if (foundAccountMatch) {
+      const errorMsg =
+        foundAccountRole === 'resident'
+          ? 'Identifiants résident incorrects. Veuillez vérifier votre mot de passe sur votre fiche d’accès.'
+          : foundAccountRole === 'provider'
+          ? 'Identifiants prestataire incorrects. Veuillez vérifier votre mot de passe sur votre fiche d’accès.'
+          : 'Identifiants incorrects. Veuillez vérifier votre email et votre mot de passe.';
+      return res.status(401).json({ ok: false, error: errorMsg });
+    }
+
+    return res.status(404).json({ ok: false, notFound: true });
+  });
+
+  // Server-side password update endpoint to atomically update Resident, Provider, and Registered User records
+  app.post('/api/auth/change-password', (req, res) => {
+    const caller = extractAndVerifyCaller(req);
+    if (!caller) {
+      return res.status(401).json({ ok: false, error: 'Unauthorized: authentication required' });
+    }
+
+    const newPassword = String(req.body?.newPassword || '').trim();
+    const emailNorm = String(req.body?.email || '').trim().toLowerCase();
+    const residentId =
+      String(req.body?.residentId || '').trim() ||
+      caller.uid.replace(/^(user-res-|res-)/, '');
+    const prestataireId =
+      String(req.body?.prestataireId || '').trim() ||
+      caller.uid.replace(/^(user-prest-|prov-)/, '');
+
+    if (!newPassword || newPassword.length < 6 || !emailNorm) {
+      return res.status(400).json({ ok: false, error: 'Invalid password update parameters' });
+    }
+
+    const newPasswordHash = hashPasswordSync(newPassword, emailNorm);
+
+    if (caller.role === 'resident') {
+      const resAccounts: any[] = Array.isArray(sharedStore.syndik_prod_resident_accounts_v1)
+        ? sharedStore.syndik_prod_resident_accounts_v1
+        : [];
+      sharedStore.syndik_prod_resident_accounts_v1 = resAccounts.map((a: any) => {
+        if (
+          a?.residentId === residentId ||
+          (emailNorm && a?.email?.trim().toLowerCase() === emailNorm)
+        ) {
+          const { password: _pw, ...rest } = a;
+          return { ...rest, passwordHash: newPasswordHash, mustChangePassword: false };
+        }
+        return a;
+      });
+
+      const syndics: any[] = Array.isArray(sharedStore.syndik_prod_syndics_v1)
+        ? sharedStore.syndik_prod_syndics_v1
+        : [];
+      for (const s of syndics) {
+        for (const bld of s.buildings || []) {
+          for (let i = 0; i < (bld.residents || []).length; i++) {
+            const r = bld.residents[i];
+            if (
+              r?.id === residentId ||
+              (emailNorm && r?.email?.trim().toLowerCase() === emailNorm)
+            ) {
+              const { generatedPassword: _gp, ...cleanRes } = r;
+              bld.residents[i] = {
+                ...cleanRes,
+                invitationStatus: 'accepted',
+                mustChangePassword: false,
+              };
+            }
+          }
+        }
+      }
+      sharedStore.syndik_prod_syndics_v1 = syndics;
+    }
+
+    if (caller.role === 'provider') {
+      const prestAccounts: any[] = Array.isArray(sharedStore.syndik_prod_prestataire_accounts_v1)
+        ? sharedStore.syndik_prod_prestataire_accounts_v1
+        : [];
+      sharedStore.syndik_prod_prestataire_accounts_v1 = prestAccounts.map((a: any) => {
+        if (
+          a?.prestataireId === prestataireId ||
+          (emailNorm && a?.email?.trim().toLowerCase() === emailNorm)
+        ) {
+          const { password: _pw, ...rest } = a;
+          return { ...rest, passwordHash: newPasswordHash, mustChangePassword: false };
+        }
+        return a;
+      });
+
+      const prestList: any[] = Array.isArray(sharedStore.syndik_prod_prestataires_v1)
+        ? sharedStore.syndik_prod_prestataires_v1
+        : [];
+      sharedStore.syndik_prod_prestataires_v1 = prestList.map((p: any) => {
+        if (
+          p?.id === prestataireId ||
+          (emailNorm && p?.email?.trim().toLowerCase() === emailNorm)
+        ) {
+          const { generatedPassword: _gp, ...cleanPrest } = p;
+          return {
+            ...cleanPrest,
+            invitationStatus: 'accepted',
+            mustChangePassword: false,
+          };
+        }
+        return p;
+      });
+    }
+
+    const regUsers: any[] = Array.isArray(sharedStore.syndik_prod_registered_users_v1)
+      ? sharedStore.syndik_prod_registered_users_v1
+      : [];
+    sharedStore.syndik_prod_registered_users_v1 = regUsers.map((u: any) => {
+      if (
+        u?.uid === caller.uid ||
+        u?.profile?.uid === caller.uid ||
+        (emailNorm && u?.email?.trim().toLowerCase() === emailNorm)
+      ) {
+        const { password: _pw, ...rest } = u;
+        return {
+          ...rest,
+          passwordHash: newPasswordHash,
+          profile: u.profile ? { ...u.profile, mustChangePassword: false } : u.profile,
+        };
+      }
+      return u;
+    });
+
+    savePersistedState(sharedStore);
+    return res.json({ ok: true, revision: sharedStore.__revision });
   });
 
   // Audit Item 02: Authenticated shared-state GET with ETag & sinceRevision delta sync

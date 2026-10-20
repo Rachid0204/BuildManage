@@ -66,7 +66,10 @@ const PrestataireCredentialsModal: React.FC<{
   if (!prestataire) return null;
 
   const password =
-    prestataire.generatedPassword || prestataire.invitationToken || 'Syndik-PREST2026!';
+    prestataire.generatedPassword ||
+    prestataire.invitationToken ||
+    prestataire.invitationCode ||
+    '';
   const portalUrl =
     typeof window !== 'undefined' ? `${window.location.origin}/login` : 'https://syndik.ma/login';
 
@@ -281,15 +284,20 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
     prestataires.find((p) => p.id === credentialPrestataireId) || null;
 
   const syncProviderToAuthRegistry = (saved: Prestataire) => {
-    if (saved.email && saved.generatedPassword) {
-      registerOrUpdateUserCredentials(saved.email, saved.generatedPassword, {
-        uid: `prov-${saved.id}`,
+    const secret = saved.generatedPassword || saved.invitationToken || saved.invitationCode;
+    if (saved.email && secret) {
+      registerOrUpdateUserCredentials(saved.email, secret, {
+        uid: `user-prest-${saved.id}`,
         email: saved.email.trim().toLowerCase(),
         displayName: saved.name,
         role: 'provider',
-        syndicId: saved.syndicId,
-        buildingId: saved.buildingId,
+        syndicId: saved.syndicId || building.syndicId,
+        buildingId: saved.buildingId || building.id,
+        buildingName: building.name,
+        prestataireId: saved.id,
+        prestataireCategory: saved.category,
         providerCategory: saved.category,
+        phone: saved.phone,
         mustChangePassword: saved.mustChangePassword ?? true,
       });
     }
@@ -307,7 +315,11 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
       queryClient.invalidateQueries({ queryKey: ['prestataires', building.id] });
       setIsModalOpen(false);
       resetForm();
-      if (saved && saved.hasAccount && saved.generatedPassword) {
+      if (
+        saved &&
+        saved.hasAccount &&
+        (saved.generatedPassword || saved.invitationToken || saved.invitationCode)
+      ) {
         syncProviderToAuthRegistry(saved);
         if (variables.shouldGenerate) {
           setCredentialPrestataireId(saved.id);
@@ -370,7 +382,7 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
   };
 
   const handleManageCredentials = (p: Prestataire) => {
-    if (p.hasAccount && (p.generatedPassword || p.invitationToken)) {
+    if (p.hasAccount && (p.generatedPassword || p.invitationToken || p.invitationCode)) {
       setCredentialPrestataireId(p.id);
     } else {
       if (!p.email || !p.email.includes('@')) {
@@ -433,7 +445,14 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
       reviews: editingPrestataire?.reviews || [],
       hasAccount: editingPrestataire?.hasAccount,
       generatedPassword: editingPrestataire?.generatedPassword,
+      invitationToken: editingPrestataire?.invitationToken,
+      invitationCode: editingPrestataire?.invitationCode,
+      invitationStatus: editingPrestataire?.invitationStatus,
+      invitationExpiresAt: editingPrestataire?.invitationExpiresAt,
       credentialsCreatedAt: editingPrestataire?.credentialsCreatedAt,
+      credentialsSharedAt: editingPrestataire?.credentialsSharedAt,
+      credentialsLastSharedMethod: editingPrestataire?.credentialsLastSharedMethod,
+      credentialsAuditLog: editingPrestataire?.credentialsAuditLog,
       mustChangePassword: editingPrestataire?.mustChangePassword,
     };
 

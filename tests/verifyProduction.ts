@@ -59,6 +59,10 @@ import {
   createAssembleeGenerale,
   castResidentAGVote,
   generateChargesFromAGResolution,
+  regenerateResidentCredentials,
+  updateResident,
+  savePrestataire,
+  regeneratePrestataireCredentials,
   STORAGE_KEYS,
 } from '../firebase/services';
 import type { Syndic, UserProfile } from '../types';
@@ -476,6 +480,77 @@ async function runVerification() {
     `Expected 1 exact-match proof batch-approved for 1000 MAD, got ${batchApproved.approvedCount}`
   );
   console.log('✅ [Phase 3/4] AG budget-to-charges allocation, CSV bank reconciliation & batch proof approval passed.');
+
+  // 8c. Resident & Prestataire Credential Generation, Regeneration, Edit Preservation & Registry Sync
+  const regRes = await regenerateResidentCredentials(resident1.id);
+  const resInvitePass = regRes.invitationCode || regRes.invitationToken || '';
+  assert(Boolean(resInvitePass), 'Regenerated resident must have a valid invitationCode/invitationToken');
+  const editedRes = await updateResident({
+    ...regRes,
+    cin: 'BK987654',
+    phone: '0611223344',
+  });
+  assert(
+    editedRes.invitationCode === resInvitePass && editedRes.cin === 'BK987654',
+    'Editing a resident must preserve invitationCode and update CIN'
+  );
+  const resAccounts = JSON.parse(localStorage.getItem(STORAGE_KEYS.RESIDENT_ACCOUNTS) || '[]');
+  const matchedResAcc = resAccounts.find((a: any) => a.residentId === resident1.id);
+  assert(
+    matchedResAcc &&
+      matchedResAcc.cin === 'BK987654' &&
+      verifyPasswordSync(resInvitePass, matchedResAcc.passwordHash, resident1.email.toLowerCase()),
+    'Resident account hash must verify against invitationCode and carry updated CIN'
+  );
+
+  const createdPrest = await savePrestataire(
+    {
+      id: 'prest-test-1',
+      syndicId: '',
+      buildingId: createdBld.id,
+      name: 'Atlas Ascenseurs SARL',
+      contactPerson: 'Hassan',
+      category: 'elevator',
+      phone: '0522001122',
+      email: 'contact@atlas-ascenseurs.ma',
+      rating: 4.9,
+      active: true,
+    },
+    true
+  );
+  const prestPass = createdPrest.generatedPassword || createdPrest.invitationToken || '';
+  assert(
+    Boolean(prestPass) && createdPrest.syndicId === syndic.id,
+    'Saved prestataire with credentials must have temporary password and resolved syndicId'
+  );
+  const regenPrest = await regeneratePrestataireCredentials(createdPrest.id);
+  const regenPrestPass = regenPrest.generatedPassword || regenPrest.invitationToken || '';
+  assert(
+    Boolean(regenPrestPass) && regenPrestPass !== prestPass,
+    'Regenerated prestataire must receive a new temporary password'
+  );
+  const prestAccounts = JSON.parse(localStorage.getItem(STORAGE_KEYS.PRESTATAIRE_ACCOUNTS) || '[]');
+  const matchedPrestAcc = prestAccounts.find((a: any) => a.prestataireId === createdPrest.id);
+  assert(
+    matchedPrestAcc &&
+      matchedPrestAcc.syndicId === syndic.id &&
+      verifyPasswordSync(
+        regenPrestPass,
+        matchedPrestAcc.passwordHash,
+        'contact@atlas-ascenseurs.ma'
+      ),
+    'Prestataire account hash must verify against regenerated password'
+  );
+  const regUsers = JSON.parse(localStorage.getItem(STORAGE_KEYS.REGISTERED_USERS) || '[]');
+  const syncedResUser = regUsers.find((u: any) => u.profile?.residentId === resident1.id);
+  const syncedPrestUser = regUsers.find((u: any) => u.profile?.prestataireId === createdPrest.id);
+  assert(
+    syncedResUser?.profile?.residentId === resident1.id &&
+      syncedPrestUser?.profile?.prestataireId === createdPrest.id &&
+      syncedPrestUser?.profile?.prestataireCategory === 'elevator',
+    'REGISTERED_USERS must stay synchronized with canonical residentId and prestataireId/prestataireCategory'
+  );
+  console.log('✅ [Auth] Resident & Prestataire credential generation, regeneration, edit preservation & registry sync passed.');
 
   // 9. Building Deletion Tombstones (Audit Item 18)
   await deleteBuilding(createdBld.id);

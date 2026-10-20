@@ -140,14 +140,18 @@ const ProviderPortal: React.FC = () => {
 
   const requests = React.useMemo(() => {
     if (!userProfile) return [];
+    const effectivePrestId =
+      userProfile.prestataireId || userProfile.uid.replace(/^(user-prest-|prov-)/, '');
+    const effectiveCategory =
+      userProfile.prestataireCategory || userProfile.providerCategory;
     return rawRequests.filter(
       (r) =>
-        (userProfile.prestataireId && r.prestataireId === userProfile.prestataireId) ||
+        (effectivePrestId && r.prestataireId === effectivePrestId) ||
         (userProfile.displayName && r.assignedTo === userProfile.displayName) ||
         (!r.prestataireId &&
           !r.assignedTo &&
-          userProfile.prestataireCategory &&
-          r.category === userProfile.prestataireCategory)
+          effectiveCategory &&
+          r.category === effectiveCategory)
     );
   }, [rawRequests, userProfile]);
 
@@ -399,6 +403,8 @@ const SyndicDataProvider: React.FC<{ children: React.ReactNode }> = ({
       }
 
       if (!matchedSyndic && userProfile.role === 'resident') {
+        const cleanResId =
+          userProfile.residentId || userProfile.uid.replace(/^(user-res-|res-)/, '');
         matchedSyndic = syndics.find((s) =>
           s.buildings.some(
             (b) =>
@@ -406,6 +412,7 @@ const SyndicDataProvider: React.FC<{ children: React.ReactNode }> = ({
               b.residents.some(
                 (r) =>
                   r.id === userProfile.uid ||
+                  r.id === cleanResId ||
                   (normalizedEmail && r.email.trim().toLowerCase() === normalizedEmail)
               )
           )
@@ -413,9 +420,10 @@ const SyndicDataProvider: React.FC<{ children: React.ReactNode }> = ({
       }
 
       if (!matchedSyndic && userProfile.role === 'provider') {
-        matchedSyndic = syndics.find((s) =>
-          s.buildings.some((b) => userProfile.buildingId && b.id === userProfile.buildingId)
-        );
+        matchedSyndic =
+          syndics.find((s) =>
+            s.buildings.some((b) => userProfile.buildingId && b.id === userProfile.buildingId)
+          ) || (userProfile.prestataireId || userProfile.buildingId ? syndics[0] : undefined);
       }
 
       if (matchedSyndic) {
@@ -722,16 +730,22 @@ const AppContent: React.FC = () => {
   const navigate = useNavigate();
 
   const syncResidentToAuthRegistry = (res: Resident) => {
-    const inviteSecret = res.invitationCode || res.generatedPassword;
+    const inviteSecret = res.invitationCode || res.invitationToken || res.generatedPassword;
     if (res.email && inviteSecret) {
+      const aptNum = selectedBuilding?.apartments.find((a) => a.id === res.apartmentId)?.number;
       registerOrUpdateUserCredentials(res.email, inviteSecret, {
-        uid: `res-${res.id}`,
+        uid: `user-res-${res.id}`,
         email: res.email.trim().toLowerCase(),
         displayName: res.name,
         role: 'resident',
         syndicId: res.syndicId,
         buildingId: res.buildingId,
+        buildingName: selectedBuilding?.name,
         apartmentId: res.apartmentId,
+        apartmentNumber: aptNum,
+        residentId: res.id,
+        cin: res.cin,
+        phone: res.phone,
         isOwner: res.isOwner,
         mustChangePassword: res.mustChangePassword ?? true,
       });
