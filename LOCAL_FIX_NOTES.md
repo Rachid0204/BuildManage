@@ -1,44 +1,44 @@
-# Notes Techniques des Correctifs Appliqués (`LOCAL_FIX_NOTES.md`)
+# Authorization and payment repairs
 
-Ce document récapitule l'ensemble des 30 points de l'audit corrigés dans le code source :
+Base: 7600bb68b0f6798e7bf38d25c9b94cf3d98227b1.
+Branch: fix/authorization-and-payment-boundaries.
 
-## Phase 1 — Sécurité & Isolation Multi-Tenant (P0 : Points 01 à 09)
-- **[01 & 03] Authentification, Sessions Signées & Codes d'Invitation** :
-  - Hachage systématique des mots de passe et codes d'invitation (`hashPasswordSync` / `verifyPasswordSync` dans `utils/security.ts`).
-  - Suppression complète du stockage des mots de passe en clair (`password`, `generatedPassword`) dans `localStorage`, les entités `Resident`/`Prestataire`, et `/api/shared-state`.
-  - Signature d'intégrité de la session locale (`createSignedSessionEnvelope` / `verifySignedSessionEnvelope`) empêchant toute élévation de privilèges par modification de `role` ou `syndicId`.
-  - Jetons d'invitation à durée limitée (`invitationCode` format `INV-XXXX-MA`, expiration à 7 jours `invitationExpiresAt`) requis pour l'auto-inscription des résidents et prestataires.
-- **[02 & 25] Sécurisation de `/api/shared-state` (`server.ts`)** :
-  - Authentification obligatoire par en-têtes vérifiés (`x-syndic-uid`, `x-syndic-role`, `x-syndic-id`, `x-building-id`).
-  - Filtrage multi-tenant (`filterStateForUser`) sur `GET /api/shared-state` et assainissement (`sanitizeIncomingValue`) sur `PUT /api/shared-state`.
-  - Limitation de débit (rate-limiting), limite de taille JSON (`2mb`), et écriture atomique via fichier temporaire.
-- **[04 & 05] Règles Firestore & Storage (`firestore.rules`, `storage.rules`)** :
-  - Alignement complet des collections et chemins avec le modèle applicatif, validation stricte par schémas (`isValidSyndic`, `isValidUserProfile`, `isValidPrestataire`, `isValidNotification`), et déploiement sur la base `ai-studio-immogest-6d16b790-183d-49fd-9d4f-086d99dc2be3`.
-- **[06 & 08] Cloud Functions & CMI (`functions/index.ts`, `components/views/ResidentCharges.tsx`)** :
-  - Contrôle RBAC sur `generateMonthlyCharges` et `recordTransaction` (vérification de l'appartenance de l'immeuble au syndic appelant).
-  - Suppression des secrets CMI factices (`MOCK_STORE_KEY` / `600000000`) et désactivation par défaut du paiement CB tant que `CMI_ENABLED=true` n'est pas activé côté serveur.
-- **[07] Proxy Serveur Gemini IA (`server.ts`, `services/geminiService.ts`)** :
-  - La clé `GEMINI_API_KEY` n'est plus jamais injectée dans le bundle client (`vite.config.ts`) ; les annonces IA passent exclusivement par `POST /api/ai/announcement`.
-- **[09] Essai Syndic & Quotas d'Immeubles (`contexts/AuthContext.tsx`, `firebase/services.ts`)** :
-  - Création automatique d'un cabinet Syndic en essai 30 jours à l'inscription et application stricte des plafonds d'immeubles par forfait (`starter: 1`, `professional: 5`, `enterprise: 999`).
+## Implemented scope
 
-## Phase 2 — Cohérence des Données & Comptabilité Loi 18-00 / 106-12 (P1 : Points 10 à 20)
-- **[10 & 11] Unification de l'Identifiant de Base Firestore & Flag Mock** :
-  - Alignement de `FIRESTORE_DATABASE_ID` (`ai-studio-immogest-6d16b790-183d-49fd-9d4f-086d99dc2be3`) et flag unique `VITE_USE_MOCK_DATA` entre `firebase/config.ts`, `firebase/services.ts`, `firebase.json` et `functions/index.ts`.
-- **[12] Idempotence des Appels de Fonds (`generateMonthlyCharges`)** :
-  - Clé déterministe `periodKey` (`YYYY-MM`) empêchant toute double facturation pour un même lot et une même période.
-- **[13] Idempotence de Validation des Justificatifs & Paiements Partiels (`reviewPaymentProof`)** :
-  - Vérification de l'état `pending`, identifiant de transaction déterministe `trx-proof-${proofId}`, et suivi du cumul payé (`amountPaid`) pour les règlements partiels.
-- **[14] Génération de Quittances Sans Double Écriture (`generateQuittanceForCharge`)** :
-  - Émission et réédition de quittances en lecture seule vis-à-vis du grand livre (`addTransactionToLedger: false`).
-- **[15 & 16] Calculs au Centime & Fonds de Réserve (`utils/security.ts`, `firebase/services.ts`, `components/views/Financials.tsx`)** :
-  - Répartition exacte au centime (`allocateBudgetInCents`, `splitReserveFundInCents`) garantissant que la somme des quotes-parts égale 100 % du budget.
-  - Utilisation du taux configuré sur l'immeuble (`reserveFundPercentage`, défaut 5 % Loi 106-12) et préservation des soldes à `0 MAD` via `??`.
-- **[18 & 19] Tombstones de Suppression & Documents Durables** :
-  - Persistance des identifiants supprimés (`syndik_deleted_ids_v1`) pour éviter la réapparition des entités mock supprimées, et encodage Data URL durable pour les archives documentaires (`uploadDocument`).
-- **[20] Assemblée Générale & Quorum Loi 18-00 (`castResidentAGVote`)** :
-  - Vérification de l'ouverture du scrutin, de la présence/représentation sur la feuille de présence, et calcul du poids de vote à partir des tantièmes officiels du lot.
+- Removed backend authentication by public client signatures. Server-issued sessions resolve current membership; Firebase tokens use Admin SDK verification and a server session exchange. Login/profile restoration no longer grants backend identity from local password comparisons or arbitrary local profiles.
+- Registration generates account/cabinet IDs and the 30-day trial on the server. It cannot join an existing cabinet by submitting its ID. Existing invited residents/providers use their invitation login; new public resident/provider accounts remain unassigned. Initial building setup remains supported through validated registration fields.
+- Rejected inconsistent role/UID/tenant fields and unauthorized membership changes in registered-user writes. Cabinet ownership and subscription fields cannot be changed by a non-admin snapshot write. Restored verified-email requirements for the bootstrap Firestore admin rule.
+- Removed resident whole-meeting writes. Added an authenticated vote operation with authoritative ownership, lot, attendance, weight and result calculation. Residents cannot submit another resident's vote or replace meeting totals. Existing quorum/majority and remote-owner check-in policies are retained.
+- Kept resident financial records scoped to the billed resident. Resident proof submissions must be pending, owned by the caller and within the charge balance; review belongs to the manager.
+- Matched CSV lot identifiers at token boundaries and required a single eligible match. Ambiguous rows stay unmatched. Debit, amount and bank-reference replay protections remain.
+- Validated payer/lot/charge relationships and remaining balance before proof approval. Invalid approvals do not first mark proofs approved.
+- Added stable manual payment identities, conflict detection and missing-receipt recovery. A repeated 40 MAD payment stays at 40; an intentional next payment uses a new reference/operation ID.
+- Reconciled manual/proof payments with an existing invoice, claimed charges during invoice creation, and used stored invoice state for allocations. Invoice payments share the configured reserve split.
+- Read-only receipt creation requires an existing paid amount and never changes accounting. The manual form retains an operation ID, displays the configured reserve rate and surfaces payment errors.
+- Password-change UI waits for server success and cannot silently complete through a local credential fallback.
 
-## Phase 3 — Qualité TypeScript, CI/CD & Documentation (P2 : Points 21 à 30)
-- **[21 & 22] Typage & Compilation** : Zéro erreur sur `npm run typecheck`, `npm run lint`, `npm run build:functions`, et `npm run build`.
-- **[23, 28, 29, 30] Pipeline CI/CD & Lockfile Unique** : Suppression de `bun.lock`, utilisation de `npm ci` dans `.github/workflows/deploy.yml`, et documentation complète dans `README.md` et `.env.example`.
+## Verification
+
+Run from a normal clean checkout:
+
+    npm ci
+    npm run check:local
+
+check:local performs frontend/Functions type checks, Firestore rules lint, the existing service suite, new payment boundary tests, actual Express HTTP authorization tests, Functions compilation and frontend build. Tests use synthetic memory/temp stores and block external network calls. Production credentials are not required.
+
+HTTP tests cover arbitrary/known-profile forged sessions, registration claiming another cabinet, conflicting roles, cross-account password changes, private finance scope, resident meeting overwrite, scoped voting, proof review, protected entitlements and private file delivery.
+
+Payment tests cover exact lot 1/10 matching, debit/excess/replay handling, partial payment retries, conflicting references, overpayments, wrong payer, receipt recovery, stored invoice authority, unique charge linking, reserve reconciliation and proof/invoice updates.
+
+The previous service fixtures were corrected to assign a real owner before paying the second lot and to reject a document for an unpaid charge. These strengthen the business assertions rather than bypassing validation.
+
+## Limits and deployment follow-up
+
+This is a scoped repair batch, not a claim that all original audit findings are closed.
+
+- The active financial engine still uses local/shared-state updates and Firestore mirroring. Multi-device financial updates are not an atomic canonical database transaction; migration, reconciliation and concurrent/reversal workflows remain required.
+- The existing legacy password hashing scheme remains for compatibility. Moving all credentials to supported Auth/password storage and auditing previously created privileged records require a separate migration.
+- Live Firebase/Google sign-in, deployed rules, email, gateways, AI, browser accessibility and staging deployment were not exercised by these isolated checks.
+- Clean installation against the committed lockfile and the CI Node runtime require an environment with registry access. Local validation used the dependencies available in the review environment.
+- Configure a stable SYNDIK_SERVER_SECRET for a deployed server session lifecycle. Without one, the server uses a process-random secret. SYNDIK_DATA_DIR must refer to durable storage when the backend's local JSON/file persistence is used in deployment. Tests override it with disposable temporary storage.
+- CMI remains disabled. No production data, secrets, deployment or customer notification is modified by running the checks.

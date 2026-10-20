@@ -158,6 +158,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
   // Quittance Generator State (Loi 18-00 & Loi 106-12)
   const [isQuittanceModalOpen, setIsQuittanceModalOpen] = useState(false);
   const [selectedQuittanceForPreview, setSelectedQuittanceForPreview] = useState<Quittance | null>(null);
+  const [quittancePaymentId, setQuittancePaymentId] = useState(() => crypto.randomUUID());
   const [quittanceChargeId, setQuittanceChargeId] = useState('');
   const [quittanceApartmentId, setQuittanceApartmentId] = useState('');
   const [quittanceResidentId, setQuittanceResidentId] = useState('');
@@ -167,7 +168,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
   );
   const [quittanceAmount, setQuittanceAmount] = useState('');
   const [quittanceReserveRatio, setQuittanceReserveRatio] = useState(
-    building?.reserveFundPercentage ?? 5
+    building?.reserveFundPercentage ?? building?.reserveFundRate ?? 5
   );
   const [quittancePaymentMethod, setQuittancePaymentMethod] = useState<PaymentMethod>('virement');
   const [quittanceBankName, setQuittanceBankName] = useState(building.bankName || 'Attijariwafa Bank');
@@ -264,12 +265,13 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
   const openQuittanceModalForCharge = (charge: Charge) => {
     const res = building.residents.find((r) => r.id === charge.residentId);
 
+    setQuittancePaymentId(crypto.randomUUID());
     setQuittanceChargeId(charge.id);
     setQuittanceApartmentId(charge.apartmentId);
     setQuittanceResidentId(charge.residentId);
     setQuittanceResidentCin(res?.cin || 'AB123456');
     setQuittancePeriod(charge.period || 'Octobre 2026');
-    setQuittanceAmount(String(charge.amount));
+    setQuittanceAmount(String(charge.status === 'paid' ? (charge.paidAmount ?? charge.amount) : Math.max(0, charge.amount - (charge.paidAmount ?? 0))));
     setQuittanceReserveRatio(building?.reserveFundPercentage ?? building?.reserveFundRate ?? 5);
     setQuittancePaymentMethod((charge.paymentMethod as PaymentMethod) || 'virement');
     setQuittanceBankName(building.bankName || 'Attijariwafa Bank');
@@ -295,6 +297,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
       : building.residents[0];
     const amt = defaultApt ? (defaultApt.monthlyFees || building.monthlySyndicFees) : building.monthlySyndicFees;
 
+    setQuittancePaymentId(crypto.randomUUID());
     setQuittanceChargeId('');
     setQuittanceApartmentId(defaultApt?.id || '');
     setQuittanceResidentId(defaultRes?.id || '');
@@ -333,6 +336,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
       const res = building.residents.find((r) => r.id === newQuit.residentId);
       generateQuittancePDF(newQuit, building, syndic, apt, res);
     },
+    onError: (error: Error) => showToast(error.message, 'error'),
   });
 
   // Direct one-click download/generate for a charge
@@ -1492,7 +1496,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                   {filteredQuittances.map((quit) => {
                     const apt = building.apartments.find((a) => a.id === quit.apartmentId);
                     const res = building.residents.find((r) => r.id === quit.residentId);
-                    const reserveAmt = quit.reserveFundAmount !== undefined ? quit.reserveFundAmount : Math.round(quit.amount * 0.15);
+                    const reserveAmt = quit.reserveFundAmount !== undefined ? quit.reserveFundAmount : splitChargeReserveAndOperating(quit.amount, building.reserveFundPercentage ?? building.reserveFundRate ?? 5).reserveFundAmount;
                     const courantesAmt = quit.chargesCourantesAmount !== undefined ? quit.chargesCourantesAmount : (quit.amount - reserveAmt);
 
                     return (
@@ -2424,7 +2428,8 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                     splitChargeReserveAndOperating(numAmt, quittanceReserveRatio);
 
                   createQuittanceMutation.mutate({
-                    chargeId: quittanceChargeId || `chg-${Date.now()}`,
+                    chargeId: quittanceChargeId,
+                    paymentId: quittancePaymentId,
                     residentId: quittanceResidentId || res?.id || 'res-1',
                     residentName: res?.name || tr('Copropriétaire', 'مالك مشترك'),
                     residentCin: quittanceResidentCin || res?.cin || 'AB123456',
@@ -2611,23 +2616,9 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                   <span className="font-semibold text-slate-700">{tr('Ventilation des Charges :', 'توزيع المساهمة:')}</span>
                   <div className="flex items-center gap-1.5">
                     <span className="text-[11px] text-slate-500">{tr('Quote-part Fonds Réserve :', 'حصة صندوق الاحتياط:')}</span>
-                    {[5, 10, 15, 20].map((ratio) => (
-                      <button
-                        key={ratio}
-                        type="button"
-                        onClick={() => setQuittanceReserveRatio(ratio)}
-                        className={`px-2 py-0.5 text-[10px] rounded font-bold transition-colors ${
-                          quittanceReserveRatio === ratio
-                            ? 'bg-teal-700 text-white'
-                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                        }`}
-                      >
-                        {ratio}%{' '}
-                        {ratio === (building?.reserveFundPercentage ?? 5)
-                          ? tr('(Configuré)', '(معتمد)')
-                          : ''}
-                      </button>
-                    ))}
+                    <span className="px-2 py-0.5 text-[10px] rounded font-bold bg-teal-700 text-white">
+                      {quittanceReserveRatio}% {tr('(Configuré)', '(معتمد)')}
+                    </span>
                   </div>
                 </div>
 
@@ -2858,7 +2849,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                       selectedQuittanceForPreview.chargesCourantesAmount ??
                         splitChargeReserveAndOperating(
                           selectedQuittanceForPreview.amount,
-                          building?.reserveFundPercentage ?? 5
+                          building?.reserveFundPercentage ?? building?.reserveFundRate ?? 5
                         ).chargesCourantesAmount
                     )}
                   </span>
@@ -2870,7 +2861,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                       selectedQuittanceForPreview.reserveFundAmount ??
                         splitChargeReserveAndOperating(
                           selectedQuittanceForPreview.amount,
-                          building?.reserveFundPercentage ?? 5
+                          building?.reserveFundPercentage ?? building?.reserveFundRate ?? 5
                         ).reserveFundAmount
                     )}
                   </span>

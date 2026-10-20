@@ -36,6 +36,12 @@ jobs:
       - name: Run business logic & security regression checks
         run: npm run test:verify
 
+      - name: Verify payment boundaries
+        run: npm run test:business
+
+      - name: Verify HTTP identity and authorization boundaries
+        run: npm run test:security
+
       - name: Compile Firebase Cloud Functions
         run: npm run build:functions
 

@@ -161,7 +161,7 @@ export function setActiveAuthContext(profile: UserProfile | null, idToken?: stri
     return;
   }
   const sig = computeSessionSignature(profile);
-  inMemoryAuthHeaderToken = idToken || `syndik-sess-${profile.uid}-${sig}`;
+  inMemoryAuthHeaderToken = idToken || null;
   inMemoryUserContext = {
     uid: profile.uid,
     role: profile.role,
@@ -197,12 +197,12 @@ export function getAuthenticatedRequestHeaders(): Record<string, string> {
       if (raw) {
         const parsedObj = JSON.parse(raw);
         const verified = verifySignedSessionEnvelope(parsedObj);
-        if (verified) {
+        if (verified && typeof parsedObj.serverToken === 'string' && parsedObj.serverToken) {
           const sig = computeSessionSignature(verified);
           const tokenToUse =
             typeof parsedObj?.serverToken === 'string' && parsedObj.serverToken
               ? parsedObj.serverToken
-              : `syndik-sess-${verified.uid}-${sig}`;
+              : '';
           headers['Authorization'] = `Bearer ${tokenToUse}`;
           headers['X-Syndik-Uid'] = verified.uid;
           headers['X-Syndik-Role'] = verified.role;

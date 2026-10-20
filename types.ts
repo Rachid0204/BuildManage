@@ -147,6 +147,7 @@ export interface PaymentProof {
 }
 
 export interface Quittance {
+  paymentId?: string;
   id: string;
   quittanceNumber: string;
   chargeId: string;
@@ -173,6 +174,7 @@ export interface Quittance {
 }
 
 export interface Invoice {
+  paymentIds?: string[];
   id: string;
   syndicId: string;
   buildingId: string;
@@ -188,6 +190,9 @@ export interface Invoice {
 }
 
 export interface Transaction {
+  paymentId?: string;
+  sourceChargeId?: string;
+  sourceInvoiceId?: string;
   id: string;
   date: string;
   description: string;

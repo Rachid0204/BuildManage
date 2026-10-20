@@ -1,3 +1,4 @@
+import assertNode from 'node:assert/strict';
 /**
  * Production Verification & Security/Financial Regression Suite
  * Exercises actual application services in an isolated in-memory environment without network calls.
@@ -511,6 +512,8 @@ async function runVerification() {
   console.log('✅ [20] AG voting session status, attendee eligibility, cross-lot hijack rejection & authoritative tantième weight checks passed.');
 
   // 8b. AG Adopted Resolution -> Prorated Calls for Funds & Batch Proof / CSV Reconciliation Safety
+  const resident2 = await addResident({ name: 'Second Fixture Owner', email: 'second@audit.invalid', phone: '0600000002',
+    syndicId: syndic.id, buildingId: createdBld.id, apartmentId: apt2.id, isOwner: true }, false);
   updatedAg.resolutions[0].budgetAmount = 2000;
   updatedAg.resolutions[0].status = 'approved';
   localStorage.setItem(STORAGE_KEYS.AG, JSON.stringify([updatedAg]));
@@ -570,8 +573,8 @@ async function runVerification() {
   const remainingAgCharge = agChargesOut.createdCharges.find((c) => c.apartmentId === apt2.id)!;
   await submitPaymentProof({
     chargeId: remainingAgCharge.id,
-    residentId: resident1.id,
-    residentName: resident1.name,
+    residentId: resident2.id,
+    residentName: resident2.name,
     apartmentId: apt2.id,
     apartmentNumber: apt2.number,
     buildingId: createdBld.id,
@@ -596,7 +599,7 @@ async function runVerification() {
   localStorage.setItem(STORAGE_KEYS.CHARGES, JSON.stringify(storedChargesForNov));
 
   // Document-only quittance (addTransactionToLedger: false) must NOT mark charge paid
-  await createQuittance({
+  await assertNode.rejects(() => createQuittance({
     chargeId: novCharge.id,
     buildingId: createdBld.id,
     buildingName: createdBld.name,
@@ -615,7 +618,7 @@ async function runVerification() {
     paymentMethod: 'virement',
     referenceNumber: 'DOC-ONLY-40',
     addTransactionToLedger: false,
-  });
+  }), /paiement suffisant/);
   const afterDocOnly = (await getChargesForBuilding(createdBld.id)).find(
     (c) => c.id === novCharge.id
   )!;

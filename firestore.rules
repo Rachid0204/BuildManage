@@ -27,7 +27,7 @@ service cloud.firestore {
     }
 
     function isBootstrappedAdmin() {
-      return isVerified() && request.auth.token.email == 'wahbi.rachid@gmail.com';
+      return isVerified() && request.auth.token.email_verified == true && request.auth.token.email == 'wahbi.rachid@gmail.com';
     }
 
     function isAdmin() {
