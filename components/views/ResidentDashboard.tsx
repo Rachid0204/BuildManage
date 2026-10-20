@@ -304,8 +304,13 @@ const ResidentDashboard: React.FC = () => {
     }
   };
 
-  const pendingCharges = myCharges.filter((c) => c.status === 'pending' || c.status === 'overdue');
-  const totalPendingAmount = pendingCharges.reduce((sum, c) => sum + c.amount, 0);
+  const pendingCharges = myCharges.filter(
+    (c) => c.status === 'pending' || c.status === 'unpaid' || c.status === 'overdue'
+  );
+  const totalPendingAmount = pendingCharges.reduce(
+    (sum, c) => sum + Math.max(0, c.amount - (c.paidAmount || 0)),
+    0
+  );
 
   if (userProfile && userProfile.role !== 'resident') {
     navigate(getHomeRouteForRole(userProfile.role), { replace: true });

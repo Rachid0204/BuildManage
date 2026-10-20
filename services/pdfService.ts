@@ -1594,7 +1594,11 @@ export const exportResidentCredentialsPDF = (
   doc.setTextColor(110, 231, 183);
   doc.setFont('courier', 'bold');
   doc.setFontSize(12);
-  doc.text(resident.generatedPassword || 'Syndik-Demo2026!', 83, y + 38);
+  doc.text(
+    resident.generatedPassword || resident.invitationCode || resident.invitationToken || 'Syndik-Demo2026!',
+    83,
+    y + 38
+  );
 
   y += 56;
 
@@ -1804,7 +1808,11 @@ export const exportPrestataireCredentialsPDF = (
   doc.setTextColor(110, 231, 183);
   doc.setFont('courier', 'bold');
   doc.setFontSize(12);
-  doc.text(prestataire.generatedPassword || 'Syndik-PREST2026!', 83, y + 38);
+  doc.text(
+    prestataire.generatedPassword || prestataire.invitationToken || 'Syndik-PREST2026!',
+    83,
+    y + 38
+  );
 
   y += 56;
 

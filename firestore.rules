@@ -36,18 +36,19 @@ service cloud.firestore {
 
     function isValidSyndic(data) {
       return data.keys().hasAll(['id', 'name', 'email', 'subscriptionPlan', 'subscriptionStatus', 'createdBy', 'buildings']) &&
-        data.keys().hasOnly(['id', 'name', 'email', 'phone', 'logoUrl', 'ice', 'taxId', 'rc', 'patente', 'subscriptionPlan', 'subscriptionStatus', 'subscriptionExpiry', 'subscriptionExpiresAt', 'createdBy', 'buildings']) &&
+        data.keys().hasOnly(['id', 'name', 'email', 'phone', 'city', 'logoUrl', 'ice', 'taxId', 'rc', 'patente', 'subscriptionPlan', 'subscriptionStatus', 'subscriptionExpiry', 'subscriptionExpiresAt', 'createdBy', 'buildings']) &&
         data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.name is string && data.name.size() >= 1 && data.name.size() <= 200 &&
         data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
         (!('phone' in data) || (data.phone is string && data.phone.size() <= 40)) &&
-        (!('logoUrl' in data) || (data.logoUrl is string && data.logoUrl.size() <= 500)) &&
+        (!('city' in data) || (data.city is string && data.city.size() <= 100)) &&
+        (!('logoUrl' in data) || (data.logoUrl is string && data.logoUrl.size() <= 2048)) &&
         (!('ice' in data) || (data.ice is string && data.ice.size() <= 32)) &&
         (!('taxId' in data) || (data.taxId is string && data.taxId.size() <= 32)) &&
         (!('rc' in data) || (data.rc is string && data.rc.size() <= 64)) &&
         (!('patente' in data) || (data.patente is string && data.patente.size() <= 64)) &&
         data.subscriptionPlan is string && data.subscriptionPlan.size() <= 32 && data.subscriptionPlan in ['starter', 'professional', 'enterprise'] &&
-        data.subscriptionStatus is string && data.subscriptionStatus.size() <= 32 && data.subscriptionStatus in ['active', 'expired', 'cancelled'] &&
+        data.subscriptionStatus is string && data.subscriptionStatus.size() <= 32 && data.subscriptionStatus in ['active', 'trialing', 'expired', 'cancelled'] &&
         (!('subscriptionExpiry' in data) || (data.subscriptionExpiry is string && data.subscriptionExpiry.size() <= 64)) &&
         (!('subscriptionExpiresAt' in data) || (data.subscriptionExpiresAt is string && data.subscriptionExpiresAt.size() <= 64)) &&
         data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128 && data.createdBy.matches('^[a-zA-Z0-9_\\-]+$') &&
@@ -56,7 +57,7 @@ service cloud.firestore {
 
     function isValidUserProfile(data) {
       return data.keys().hasAll(['uid', 'email', 'displayName', 'role']) &&
-        data.keys().hasOnly(['uid', 'email', 'displayName', 'role', 'syndicId', 'buildingId', 'buildingName', 'apartmentId', 'apartmentNumber', 'isOwner', 'cin', 'phone', 'photoURL', 'mustChangePassword']) &&
+        data.keys().hasOnly(['uid', 'email', 'displayName', 'role', 'syndicId', 'buildingId', 'buildingName', 'apartmentId', 'apartmentNumber', 'residentId', 'prestataireId', 'prestataireCategory', 'subscriptionPlan', 'subscriptionStatus', 'createdAt', 'isOwner', 'cin', 'phone', 'photoURL', 'mustChangePassword']) &&
         data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 && data.uid.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
         data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 150 &&
@@ -66,10 +67,16 @@ service cloud.firestore {
         (!('buildingName' in data) || (data.buildingName is string && data.buildingName.size() <= 200)) &&
         (!('apartmentId' in data) || (data.apartmentId is string && data.apartmentId.size() <= 128)) &&
         (!('apartmentNumber' in data) || (data.apartmentNumber is string && data.apartmentNumber.size() <= 64)) &&
+        (!('residentId' in data) || (data.residentId is string && data.residentId.size() <= 128)) &&
+        (!('prestataireId' in data) || (data.prestataireId is string && data.prestataireId.size() <= 128)) &&
+        (!('prestataireCategory' in data) || (data.prestataireCategory is string && data.prestataireCategory.size() <= 64)) &&
+        (!('subscriptionPlan' in data) || (data.subscriptionPlan is string && data.subscriptionPlan.size() <= 32 && data.subscriptionPlan in ['starter', 'professional', 'enterprise'])) &&
+        (!('subscriptionStatus' in data) || (data.subscriptionStatus is string && data.subscriptionStatus.size() <= 32 && data.subscriptionStatus in ['active', 'trialing', 'expired', 'cancelled'])) &&
+        (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() <= 64)) &&
         (!('isOwner' in data) || data.isOwner is bool) &&
         (!('cin' in data) || (data.cin is string && data.cin.size() <= 32)) &&
         (!('phone' in data) || (data.phone is string && data.phone.size() <= 40)) &&
-        (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 500)) &&
+        (!('photoURL' in data) || data.photoURL == null || (data.photoURL is string && data.photoURL.size() <= 500)) &&
         (!('mustChangePassword' in data) || data.mustChangePassword is bool);
     }
 
@@ -116,14 +123,16 @@ service cloud.firestore {
       allow list: if isSignedIn() && (existing().createdBy == request.auth.uid || isBootstrappedAdmin());
       allow create: if isVerified() && isValidId(syndicId) && isValidSyndic(incoming()) && incoming().id == syndicId && (
         isAdmin() ||
-        (incoming().createdBy == request.auth.uid && incoming().subscriptionPlan == 'starter' && incoming().subscriptionStatus == 'active')
+        (incoming().createdBy == request.auth.uid &&
+         incoming().subscriptionPlan in ['starter', 'professional', 'enterprise'] &&
+         incoming().subscriptionStatus in ['active', 'trialing'])
       );
       allow update: if isVerified() && isValidId(syndicId) && isValidSyndic(incoming()) && incoming().id == existing().id && incoming().createdBy == existing().createdBy && (
         isAdmin() ||
         (existing().createdBy == request.auth.uid &&
          incoming().subscriptionPlan == existing().subscriptionPlan &&
          incoming().subscriptionStatus == existing().subscriptionStatus &&
-         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'email', 'phone', 'logoUrl', 'ice', 'taxId', 'rc', 'patente', 'buildings']))
+         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'email', 'phone', 'city', 'logoUrl', 'ice', 'taxId', 'rc', 'patente', 'buildings']))
       );
       allow delete: if isVerified() && isValidId(syndicId) && isAdmin();
     }

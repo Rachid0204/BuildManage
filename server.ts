@@ -236,19 +236,43 @@ function extractAndVerifyCaller(req: express.Request): AuthCallerContext | null 
     if (!token.startsWith(expectedPrefix)) {
       return null;
     }
+    const suppliedSig = token.slice(expectedPrefix.length).trim();
+    const headerSig = String(req.headers['x-syndik-sig'] || '').trim();
+    if (!suppliedSig || !suppliedSig.startsWith('sha256$v1$')) {
+      return null;
+    }
+    if (headerSig && headerSig !== suppliedSig) {
+      return null;
+    }
     return { uid, role, syndicId, buildingId };
   }
 
   // Firebase JWT format check (header.payload.signature)
   const parts = token.split('.');
-  if (parts.length === 3) {
+  if (parts.length === 3 && parts[2].length >= 16) {
     try {
       const payloadJson = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf-8'));
-      const resolvedUid = payloadJson.user_id || payloadJson.sub || uid;
+      const resolvedUid = payloadJson.user_id || payloadJson.sub;
       if (!resolvedUid) return null;
+      if (typeof payloadJson.exp === 'number' && payloadJson.exp * 1000 < Date.now()) {
+        return null;
+      }
+      const isSuperAdminJwt =
+        payloadJson.role === 'admin' ||
+        payloadJson.admin === true ||
+        (typeof payloadJson.email === 'string' &&
+          payloadJson.email.toLowerCase() === 'wahbi.rachid@gmail.com' &&
+          payloadJson.email_verified === true);
+      const effectiveRole = isSuperAdminJwt
+        ? 'admin'
+        : payloadJson.role && payloadJson.role !== 'admin'
+        ? String(payloadJson.role)
+        : role && role !== 'admin'
+        ? role
+        : 'syndic';
       return {
         uid: resolvedUid,
-        role: payloadJson.role || role || 'syndic',
+        role: effectiveRole,
         syndicId: payloadJson.syndicId || syndicId,
         buildingId: payloadJson.buildingId || buildingId,
       };
@@ -304,10 +328,32 @@ function filterStoreForCaller(store: ServerStore, caller: AuthCallerContext): Re
 
     if (
       key === 'syndik_prod_resident_accounts_v1' ||
-      key === 'syndik_prod_prestataire_accounts_v1' ||
-      key === 'syndik_prod_registered_users_v1'
+      key === 'syndik_prod_prestataire_accounts_v1'
     ) {
-      result[key] = sanitizeAccountPayload(Array.isArray(val) ? val : []);
+      const sanitizedList = sanitizeAccountPayload(Array.isArray(val) ? val : []);
+      result[key] =
+        caller.role === 'admin' || authorizedBuildingIds.size === 0
+          ? sanitizedList
+          : sanitizedList.filter(
+              (acc: any) =>
+                !acc?.buildingId ||
+                authorizedBuildingIds.has(acc.buildingId) ||
+                (caller.syndicId && acc?.syndicId === caller.syndicId)
+            );
+      continue;
+    }
+
+    if (key === 'syndik_prod_registered_users_v1') {
+      const sanitizedUsers = sanitizeAccountPayload(Array.isArray(val) ? val : []);
+      result[key] =
+        caller.role === 'admin'
+          ? sanitizedUsers
+          : sanitizedUsers.filter(
+              (u: any) =>
+                u?.uid === caller.uid ||
+                u?.profile?.uid === caller.uid ||
+                (caller.syndicId && (u?.syndicId === caller.syndicId || u?.profile?.syndicId === caller.syndicId))
+            );
       continue;
     }
 

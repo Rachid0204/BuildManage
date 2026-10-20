@@ -157,16 +157,23 @@ const AdminDashboard: React.FC = () => {
         const filtered = existingUsers.filter(
           (u: any) => u.email?.trim().toLowerCase() !== cleanEmail
         );
-        filtered.push({
+        const rawPass = newPassword.trim() || 'password123';
+        const syndicProfile = {
           uid,
           email: cleanEmail,
           displayName: newManagerName.trim() || cleanName,
-          role: 'syndic',
+          role: 'syndic' as const,
           syndicId,
           buildingId: createdBuilding.id,
           buildingName: createdBuilding.name,
           phone: newPhone.trim(),
-          password: newPassword.trim() || 'password123',
+        };
+        filtered.push({
+          uid,
+          email: cleanEmail,
+          password: rawPass,
+          profile: syndicProfile,
+          createdAt: new Date().toISOString(),
         });
         localStorage.setItem(STORAGE_KEYS.REGISTERED_USERS, JSON.stringify(filtered));
         await pushKeyToSharedServer(STORAGE_KEYS.REGISTERED_USERS, filtered);

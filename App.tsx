@@ -131,12 +131,25 @@ const ProviderPortal: React.FC = () => {
   const [techNote, setTechNote] = useState('');
   const [nextStatus, setNextStatus] = useState<'in_progress' | 'completed'>('in_progress');
 
-  const { data: requests = [] } = useQuery({
+  const { data: rawRequests = [] } = useQuery({
     queryKey: ['maintenance', buildingId, userProfile?.uid],
     queryFn: () =>
       buildingId ? getMaintenanceRequestsForBuilding(buildingId) : Promise.resolve([]),
     enabled: Boolean(buildingId),
   });
+
+  const requests = React.useMemo(() => {
+    if (!userProfile) return [];
+    return rawRequests.filter(
+      (r) =>
+        (userProfile.prestataireId && r.prestataireId === userProfile.prestataireId) ||
+        (userProfile.displayName && r.assignedTo === userProfile.displayName) ||
+        (!r.prestataireId &&
+          !r.assignedTo &&
+          userProfile.prestataireCategory &&
+          r.category === userProfile.prestataireCategory)
+    );
+  }, [rawRequests, userProfile]);
 
   const categoryLabels: Record<string, string> = {
     plumbing: tr('Plomberie', 'السباكة'),
@@ -1263,6 +1276,7 @@ const App: React.FC = () => {
                 </ProtectedRoute>
               }
             />
+            <Route path="/admin-portal" element={<Navigate to="/admin" replace />} />
 
             <Route
               path="/resident"
@@ -1274,6 +1288,7 @@ const App: React.FC = () => {
                 </ProtectedRoute>
               }
             />
+            <Route path="/resident-portal" element={<Navigate to="/resident" replace />} />
 
             <Route
               path="/provider"
@@ -1285,6 +1300,7 @@ const App: React.FC = () => {
                 </ProtectedRoute>
               }
             />
+            <Route path="/provider-portal" element={<Navigate to="/provider" replace />} />
 
             <Route
               path="/*"

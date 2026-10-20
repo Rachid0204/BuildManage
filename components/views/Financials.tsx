@@ -300,7 +300,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
       new Date().toLocaleDateString(isAr ? 'ar-MA' : 'fr-FR', { month: 'long', year: 'numeric' })
     );
     setQuittanceAmount(String(amt));
-    setQuittanceReserveRatio(15);
+    setQuittanceReserveRatio(building.reserveFundPercentage ?? building.reserveFundRate ?? 5);
     setQuittancePaymentMethod('virement');
     setQuittanceBankName(building.bankName || 'Attijariwafa Bank');
     setQuittanceReference('');
@@ -358,8 +358,8 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
       computeBuildingFundBalances(building);
 
     const pendingChargesTotal = charges
-      .filter((c) => c.status === 'pending')
-      .reduce((sum, c) => sum + c.amount, 0);
+      .filter((c) => c.status === 'pending' || c.status === 'unpaid')
+      .reduce((sum, c) => sum + Math.max(0, c.amount - (c.paidAmount || 0)), 0);
 
     const overdueChargesTotal = charges
       .filter((c) => c.status === 'overdue')
@@ -494,11 +494,13 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
   }, [quittances]);
 
   const totalReserveFundAmount = useMemo(() => {
+    const fallbackRatio = (building.reserveFundPercentage ?? building.reserveFundRate ?? 5) / 100;
     return quittances.reduce((sum, q) => {
-      const reserve = q.reserveFundAmount !== undefined ? q.reserveFundAmount : Math.round(q.amount * 0.15);
+      const reserve =
+        q.reserveFundAmount !== undefined ? q.reserveFundAmount : Math.round(q.amount * fallbackRatio);
       return sum + reserve;
     }, 0);
-  }, [quittances]);
+  }, [quittances, building.reserveFundPercentage, building.reserveFundRate]);
 
   // Prestataire quick-select handler
   const handleSelectPrestataire = (pId: string) => {

@@ -65,7 +65,8 @@ const PrestataireCredentialsModal: React.FC<{
 
   if (!prestataire) return null;
 
-  const password = prestataire.generatedPassword || 'Syn-2026-MA';
+  const password =
+    prestataire.generatedPassword || prestataire.invitationToken || 'Syndik-PREST2026!';
   const portalUrl =
     typeof window !== 'undefined' ? `${window.location.origin}/login` : 'https://syndik.ma/login';
 
@@ -369,7 +370,7 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
   };
 
   const handleManageCredentials = (p: Prestataire) => {
-    if (p.hasAccount && p.generatedPassword) {
+    if (p.hasAccount && (p.generatedPassword || p.invitationToken)) {
       setCredentialPrestataireId(p.id);
     } else {
       if (!p.email || !p.email.includes('@')) {

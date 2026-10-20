@@ -73,6 +73,27 @@ export function computeSessionSignature(profile: UserProfile): string {
   return hashPasswordSync(canonical, profile.uid || 'session');
 }
 
+/**
+ * Generates a cryptographically strong random alphanumeric code or temporary password
+ * using Web Crypto API (crypto.getRandomValues) instead of predictable Math.random().
+ */
+export function generateSecureRandomDigits(length = 6): string {
+  const digits = '0123456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const buf = new Uint32Array(length);
+  if (typeof globalThis !== 'undefined' && globalThis.crypto?.getRandomValues) {
+    globalThis.crypto.getRandomValues(buf);
+  } else {
+    for (let i = 0; i < length; i++) {
+      buf[i] = Math.floor(Date.now() * (i + 1) + Math.random() * 0xffffffff) >>> 0;
+    }
+  }
+  let out = '';
+  for (let i = 0; i < length; i++) {
+    out += digits[buf[i] % digits.length];
+  }
+  return out;
+}
+
 export interface SignedSessionEnvelope {
   profile: UserProfile;
   signature: string;
@@ -198,10 +219,12 @@ export function computeBuildingFinancialBalances(building?: Building | null): {
 
   const transactions =
     building.financials?.transactions || (building as any)?.transactions || [];
+  const openingWorking = Number(building.financials?.openingBalance ?? 0) || 0;
+  const openingReserve = Number(building.financials?.openingReserveBalance ?? 0) || 0;
 
   if (transactions.length > 0) {
-    let workingFromTx = 0;
-    let reserveFromTx = 0;
+    let workingFromTx = openingWorking;
+    let reserveFromTx = openingReserve;
 
     for (const trx of transactions) {
       const rawAmt = Number(trx.amount) || 0;
@@ -228,8 +251,8 @@ export function computeBuildingFinancialBalances(building?: Building | null): {
     };
   }
 
-  const working = building.financials?.balance ?? 0;
-  const reserve = building.financials?.reserveFundBalance ?? 0;
+  const working = (building.financials?.balance ?? 0) + openingWorking;
+  const reserve = (building.financials?.reserveFundBalance ?? 0) + openingReserve;
   return {
     workingBalance: working,
     operatingBalance: working,

@@ -63,6 +63,14 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
       if (!currentResident || !currentApartment) {
         throw new Error(tr('Profil copropriétaire introuvable', 'ملف المالك المشترك غير موجود'));
       }
+      if (currentResident.isOwner === false) {
+        throw new Error(
+          tr(
+            'Conformément à la Loi 18-00, seuls les copropriétaires (ou leurs mandataires) disposent du droit de vote en Assemblée Générale.',
+            'وفقاً للقانون 18-00، يقتصر حق التصويت في الجمع العام على الملاك المشتركين (أو وكلائهم).'
+          )
+        );
+      }
       return castResidentAGVote(
         agId,
         resolutionId,

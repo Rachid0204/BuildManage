@@ -622,7 +622,7 @@ const generateChargesLogic = async (buildingId?: string, syndicId?: string) => {
         apartmentId: aptDoc.id,
         residentId,
         periodKey,
-        chargeType: 'cotisation',
+        chargeType: 'courante',
         amount: apt.monthlyFees ?? 0,
         dueDate,
         status: 'unpaid',

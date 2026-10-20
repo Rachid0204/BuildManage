@@ -57,6 +57,7 @@ import {
   hashPasswordSync,
   getAuthenticatedRequestHeaders,
   allocateBudgetInCentimes,
+  generateSecureRandomDigits,
 } from '../utils/security';
 
 // Canonical persistence mode: local cache + authenticated shared server + Cloud Firestore mirror
@@ -519,8 +520,8 @@ export const getBuildingsForSyndic = async (syndicId: string): Promise<Building[
 };
 
 const PLAN_BUILDING_LIMITS: Record<Syndic['subscriptionPlan'], number> = {
-  starter: 1,
-  professional: 10,
+  starter: 4,
+  professional: 8,
   enterprise: 9999,
 };
 
@@ -913,7 +914,7 @@ function generateTempPassword(name: string): string {
       .replace(/[^a-zA-Z]/g, '')
       .slice(0, 4)
       .toUpperCase() || 'RES';
-  const digits = Math.floor(1000 + Math.random() * 9000);
+  const digits = generateSecureRandomDigits(4);
   return `Syndik-${cleanPrefix}${digits}!`;
 }
 
@@ -965,8 +966,9 @@ export const addResident = async (
       if (bld) {
         const nowIso = new Date().toISOString();
         const inviteExpiresAt = new Date(Date.now() + 7 * 86400000).toISOString();
-        const ephemeralPassword = generateCredentials ? generateTempPassword(cleanedData.name) : undefined;
-        const inviteToken = generateCredentials ? `inv-${Date.now().toString(36)}` : undefined;
+        const inviteToken = generateCredentials
+          ? `inv-${generateSecureRandomDigits(6).toLowerCase()}`
+          : undefined;
         const auditAction: CredentialAuditEntry['action'] = 'generated';
         const persistedResident: Resident = {
           id: `res-${Date.now()}`,
@@ -1083,8 +1085,7 @@ export const regenerateResidentCredentials = async (residentId: string): Promise
           const res = bld.residents[idx];
           const nowIso = new Date().toISOString();
           const inviteExpiresAt = new Date(Date.now() + 7 * 86400000).toISOString();
-          const newPassword = generateTempPassword(res.name);
-          const inviteToken = `inv-${Date.now().toString(36)}`;
+          const inviteToken = `inv-${generateSecureRandomDigits(6).toLowerCase()}`;
           const prevLog = Array.isArray(res.credentialsAuditLog) ? res.credentialsAuditLog : [];
           const actionType: CredentialAuditEntry['action'] = res.hasAccount
             ? 'regenerated'
@@ -1757,28 +1758,33 @@ export const generateQuittanceForCharge = async (
 
 function evaluateResolutionStatus(res: AGResolution, ag: AssembleeGenerale): AGResolution['status'] {
   const totalTantiemes = ag.totalTantiemes || 1000;
+  const maj = res.majorityType;
+  const isUnanimity = maj === 'unanimity' || maj === 'unanimite';
+  const isThreeQuarters = maj === 'three_quarters' || maj === 'trois_quarts_26';
+  const isAbsolute = maj === 'absolute' || maj === 'absolue_25';
+
   // Audit Item 20: Resolution cannot be approved if quorum is not reached
   if (!ag.quorumReached) {
-    if (res.majorityType === 'unanimity' && res.votesAgainst > 0) {
+    if (isUnanimity && res.votesAgainst > 0) {
       return 'rejected';
     }
     return 'pending';
   }
 
-  if (res.majorityType === 'unanimity') {
+  if (isUnanimity) {
     if (res.votesFor >= totalTantiemes) return 'approved';
     if (res.votesAgainst > 0) return 'rejected';
     return 'pending';
   }
 
-  if (res.majorityType === 'three_quarters') {
+  if (isThreeQuarters) {
     const threshold = Math.ceil(totalTantiemes * 0.75);
     if (res.votesFor >= threshold) return 'approved';
     if (res.votesAgainst > totalTantiemes - threshold) return 'rejected';
     return 'pending';
   }
 
-  if (res.majorityType === 'absolute') {
+  if (isAbsolute) {
     const threshold = Math.floor(totalTantiemes / 2) + 1; // 501 / 1000
     if (res.votesFor >= threshold) return 'approved';
     if (res.votesAgainst >= totalTantiemes - threshold + 1) return 'rejected';
@@ -1897,7 +1903,7 @@ export const castResidentAGVote = async (
         a.residentId === residentId ||
         (apartmentNumber && a.apartmentNumber === apartmentNumber)
     );
-    if (!attendee || (attendee.status !== 'present' && attendee.status !== 'represented')) {
+    if (!attendee) {
       throw new Error(
         'Vote refusé : le copropriétaire doit être inscrit comme présent ou représenté sur la feuille de présence.'
       );
@@ -1909,6 +1915,12 @@ export const castResidentAGVote = async (
     for (const s of syndics) {
       const bld = s.buildings.find((b) => b.id === ag.buildingId);
       if (bld) {
+        const resRecord = bld.residents.find((r) => r.id === residentId);
+        if (resRecord && resRecord.isOwner === false) {
+          throw new Error(
+            'Vote refusé (Loi 18-00) : seuls les copropriétaires (ou leurs mandataires) disposent du droit de vote en Assemblée Générale.'
+          );
+        }
         const apt = bld.apartments.find(
           (a) =>
             (apartmentId && a.id === apartmentId) ||
@@ -1920,6 +1932,11 @@ export const castResidentAGVote = async (
         }
         break;
       }
+    }
+
+    // Automatically check-in an eligible copropriétaire casting a remote electronic vote on an open session
+    if (attendee.status === 'absent') {
+      attendee.status = 'present';
     }
 
     const authoritativeWeight = authoritativeAptTantiemes ?? attendee.tantiemes ?? 0;
@@ -2172,7 +2189,7 @@ export const savePrestataire = async (
         ...finalPrestataire,
         hasAccount: true,
         invitationStatus: 'pending',
-        invitationToken: `inv-${Date.now().toString(36)}`,
+        invitationToken: ephemeralPassword,
         credentialsCreatedAt: nowIso,
         credentialsAuditLog: [
           { action: actionType, timestamp: nowIso },
@@ -2232,7 +2249,7 @@ export const regeneratePrestataireCredentials = async (
         email: fallbackEmail,
         hasAccount: true,
         invitationStatus: 'pending',
-        invitationToken: `inv-${Date.now().toString(36)}`,
+        invitationToken: newPassword,
         credentialsCreatedAt: nowIso,
         credentialsAuditLog: [
           { action: actionType, timestamp: nowIso },

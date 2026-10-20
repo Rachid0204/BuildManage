@@ -7,6 +7,8 @@ import Modal from '../common/Modal';
 import LanguageToggle from '../common/LanguageToggle';
 import { useI18n } from '../../hooks/useI18n';
 import { useAuth, getHomeRouteForRole } from '../../contexts/AuthContext';
+import { sendPasswordResetEmail } from 'firebase/auth';
+import { auth } from '../../firebase/config';
 import { BuildingsIcon } from '../icons/IconComponents';
 
 interface LoginScreenProps {
@@ -591,8 +593,16 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
             </Button>
             {!forgotSent && (
               <Button
-                onClick={() => {
-                  if (!forgotEmail.trim()) return;
+                onClick={async () => {
+                  const target = forgotEmail.trim();
+                  if (!target) return;
+                  if (target.includes('@')) {
+                    try {
+                      await sendPasswordResetEmail(auth, target);
+                    } catch {
+                      // Local/shared accounts or offline demo mode fall back to Syndic regeneration notice
+                    }
+                  }
                   setForgotSent(true);
                 }}
               >

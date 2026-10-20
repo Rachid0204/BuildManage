@@ -149,7 +149,9 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
       return;
     }
 
-    const initialAttendees = building.residents.map((res) => {
+    const eligibleOwners = building.residents.filter((res) => res.isOwner !== false);
+    const attendeesPool = eligibleOwners.length > 0 ? eligibleOwners : building.residents;
+    const initialAttendees = attendeesPool.map((res) => {
       const apt = building.apartments.find((a) => a.id === res.apartmentId || a.ownerId === res.id);
       return {
         residentId: res.id,
