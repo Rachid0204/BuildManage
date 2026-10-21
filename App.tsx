@@ -1,6 +1,7 @@
 import AccountAction from './components/views/AccountAction';
 import EmailVerificationGate from './components/views/EmailVerificationGate';
 import React, { Suspense, useEffect, useState } from 'react';
+import { AlertTriangle, Clock, AlertCircle, Info } from 'lucide-react';
 import {
   BrowserRouter as Router,
   Routes,
@@ -167,6 +168,40 @@ const ProviderPortal: React.FC = () => {
     other: tr('Autre', 'أخرى'),
   };
 
+  const renderPriorityBadge = (priority?: string) => {
+    switch (priority) {
+      case 'emergency':
+        return (
+          <span className="inline-flex items-center gap-1 text-xs font-bold px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200">
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+            <span>{tr('Urgence', 'طوارئ')}</span>
+          </span>
+        );
+      case 'high':
+        return (
+          <span className="inline-flex items-center gap-1 text-xs font-bold px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200">
+            <Clock className="w-3.5 h-3.5 shrink-0" />
+            <span>{tr('Haute', 'عالية')}</span>
+          </span>
+        );
+      case 'low':
+        return (
+          <span className="inline-flex items-center gap-1 text-xs font-bold px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
+            <Info className="w-3.5 h-3.5 shrink-0" />
+            <span>{tr('Basse', 'منخفضة')}</span>
+          </span>
+        );
+      case 'medium':
+      default:
+        return (
+          <span className="inline-flex items-center gap-1 text-xs font-bold px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-200">
+            <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+            <span>{tr('Moyenne', 'متوسطة')}</span>
+          </span>
+        );
+    }
+  };
+
   const updateMutation = useMutation({
     mutationFn: (payload: { requestId: string; status: 'in_progress' | 'completed'; note: string }) =>
       updateMaintenanceRequest(
@@ -255,7 +290,7 @@ const ProviderPortal: React.FC = () => {
                 className="p-4 rounded-xl border border-slate-200 bg-white flex flex-col md:flex-row justify-between gap-4"
               >
                 <div className="space-y-1.5">
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span className="text-xs font-bold uppercase px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-700">
                       {categoryLabels[req.category] || req.category}
                     </span>
@@ -274,6 +309,7 @@ const ProviderPortal: React.FC = () => {
                         ? t('providerPortal.statusInProgress')
                         : t('providerPortal.statusPending')}
                     </span>
+                    {renderPriorityBadge(req.priority)}
                     {req.location && (
                       <span className="text-xs text-slate-500">📍 {req.location}</span>
                     )}

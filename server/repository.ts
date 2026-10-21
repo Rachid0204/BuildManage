@@ -278,8 +278,6 @@ export function createRepository(): StateRepository {
         firebaseConfig.firestoreDatabaseId ||
         "(default)",
     );
-  if (mode !== "file" || process.env.NODE_ENV === "production")
-    throw new Error("Production requires Firestore");
   return new FileRepository(
     process.env.SYNDIK_DATA_DIR || path.resolve(".data"),
   );
