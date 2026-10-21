@@ -1,4 +1,5 @@
 import FinancialTools from './FinancialTools';
+import ResidentPaymentModal from './ResidentPaymentModal';
 import React, { Suspense, useState, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -26,7 +27,6 @@ import {
   getMaintenanceRequestsForResident,
   addMaintenanceRequest,
   getChargesForResident,
-  submitPaymentProof,
   getQuittancesForResident,
   generateQuittanceForCharge,
   getPaymentProofsForResident,
@@ -35,7 +35,6 @@ import {
 } from '../../firebase/services';
 import type {
   MaintenanceRequest,
-  PaymentMethod,
   Quittance,
   Syndic,
   Building,
@@ -97,11 +96,7 @@ const ResidentDashboard: React.FC = () => {
   const [residentLightboxPhoto, setResidentLightboxPhoto] = useState<string | null>(null);
   const maintPhotoInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Payment Proof Form State
-  const [bankName, setBankName] = useState('Attijariwafa Bank');
-  const [refNumber, setRefNumber] = useState('');
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('virement');
-  const [proofNote, setProofNote] = useState('');
+  const [paymentNotice, setPaymentNotice] = useState('');
 
   // Fetch Syndic and Building Data
   const { data: syndics = [] } = useQuery({
@@ -203,17 +198,6 @@ const ResidentDashboard: React.FC = () => {
       (r) => !r.voters?.some((v) => v.residentId === currentResident?.id)
     ).length || 0;
 
-  const proofMutation = useMutation({
-    mutationFn: submitPaymentProof,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['proofs', currentResident?.id] });
-      queryClient.invalidateQueries({ queryKey: ['charges', currentResident?.id] });
-      setIsProofModalOpen(false);
-      setRefNumber('');
-      setProofNote('');
-    },
-  });
-
   const reportMutation = useMutation({
     mutationFn: (data: any) =>
       addMaintenanceRequest({
@@ -306,8 +290,10 @@ const ResidentDashboard: React.FC = () => {
   };
 
   const pendingCharges = myCharges.filter(
-    (c) => c.status === 'pending' || c.status === 'unpaid' || c.status === 'overdue'
+    (c) => c.status !== 'paid' && c.amount > (c.paidAmount || 0)
   );
+  const payableCharges = pendingCharges.filter(c => !myProofs.some(p => p.chargeId === c.id && p.status === 'pending'));
+  const selectedPaymentCharge = myCharges.find(c => c.id === selectedChargeId);
   const totalPendingAmount = pendingCharges.reduce(
     (sum, c) => sum + Math.max(0, c.amount - (c.paidAmount || 0)),
     0
@@ -685,14 +671,15 @@ const ResidentDashboard: React.FC = () => {
                   </span>
                   <button
                     onClick={() => {
-                      if (pendingCharges.length > 0) {
-                        setSelectedChargeId(pendingCharges[0].id);
+                      if (payableCharges.length > 0) {
+                        setPaymentNotice('');
+                        setSelectedChargeId(payableCharges[0].id);
                         setIsProofModalOpen(true);
                       } else {
                         alert(
                           tr(
-                            'Aucune charge en attente.',
-                            'لا توجد أي مساهمات عالقة حالياً.'
+                            'Aucune charge à régler ou un justificatif est déjà en cours de validation.',
+                            'لا توجد مساهمة مستحقة أو أن إثبات الأداء قيد التحقق.'
                           )
                         );
                       }
@@ -743,16 +730,19 @@ const ResidentDashboard: React.FC = () => {
                   </span>
                   <p className="text-teal-800 mt-0.5">
                     {tr('Banque :', 'البنك :')}{' '}
-                    <strong>{activeBuilding?.bankName || 'Attijariwafa Bank - Agence Gauthier'}</strong>
+                    <strong>{activeBuilding?.bankName || tr('Non renseignée', 'غير محدد')}</strong>
                   </p>
                 </div>
                 <div className="bg-white px-3 py-1.5 rounded border border-teal-300 font-mono font-bold text-teal-900 text-sm select-all">
-                  RIB : {activeBuilding?.bankRib || '007 780 0001234567890123 45'}
+                  {activeBuilding?.bankRib
+                    ? <>RIB : {activeBuilding.bankRib}</>
+                    : tr('Contactez votre syndic pour obtenir les coordonnées bancaires avant tout virement.', 'تواصل مع السنديك للحصول على المعلومات البنكية قبل أي تحويل.')}
                 </div>
               </div>
             </Card>
 
             {/* Section: Pending Charges & Proofs */}
+            {paymentNotice && <p role="status" className="p-3 rounded bg-emerald-50 text-emerald-800 text-sm">{paymentNotice}</p>}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
               <div className="lg:col-span-7 space-y-4">
                 <Card className="p-5">
@@ -772,7 +762,8 @@ const ResidentDashboard: React.FC = () => {
 
                   <div className="divide-y divide-slate-100 mt-3">
                     {myCharges.map((charge) => {
-                      const proof = myProofs.find((p) => p.chargeId === charge.id);
+                      const proof = myProofs.find((p) => p.chargeId === charge.id && p.status === 'pending');
+                      const rejectedProof = myProofs.find((p) => p.chargeId === charge.id && p.status === 'rejected');
 
                       return (
                         <div
@@ -794,12 +785,15 @@ const ResidentDashboard: React.FC = () => {
                                   )}
                                 </span>
                               )}
+                              {!proof && rejectedProof && charge.status !== 'paid' && (
+                                <span className="text-rose-700">{tr('Justificatif rejeté :', 'إثبات مرفوض:')} {rejectedProof.rejectionReason || tr('Veuillez transmettre un nouveau justificatif.', 'يرجى إرسال إثبات جديد.')}</span>
+                              )}
                             </div>
                           </div>
 
                           <div className="flex items-center gap-3 shrink-0">
                             <span className="font-mono font-bold text-slate-900">
-                              {currencyFormatter.format(charge.amount)}
+                              {currencyFormatter.format(charge.status === 'paid' ? charge.amount : Math.max(0, charge.amount - (charge.paidAmount || 0)))}
                             </span>
 
                             {charge.status === 'paid' ? (
@@ -864,6 +858,7 @@ const ResidentDashboard: React.FC = () => {
                             ) : (
                               <button
                                 onClick={() => {
+                                  setPaymentNotice('');
                                   setSelectedChargeId(charge.id);
                                   setIsProofModalOpen(true);
                                 }}
@@ -1217,132 +1212,19 @@ const ResidentDashboard: React.FC = () => {
         </Modal>
       )}
 
-      {/* Modal: Submit Payment Proof */}
-      <Modal
+      <ResidentPaymentModal
         isOpen={isProofModalOpen}
         onClose={() => setIsProofModalOpen(false)}
-        title={tr(
-          'Transmettre un justificatif de virement bancaire',
-          'إرسال إثبات التحويل البنكي'
-        )}
-        footer={
-          <div className="flex justify-end gap-2">
-            <Button variant="secondary" onClick={() => setIsProofModalOpen(false)}>
-              {tr('Annuler', 'إلغاء')}
-            </Button>
-            <Button
-              onClick={() => {
-                if (!refNumber)
-                  return alert(
-                    tr(
-                      'Veuillez saisir le numéro de référence du virement.',
-                      'يرجى إدخال الرقم المرجعي لعملية التحويل.'
-                    )
-                  );
-                const targetCharge =
-                  myCharges.find((c) => c.id === selectedChargeId) || myCharges[0];
-                if (!targetCharge) return;
-
-                proofMutation.mutate({
-                  chargeId: targetCharge.id,
-                  residentId: currentResident?.id || 'res-2',
-                  residentName: currentResident?.name || tr('Copropriétaire', 'مالك مشترك'),
-                  apartmentId: currentApartment?.id || 'apt-2',
-                  apartmentNumber: currentApartment?.number || 'A-102',
-                  buildingId: activeBuilding?.id || 'bld-1',
-                  amount: targetCharge.amount,
-                  paymentMethod,
-                  bankName,
-                  referenceNumber: refNumber,
-                  receiptNote: proofNote,
-                });
-              }}
-            >
-              {tr('Envoyer pour validation', 'إرسال للمصادقة')}
-            </Button>
-          </div>
-        }
-      >
-        <div className="space-y-4">
-          <p className="text-xs text-slate-600">
-            {tr(
-              'Une fois votre justificatif vérifié par le syndic, votre compte de charges sera crédité et votre quittance officielle conforme à la Loi 18-00 sera générée automatiquement.',
-              'بمجرد التحقق من وصل الأداء من طرف السنديك، سيتم تحديث حساب مساهماتكم وإصدار وصل الإبراء الرسمي المطابق للقانون 18-00 تلقائياً.'
-            )}
-          </p>
-
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">
-              {tr('Banque émettrice', 'البنك المصدر للتحويل')}
-            </label>
-            <select
-              value={bankName}
-              onChange={(e) => setBankName(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 rounded text-sm bg-white"
-            >
-              <option value="Attijariwafa Bank">Attijariwafa Bank</option>
-              <option value="CIH Bank">CIH Bank</option>
-              <option value="Bank of Africa (BMCE)">Bank of Africa (BMCE)</option>
-              <option value="Banque Populaire (BCP)">Banque Populaire (BCP)</option>
-              <option value="Société Générale Maroc">Société Générale Maroc</option>
-              <option value="CFG Bank">CFG Bank</option>
-              <option value="Al Barid Bank">Al Barid Bank</option>
-              <option value="Autre banque">
-                {tr('Autre banque marocaine', 'بنك مغربي آخر')}
-              </option>
-            </select>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                {tr('Mode de règlement', 'طريقة الأداء')}
-              </label>
-              <select
-                value={paymentMethod}
-                onChange={(e) => setPaymentMethod(e.target.value as any)}
-                className="w-full px-3 py-2 border border-slate-300 rounded text-sm bg-white"
-              >
-                <option value="virement">
-                  {tr('Virement bancaire (Application / Web)', 'تحويل بنكي (تطبيق / ويب)')}
-                </option>
-                <option value="versement">
-                  {tr('Versement espèces en agence', 'إيداع نقدي بالوكالة')}
-                </option>
-                <option value="cheque">{tr('Chèque bancaire', 'شيك بنكي')}</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                {tr("N° Référence / Numéro d'opération", 'رقم المرجع / رقم العملية')}
-              </label>
-              <input
-                type="text"
-                value={refNumber}
-                onChange={(e) => setRefNumber(e.target.value)}
-                placeholder="Ex: VIR-20261014-998"
-                className="w-full px-3 py-2 border border-slate-300 rounded text-sm font-mono"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">
-              {tr('Note pour le syndic', 'ملاحظة للسنديك')}
-            </label>
-            <textarea
-              rows={2}
-              value={proofNote}
-              onChange={(e) => setProofNote(e.target.value)}
-              placeholder={tr(
-                'Ex: Virement effectué depuis mon compte CIH Mobile ce matin...',
-                'مثال: تم التحويل من حسابي البنكي هذا الصباح...'
-              )}
-              className="w-full px-3 py-2 border border-slate-300 rounded text-xs"
-            />
-          </div>
-        </div>
-      </Modal>
+        charge={selectedPaymentCharge}
+        building={activeBuilding}
+        resident={currentResident}
+        apartment={activeBuilding?.apartments.find(a => a.id === selectedPaymentCharge?.apartmentId)}
+        onSubmitted={() => {
+          queryClient.invalidateQueries({ queryKey: ['proofs', currentResident?.id] });
+          queryClient.invalidateQueries({ queryKey: ['charges', currentResident?.id] });
+          setPaymentNotice(tr('Justificatif envoyé. Votre paiement est en attente de validation par le syndic.', 'تم إرسال الإثبات. أداؤك في انتظار مصادقة السنديك.'));
+        }}
+      />
 
       {/* Modal: Add Maintenance Request */}
       <Modal

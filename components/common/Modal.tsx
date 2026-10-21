@@ -25,6 +25,12 @@ const Modal: React.FC<ModalProps> = ({
   const previousActiveElementRef = useRef<HTMLElement | null>(null);
   const titleId = useId();
   const { tr } = useI18n();
+  const onCloseRef = useRef(onClose);
+
+  // Call the latest handler without restarting focus management on form edits.
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -46,7 +52,7 @@ const Modal: React.FC<ModalProps> = ({
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.stopPropagation();
-        onClose();
+        onCloseRef.current();
         return;
       }
 
@@ -92,7 +98,7 @@ const Modal: React.FC<ModalProps> = ({
         previousActiveElementRef.current.focus();
       }
     };
-  }, [isOpen, onClose]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 

@@ -244,6 +244,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
       queryClient.invalidateQueries({ queryKey: ['quittances', building.id] });
       queryClient.invalidateQueries({ queryKey: ['syndics'] });
     },
+    onError: (error: Error) => showToast(error.message, 'error'),
   });
 
   const generateChargesMutation = useMutation({
@@ -1312,6 +1313,11 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
 
                   {proof.receiptNote && (
                     <p className="text-xs text-slate-500 italic mt-1">"{proof.receiptNote}"</p>
+                  )}
+                  {proof.receiptUrl?.startsWith('/api/uploads/') && (
+                    <a href={proof.receiptUrl} target="_blank" rel="noopener noreferrer" className="inline-block text-xs font-semibold text-teal-700 underline">
+                      {tr('Ouvrir le justificatif', 'فتح إثبات الأداء')}
+                    </a>
                   )}
                 </div>
 

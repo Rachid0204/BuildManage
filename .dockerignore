@@ -7,3 +7,5 @@ dist-server
 *.enc.json
 *-debug.log
 functions/lib
+test-results
+playwright-report

@@ -67,6 +67,20 @@ are contacted. A passing build does not establish live integration readiness.
 - PDFs embed a licensed Arabic-capable font, use actual persisted records, and do
   not fabricate a QR verification service, seal, signature or banking information.
 
+## Browser regression checks
+
+After `npm ci`, install the test browser with `npx playwright install chromium --only-shell`,
+then run `npm run build && npm run test:ui`. CI installs the required Linux browser
+dependencies automatically. The tests use disposable synthetic accounts and a local
+file repository; external browser requests and server calls are blocked.
+
+Coverage includes continuous typing and caret placement in payment and marketplace
+dialogs, keyboard focus restoration, publication retries, receipt validation and
+private access, payment submission failures, partial balances, syndic approval,
+invoice/journal updates, and rejected proof resubmission on mobile in Arabic.
+Submitting a resident proof records a pending request. Only the syndic's approval
+posts the payment and creates its receipt.
+
 ## Deployment
 
 Read [DEPLOYMENT.md](DEPLOYMENT.md) before switching traffic. This release needs a

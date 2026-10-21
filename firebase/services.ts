@@ -1820,7 +1820,8 @@ export const reviewPaymentProof = async (
   decision: 'approved' | 'rejected' | 'approve' | 'reject',
   rejectionReason?: string
 ): Promise<{ proof: PaymentProof; quittance?: Quittance; success: boolean }> => {
-  if (typeof window !== 'undefined') return remoteMutation('reviewPaymentProof', [proofId, decision, rejectionReason]);
+  const canonicalDecision = decision === 'approve' ? 'approved' : decision === 'reject' ? 'rejected' : decision;
+  if (typeof window !== 'undefined') return remoteMutation('reviewPaymentProof', [proofId, canonicalDecision, rejectionReason]);
 
   if (!['approved', 'approve', 'rejected', 'reject'].includes(decision)) throw new Error('Décision invalide.');
   const approved = decision === 'approved' || decision === 'approve';
