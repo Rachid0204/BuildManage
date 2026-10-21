@@ -1,28 +1,55 @@
-# Security Specification (`security_spec.md`)
+# Security and accounting contract
 
-## 1. Data Invariants
-1. **Default Deny**: All paths not explicitly matched in `firestore.rules` are denied by default (`match /{document=**} { allow read, write: if false; }`).
-2. **Authentication & Verification**: All write operations require an authenticated user (`isSignedIn()`) with verified email (`isVerified()`) or bootstrapped SaaS Admin (`isAdmin()`).
-3. **Path Variable Hardening**: Every single-document operation (`get`, `create`, `update`, `delete`) validates its path ID variable with `isValidId(id)` (`id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$')`).
-4. **Strict Blueprint Validation (`isValidSyndic`, `isValidUserProfile`, `isValidPrestataire`)**: Every `create` and `update` operation enforces strict key allowlists (`hasAll` / `hasOnly`), string length bounds (`.size() <= MAX`), array size bounds (`buildings.size() <= 50`), and immutable ownership (`createdBy` / `uid`).
-5. **PII & List Query Protection**: `users/{userId}` restricts reads strictly to the document owner (`request.auth.uid == userId`) or `isAdmin()`. Every `allow list` rule enforces `resource.data` ownership or `isAdmin()`.
+The backend is the authority for identities, tenant membership and financial state.
+A Firebase browser token must be verified by the Admin SDK; custom sessions are
+server HMAC tokens bound to current membership and a revocation version. Browser
+session envelopes and user-provided roles are not authorization credentials.
 
-## 2. The "Dirty Dozen" Payloads
-1. **Unauthenticated Write**: `auth = null` attempting `create` on `/syndics/syn-1` -> `PERMISSION_DENIED`.
-2. **Unverified Email Spoof**: `auth = { uid: 'u1', token: { email: 'wahbi.rachid@gmail.com', email_verified: false } }` attempting admin write -> `PERMISSION_DENIED`.
-3. **Shadow Field Injection**: `create` on `/syndics/syn-1` including `{ isSuperVerified: true }` -> `PERMISSION_DENIED` (blocked by `keys().hasOnly(...)`).
-4. **Identity Spoofing on Create**: User `u1` creating `/syndics/syn-1` with `createdBy: 'u2'` -> `PERMISSION_DENIED`.
-5. **Self-Assigned Admin Role**: User `u1` creating `/users/u1` with `role: 'admin'` without being bootstrapped admin -> `PERMISSION_DENIED`.
-6. **Privilege Escalation on Update**: User `u1` updating `/users/u1` to change `role: 'admin'` -> `PERMISSION_DENIED`.
-7. **Owner Mutation on Update**: User `u1` updating `/syndics/syn-1` to change `createdBy: 'u2'` -> `PERMISSION_DENIED`.
-8. **ID Poisoning Attack**: Document ID exceeding 128 chars or containing invalid characters -> `PERMISSION_DENIED` (`isValidId` check).
-9. **Value Poisoning / Oversized String**: Updating `name` with a 5,000-character string -> `PERMISSION_DENIED` (`name.size() <= 200`).
-10. **Unbounded Array Exhaustion**: Updating `buildings` with 100 items -> `PERMISSION_DENIED` (`buildings.size() <= 50`).
-11. **PII Blanket Read**: User `u2` attempting `get` on `/users/u1` -> `PERMISSION_DENIED`.
-12. **Unfiltered List Scraping**: Non-admin user attempting unfiltered `list` on `/users` -> `PERMISSION_DENIED`.
+All business writes use `/api/commands` or another specific authenticated operation.
+`/api/shared-state` is a filtered read view; snapshot writes and web resets are
+forbidden. Firestore and Storage deny direct client access, including clients
+claiming an admin role. Admin SDK IAM is configured separately at deployment.
 
-## 3. Conflict & Red Team Audit Report
-- **Identity Spoofing**: Blocked on all collections via `incoming().createdBy == request.auth.uid` and `incoming().uid == userId`.
-- **State Shortcutting**: Subscription status and plan values are constrained to valid enums (`['starter', 'professional', 'enterprise']` and `['active', 'expired', 'cancelled']`).
-- **Resource Poisoning**: Every string has `.size() <= MAX` and every array has `.size() <= 50`.
-- **Update Validation Gate**: Every `allow update` begins with `isValid[Entity](incoming())` and uses action-based `affectedKeys().hasOnly(...)` plus `|| isAdmin()`.
+Every command validates role, tenant, building and record ownership. Generated
+identifiers and actor identity come from trusted state. Provider status updates are
+limited to assigned interventions; resident proofs and requests belong to that
+resident. Private chat messages have explicit peers. File access checks private
+ownership, shared document attachment, marketplace publication or assigned work.
+
+A repository transaction encloses authorization, idempotency receipts, domain
+updates and audit records. HTTP success is released only after durable commit.
+There are no external email sends inside a database transaction. Firestore's global
+revision protects cross-instance correctness; large writes stage a generation and
+atomically switch the active pointer. The file adapter is local development only.
+
+Financial operations use integer centimes for allocation and validate stored
+invoices/charges. Partial payments cannot exceed the remaining balance. Monthly
+billing normalizes periods and uses one engine for manual and scheduled execution.
+Opening arrears never create cash income. Opening cash balances are confirmed once.
+Reversals append inverse journal entries, retain original transactions and void
+superseded receipts. Closed periods reject new entries for their dates; admin
+reopening requires an audit reason. Platform subscriptions are separate from
+resident/property funds. AI OCR cannot approve payments, and CMI is unavailable.
+
+Passwords use salted scrypt on the server. Legacy account digests are protected
+with scrypt on import and upgraded on successful login. New invitation secrets use
+cryptographic randomness, are retained in manager memory for sharing, and are
+removed from persisted resident/provider entities. Idempotent response bodies and
+email outbox bodies are encrypted at rest with the server secret. Identity actions
+use hashed random, expiring, single-use tokens. Password changes/resets, credential
+regeneration and logout revoke prior custom sessions. Archived accounts, including
+legacy credential-store accounts, cannot keep using a prior token.
+
+Assembly vote weights come from named, owned lots. The ownership roll is frozen
+when voting opens. Clients cannot supply accepted totals or mutate the resolutions
+after opening. Finalization recomputes results; completed meetings are immutable.
+
+Regression coverage lives in `tests/httpBoundaries.ts`, `tests/paymentBoundaries.ts`,
+`tests/productionReadiness.ts`, `tests/adminRecovery.ts` and
+`tests/firestoreIntegration.ts`. The older domain suite also remains in place.
+The emulator suite checks bulk generation, concurrency, rollback and client denial.
+Run `npm run check:local` and `npm run test:emulator` before release.
+
+See DEPLOYMENT.md for migration, IAM, key management, backups, live integration
+acceptance and capacity limits. Local tests are not evidence that production
+services or legal templates have been approved.

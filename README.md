@@ -1,123 +1,80 @@
-# ImmoGest / Syndik Maroc — Plateforme de Gestion de Copropriété (Loi 18-00 & 106-12)
+# ImmoGest / Syndik Maroc
 
-Application complète de gestion de copropriété adaptée au cadre juridique et comptable marocain (**Loi n° 18-00** modifiée et complétée par la **Loi n° 106-12**), avec support bilingue **Français / Arabe (RTL)**.
+French/Arabic property-management SaaS for Moroccan syndic cabinets, residents,
+providers and platform administrators. Includes buildings, lots, charge billing,
+payment review, invoices/receipts, maintenance, assemblies/voting, documents, chat,
+marketplace, financial exports and subscription controls.
 
----
+## Run locally
 
-## 1. Prérequis & Environnement (Windows / macOS / Linux)
-
-- **Node.js** : version `20.x LTS` (ou supérieure compatible)
-- **Gestionnaire de paquets** : `npm` (utilisez uniquement `package-lock.json`)
-- **Firebase CLI** (optionnel pour les émulateurs et le déploiement) : `npm install -g firebase-tools`
-
----
-
-## Vérification locale sans secrets
+Use Node 22.9 or newer. Live secrets are unnecessary for local builds and synthetic
+regression tests.
 
 ```bash
 npm ci
 npm run check:local
-```
-
-Cette commande vérifie le typage, les règles, les services, les frontières HTTP, les paiements et les builds. Les tests utilisent des données synthétiques et bloquent les appels externes. Aucun secret de paiement, Firebase Admin, email ou IA n'est nécessaire pour ces vérifications.
-
-L'authentification de l'API utilise une identité vérifiée côté serveur. L'inscription crée un nouveau cabinet avec ses identifiants et son essai de 30 jours côté serveur. Les comptes invités se connectent avec les identifiants fournis par leur syndic. Les signatures calculables dans le navigateur ne donnent aucun droit serveur.
-
-Consultez LOCAL_FIX_NOTES.md pour les limites restantes : la migration de la persistance financière canonique, les transactions multi-appareils et les intégrations déployées restent à vérifier.
-
-## 2. Installation & Démarrage Rapide (Windows PowerShell / CMD / Bash)
-
-```bash
-# 1. Installer les dépendances à partir du lockfile
-npm ci
-
-# 2. Copier le modèle de variables d'environnement
-cp .env.example .env.local
-# Sous Windows CMD :
-# copy .env.example .env.local
-
-# 3. Lancer le serveur de développement (Express + Vite sur le port 3000)
 npm run dev
 ```
 
-L'application est accessible sur `http://localhost:3000`.
+The development app runs on `http://localhost:3000`. It uses `.data` for local data.
+Copy `.env.example` to `.env.local` when configuring optional integrations. These
+variables are loaded by the start/dev scripts; production requires durable services.
 
----
-
-## 3. Commandes de Vérification & Qualité (Release Gates)
-
-Toutes ces commandes sont exécutées automatiquement dans le pipeline CI (`.github/workflows/deploy.yml`) :
+## Verification
 
 ```bash
-# Vérification stricte du typage TypeScript (Frontend + Cloud Functions)
 npm run typecheck
-
-# Audit statique des règles de sécurité Firestore
 npm run lint
-
-# Exécution de la suite de tests de non-régression (Auth, Finances, Quittances, AG, Isolation)
 npm run test:verify
-
-# Compilation des Cloud Functions Firebase
+npm run test:business
+npm run test:security
+npm run test:production
+npm run test:recovery
+npm run test:emulator  # Java 21; local demo project only
 npm run build:functions
-
-# Construction du bundle de production Frontend
 npm run build
 ```
 
----
+HTTP tests use isolated synthetic data, local processes and a network guard. The
+Firestore suite validates staged bulk writes, concurrent repositories, rollback and
+client denial against a local emulator. No real accounts, email or payment services
+are contacted. A passing build does not establish live integration readiness.
 
-## 4. Architecture & Modèle de Données
+## Architecture and workflow
 
-- **Persistance actuelle** : cache local, état partagé serveur et miroirs Firestore. La migration vers une autorité financière canonique et transactionnelle reste à terminer.
-- **Authentification & Rôles** :
-  - `admin` : Super-administrateur plateforme.
-  - `syndic` : Gestionnaire de cabinet de syndic (essai initial de 30 jours créé côté serveur / inscription, limites d'immeubles par forfait vérifiées).
-  - `resident` : Copropriétaire ou locataire rattaché via code d'invitation sécurisé à expiration (`INV-XXXX-MA`).
-  - `provider` : Prestataire agréé rattaché à un immeuble.
-- **Sécurité & Isolation Multi-Tenant** :
-  - Aucune donnée de mot de passe en clair n'est stockée dans `localStorage`, dans les entités métiers ou sur le serveur.
-  - Les routes `/api/shared-state` exigent des en-têtes d'authentification vérifiés et filtrent les données par `syndicId` / `buildingId`.
-  - La génération d'annonces IA passe exclusivement par le proxy serveur authentifié `POST /api/ai/announcement` (la clé `GEMINI_API_KEY` reste côté serveur).
+- The authenticated backend is the single authority. Explicit commands enforce
+  tenant, role, record ownership and subscription policy. Broad snapshot writes
+  and web resets are disabled.
+- Production uses Admin SDK Firestore transactions; development uses an atomic
+  locked file adapter. Browser business state is an in-memory view, cleared on
+  identity changes. Firestore and Storage deny direct browser access.
+- Related financial records commit together. Retries have durable operation
+  receipts; invoice payments store charge allocations. Reversals preserve the
+  original journal and void receipts. Financial periods can be closed, with admin
+  reopening and an audit reason. Opening arrears are separate from opening cash.
+- Manual and scheduled billing use the same backend operation and period keys.
+  Initial billing creates persisted, itemized invoices. Owner-first lot liability
+  is used consistently. Expired subscriptions allow consultation and export while
+  blocking mutations; plan limits are checked in the backend.
+- New passwords and invitations use scrypt and cryptographic randomness. Custom
+  account recovery uses expiring single-use tokens and an encrypted email outbox.
+  Password resets, credential regeneration and logout revoke server sessions.
+- Providers update only assigned interventions. Completion awaits the resident or
+  syndic's confirmation. Marketplace conversations have explicit buyer/seller peers.
+- Assembly vote totals and weights are server-derived. Ownership is frozen on
+  opening, resolutions cannot change after voting starts, and finalized meetings
+  are immutable.
+- PDFs embed a licensed Arabic-capable font, use actual persisted records, and do
+  not fabricate a QR verification service, seal, signature or banking information.
 
----
+## Deployment
 
-## 5. Règles Comptables & Financières (Loi 18-00 & 106-12)
+Read [DEPLOYMENT.md](DEPLOYMENT.md) before switching traffic. This release needs a
+coordinated data migration, backend/rules/functions rollout, private uploads,
+transactional mail and scheduled jobs. `npm start` serves the compiled backend and
+frontend after `npm run build`. The workflow verifies and uploads build artifacts;
+it does not deploy to live infrastructure.
 
-- **Calculs au centime** : Toutes les répartitions budgétaires aux tantièmes et ventilations entre **Charges Courantes** et **Fonds de Réserve** utilisent des calculs exacts au centime (`utils/security.ts`) garantissant que la somme des quotes-parts égale exactement le budget.
-- **Unicité des appels de fonds** : `generateMonthlyCharges` utilise une clé de période déterministe (`YYYY-MM`) empêchant toute double facturation lors d'appels répétés ou concurrents.
-- **Validation des justificatifs & Quittances** :
-  - `reviewPaymentProof` vérifie l'état `pending` et utilise un identifiant d'écriture déterministe pour empêcher les doubles encaissements et gérer les paiements partiels.
-  - `generateQuittanceForCharge` émet ou réédite le reçu officiel en lecture seule pour la comptabilité (`addTransactionToLedger: false`), sans jamais gonfler la trésorerie.
-
----
-
-## 6. Où récupérer les valeurs des variables d'environnement (`.env.local` & GitHub Secrets)
-
-### A. Configuration Firebase Client (`VITE_FIREBASE_*` & `FIRESTORE_DATABASE_ID`)
-- **Déjà pré-configurée** dans le fichier `firebase-applet-config.json` à la racine du projet :
-  - `VITE_FIREBASE_PROJECT_ID` : `immogest-7faaf`
-  - `VITE_FIREBASE_APP_ID` : `1:174234637104:web:9611f6009cb754d7222ef5`
-  - `VITE_FIREBASE_MEASUREMENT_ID` : `G-TF6SCSL1X0`
-  - `VITE_FIREBASE_API_KEY` : `AIzaSyC9RcLD9nFizqRXKdPr6ubFlSDqS4pXF6s`
-  - `VITE_FIREBASE_AUTH_DOMAIN` : `immogest-7faaf.firebaseapp.com`
-  - `VITE_FIREBASE_STORAGE_BUCKET` : `immogest-7faaf.firebasestorage.app`
-  - `VITE_FIREBASE_MESSAGING_SENDER_ID` : `174234637104`
-  - `VITE_FIRESTORE_DATABASE_ID` / `FIRESTORE_DATABASE_ID` : `ai-studio-immogest-6d16b790-183d-49fd-9d4f-086d99dc2be3`
-- **Pour un autre projet Firebase (Staging / Production)** :
-  1. Ouvrez la [Console Firebase](https://console.firebase.google.com/).
-  2. Allez dans **Paramètres du projet (⚙️ Project Settings)** > onglet **Général (General)**.
-  3. Descendez jusqu'à **Vos applications (Your apps)** > sélectionnez votre application Web (`</>`).
-  4. Copiez les clés de l'objet `firebaseConfig`.
-  5. Pour `VITE_FIRESTORE_DATABASE_ID`, allez dans **Firestore Database** dans le menu de gauche : l'identifiant de la base s'affiche en haut (utilisez `(default)` si vous utilisez la base par défaut).
-
-### B. Clé API Gemini (`GEMINI_API_KEY`) — Optionnelle (Rédaction IA des annonces)
-- **Où l'obtenir** : Sur [Google AI Studio — API Keys](https://aistudio.google.com/apikey).
-- Cliquez sur **Create API key**, puis collez-la dans `GEMINI_API_KEY=` au sein de `.env.local` (côté serveur uniquement).
-
-### C. Passerelle de Paiement CMI Maroc (`CMI_CLIENT_ID`, `CMI_STORE_KEY`) — Optionnelle
-- Gardez `CMI_ENABLED=false` tant que votre contrat commerçant CMI n'est pas actif.
-- **Où les obtenir** : Dans votre portail marchand **CMI Back-Office** (`https://ants.cmi.co.ma`) > **Administration** > **Clé de hachage (Store Key)** et votre identifiant marchand (`Client ID` à 9 chiffres fourni par le CMI lors de l'affiliation).
-
-### D. Emails Transactionnels (`SENDGRID_API_KEY`) — Optionnelle
-- **Où l'obtenir** : Dans le tableau de bord [SendGrid](https://app.sendgrid.com/settings/api_keys) > **Settings** > **API Keys** > **Create API Key**.
+Local/emulator checks cannot prove IAM, real email delivery, merchant integration,
+restore timing or production capacity. Those acceptance steps are explicit in the
+runbook. CMI is disabled pending a real merchant-tested integration.

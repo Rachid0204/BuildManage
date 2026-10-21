@@ -10,8 +10,9 @@ export function isAlreadyHashedPassword(value: string | undefined): boolean {
 }
 
 /**
- * Synchronous deterministic FNV-1a / DJB2 256-bit hex digest so both sync & async callers
- * can hash and verify credentials without storing plaintext passwords in localStorage or server state.
+ * Legacy compatibility digest for migration and historical session envelopes; not a password KDF.
+ * The backend uses server/passwords.ts (scrypt). Existing callers
+ * must never use this legacy digest to create production credentials.
  */
 export function hashPasswordSync(password: string, emailSalt = ''): string {
   const normalizedSalt = emailSalt.trim().toLowerCase();
@@ -89,11 +90,7 @@ export function generateSecureRandomDigits(length = 6): string {
   const buf = new Uint32Array(length);
   if (typeof globalThis !== 'undefined' && globalThis.crypto?.getRandomValues) {
     globalThis.crypto.getRandomValues(buf);
-  } else {
-    for (let i = 0; i < length; i++) {
-      buf[i] = Math.floor(Date.now() * (i + 1) + Math.random() * 0xffffffff) >>> 0;
-    }
-  }
+  } else { throw new Error('A cryptographic random generator is required'); }
   let out = '';
   for (let i = 0; i < length; i++) {
     out += digits[buf[i] % digits.length];

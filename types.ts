@@ -40,6 +40,7 @@ export type View =
   | 'marketplace';
 
 export interface UserProfile {
+  emailVerified?: boolean;
   uid: string;
   email: string;
   displayName: string;
@@ -103,6 +104,7 @@ export interface Apartment {
 }
 
 export interface Charge {
+  periodKey?: string;
   id: string;
   syndicId: string;
   buildingId: string;
@@ -147,6 +149,8 @@ export interface PaymentProof {
 }
 
 export interface Quittance {
+  voidedAt?: string;
+  voidReason?: string;
   paymentId?: string;
   id: string;
   quittanceNumber: string;
@@ -174,6 +178,8 @@ export interface Quittance {
 }
 
 export interface Invoice {
+  items?: Array<{description:string;period:string;amount:number}>;
+  issuedTo?: Pick<Resident, "name" | "email" | "phone" | "cin" | "isOwner">;
   paymentIds?: string[];
   id: string;
   syndicId: string;
@@ -352,6 +358,7 @@ export interface AGAttendee {
 }
 
 export interface AssembleeGenerale {
+  votingSnapshot?: Partial<Building>;
   id: string;
   buildingId: string;
   syndicId: string;

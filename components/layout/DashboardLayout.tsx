@@ -1,3 +1,5 @@
+import SetupChecklist from '../views/SetupChecklist';
+import { subscriptionCanWrite } from '../../utils/subscriptionPolicy';
 import React, { useState } from 'react';
 import { Outlet, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import Sidebar from '../Sidebar';
@@ -75,7 +77,9 @@ const DashboardLayout: React.FC = () => {
                         onOpenMobileMenu={() => setIsMobileMenuOpen(true)}
                     />
                     <main className="flex-1 overflow-x-hidden overflow-y-auto bg-slate-100 p-3 sm:p-6 pb-24 lg:pb-6">
-                        <Outlet />
+                        {syndic && <p role="status" className="text-sm p-3 bg-slate-100 rounded mb-3">{subscriptionCanWrite(syndic) ? tr(`Abonnement : ${syndic.subscriptionStatus} · Échéance ${new Date(syndic.subscriptionExpiry).toLocaleDateString('fr-MA')}`, `الاشتراك: ${syndic.subscriptionStatus} · الانتهاء ${new Date(syndic.subscriptionExpiry).toLocaleDateString('ar-MA')}`) : tr('Abonnement expiré : consultation et export disponibles.', 'انتهى الاشتراك: الاطلاع والتصدير متاحان.')}</p>}
+                {selectedBuilding && <SetupChecklist building={selectedBuilding} />}
+                <Outlet />
                     </main>
                 </div>
             </div>

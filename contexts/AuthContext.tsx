@@ -1,7 +1,8 @@
+import { useQueryClient } from '@tanstack/react-query';
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { User, onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut, signInWithEmailAndPassword } from 'firebase/auth';
 import { auth } from '../firebase/config';
-import { STORAGE_KEYS, pushKeyToSharedServer, syncAllSharedStateFromServer, sanitizeAccountRecordsInStorage } from '../firebase/services';
+import { STORAGE_KEYS, pushKeyToSharedServer, syncAllSharedStateFromServer, sanitizeAccountRecordsInStorage, clearStateCache } from '../firebase/services';
 import type { UserProfile, UserRole, SubscriptionPlan, Prestataire } from '../types';
 import {
   hashPasswordSync,
@@ -63,11 +64,6 @@ interface AuthContextType {
   ) => Promise<UserProfile>;
   completeMandatoryPasswordChange: (newPassword: string) => Promise<void>;
   changePassword: (newPassword: string) => Promise<void>;
-  registerOrUpdateUserCredentials: (
-    email: string,
-    passwordOrToken: string,
-    profile: UserProfile
-  ) => void;
   logout: () => Promise<void>;
 }
 
@@ -204,6 +200,7 @@ function createVerifiedIdentityAdapter(profile: UserProfile, apiToken: string): 
 }
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  const queryClient = useQueryClient();
   const [user, setUser] = useState<User | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -213,6 +210,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     firebaseUser?: User | null,
     serverToken?: string
   ) => {
+    if (!profile || profile.uid !== userProfile?.uid) { clearStateCache(); queryClient.clear(); }
     if (!profile) {
       localStorage.removeItem(SESSION_STORAGE_KEY);
       setActiveAuthContext(null, null);
@@ -243,48 +241,23 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   useEffect(() => {
-    // Sanitize any legacy plaintext passwords in localStorage on boot (Audit Item 03)
-    sanitizeAccountRecordsInStorage();
-    void syncAllSharedStateFromServer();
-
-    // 1. Check signed session envelope in localStorage (rejects unsigned/tampered JSON)
-    const savedSession = localStorage.getItem(SESSION_STORAGE_KEY);
-    if (savedSession) {
+    let active = true;
+    const restore = async () => {
+      const raw = localStorage.getItem(SESSION_STORAGE_KEY); if (!raw) return false;
       try {
-        const parsed = JSON.parse(savedSession);
-        const verifiedProfile = verifySignedSessionEnvelope(parsed);
-        if (verifiedProfile && typeof parsed.serverToken === 'string' && parsed.serverToken) {
-          setActiveAuthContext(
-            verifiedProfile,
-            typeof parsed.serverToken === 'string' ? parsed.serverToken : null
-          );
-          setUserProfile(verifiedProfile);
-          setUser(createVerifiedIdentityAdapter(verifiedProfile, parsed.serverToken));
-          setLoading(false);
-        } else {
-          // Unsigned or tampered session JSON — purge immediately
-          localStorage.removeItem(SESSION_STORAGE_KEY);
-        }
-      } catch {
-        localStorage.removeItem(SESSION_STORAGE_KEY);
-      }
-    }
-
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      if (currentUser) {
-        const active = localStorage.getItem(SESSION_STORAGE_KEY);
-        // A local resident/provider session may coexist with a previous Firebase browser login.
-        if (active) {
-          try { const cached = JSON.parse(active);
-            if (cached.serverToken && cached.profile?.uid !== currentUser.uid) { setLoading(false); return; }
-          } catch { /* continue with verified identity */ }
-        }
-        try { await exchangeFirebaseSession(currentUser); }
-        catch (error) { console.warn('Firebase session exchange failed:', error); }
-      }
-      setLoading(false);
+        const cached = JSON.parse(raw);if (!cached.serverToken) throw new Error('No server session');
+        const response = await fetch('/api/auth/session', { headers: { Authorization: `Bearer ${cached.serverToken}` } });
+        if (!response.ok) throw new Error('Expired session'); const data = await response.json();
+        if (active) persistSession(data.profile,undefined,data.token);return true;
+      } catch { if (active) persistSession(null);return false; }
+    };
+    const restored = restore();
+    const unsubscribe = onAuthStateChanged(auth, async currentUser => {
+      const hasSession = await restored;
+      if (active && !hasSession && currentUser) try { await exchangeFirebaseSession(currentUser); } catch { persistSession(null); }
+      if (active) setLoading(false);
     });
-    return () => unsubscribe();
+    return () => { active=false;unsubscribe(); };
   }, []);
 
   const exchangeFirebaseSession = async (firebaseUser: User): Promise<UserProfile> => {
@@ -381,17 +354,17 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const completeMandatoryPasswordChange = async (newPassword: string) => {
     if (!userProfile) throw new Error('Authentification requise.');
     const password = newPassword.trim();
-    if (password.length < 6 || isAlreadyHashedPassword(password)) throw new Error('Mot de passe invalide.');
+    if (password.length < 10 || isAlreadyHashedPassword(password)) throw new Error('Mot de passe invalide.');
     const response = await fetch('/api/auth/change-password', { method: 'POST',
       headers: getAuthenticatedRequestHeaders(), body: JSON.stringify({ newPassword: password }) });
     const data = await response.json();
     if (!response.ok || !data.ok) throw new Error(data.error || 'Le mot de passe n’a pas été enregistré.');
     await syncAllSharedStateFromServer(true);
-    persistSession({ ...userProfile, mustChangePassword: false });
+    persistSession(data.profile || { ...userProfile, mustChangePassword:false },undefined,data.token);
   };
 
   const logout = async () => {
-    persistSession(null);
+    try { await fetch('/api/auth/logout',{method:'POST',headers:getAuthenticatedRequestHeaders()}); } finally { persistSession(null); }
     if (typeof window !== 'undefined') {
       // Audit Item 22: Clear selected building and user-scoped cached state on logout
       localStorage.removeItem('syndik_selected_building_id');
@@ -404,34 +377,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
-  const registerOrUpdateUserCredentials = (
-    email: string,
-    passwordOrToken: string,
-    profile: UserProfile
-  ) => {
-    const normalizedEmail = email.trim().toLowerCase();
-    if (!normalizedEmail || !passwordOrToken) return;
-    // Audit Item 03: Only persist cryptographic passwordHash, never plaintext password
-    const passwordHash = hashPasswordSync(passwordOrToken, normalizedEmail);
-    const registered = getStoredRegisteredUsers();
-    const existingIdx = registered.findIndex(
-      (u) => u.email.toLowerCase() === normalizedEmail || u.uid === profile.uid
-    );
-    const entry: StoredUserAccount = {
-      uid: profile.uid,
-      email: normalizedEmail,
-      passwordHash,
-      profile,
-      createdAt: new Date().toISOString(),
-    };
-    if (existingIdx >= 0) {
-      registered[existingIdx] = entry;
-    } else {
-      registered.push(entry);
-    }
-    localStorage.setItem(REGISTERED_USERS_KEY, JSON.stringify(registered));
-    void pushKeyToSharedServer(REGISTERED_USERS_KEY, registered);
-  };
 
   return (
     <AuthContext.Provider
@@ -448,7 +393,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         register: registerAccount,
         completeMandatoryPasswordChange,
         changePassword: completeMandatoryPasswordChange,
-        registerOrUpdateUserCredentials,
         logout,
       }}
     >

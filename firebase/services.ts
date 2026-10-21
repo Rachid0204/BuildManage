@@ -1,3 +1,5 @@
+import { engineStorage, clearBusinessCache } from './cache';
+import { getServerRuntime } from './serverRuntime';
 import { applyResidentVote, evaluateResolutionStatus } from '../utils/agVoting';
 import {
   collection,
@@ -119,7 +121,7 @@ function notifyStateUpdated(key: string) {
 
 /**
  * Strips plaintext passwords from Syndic/Resident/Prestataire records before persisting to
- * localStorage or sending over the network (Audit Item 03).
+ * engineStorage or sending over the network (Audit Item 03).
  */
 function stripPlaintextCredentialsForStorage<T>(key: string, val: T): T {
   if (!val) return val;
@@ -168,7 +170,7 @@ function stripPlaintextCredentialsForStorage<T>(key: string, val: T): T {
 }
 
 export function sanitizeAccountRecordsInStorage(): void {
-  if (typeof localStorage === 'undefined') return;
+  if (typeof engineStorage === 'undefined') return;
   const keysToSanitize = [
     STORAGE_KEYS.SYNDICS,
     STORAGE_KEYS.PRESTATAIRES,
@@ -178,11 +180,11 @@ export function sanitizeAccountRecordsInStorage(): void {
   ];
   for (const key of keysToSanitize) {
     try {
-      const raw = localStorage.getItem(key);
+      const raw = engineStorage.getItem(key);
       if (!raw) continue;
       const parsed = JSON.parse(raw);
       const sanitized = stripPlaintextCredentialsForStorage(key, parsed);
-      localStorage.setItem(key, JSON.stringify(sanitized));
+      engineStorage.setItem(key, JSON.stringify(sanitized));
     } catch {
       // ignore malformed JSON
     }
@@ -200,14 +202,16 @@ export async function pushKeyToSharedServer<T>(
   options?: { background?: boolean }
 ): Promise<T> {
   const sanitizedVal = stripPlaintextCredentialsForStorage(key, val);
+  if (getServerRuntime() || typeof window === 'undefined') return sanitizedVal;
+  throw new Error('Utilisez une opération serveur explicite.');
   const headers = getAuthenticatedRequestHeaders();
   const isNetworkBlockedSim =
-    typeof localStorage !== 'undefined' &&
-    localStorage.getItem('syndik_simulate_network_offline') === 'true';
+    typeof engineStorage !== 'undefined' &&
+    engineStorage.getItem('syndik_simulate_network_offline') === 'true';
 
   if (isNetworkBlockedSim) {
     try {
-      localStorage.setItem('syndik_sync_status_v1', 'failed');
+      engineStorage.setItem('syndik_sync_status_v1', 'failed');
     } catch {
       // ignore
     }
@@ -235,7 +239,7 @@ export async function pushKeyToSharedServer<T>(
     });
     if (!res.ok) {
       try {
-        localStorage.setItem('syndik_sync_status_v1', 'failed');
+        engineStorage.setItem('syndik_sync_status_v1', 'failed');
       } catch {
         // ignore
       }
@@ -245,7 +249,7 @@ export async function pushKeyToSharedServer<T>(
       return sanitizedVal;
     }
     try {
-      localStorage.setItem('syndik_sync_status_v1', 'synced');
+      engineStorage.setItem('syndik_sync_status_v1', 'synced');
     } catch {
       // ignore
     }
@@ -259,7 +263,7 @@ export async function pushKeyToSharedServer<T>(
       if (data && data.ok && data.value !== undefined && data.value !== null) {
         const cleanServerVal = stripPlaintextCredentialsForStorage(key, data.value as T);
         try {
-          localStorage.setItem(key, JSON.stringify(cleanServerVal));
+          engineStorage.setItem(key, JSON.stringify(cleanServerVal));
         } catch {
           // ignore
         }
@@ -278,7 +282,7 @@ export async function pushKeyToSharedServer<T>(
       return sanitizedVal;
     }
     try {
-      localStorage.setItem('syndik_sync_status_v1', 'failed');
+      engineStorage.setItem('syndik_sync_status_v1', 'failed');
     } catch {
       // ignore
     }
@@ -294,6 +298,7 @@ export async function pushKeyToSharedServer<T>(
 export async function syncAllSharedStateFromServer(
   force: boolean = false
 ): Promise<Record<string, any> | null> {
+  if (getServerRuntime()) return null;
   const headers = getAuthenticatedRequestHeaders();
   if (!headers['Authorization']) {
     return null;
@@ -338,12 +343,12 @@ export async function syncAllSharedStateFromServer(
       const trackedKeys = Object.values(STORAGE_KEYS);
 
       if (typeof window !== 'undefined' && serverStore.__resetAt) {
-        const localResetAt = localStorage.getItem('syndik_prod_last_reset_at');
+        const localResetAt = engineStorage.getItem('syndik_prod_last_reset_at');
         if (localResetAt !== String(serverStore.__resetAt)) {
           for (const k of trackedKeys) {
-            localStorage.removeItem(k);
+            engineStorage.removeItem(k);
           }
-          localStorage.setItem('syndik_prod_last_reset_at', String(serverStore.__resetAt));
+          engineStorage.setItem('syndik_prod_last_reset_at', String(serverStore.__resetAt));
         }
       }
 
@@ -351,18 +356,8 @@ export async function syncAllSharedStateFromServer(
         const serverVal = serverStore[key];
         if (serverVal !== undefined && serverVal !== null) {
           const cleanVal = stripPlaintextCredentialsForStorage(key, serverVal);
-          localStorage.setItem(key, JSON.stringify(cleanVal));
-        } else {
-          const localRaw = localStorage.getItem(key);
-          if (localRaw) {
-            try {
-              const parsed = JSON.parse(localRaw);
-              void pushKeyToSharedServer(key, parsed, undefined, { background: true });
-            } catch {
-              // ignore
-            }
-          }
-        }
+          engineStorage.setItem(key, JSON.stringify(cleanVal));
+        } else { engineStorage.removeItem(key); }
       }
       return serverStore;
     } catch {
@@ -375,49 +370,13 @@ export async function syncAllSharedStateFromServer(
   return inflightSyncPromise;
 }
 
-export async function resetAllProductionData(): Promise<void> {
-  if (typeof window !== 'undefined') {
-    for (const key of Object.values(STORAGE_KEYS)) {
-      localStorage.removeItem(key);
-    }
-    for (const oldKey of LEGACY_TEST_KEYS) {
-      localStorage.removeItem(oldKey);
-    }
-    localStorage.removeItem('syndik_selected_building_id');
-  }
-  try {
-    const headers = getAuthenticatedRequestHeaders();
-    if (headers['Authorization']) {
-      await fetch('/api/shared-state/reset', {
-        method: 'POST',
-        headers,
-      });
-    }
-  } catch {
-    // ignore
-  }
-  const user = auth.currentUser;
-  if (user && user.emailVerified) {
-    try {
-      const snap = await getDocs(collection(db, 'syndics'));
-      for (const docSnap of snap.docs) {
-        try {
-          await deleteDoc(doc(db, 'syndics', docSnap.id));
-        } catch {
-          // ignore
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }
-  notifyStateUpdated(STORAGE_KEYS.SYNDICS);
-}
+export async function resetAllProductionData(): Promise<void> { throw new Error('Remise à zéro désactivée : utilisez la sauvegarde et restauration.'); }
 
 // Purge any legacy test/mock keys in browser and sanitize credentials
 if (typeof window !== 'undefined') {
+  for (const key of Object.values(STORAGE_KEYS)) window.localStorage.removeItem(key);
   for (const oldKey of LEGACY_TEST_KEYS) {
-    localStorage.removeItem(oldKey);
+    engineStorage.removeItem(oldKey);
   }
   sanitizeAccountRecordsInStorage();
   void syncAllSharedStateFromServer();
@@ -426,16 +385,16 @@ if (typeof window !== 'undefined') {
 // Helper to get or initialize local storage item
 function getLocalItem<T>(key: string, defaultVal: T): T {
   try {
-    const item = localStorage.getItem(key);
+    const item = engineStorage.getItem(key);
     if (!item) {
       const cleanDefault = stripPlaintextCredentialsForStorage(key, defaultVal);
-      localStorage.setItem(key, JSON.stringify(cleanDefault));
-      void pushKeyToSharedServer(key, cleanDefault, undefined, { background: true });
+      engineStorage.setItem(key, JSON.stringify(cleanDefault));
+
       return cleanDefault;
     }
     return JSON.parse(item) as T;
   } catch (e) {
-    console.error(`Error reading ${key} from localStorage:`, e);
+    console.error(`Error reading ${key} from engineStorage:`, e);
     return defaultVal;
   }
 }
@@ -443,19 +402,19 @@ function getLocalItem<T>(key: string, defaultVal: T): T {
 function setLocalItem<T>(key: string, val: T, deletedId?: string): void {
   try {
     if (deletedId) {
-      const rawTombstones = localStorage.getItem('syndik_deleted_building_ids_v1');
+      const rawTombstones = engineStorage.getItem('syndik_deleted_building_ids_v1');
       const tombstones: string[] = rawTombstones ? JSON.parse(rawTombstones) : [];
       if (!tombstones.includes(deletedId)) {
         tombstones.push(deletedId);
-        localStorage.setItem('syndik_deleted_building_ids_v1', JSON.stringify(tombstones));
+        engineStorage.setItem('syndik_deleted_building_ids_v1', JSON.stringify(tombstones));
       }
     }
     const sanitized = stripPlaintextCredentialsForStorage(key, val);
-    localStorage.setItem(key, JSON.stringify(sanitized));
-    void pushKeyToSharedServer(key, sanitized, deletedId, { background: true });
+    engineStorage.setItem(key, JSON.stringify(sanitized));
+
     notifyStateUpdated(key);
   } catch (e) {
-    console.error(`Error writing ${key} to localStorage:`, e);
+    console.error(`Error writing ${key} to engineStorage:`, e);
   }
 }
 
@@ -531,56 +490,11 @@ export async function syncPasswordChangeToFirestore(_params: {
 // 1. SYNDIC & TENANT DATA
 // ==========================================
 
-export const getSyndics = async (): Promise<Syndic[]> => {
-  await syncAllSharedStateFromServer();
-  const localSyndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
-
-  if (!isMock) {
-    try {
-      const snapshot = await getDocs(collection(db, SYNDICS_COL));
-      if (!snapshot.empty) {
-        const rawTombstones = localStorage.getItem('syndik_deleted_building_ids_v1');
-        const tombstones = new Set<string>(rawTombstones ? JSON.parse(rawTombstones) : []);
-        const mergedMap = new Map<string, Syndic>();
-        for (const s of localSyndics) {
-          if (s?.id && !tombstones.has(s.id)) {
-            mergedMap.set(s.id, { ...s, logoUrl: s.logoUrl ?? '' });
-          }
-        }
-        for (const docSnap of snapshot.docs) {
-          if (tombstones.has(docSnap.id)) continue;
-          const data = docSnap.data() as any;
-          const existing = mergedMap.get(docSnap.id);
-          const buildings = Array.isArray(data.buildings)
-            ? data.buildings.filter((b: any) => b?.id && !tombstones.has(b.id))
-            : existing?.buildings || [];
-          const firestoreSyndic: Syndic = {
-            ...existing,
-            ...data,
-            id: docSnap.id,
-            logoUrl: data.logoUrl ?? existing?.logoUrl ?? '',
-            subscriptionExpiry:
-              data.subscriptionExpiresAt ||
-              data.subscriptionExpiry ||
-              existing?.subscriptionExpiry ||
-              new Date(Date.now() + 30 * 86400000).toISOString(),
-            buildings,
-          };
-          mergedMap.set(docSnap.id, firestoreSyndic);
-        }
-        const mergedList = Array.from(mergedMap.values());
-        setLocalItem(STORAGE_KEYS.SYNDICS, mergedList);
-        return mergedList;
-      }
-    } catch {
-      // continue with shared server + local state
-    }
-  }
-
-  return localSyndics.map((s) => ({ ...s, logoUrl: s.logoUrl ?? '' }));
-};
+export const getSyndics = async (): Promise<Syndic[]> => { await syncAllSharedStateFromServer(); return getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, []).filter((s: any) => !s.archivedAt).map(s => ({ ...s, logoUrl: s.logoUrl ?? '', buildings: s.buildings.filter((b: any) => !b.archivedAt).map(b => ({ ...b, residents: b.residents.filter((r: any) => !r.archivedAt).map(r => ({ ...r,...ephemeralInvites.get(r.id) })), apartments: b.apartments.filter((a: any) => !a.archivedAt) })) })); };
 
 export const saveSyndic = async (syndic: Syndic): Promise<Syndic> => {
+  if (typeof window !== 'undefined') return remoteMutation('saveSyndic', [syndic]);
+
   const normalizedSyndic: Syndic = {
     ...syndic,
     logoUrl: syndic.logoUrl ?? '',
@@ -643,6 +557,8 @@ export const addBuilding = async (
     'id' | 'residents' | 'apartments' | 'announcements' | 'documents' | 'financials' | 'syndicId'
   > & { apartments?: Omit<Apartment, 'id' | 'buildingId'>[] }
 ) => {
+  if (typeof window !== 'undefined') return remoteMutation('addBuilding', [syndicId, buildingData]);
+
   const { apartments, ...coreBuilding } = buildingData;
   const validation = BuildingSchema.safeParse({ ...coreBuilding, syndicId });
   if (!validation.success) {
@@ -671,7 +587,7 @@ export const addBuilding = async (
     );
   }
 
-  const newBuildingId = `bld-${Date.now()}`;
+  const newBuildingId = crypto.randomUUID();
   const totalLots = apartments?.length || 0;
   const baseTantiemes = totalLots > 0 ? Math.floor(1000 / totalLots) : 100;
   const remainderTantiemes = totalLots > 0 ? 1000 - baseTantiemes * totalLots : 0;
@@ -736,6 +652,8 @@ export const updateBuilding = async (
     >
   > & { syncApartmentFees?: boolean }
 ) => {
+  if (typeof window !== 'undefined') return remoteMutation('updateBuilding', [buildingId, updates]);
+
   const { syncApartmentFees, ...buildingUpdates } = updates;
   if (isLocalEngineEnabled) {
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
@@ -768,6 +686,8 @@ export const updateBuilding = async (
 };
 
 export const deleteBuilding = async (buildingId: string) => {
+  if (typeof window !== 'undefined') return remoteMutation('deleteBuilding', [buildingId]);
+
   if (isLocalEngineEnabled) {
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
     for (const syndic of syndics) {
@@ -793,6 +713,8 @@ export const deleteBuilding = async (buildingId: string) => {
 // ==========================================
 
 export const addApartment = async (apartmentData: Omit<Apartment, 'id'>) => {
+  if (typeof window !== 'undefined') return remoteMutation('addApartment', [apartmentData]);
+
   const validation = ApartmentSchema.safeParse(apartmentData);
   if (!validation.success) {
     throw new Error('Invalid Apartment Data: ' + validation.error.message);
@@ -836,6 +758,8 @@ export const addApartmentsBulk = async (
   buildingId: string,
   apartmentsList: Omit<Apartment, 'id' | 'buildingId'>[]
 ) => {
+  if (typeof window !== 'undefined') return remoteMutation('addApartmentsBulk', [buildingId, apartmentsList]);
+
   if (!apartmentsList.length) return [];
 
   if (isLocalEngineEnabled) {
@@ -891,6 +815,8 @@ export const addApartmentsBulk = async (
 };
 
 export const rebalanceBuildingTantiemes = async (buildingId: string) => {
+  if (typeof window !== 'undefined') return remoteMutation('rebalanceBuildingTantiemes', [buildingId]);
+
   if (isLocalEngineEnabled) {
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
     for (const syndic of syndics) {
@@ -916,6 +842,8 @@ export const rebalanceBuildingTantiemes = async (buildingId: string) => {
 };
 
 export const updateApartment = async (apartment: Apartment) => {
+  if (typeof window !== 'undefined') return remoteMutation('updateApartment', [apartment]);
+
   const validation = ApartmentSchema.safeParse(apartment);
   if (!validation.success) {
     throw new Error('Invalid Apartment Data: ' + validation.error.message);
@@ -972,6 +900,8 @@ export const updateApartment = async (apartment: Apartment) => {
 };
 
 export const deleteApartment = async (apartmentId: string) => {
+  if (typeof window !== 'undefined') return remoteMutation('deleteApartment', [apartmentId]);
+
   if (isLocalEngineEnabled) {
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
     for (const syndic of syndics) {
@@ -1028,14 +958,14 @@ function generateTempPassword(name: string): string {
       .replace(/[^a-zA-Z]/g, '')
       .slice(0, 4)
       .toUpperCase() || 'RES';
-  const digits = generateSecureRandomDigits(4);
+  const digits = generateSecureRandomDigits(32);
   return `Syndik-${cleanPrefix}${digits}!`;
 }
 
 function saveResidentCredentialAccount(resident: Resident, rawPassword: string): ResidentAccountRecord {
   const accounts = getLocalItem<ResidentAccountRecord[]>(RESIDENT_ACCOUNTS_KEY, []);
   const emailNorm = resident.email.trim().toLowerCase();
-  const passwordHash = hashPasswordSync(rawPassword, emailNorm);
+  const passwordHash = getServerRuntime()?.hashPassword(rawPassword) || hashPasswordSync(rawPassword, emailNorm);
   const record: ResidentAccountRecord = {
     residentId: resident.id,
     email: resident.email.trim(),
@@ -1124,6 +1054,8 @@ export const addResident = async (
   residentData: Omit<Resident, 'id'>,
   generateCredentials: boolean = true
 ): Promise<Resident> => {
+  if (typeof window !== 'undefined') return remoteMutation('addResident', [residentData, generateCredentials]);
+
   const cleanedData = {
     ...residentData,
     apartmentId: residentData.apartmentId || undefined,
@@ -1142,11 +1074,11 @@ export const addResident = async (
         const nowIso = new Date().toISOString();
         const inviteExpiresAt = new Date(Date.now() + 7 * 86400000).toISOString();
         const inviteToken = generateCredentials
-          ? `inv-${generateSecureRandomDigits(6).toLowerCase()}`
+          ? `inv-${generateSecureRandomDigits(32).toLowerCase()}`
           : undefined;
         const auditAction: CredentialAuditEntry['action'] = 'generated';
         const persistedResident: Resident = {
-          id: `res-${Date.now()}`,
+          id: crypto.randomUUID(),
           ...cleanedData,
           hasAccount: !!generateCredentials,
           invitationStatus: generateCredentials ? 'pending' : undefined,
@@ -1189,6 +1121,8 @@ export const addResident = async (
 };
 
 export const updateResident = async (resident: Resident): Promise<Resident> => {
+  if (typeof window !== 'undefined') return remoteMutation('updateResident', [resident]);
+
   const { generatedPassword: ephemeralPassword, ...residentWithoutPassword } = resident;
   const cleanedResident: Resident = {
     ...residentWithoutPassword,
@@ -1276,6 +1210,8 @@ export const updateResident = async (resident: Resident): Promise<Resident> => {
 };
 
 export const regenerateResidentCredentials = async (residentId: string): Promise<Resident> => {
+  if (typeof window !== 'undefined') return remoteMutation('regenerateResidentCredentials', [residentId]);
+
   if (isLocalEngineEnabled) {
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
     for (const syndic of syndics) {
@@ -1285,7 +1221,7 @@ export const regenerateResidentCredentials = async (residentId: string): Promise
           const res = bld.residents[idx];
           const nowIso = new Date().toISOString();
           const inviteExpiresAt = new Date(Date.now() + 7 * 86400000).toISOString();
-          const inviteToken = `inv-${generateSecureRandomDigits(6).toLowerCase()}`;
+          const inviteToken = `inv-${generateSecureRandomDigits(32).toLowerCase()}`;
           const prevLog = Array.isArray(res.credentialsAuditLog) ? res.credentialsAuditLog : [];
           const actionType: CredentialAuditEntry['action'] = res.hasAccount
             ? 'regenerated'
@@ -1321,6 +1257,8 @@ export const recordResidentCredentialShare = async (
   residentId: string,
   method: 'pdf' | 'copy'
 ): Promise<Resident | null> => {
+  if (typeof window !== 'undefined') return remoteMutation('recordResidentCredentialShare', [residentId, method]);
+
   const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
   for (const syndic of syndics) {
     for (const bld of syndic.buildings) {
@@ -1351,6 +1289,8 @@ export const recordResidentCredentialShare = async (
 };
 
 export const deleteResident = async (residentId: string) => {
+  if (typeof window !== 'undefined') return remoteMutation('deleteResident', [residentId]);
+
   if (isLocalEngineEnabled) {
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
     for (const syndic of syndics) {
@@ -1499,6 +1439,8 @@ export const generateMonthlyCharges = async (
         useTantiemes?: boolean;
       }
 ): Promise<GenerateChargesResult> => {
+  if (typeof window !== 'undefined') return remoteMutation('generateMonthlyCharges', [buildingId, syndicId, periodOrOptions, maybeOptions]);
+
   const now = new Date();
   const defaultPeriod = now.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
 
@@ -1536,7 +1478,8 @@ export const generateMonthlyCharges = async (
     }
 
     const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, mockCharges);
-    const dueDate = new Date(now.getFullYear(), now.getMonth() + 1, 5)
+    const [billingYear, billingMonth] = normalizedPeriodKey.split('-').map(Number);
+    const dueDate = new Date(Date.UTC(billingYear, billingMonth - 1, 5))
       .toISOString()
       .split('T')[0];
 
@@ -1549,7 +1492,7 @@ export const generateMonthlyCharges = async (
     const centimeAllocationMap = useTantiemesBudget
       ? allocateBudgetInCentimes(
           budgetToSplit!,
-          building.apartments.map((a) => ({ id: a.id, tantiemes: a.tantiemes ?? 100 })),
+          building.apartments.filter((a: any) => !a.archivedAt).map((a) => ({ id: a.id, tantiemes: a.tantiemes ?? 100 })),
           totalTantiemes
         )
       : null;
@@ -1557,7 +1500,7 @@ export const generateMonthlyCharges = async (
     const newCharges: Charge[] = [];
     let skippedCount = 0;
 
-    building.apartments.forEach((apt) => {
+    building.apartments.filter((a: any) => !a.archivedAt).forEach((apt) => {
       const residentId =
         apt.ownerId ||
         apt.tenantId ||
@@ -1596,6 +1539,7 @@ export const generateMonthlyCharges = async (
         dueDate,
         status: 'unpaid',
         period: resolvedPeriod,
+        periodKey: normalizedPeriodKey,
         chargeType: resolvedChargeType,
         tantiemesApplied: shares,
         createdAt: now.toISOString(),
@@ -1661,6 +1605,8 @@ export const getPaymentProofsForResident = async (residentId: string): Promise<P
 export const submitPaymentProof = async (
   proofData: Omit<PaymentProof, 'id' | 'submissionDate' | 'status'>
 ): Promise<PaymentProof> => {
+  if (typeof window !== 'undefined') return remoteMutation('submitPaymentProof', [proofData]);
+
   if (!proofData.amount || proofData.amount <= 0) {
     throw new Error('Le montant du justificatif doit être supérieur à 0 MAD.');
   }
@@ -1715,6 +1661,8 @@ export const approvePaymentProofsBatch = async (
   buildingId: string,
   proofIds?: string[]
 ): Promise<{ approvedCount: number; totalAmountMad: number; quittances: Quittance[] }> => {
+  if (typeof window !== 'undefined') return remoteMutation('approvePaymentProofsBatch', [buildingId, proofIds]);
+
   const proofs = getLocalItem<PaymentProof[]>(STORAGE_KEYS.PROOFS, mockPaymentProofs);
   const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, mockCharges);
   const candidates = proofs.filter((p) => {
@@ -1762,6 +1710,8 @@ export const reconcileBankStatementCSV = async (
   totalReconciledMad: number;
   quittances: Quittance[];
 }> => {
+  if (typeof window !== 'undefined') return remoteMutation('reconcileBankStatementCSV', [buildingId, rows]);
+
   const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
   let targetBuilding: Building | undefined;
   let targetSyndic: Syndic | undefined;
@@ -1870,6 +1820,8 @@ export const reviewPaymentProof = async (
   decision: 'approved' | 'rejected' | 'approve' | 'reject',
   rejectionReason?: string
 ): Promise<{ proof: PaymentProof; quittance?: Quittance; success: boolean }> => {
+  if (typeof window !== 'undefined') return remoteMutation('reviewPaymentProof', [proofId, decision, rejectionReason]);
+
   if (!['approved', 'approve', 'rejected', 'reject'].includes(decision)) throw new Error('Décision invalide.');
   const approved = decision === 'approved' || decision === 'approve';
   const proofs = getLocalItem<PaymentProof[]>(STORAGE_KEYS.PROOFS, mockPaymentProofs);
@@ -1916,7 +1868,7 @@ export const reviewPaymentProof = async (
 export const getQuittancesForBuilding = async (buildingId: string): Promise<Quittance[]> => {
   if (isLocalEngineEnabled) {
     const quittances = getLocalItem<Quittance[]>(STORAGE_KEYS.QUITTANCES, mockQuittances);
-    return quittances.filter((q) => q.buildingId === buildingId);
+    return quittances.filter((q) => q.buildingId === buildingId && !q.voidedAt);
   }
 
   const q = query(collection(db, QUITTANCES_COL), where('buildingId', '==', buildingId));
@@ -1927,7 +1879,7 @@ export const getQuittancesForBuilding = async (buildingId: string): Promise<Quit
 export const getQuittancesForResident = async (residentId: string): Promise<Quittance[]> => {
   if (isLocalEngineEnabled) {
     const quittances = getLocalItem<Quittance[]>(STORAGE_KEYS.QUITTANCES, mockQuittances);
-    return quittances.filter((q) => q.residentId === residentId);
+    return quittances.filter((q) => q.residentId === residentId && !q.voidedAt);
   }
 
   const q = query(collection(db, QUITTANCES_COL), where('residentId', '==', residentId));
@@ -1957,6 +1909,8 @@ function postIncome(building: Building, amount: number, paymentId: string, detai
 export const createQuittance = async (
   input: Omit<Quittance, 'id' | 'quittanceNumber' | 'createdAt'> & { quittanceNumber?: string; addTransactionToLedger?: boolean }
 ): Promise<Quittance> => {
+  if (typeof window !== 'undefined') return remoteMutation('createQuittance', [input]);
+
   const { addTransactionToLedger = true, ...core } = input;
   const amount = centimes(core.amount);
   if (amount <= 0) throw new Error('Montant du paiement invalide.');
@@ -1978,8 +1932,9 @@ export const createQuittance = async (
   const paymentId = addTransactionToLedger ? (core.paymentId || (core.referenceNumber?.trim() ?
     `manual:${core.buildingId}:${charge.id}:${core.paymentMethod}:${core.referenceNumber.trim()}` : undefined)) : core.paymentId;
   if (addTransactionToLedger && !paymentId) throw new Error('Référence unique de paiement obligatoire.');
-  const existing = receipts.find((q) => paymentId ? q.paymentId === paymentId :
-    q.chargeId === charge.id && centimes(q.amount) === amount);
+  if (paymentId && building.financials.transactions.some((t: any) => t.reversalOf === paymentId)) throw new Error("Paiement contrepassé : enregistrez un nouveau règlement.");
+  const existing = receipts.find((q) => !q.voidedAt && (paymentId ? q.paymentId === paymentId :
+    q.chargeId === charge.id && centimes(q.amount) === amount));
   if (existing) {
     if (existing.buildingId !== core.buildingId || existing.syndicId !== core.syndicId || existing.residentId !== core.residentId ||
       existing.chargeId !== charge.id || centimes(existing.amount) !== amount || existing.paymentMethod !== core.paymentMethod) {
@@ -2032,6 +1987,8 @@ export const generateQuittanceForCharge = async (
   referenceNumber?: string,
   bankName?: string
 ): Promise<Quittance> => {
+  if (typeof window !== 'undefined') return remoteMutation('generateQuittanceForCharge', [chargeOrId, buildingIdOrPaymentMethod, referenceNumber, bankName]);
+
   const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, mockCharges);
   const charge: Charge | undefined =
     typeof chargeOrId === 'string'
@@ -2044,7 +2001,7 @@ export const generateQuittanceForCharge = async (
 
   // Audit Item 14: If a quittance already exists for this charge, return it without modifying accounting
   const quittances = getLocalItem<Quittance[]>(STORAGE_KEYS.QUITTANCES, mockQuittances);
-  const existing = quittances.find((q) => q.chargeId === charge.id);
+  const existing = quittances.find((q) => q.chargeId === charge.id && !q.voidedAt);
   if (existing) {
     return existing;
   }
@@ -2085,7 +2042,7 @@ export const generateQuittanceForCharge = async (
     syndicName: targetSyndic?.name || 'Cabinet Syndic',
     residentId: charge.residentId,
     residentName: res?.name || 'Copropriétaire',
-    residentCin: res?.cin || 'AB123456',
+    residentCin: res?.cin || '',
     apartmentId: charge.apartmentId,
     apartmentNumber: apt?.number || 'Lot',
     tantiemes: apt?.tantiemes || charge.tantiemesApplied || 100,
@@ -2098,7 +2055,7 @@ export const generateQuittanceForCharge = async (
     paymentDate: new Date().toISOString(),
     paymentMethod,
     referenceNumber: referenceNumber || `QUIT-${Date.now().toString().slice(-6)}`,
-    bankName: bankName || targetBuilding?.bankName || 'Attijariwafa Bank',
+    bankName: bankName || targetBuilding?.bankName || '',
     remarks: 'Cotisation copropriété - Récépissé libératoire (Loi 18-00 / 106-12)',
     addTransactionToLedger: false,
   });
@@ -2125,6 +2082,8 @@ export const getAssembleesGeneralesForBuilding = async (
 export const saveAssembleeGenerale = async (
   ag: AssembleeGenerale
 ): Promise<AssembleeGenerale> => {
+  if (typeof window !== 'undefined') return remoteMutation('saveAssembleeGenerale', [ag]);
+
   if (isLocalEngineEnabled) {
     const agList = getLocalItem<AssembleeGenerale[]>(STORAGE_KEYS.AG, mockAssembleesGenerales);
     const index = agList.findIndex((item) => item.id === ag.id);
@@ -2145,6 +2104,8 @@ export const saveAssembleeGenerale = async (
 export const createAssembleeGenerale = async (
   agInput: Omit<AssembleeGenerale, 'id'> & { id?: string }
 ): Promise<AssembleeGenerale> => {
+  if (typeof window !== 'undefined') return remoteMutation('createAssembleeGenerale', [agInput]);
+
   const ag: AssembleeGenerale = {
     ...agInput,
     id: agInput.id || `ag-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -2202,7 +2163,7 @@ export const castResidentAGVote = async (
     const list = getLocalItem<AssembleeGenerale[]>(STORAGE_KEYS.AG, mockAssembleesGenerales);
     const index = list.findIndex((a) => a.id === agId);
     if (index >= 0) list[index] = data.ag; else list.push(data.ag);
-    localStorage.setItem(STORAGE_KEYS.AG, JSON.stringify(list));
+    engineStorage.setItem(STORAGE_KEYS.AG, JSON.stringify(list));
     notifyStateUpdated(STORAGE_KEYS.AG);
     return data.ag;
   }
@@ -2220,6 +2181,8 @@ export const castResidentAGVote = async (
 };
 
 export const toggleAGVoting = async (agId: string, isOpen: boolean): Promise<AssembleeGenerale> => {
+  if (typeof window !== 'undefined') return remoteMutation('toggleAGVoting', [agId, isOpen]);
+
   if (isLocalEngineEnabled) {
     const agList = getLocalItem<AssembleeGenerale[]>(STORAGE_KEYS.AG, mockAssembleesGenerales);
     const ag = agList.find((item) => item.id === agId);
@@ -2241,6 +2204,8 @@ export const generateChargesFromAGResolution = async (
   agId: string,
   resolutionId: string
 ): Promise<{ createdCharges: Charge[]; totalAllocatedMad: number }> => {
+  if (typeof window !== 'undefined') return remoteMutation('generateChargesFromAGResolution', [agId, resolutionId]);
+
   const agList = getLocalItem<AssembleeGenerale[]>(STORAGE_KEYS.AG, mockAssembleesGenerales);
   const ag = agList.find((item) => item.id === agId);
   if (!ag) throw new Error('Assemblée Générale introuvable');
@@ -2270,7 +2235,7 @@ export const generateChargesFromAGResolution = async (
     throw new Error('Aucun lot configuré dans cet immeuble pour répartir le budget voté.');
   }
 
-  const lots = targetBuilding.apartments.map((a) => ({
+  const lots = targetBuilding.apartments.filter((a: any) => !a.archivedAt).map((a) => ({
     id: a.id,
     tantiemes: a.tantiemes || 100,
   }));
@@ -2286,7 +2251,7 @@ export const generateChargesFromAGResolution = async (
   const createdCharges: Charge[] = [];
   let totalAllocatedMad = 0;
 
-  for (const apt of targetBuilding.apartments) {
+  for (const apt of targetBuilding.apartments.filter((a: any) => !a.archivedAt)) {
     const shareMad = allocations.get(apt.id) || 0;
     if (shareMad <= 0) continue;
     const residentId =
@@ -2338,6 +2303,8 @@ export const recordAGVote = async (
     apartmentNumber: string;
   }
 ): Promise<AssembleeGenerale> => {
+  if (typeof window !== 'undefined') return remoteMutation('recordAGVote', [agId, resolutionId, voteType, tantiemesWeight, voterInfo]);
+
   if (voterInfo) {
     return castResidentAGVote(
       agId,
@@ -2381,6 +2348,8 @@ export const updateAGAttendee = async (
   status: 'present' | 'represented' | 'absent',
   proxyHolderName?: string
 ): Promise<AssembleeGenerale> => {
+  if (typeof window !== 'undefined') return remoteMutation('updateAGAttendee', [agId, residentId, status, proxyHolderName]);
+
   if (isLocalEngineEnabled) {
     const agList = getLocalItem<AssembleeGenerale[]>(STORAGE_KEYS.AG, mockAssembleesGenerales);
     const ag = agList.find((item) => item.id === agId);
@@ -2524,43 +2493,14 @@ function savePrestataireCredentialAccount(
   return record;
 }
 
-export const getPrestatairesForBuilding = async (buildingId: string): Promise<Prestataire[]> => {
-  if (isLocalEngineEnabled) {
-    const list = getLocalItem<Prestataire[]>(STORAGE_KEYS.PRESTATAIRES, mockPrestataires);
-    if (!isMock) {
-      try {
-        const q = query(collection(db, PRESTATAIRES_COL), where('buildingId', '==', buildingId));
-        const snapshot = await getDocs(q);
-        if (!snapshot.empty) {
-          const map = new Map<string, Prestataire>();
-          for (const p of list) {
-            if (p?.id) map.set(p.id, p);
-          }
-          for (const d of snapshot.docs) {
-            const data = d.data() as Prestataire;
-            const id = data.id || d.id;
-            map.set(id, { ...map.get(id), ...data, id });
-          }
-          const merged = Array.from(map.values());
-          setLocalItem(STORAGE_KEYS.PRESTATAIRES, merged);
-          return merged.filter((p) => p.buildingId === buildingId);
-        }
-      } catch {
-        // fallback to local
-      }
-    }
-    return list.filter((p) => p.buildingId === buildingId);
-  }
-
-  const q = query(collection(db, PRESTATAIRES_COL), where('buildingId', '==', buildingId));
-  const snapshot = await getDocs(q);
-  return snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Prestataire));
-};
+export const getPrestatairesForBuilding = async (buildingId: string): Promise<Prestataire[]> => { await syncAllSharedStateFromServer(); return getLocalItem<Prestataire[]>(STORAGE_KEYS.PRESTATAIRES, []).filter((p: any) => p.buildingId === buildingId && !p.archivedAt).map(p=>({ ...p,...ephemeralInvites.get(p.id) })); };
 
 export const savePrestataire = async (
   prestataire: Prestataire,
   generateCredentials?: boolean
 ): Promise<Prestataire> => {
+  if (typeof window !== 'undefined') return remoteMutation('savePrestataire', [prestataire, generateCredentials]);
+
   if (isLocalEngineEnabled) {
     const list = getLocalItem<Prestataire[]>(STORAGE_KEYS.PRESTATAIRES, mockPrestataires);
     const index = list.findIndex((p) => p.id === prestataire.id);
@@ -2669,6 +2609,8 @@ export const savePrestataire = async (
 export const regeneratePrestataireCredentials = async (
   prestataireId: string
 ): Promise<Prestataire> => {
+  if (typeof window !== 'undefined') return remoteMutation('regeneratePrestataireCredentials', [prestataireId]);
+
   if (isLocalEngineEnabled) {
     const list = getLocalItem<Prestataire[]>(STORAGE_KEYS.PRESTATAIRES, mockPrestataires);
     const idx = list.findIndex((p) => p.id === prestataireId);
@@ -2724,6 +2666,8 @@ export const recordPrestataireCredentialShare = async (
   prestataireId: string,
   method: 'pdf' | 'copy'
 ): Promise<Prestataire | null> => {
+  if (typeof window !== 'undefined') return remoteMutation('recordPrestataireCredentialShare', [prestataireId, method]);
+
   const list = getLocalItem<Prestataire[]>(STORAGE_KEYS.PRESTATAIRES, mockPrestataires);
   const idx = list.findIndex((p) => p.id === prestataireId);
   if (idx >= 0) {
@@ -2749,6 +2693,8 @@ export const recordPrestataireCredentialShare = async (
 };
 
 export const deletePrestataire = async (prestataireId: string): Promise<boolean> => {
+  if (typeof window !== 'undefined') return remoteMutation('deletePrestataire', [prestataireId]);
+
   if (isLocalEngineEnabled) {
     const list = getLocalItem<Prestataire[]>(STORAGE_KEYS.PRESTATAIRES, mockPrestataires);
     const filtered = list.filter((p) => p.id !== prestataireId);
@@ -2771,6 +2717,8 @@ export const addPrestataireReview = async (
   prestataireId: string,
   review: Omit<PrestataireReview, 'id' | 'date'>
 ): Promise<Prestataire | null> => {
+  if (typeof window !== 'undefined') return remoteMutation('addPrestataireReview', [prestataireId, review]);
+
   const newRev: PrestataireReview = {
     id: `rev-${Date.now()}`,
     date: new Date().toISOString().split('T')[0],
@@ -2800,6 +2748,8 @@ export const addPrestataireReview = async (
 // ==========================================
 
 export const addTransaction = async (buildingId: string, transaction: Omit<Transaction, 'id'>) => {
+  if (typeof window !== 'undefined') return remoteMutation('addTransaction', [buildingId, transaction]);
+
   const signedAmount =
     transaction.type === 'expense'
       ? -Math.abs(transaction.amount)
@@ -2857,6 +2807,8 @@ export const createInvoiceForResident = async (
   buildingId: string,
   syndicId: string
 ): Promise<Invoice> => {
+  if (typeof window !== 'undefined') return remoteMutation('createInvoiceForResident', [residentId, buildingId, syndicId]);
+
   const building = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics).find((s) => s.id === syndicId)?.buildings.find((b) => b.id === buildingId);
   if (!building?.residents.some((r) => r.id === residentId)) throw new Error('Copropriétaire hors de cet immeuble.');
   const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, mockCharges);
@@ -2873,13 +2825,15 @@ export const createInvoiceForResident = async (
     invoiceNumber: `FAC-${new Date().getFullYear()}-${String(invoices.length + 1).padStart(4, '0')}`,
     totalAmount: eligible.reduce((sum, c) => sum + outstanding(c), 0) / 100, paidAmount: 0, status: 'unpaid',
     createdAt: new Date().toISOString(), dueDate: new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10),
-    chargeIds: eligible.map((c) => c.id) };
+    chargeIds: eligible.map((c) => c.id), items: eligible.map(c => ({ description:c.description || "Charges de copropriété",period:c.period,amount:outstanding(c)/100 })), issuedTo: Object.fromEntries(Object.entries(building.residents.find(r=>r.id===residentId)!).filter(([key])=>["name","email","phone","cin","isOwner"].includes(key))) as any };
   for (const charge of eligible) charge.invoiceId = invoice.id;
   setLocalItem(STORAGE_KEYS.CHARGES, charges); setLocalItem(STORAGE_KEYS.INVOICES, [invoice, ...invoices]);
   return invoice;
 };
 
 export const recordPayment = async (invoice: Invoice, amount: number, method: string, paymentReference?: string) => {
+  if (typeof window !== 'undefined') return remoteMutation('recordPayment', [invoice, amount, method, paymentReference]);
+
   const cents = centimes(amount);
   if (cents <= 0) throw new Error('Montant invalide.');
   const invoices = getLocalItem<Invoice[]>(STORAGE_KEYS.INVOICES, []);
@@ -2905,8 +2859,10 @@ export const recordPayment = async (invoice: Invoice, amount: number, method: st
   });
   if (cents > linked.reduce((sum, c) => sum + outstanding(c), 0)) throw new Error('Paiement supérieur aux charges dues.');
   let remaining = cents;
+  const paymentAllocations: Array<{ chargeId: string; amount: number }> = [];
   for (const charge of linked) {
     const allocated = Math.min(remaining, outstanding(charge));
+    if (allocated) paymentAllocations.push({ chargeId: charge.id, amount: allocated / 100 });
     charge.paidAmount = (centimes(paidAmount(charge)) + allocated) / 100;
     charge.status = outstanding(charge) === 0 ? 'paid' : 'unpaid'; charge.invoiceId = current.id;
     remaining -= allocated;
@@ -2915,7 +2871,7 @@ export const recordPayment = async (invoice: Invoice, amount: number, method: st
   current.status = centimes(current.paidAmount) === centimes(current.totalAmount) ? 'paid' : 'unpaid';
   current.paymentIds = [...(current.paymentIds || []), paymentId];
   postIncome(building, cents / 100, paymentId, { sourceInvoiceId: current.id, paymentMethod: method,
-    description: `Paiement facture ${current.invoiceNumber}`, invoiceNumber: current.invoiceNumber });
+    description: `Paiement facture ${current.invoiceNumber}`, invoiceNumber: current.invoiceNumber, paymentAllocations } as any);
   setLocalItem(STORAGE_KEYS.INVOICES, invoices); setLocalItem(STORAGE_KEYS.CHARGES, charges); setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
   return true;
 };
@@ -3074,8 +3030,10 @@ export const getMaintenanceRequestsForResident = async (
 };
 
 export const addMaintenanceRequest = async (request: Omit<MaintenanceRequest, 'id'>) => {
+  if (typeof window !== 'undefined') return remoteMutation('addMaintenanceRequest', [request]);
+
   const normalizedDraft = normalizeMaintenanceRequestApartment({
-    id: `maint-${Date.now()}`,
+    id: crypto.randomUUID(),
     ...request,
   });
 
@@ -3127,6 +3085,8 @@ export const updateMaintenanceRequest = async (
     stepPhotos?: string[];
   }
 ) => {
+  if (typeof window !== 'undefined') return remoteMutation('updateMaintenanceRequest', [id, updates, stepInfo]);
+
   if (isLocalEngineEnabled) {
     const list = getLocalItem<MaintenanceRequest[]>(
       STORAGE_KEYS.MAINTENANCE,
@@ -3199,8 +3159,10 @@ export const addAnnouncement = async (
   buildingId: string,
   announcementData: { title: string; content: string; priority?: 'normal' | 'urgent' }
 ): Promise<Announcement> => {
+  if (typeof window !== 'undefined') return remoteMutation('addAnnouncement', [buildingId, announcementData]);
+
   const newAnn: Announcement = {
-    id: `ann-${Date.now()}`,
+    id: crypto.randomUUID(),
     title: announcementData.title,
     content: announcementData.content,
     date: new Date().toISOString(),
@@ -3266,68 +3228,16 @@ async function readFileAsDurableDataUrl(file: File): Promise<string> {
   return `data:${file.type || 'application/pdf'};base64,JVBERi0xLjQK`;
 }
 
-export const uploadDocument = async (buildingId: string, file: File): Promise<Document> => {
-  if (!file || !file.name) {
-    throw new Error('Fichier invalide.');
-  }
-  if (file.size > MAX_DOCUMENT_UPLOAD_BYTES) {
-    throw new Error('Le fichier dépasse la taille maximale autorisée de 5 Mo.');
-  }
-
-  // Audit Item 19 & Phase 1.2: Offload binary payload to /api/uploads when server session is active
-  // so localStorage never overflows 5MB, while keeping durable data URI fallback for isolated/offline runs.
-  const durableDataUrl = await readFileAsDurableDataUrl(file);
-  let resolvedUrl = durableDataUrl;
-  try {
-    const headers = getAuthenticatedRequestHeaders();
-    if (headers['Authorization'] && typeof fetch === 'function') {
-      const res = await fetch('/api/uploads', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          name: file.name,
-          dataUrl: durableDataUrl,
-          buildingId,
-        }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data?.ok && typeof data.url === 'string') {
-          resolvedUrl = data.url;
-        }
-      }
-    }
-  } catch {
-    // Fallback to durableDataUrl in offline or isolated test environments
-  }
-
-  const newDoc: Document = {
-    id: `doc-${Date.now()}`,
-    name: file.name,
-    url: resolvedUrl,
-    size: `${Math.max(0.1, file.size / (1024 * 1024)).toFixed(1)} MB`,
-    uploadedAt: new Date().toISOString(),
-    category: 'autre',
-  };
-
-  if (isLocalEngineEnabled) {
-    const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
-    for (const s of syndics) {
-      const bld = s.buildings.find((b) => b.id === buildingId);
-      if (bld) {
-        bld.documents = bld.documents || [];
-        bld.documents.unshift(newDoc);
-        setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
-        void syncSyndicToFirestoreIfAuthenticated(s);
-        return newDoc;
-      }
-    }
-  }
-
-  return newDoc;
+export const uploadDocument = async (buildingId: string,file: File): Promise<Document> => {
+  const dataUrl = await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result));reader.onerror=()=>reject(new Error('Lecture impossible.'));reader.readAsDataURL(file);});
+  const response = await fetch('/api/uploads',{method:'POST',headers:getAuthenticatedRequestHeaders(),body:JSON.stringify({buildingId,name:file.name,dataUrl})});
+  const result = await response.json();if (!response.ok) throw new Error(result.error || 'Téléversement impossible.');
+  return remoteMutation('attachDocument',[buildingId,{fileId:result.fileId}]);
 };
 
 export const deleteDocument = async (docToDelete: Document): Promise<boolean> => {
+  if (typeof window !== 'undefined') return remoteMutation('deleteDocument', [docToDelete]);
+
   if (isLocalEngineEnabled) {
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
     for (const s of syndics) {
@@ -3367,6 +3277,8 @@ export const getUserNotifications = async (userId: string): Promise<Notification
 };
 
 export const markNotificationAsRead = async (notificationId: string) => {
+  if (typeof window !== 'undefined') return remoteMutation('markNotificationAsRead', [notificationId]);
+
   if (isLocalEngineEnabled) {
     const list = getLocalItem<Notification[]>(STORAGE_KEYS.NOTIFICATIONS, DEFAULT_NOTIFICATIONS);
     const updated = list.map((n) => (n.id === notificationId ? { ...n, read: true } : n));
@@ -3420,8 +3332,10 @@ export const getChatMessages = async (
 export const sendChatMessage = async (
   message: Omit<ChatMessage, 'id' | 'createdAt'>
 ): Promise<ChatMessage> => {
+  if (typeof window !== 'undefined') return remoteMutation('sendChatMessage', [message]);
+
   const newMsg: ChatMessage = {
-    id: `msg-${Date.now()}`,
+    id: crypto.randomUUID(),
     createdAt: new Date().toISOString(),
     ...message,
   };
@@ -3441,6 +3355,8 @@ export const toggleChatMessageLike = async (
   messageId: string,
   userId: string
 ): Promise<ChatMessage | null> => {
+  if (typeof window !== 'undefined') return remoteMutation('toggleChatMessageLike', [messageId, userId]);
+
   if (isLocalEngineEnabled) {
     const list = getLocalItem<ChatMessage[]>(STORAGE_KEYS.CHAT, mockChatMessages);
     const msg = list.find((m) => m.id === messageId);
@@ -3483,6 +3399,8 @@ export const getMarketplaceItems = async (
 export const addMarketplaceItem = async (
   item: Omit<MarketplaceItem, 'id' | 'createdAt'>
 ): Promise<MarketplaceItem> => {
+  if (typeof window !== 'undefined') return remoteMutation('addMarketplaceItem', [item]);
+
   const newItem: MarketplaceItem = {
     id: `item-${Date.now()}`,
     createdAt: new Date().toISOString(),
@@ -3504,6 +3422,8 @@ export const updateMarketplaceItemStatus = async (
   itemId: string,
   status: MarketplaceItem['status']
 ): Promise<boolean> => {
+  if (typeof window !== 'undefined') return remoteMutation('updateMarketplaceItemStatus', [itemId, status]);
+
   if (isLocalEngineEnabled) {
     const list = getLocalItem<MarketplaceItem[]>(STORAGE_KEYS.MARKETPLACE, mockMarketplaceItems);
     const it = list.find((i) => i.id === itemId);
@@ -3521,6 +3441,8 @@ export const updateMarketplaceItemStatus = async (
 };
 
 export const deleteMarketplaceItem = async (itemId: string): Promise<boolean> => {
+  if (typeof window !== 'undefined') return remoteMutation('deleteMarketplaceItem', [itemId]);
+
   if (isLocalEngineEnabled) {
     const list = getLocalItem<MarketplaceItem[]>(STORAGE_KEYS.MARKETPLACE, mockMarketplaceItems);
     const filtered = list.filter((i) => i.id !== itemId);
@@ -3531,3 +3453,33 @@ export const deleteMarketplaceItem = async (itemId: string): Promise<boolean> =>
   await deleteDoc(doc(db, 'marketplace_items', itemId));
   return true;
 };
+
+const pendingOperations = new Map<string, string>();
+const ephemeralInvites = new Map<string, any>();
+export function clearStateCache() { clearBusinessCache(); pendingOperations.clear(); ephemeralInvites.clear(); lastKnownServerRevision = 0; lastSyncTimestampMs = 0; }
+export async function remoteMutation<T = any>(operation: string, args: unknown[]): Promise<T> {
+  args = [...args]; while(args.length && args.at(-1) === undefined) args.pop();
+  const first: any = args[0];
+  const linked = typeof first === 'string' ? [STORAGE_KEYS.MAINTENANCE, STORAGE_KEYS.MARKETPLACE, STORAGE_KEYS.CHAT].flatMap(key => JSON.parse(engineStorage.getItem(key) || '[]')).find(item => item.id === first) : undefined;
+  const buildingId = first?.buildingId || linked?.buildingId;
+  if (buildingId) {
+    const upload = async (value: any, key = ''): Promise<any> => {
+      if (typeof value === 'string' && value.startsWith('data:') && ['photoUrl','photos','images','imageUrl','receiptUrl','attachmentUrl','stepPhotos'].includes(key)) {
+        const response = await fetch('/api/uploads', { method: 'POST', headers: getAuthenticatedRequestHeaders(), body: JSON.stringify({ buildingId, name: 'piece-jointe', dataUrl: value }) });
+        const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Téléversement impossible.'); return result.url;
+      }
+      if (Array.isArray(value)) return Promise.all(value.map(item => upload(item,key)));
+      if (value && typeof value === 'object') return Object.fromEntries(await Promise.all(Object.entries(value).map(async ([field,item]) => [field,await upload(item,field)])));
+      return value;
+    }; args = await upload(args);
+  }
+  const serialized = JSON.stringify({ operation,args }), operationId = pendingOperations.get(serialized) || crypto.randomUUID(); pendingOperations.set(serialized, operationId);
+  const response = await fetch('/api/commands', { method: 'POST', headers: getAuthenticatedRequestHeaders(), body: JSON.stringify({ operation,args,operationId }) });
+  const data = await response.json();
+  if (!response.ok) { if (response.status < 500) pendingOperations.delete(serialized); throw new Error(data.error || 'Enregistrement impossible.'); }
+  pendingOperations.delete(serialized);
+  if (data.result?.id && (data.result.invitationCode || data.result.invitationToken)) ephemeralInvites.set(data.result.id,{ invitationCode:data.result.invitationCode,invitationToken:data.result.invitationToken });
+  if (data.store) for (const [key,value] of Object.entries(data.store)) if (key.startsWith('syndik_prod_')) engineStorage.setItem(key,JSON.stringify(value));
+  for (const key of Object.values(STORAGE_KEYS)) notifyStateUpdated(key);
+  return (Array.isArray(data.result) ? Object.assign(data.result,data.resultMeta || {}) : data.result) as T;
+}

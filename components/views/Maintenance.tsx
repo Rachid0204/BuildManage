@@ -5,6 +5,7 @@ import {
   updateMaintenanceRequest,
   addMaintenanceRequest,
   getPrestatairesForBuilding,
+  remoteMutation,
 } from '../../firebase/services';
 import type { Building, MaintenanceRequest } from '../../types';
 import Card from '../common/Card';
@@ -481,21 +482,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
     e.preventDefault();
     if (!selectedRequest) return;
 
-    const updates: Partial<MaintenanceRequest> = {
-      status: isResidentPortal ? selectedRequest.status : editStatus,
-      assignedTo: isResidentPortal ? selectedRequest.assignedTo : editAssignedTo || undefined,
-      cost: isResidentPortal
-        ? selectedRequest.cost
-        : editCost
-        ? parseFloat(editCost)
-        : undefined,
-      invoiceRef: isResidentPortal ? selectedRequest.invoiceRef : editInvoiceRef || undefined,
-      syndicNotes: !isResidentPortal && stepNote.trim() ? stepNote.trim() : selectedRequest.syndicNotes,
-    };
-
-    if (!isResidentPortal && editStatus === 'completed' && selectedRequest.status !== 'completed') {
-      updates.completedAt = new Date().toISOString();
-    }
+    const updates: Partial<MaintenanceRequest> = isResidentPortal ? {} : {status:editStatus,assignedTo:editAssignedTo || undefined,cost:editCost?parseFloat(editCost):undefined,invoiceRef:editInvoiceRef || undefined,syndicNotes:stepNote.trim() || undefined};
 
     updateMutation.mutate({
       id: selectedRequest.id,
@@ -1061,6 +1048,8 @@ const Maintenance: React.FC<MaintenanceProps> = ({
               <p className="text-slate-600 mt-0.5">{selectedRequest.description}</p>
             </div>
 
+            {(selectedRequest as any).completionPending && <Button onClick={async()=>{try{await remoteMutation('confirmMaintenanceCompletion',[selectedRequest.id,tr('Intervention validée','تم تأكيد التدخل')]);void queryClient.invalidateQueries();setSelectedRequest(null);}catch(e:any){window.alert(e.message);}}}>{tr('Confirmer la réparation','تأكيد الإصلاح')}</Button>}
+            {selectedRequest.status === 'completed' && <Button onClick={async()=>{try{await remoteMutation('reopenMaintenance',[selectedRequest.id,tr('Réouverture demandée','طلب إعادة فتح')]);void queryClient.invalidateQueries();setSelectedRequest(null);}catch(e:any){window.alert(e.message);}}}>{tr('Réouvrir le signalement','إعادة فتح البلاغ')}</Button>}
             {!isResidentPortal && (
               <>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

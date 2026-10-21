@@ -1,3 +1,4 @@
+import FinancialTools from './FinancialTools';
 import React, { Suspense, useState, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -259,12 +260,12 @@ const ResidentDashboard: React.FC = () => {
 
   const handlePasswordSubmit = async () => {
     setPasswordMsg(null);
-    if (newPassword.trim().length < 6) {
+    if (newPassword.trim().length < 10) {
       setPasswordMsg({
         type: 'error',
         text: tr(
-          'Le nouveau mot de passe doit comporter au moins 6 caractères.',
-          'يجب أن تتكون كلمة المرور الجديدة من 6 أحرف على الأقل.'
+          'Le nouveau mot de passe doit comporter au moins 10 caractères.',
+          'يجب أن تتكون كلمة المرور الجديدة من 10 أحرف على الأقل.'
         ),
       });
       return;
@@ -328,6 +329,7 @@ const ResidentDashboard: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-100" dir={language === 'ar' ? 'rtl' : 'ltr'}>
+      {activeBuilding && <div className="max-w-7xl mx-auto p-4"><FinancialTools building={activeBuilding} /></div>}
       {/* Top Navbar */}
       <nav className="bg-slate-900 text-white shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -1780,7 +1782,7 @@ const ResidentDashboard: React.FC = () => {
             <label className="block text-xs font-semibold text-slate-700 mb-1">
               {tr(
                 'Nouveau mot de passe (min. 6 caractères)',
-                'كلمة المرور الجديدة (6 أحرف على الأقل)'
+                'كلمة المرور الجديدة (10 أحرف على الأقل)'
               )}
             </label>
             <input

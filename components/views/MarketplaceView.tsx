@@ -418,6 +418,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
   const [detailPhotoIndex, setDetailPhotoIndex] = useState(0);
 
   // In-Platform Marketplace Chat State
+  const [activeBuyer, setActiveBuyer] = useState('');
   const [activeChatListing, setActiveChatListing] = useState<MarketplaceItem | null>(null);
   const [isInboxOpen, setIsInboxOpen] = useState(false);
   const [chatInputText, setChatInputText] = useState('');
@@ -454,6 +455,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
     mutationFn: (content: string) => {
       if (!activeChatListing) throw new Error(tr('Aucune annonce sélectionnée', 'لم يتم تحديد أي إعلان'));
       const isSeller = activeChatListing.residentId === currentResidentId;
+      if (isSeller && !activeBuyer) throw new Error(tr('Sélectionnez un acheteur.','اختر مشترياً.'));
       const payload: Omit<ChatMessage, 'id' | 'createdAt'> = {
         buildingId: building.id,
         channelId: `market-${activeChatListing.id}`,
@@ -461,7 +463,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
         senderName: currentResidentName,
         senderRole: isResidentPortal ? 'resident' : 'syndic',
         senderApartment: currentApartmentNumber,
-        recipientId: activeChatListing.residentId,
+        recipientId: isSeller ? activeBuyer : activeChatListing.residentId,
         recipientName: activeChatListing.residentName,
         content,
         badge: isSeller ? tr('Réponse Vendeur', 'رد البائع') : tr('Question Souk', 'سؤال في السوق'),
@@ -510,13 +512,13 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
 
   // Active item conversation messages
   const activeItemMessages = useMemo(() => {
-    if (!activeChatListing) return [];
+    if (!activeChatListing || (activeChatListing.residentId === currentResidentId && !activeBuyer)) return [];
     return allMarketplaceMessages.filter(
       (m) =>
-        m.channelId === `market-${activeChatListing.id}` ||
-        m.marketplaceItemId === activeChatListing.id
+        (activeChatListing.residentId !== currentResidentId || m.senderId === activeBuyer || m.recipientId === activeBuyer) && (m.channelId === `market-${activeChatListing.id}` ||
+        m.marketplaceItemId === activeChatListing.id)
     );
-  }, [allMarketplaceMessages, activeChatListing]);
+  }, [allMarketplaceMessages, activeChatListing, activeBuyer, currentResidentId]);
 
   const publishMutation = useMutation({
     mutationFn: addMarketplaceItem,
@@ -1397,6 +1399,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
               </button>
             </div>
 
+            {activeChatListing.residentId === currentResidentId && <label className="block mb-3 text-sm font-bold">{tr('Conversation avec','المحادثة مع')}<select className="border rounded p-2 ms-2" value={activeBuyer} onChange={e=>setActiveBuyer(e.target.value)}><option value="">{tr('Choisir un acheteur','اختر مشترياً')}</option>{[...new Set(allMarketplaceMessages.filter(m=>m.marketplaceItemId===activeChatListing.id).map(m=>m.senderId===currentResidentId?m.recipientId:m.senderId))].filter(Boolean).map(id=><option key={id} value={id}>{allMarketplaceMessages.find(m=>m.senderId===id)?.senderName || tr('Acheteur','المشتري')}</option>)}</select></label>}
             <div className="h-72 overflow-y-auto p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
               {activeItemMessages.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center text-center text-slate-400 p-4 space-y-1.5">

@@ -1,3 +1,4 @@
+import FinancialTools from './FinancialTools';
 import React, { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Building, Transaction, Charge, Syndic, Quittance, PaymentMethod } from '../../types';
@@ -13,6 +14,8 @@ import {
 } from '../icons/IconComponents';
 import {
   getChargesForBuilding,
+  getInvoicesForBuilding,
+  createInvoiceForResident,
   getPaymentProofsForBuilding,
   reviewPaymentProof,
   approvePaymentProofsBatch,
@@ -55,7 +58,7 @@ const currencyFormatter = new Intl.NumberFormat('fr-MA', {
 });
 
 const MOROCCAN_BANKS = [
-  'Attijariwafa Bank',
+  '',
   'Banque Populaire (BCP)',
   'Bank of Africa (BMCE)',
   'CIH Bank',
@@ -137,7 +140,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
   const [trxThirdPartyName, setTrxThirdPartyName] = useState('');
   const [trxThirdPartyIce, setTrxThirdPartyIce] = useState('');
   const [selectedApartmentId, setSelectedApartmentId] = useState('');
-  const [trxBankName, setTrxBankName] = useState(building.bankName || 'Attijariwafa Bank');
+  const [trxBankName, setTrxBankName] = useState(building.bankName || '');
   const [trxNotes, setTrxNotes] = useState('');
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
@@ -171,7 +174,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
     building?.reserveFundPercentage ?? building?.reserveFundRate ?? 5
   );
   const [quittancePaymentMethod, setQuittancePaymentMethod] = useState<PaymentMethod>('virement');
-  const [quittanceBankName, setQuittanceBankName] = useState(building.bankName || 'Attijariwafa Bank');
+  const [quittanceBankName, setQuittanceBankName] = useState(building.bankName || '');
   const [quittanceReference, setQuittanceReference] = useState('');
   const [quittancePaymentDate, setQuittancePaymentDate] = useState(new Date().toISOString().split('T')[0]);
   const [quittanceRemarks, setQuittanceRemarks] = useState('');
@@ -217,7 +220,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
     setTrxThirdPartyName('');
     setTrxThirdPartyIce('');
     setSelectedApartmentId('');
-    setTrxBankName(building.bankName || 'Attijariwafa Bank');
+    setTrxBankName(building.bankName || '');
     setTrxNotes('');
     setFormErrors({});
   };
@@ -274,7 +277,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
     setQuittanceAmount(String(charge.status === 'paid' ? (charge.paidAmount ?? charge.amount) : Math.max(0, charge.amount - (charge.paidAmount ?? 0))));
     setQuittanceReserveRatio(building?.reserveFundPercentage ?? building?.reserveFundRate ?? 5);
     setQuittancePaymentMethod((charge.paymentMethod as PaymentMethod) || 'virement');
-    setQuittanceBankName(building.bankName || 'Attijariwafa Bank');
+    setQuittanceBankName(building.bankName || '');
     setQuittanceReference(`VIR-${charge.id.slice(-6).toUpperCase()}`);
     setQuittancePaymentDate(
       charge.paidAt ? charge.paidAt.split('T')[0] : new Date().toISOString().split('T')[0]
@@ -308,7 +311,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
     setQuittanceAmount(String(amt));
     setQuittanceReserveRatio(building.reserveFundPercentage ?? building.reserveFundRate ?? 5);
     setQuittancePaymentMethod('virement');
-    setQuittanceBankName(building.bankName || 'Attijariwafa Bank');
+    setQuittanceBankName(building.bankName || '');
     setQuittanceReference('');
     setQuittancePaymentDate(new Date().toISOString().split('T')[0]);
     setQuittanceRemarks(
@@ -608,6 +611,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
 
   return (
     <div className="space-y-6">
+      <FinancialTools building={building} />
       {/* Top Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-2 border-b border-slate-200">
         <div>
@@ -617,7 +621,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
           </h1>
           <p className="text-sm text-slate-500 mt-0.5">
             {tr(
-              `Comptabilité de la copropriété ${building.name} · Tantièmes, Quittances certifiées et Mises en demeure (Loi 18-00)`,
+              `Comptabilité de la copropriété ${building.name} · Tantièmes, Quittances enregistrées et Mises en demeure (Loi 18-00)`,
               `محاسبة الملكية المشتركة ${building.name} · الحصص الشائعة، وصولات الأداء المعتمدة والإنذارات القانونية (القانون 18-00)`
             )}
           </p>
@@ -667,7 +671,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
           </p>
           <p className="text-[11px] text-slate-500 mt-1 flex items-center gap-1">
             <span>{tr('Banque :', 'البنك:')}</span>
-            <span className="font-medium text-slate-700">{building.bankName || 'Attijariwafa Bank'}</span>
+            <span className="font-medium text-slate-700">{building.bankName || ''}</span>
           </p>
         </Card>
 
@@ -980,7 +984,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                           </p>
                           <div className="text-[10px] text-slate-400 font-mono mt-0.5">
                             {trx.reference && <span>{tr('Réf:', 'مرجع:')} {trx.reference} · </span>}
-                            <span>{trx.bankName || building.bankName || 'Attijariwafa'}</span>
+                            <span>{trx.bankName || building.bankName || ''}</span>
                           </div>
                         </td>
 
@@ -1156,23 +1160,15 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                           )}
 
                           <button
-                            onClick={() => {
-                              if (res) {
-                                const mockInv = {
-                                  id: `inv-${charge.id}`,
-                                  syndicId: building.syndicId,
-                                  buildingId: building.id,
-                                  residentId: charge.residentId,
-                                  invoiceNumber: `AF-2026-${charge.id.slice(-4)}`,
-                                  totalAmount: charge.amount,
-                                  status: charge.status === 'paid' ? 'paid' : 'unpaid',
-                                  createdAt: charge.createdAt,
-                                  dueDate: charge.dueDate,
-                                  chargeIds: [charge.id],
-                                };
-                                generateInvoicePDF(mockInv as any, building, res, syndic);
-                              }
+                            onClick={async () => {
+                              if (!res) return;
+                              try {
+                                const invoices = await getInvoicesForBuilding(building.id);
+                                const invoice = invoices.find(i => i.id === charge.invoiceId || i.chargeIds.includes(charge.id)) || await createInvoiceForResident(charge.residentId,building.id,building.syndicId);
+                                generateInvoicePDF(invoice,building,res,syndic);
+                              } catch (e:any) { showToast(e.message,'error'); }
                             }}
+
                             className="text-[11px] text-slate-500 hover:text-slate-800 underline px-1"
                           >
                             {tr('Avis', 'إشعار')}
@@ -1461,7 +1457,6 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                   <option value="virement">{tr('Virement bancaire', 'تحويل بنكي')}</option>
                   <option value="cheque">{tr('Chèque bancaire', 'شيك بنكي')}</option>
                   <option value="versement">{tr('Versement agence / GAB', 'إيداع بنكي')}</option>
-                  <option value="cmi">{tr('Carte bancaire (CMI)', 'بطاقة بنكية (CMI)')}</option>
                   <option value="especes">{tr('Espèces (Reçu caisse)', 'نقداً (وصل صندوق)')}</option>
                 </select>
 
@@ -1584,7 +1579,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                         <p className="text-xs mt-1 text-slate-400">
                           {quittanceSearch
                             ? tr('Aucune quittance ne correspond à vos filtres de recherche.', 'لا يوجد وصل يطابق معايير البحث.')
-                            : tr('Délivrez votre première quittance certifiée conforme à la Loi 18-00.', 'أصدر أول وصل أداء معتمد وفق القانون 18-00.')}
+                            : tr('Délivrez votre première quittance à partir d’un règlement enregistré.', 'أصدر أول وصل مرتبط بدفعة مسجلة.')}
                         </p>
                         <Button
                           onClick={() => openQuittanceModalNew()}
@@ -2094,7 +2089,6 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                   <option value="virement">{tr('Virement bancaire', 'تحويل بنكي')}</option>
                   <option value="cheque">{tr('Chèque bancaire', 'شيك بنكي')}</option>
                   <option value="versement">{tr('Versement espèces à la banque', 'إيداع نقدي بالبنك')}</option>
-                  <option value="cmi">{tr('Paiement Carte / CMI', 'أداء بالبطاقة / CMI')}</option>
                   <option value="especes">{tr('Espèces (Menues dépenses)', 'نقداً (مصاريف بسيطة)')}</option>
                 </select>
               </div>
@@ -2403,7 +2397,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
         footer={
           <div className="flex justify-between items-center w-full">
             <span className="text-[11px] text-slate-500 font-mono hidden sm:inline">
-              {tr("Document officiel avec cachet du syndic & QR code d'intégrité", 'وثيقة رسمية مختومة من طرف السنديك')}
+              {tr("Reçu traçable à partir du règlement enregistré", 'وصل مرتبط بالدفعة المسجلة')}
             </span>
             <div className="flex items-center gap-2">
               <Button variant="secondary" onClick={() => setIsQuittanceModalOpen(false)}>
@@ -2672,7 +2666,6 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                   <option value="virement">{tr('Virement bancaire', 'تحويل بنكي')}</option>
                   <option value="cheque">{tr('Chèque bancaire', 'شيك بنكي')}</option>
                   <option value="versement">{tr('Versement agence / GAB', 'إيداع بنكي')}</option>
-                  <option value="cmi">{tr('Carte bancaire (CMI)', 'بطاقة بنكية (CMI)')}</option>
                   <option value="especes">{tr('Espèces (Reçu caisse)', 'نقداً (وصل صندوق)')}</option>
                 </select>
               </div>
@@ -2817,7 +2810,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                   {tr('Syndic:', 'السنديك:')} {syndic?.name || selectedQuittanceForPreview.syndicName}
                 </p>
                 <p className="text-slate-400 font-mono text-[10px]">
-                  RIB: {building.bankRib || '007 780 0001234567890123 45'}
+                  RIB: {building.bankRib || tr('Non renseigné','غير مسجل')}
                 </p>
               </div>
 

@@ -13,7 +13,7 @@ import {
   addBuilding,
   STORAGE_KEYS,
   pushKeyToSharedServer,
-  resetAllProductionData,
+  remoteMutation,
 } from '../../firebase/services';
 import { hashPasswordSync, generateSecureRandomDigits } from '../../utils/security';
 import type { Syndic, SubscriptionPlan, SubscriptionStatus, Apartment } from '../../types';
@@ -32,6 +32,9 @@ const AdminDashboard: React.FC = () => {
   const queryClient = useQueryClient();
 
   const [selectedSyndic, setSelectedSyndic] = useState<Syndic | null>(null);
+  const [subscriptionReference, setSubscriptionReference] = useState('');
+  const [subscriptionMonths, setSubscriptionMonths] = useState(1);
+  const [subscriptionMessage, setSubscriptionMessage] = useState('');
   const [editPlan, setEditPlan] = useState<SubscriptionPlan>('professional');
   const [editStatus, setEditStatus] = useState<SubscriptionStatus>('active');
   const [editExpiry, setEditExpiry] = useState('');
@@ -46,10 +49,10 @@ const AdminDashboard: React.FC = () => {
   const [newCity, setNewCity] = useState('Casablanca');
   const [newPlan, setNewPlan] = useState<SubscriptionPlan>('professional');
   const [newBuildingName, setNewBuildingName] = useState('');
+  const [newBuildingAddress, setNewBuildingAddress] = useState('');
   const [newApartmentsCount, setNewApartmentsCount] = useState(8);
   const [newMonthlyFees, setNewMonthlyFees] = useState(250);
   const [createError, setCreateError] = useState('');
-  const [isResetModalOpen, setIsResetModalOpen] = useState(false);
 
   const {
     data: syndics = [],
@@ -72,120 +75,10 @@ const AdminDashboard: React.FC = () => {
     },
   });
 
-  const resetProductionMutation = useMutation({
-    mutationFn: resetAllProductionData,
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['syndics'] });
-      void queryClient.invalidateQueries();
-      setIsResetModalOpen(false);
-    },
-  });
-
   const createSyndicMutation = useMutation({
     mutationFn: async () => {
-      const cleanName = newCabinetName.trim();
-      const cleanEmail = newEmail.trim().toLowerCase();
-      if (!cleanName || !cleanEmail) {
-        throw new Error(
-          tr(
-            'Veuillez renseigner le nom du cabinet et son adresse e-mail.',
-            'يرجى إدخال اسم المكتب والبريد الإلكتروني.'
-          )
-        );
-      }
-
-      const syndicId = `syndic-${Date.now()}`;
-      const uid = `user-syndic-${Date.now()}`;
-      const expiryDate = new Date();
-      expiryDate.setDate(expiryDate.getDate() + 365);
-
-      const createdSyndic: Syndic = {
-        id: syndicId,
-        name: cleanName,
-        logoUrl:
-          'https://images.unsplash.com/photo-1560518883-ce09059eeffa?w=150&auto=format&fit=crop&q=60',
-        createdBy: uid,
-        subscriptionPlan: newPlan,
-        subscriptionStatus: 'active',
-        subscriptionExpiry: expiryDate.toISOString(),
-        email: cleanEmail,
-        phone: newPhone.trim() || '+212 6 00 00 00 00',
-        city: newCity.trim() || 'Casablanca',
-        ice: `00${Math.floor(1000000000000 + Math.random() * 8999999999999)}`,
-        rc: `${Math.floor(100000 + Math.random() * 899999)}`,
-        buildings: [],
-      };
-
-      await saveSyndic(createdSyndic);
-
-      const bldName = newBuildingName.trim() || `Résidence ${cleanName}`;
-      const numApts = Math.max(1, Number(newApartmentsCount) || 8);
-      const fee = Math.max(50, Number(newMonthlyFees) || 250);
-      const baseTantieme = Math.floor(1000 / numApts);
-      const initialApts: Omit<Apartment, 'id' | 'buildingId'>[] = [];
-
-      for (let i = 1; i <= numApts; i++) {
-        const floorIdx = Math.ceil(i / 2);
-        const unitNum = `${floorIdx}0${((i - 1) % 2) + 1}`;
-        initialApts.push({
-          number: unitNum,
-          floor: floorIdx,
-          area: 85,
-          monthlyFees: fee,
-          tantiemes:
-            i === 1 ? baseTantieme + (1000 - baseTantieme * numApts) : baseTantieme,
-          coproType: 'apartment',
-          ownerId: null,
-          tenantId: null,
-        });
-      }
-
-      const createdBuilding = await addBuilding(syndicId, {
-        name: bldName,
-        address: `Boulevard Principal, ${newCity.trim() || 'Casablanca'}`,
-        city: newCity.trim() || 'Casablanca',
-        monthlySyndicFees: fee,
-        reserveFundRate: 5,
-        managerName: newManagerName.trim() || cleanName,
-        managerPhone: newPhone.trim() || '+212 6 00 00 00 00',
-        apartments: initialApts,
-      });
-
-      // Register hashed login credentials for this Syndic cabinet so they can sign in immediately
-      try {
-        const rawUsers = localStorage.getItem(STORAGE_KEYS.REGISTERED_USERS);
-        const existingUsers = rawUsers ? JSON.parse(rawUsers) : [];
-        const filtered = existingUsers.filter(
-          (u: any) => u.email?.trim().toLowerCase() !== cleanEmail
-        );
-        const rawPass =
-          newPassword.trim().length >= 6
-            ? newPassword.trim()
-            : `Syndik-${generateSecureRandomDigits(6)}!`;
-        const syndicProfile = {
-          uid,
-          email: cleanEmail,
-          displayName: newManagerName.trim() || cleanName,
-          role: 'syndic' as const,
-          syndicId,
-          buildingId: createdBuilding.id,
-          buildingName: createdBuilding.name,
-          phone: newPhone.trim(),
-        };
-        filtered.push({
-          uid,
-          email: cleanEmail,
-          passwordHash: hashPasswordSync(rawPass, cleanEmail),
-          profile: syndicProfile,
-          createdAt: new Date().toISOString(),
-        });
-        localStorage.setItem(STORAGE_KEYS.REGISTERED_USERS, JSON.stringify(filtered));
-        await pushKeyToSharedServer(STORAGE_KEYS.REGISTERED_USERS, filtered);
-      } catch {
-        // ignore
-      }
-
-      return createdSyndic;
+      if (newPassword.length < 10) throw new Error(tr('Mot de passe : 10 caractères minimum.', 'كلمة المرور: عشرة أحرف على الأقل.'));
+      return remoteMutation<Syndic>('adminCreateCabinet', [{name:newCabinetName.trim(),email:newEmail.trim(),managerName:newManagerName.trim(),password:newPassword,phone:newPhone.trim(),city:newCity.trim(),plan:newPlan,initialBuilding:newBuildingName.trim()?{name:newBuildingName.trim(),address:newBuildingAddress.trim(),apartmentsCount:Number(newApartmentsCount),monthlyFees:Number(newMonthlyFees)}:undefined}]);
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['syndics'] });
@@ -288,14 +181,6 @@ const AdminDashboard: React.FC = () => {
             >
               <span>{isFetching ? '⟳' : '↻'}</span>
               <span>{tr('Actualiser', 'تحديث')}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setIsResetModalOpen(true)}
-              className="px-3.5 py-2 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs transition-colors flex items-center gap-1.5"
-            >
-              <TrashIcon />
-              <span>{tr('Purger les données de test', 'مسح بيانات التجربة')}</span>
             </button>
             <Button
               onClick={() => {
@@ -492,40 +377,6 @@ const AdminDashboard: React.FC = () => {
         </Card>
       </main>
 
-      {/* Reset Production Data Confirmation Modal */}
-      {isResetModalOpen && (
-        <Modal
-          isOpen={isResetModalOpen}
-          onClose={() => setIsResetModalOpen(false)}
-          title={tr('Purger toutes les données de test', 'مسح جميع البيانات التجريبية')}
-          footer={
-            <div className="flex justify-end gap-2">
-              <Button variant="secondary" onClick={() => setIsResetModalOpen(false)}>
-                {tr('Annuler', 'إلغاء')}
-              </Button>
-              <Button
-                variant="danger"
-                onClick={() => resetProductionMutation.mutate()}
-                disabled={resetProductionMutation.isPending}
-              >
-                {resetProductionMutation.isPending
-                  ? tr('Suppression...', 'جاري المسح...')
-                  : tr('Confirmer la remise à zéro', 'تأكيد المسح الكامل')}
-              </Button>
-            </div>
-          }
-        >
-          <div className="space-y-3 text-xs sm:text-sm text-slate-600">
-            <p>
-              {tr(
-                'Cette action supprimera définitivement tous les cabinets Syndics, immeubles, résidents, prestataires et opérations comptables enregistrés afin de repartir sur une base de production totalement vierge.',
-                'سيؤدي هذا الإجراء إلى حذف جميع مكاتب السنديك والعمارات والسكان ومقدمي الخدمات والعمليات المحاسبية المسجلة للبدء بقاعدة بيانات إنتاج فارغة تماماً.'
-              )}
-            </p>
-          </div>
-        </Modal>
-      )}
-
       {/* Create New Syndic Cabinet Modal */}
       {isCreateModalOpen && (
         <Modal
@@ -676,6 +527,7 @@ const AdminDashboard: React.FC = () => {
                   className="w-full p-2.5 rounded-lg border border-slate-300"
                 />
               </div>
+              <label className="block text-sm">{tr('Adresse réelle de l’immeuble','العنوان الفعلي للعمارة')}<input className="border rounded p-2 w-full" value={newBuildingAddress} onChange={e=>setNewBuildingAddress(e.target.value)} /></label>
               <div>
                 <label className="block font-bold text-slate-700 mb-1">
                   {tr('Nombre de lots', 'عدد الشقق')}
@@ -793,6 +645,7 @@ const AdminDashboard: React.FC = () => {
                   `العمارات التابعة (${selectedSyndic.buildings?.length || 0}) :`
                 )}
               </div>
+              <fieldset className="border rounded-xl p-3 space-y-2"><legend>{tr('Encaisser l’abonnement plateforme','تسجيل دفع اشتراك المنصة')}</legend><label className="block">{tr('Nombre de mois','عدد الأشهر')}<input className="border rounded p-2 ms-2" type="number" min={1} max={12} value={subscriptionMonths} onChange={e=>setSubscriptionMonths(Number(e.target.value))}/></label><label className="block">{tr('Référence bancaire unique','مرجع بنكي فريد')}<input className="border rounded p-2 w-full" value={subscriptionReference} onChange={e=>setSubscriptionReference(e.target.value)}/></label><p>{PLAN_PRICES[editPlan]*subscriptionMonths} MAD</p><Button disabled={!subscriptionReference.trim()} onClick={async()=>{try{await remoteMutation('recordSubscriptionPayment',[{syndicId:selectedSyndic.id,plan:editPlan,months:subscriptionMonths,reference:subscriptionReference.trim(),amount:PLAN_PRICES[editPlan]*subscriptionMonths}]);setSubscriptionMessage(tr('Abonnement prolongé et paiement enregistré.','تم تمديد الاشتراك وتسجيل الدفع.'));void queryClient.invalidateQueries({queryKey:['syndics']});}catch(e:any){setSubscriptionMessage(e.message);}}}>{tr('Enregistrer le paiement','تسجيل الدفع')}</Button><p role="status">{subscriptionMessage}</p></fieldset>
               {(selectedSyndic.buildings || []).map((b) => (
                 <div key={b.id} className="flex justify-between text-slate-600 font-mono text-[11px]">
                   <span>
