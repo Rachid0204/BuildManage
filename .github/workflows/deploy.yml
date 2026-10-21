@@ -39,6 +39,9 @@ jobs:
       - name: Verify payment boundaries
         run: npm run test:business
 
+      - name: Verify identity cache isolation and collision-free journal entries
+        run: npm run test:cache
+
       - name: Verify HTTP identity and authorization boundaries
         run: npm run test:security
 
@@ -73,6 +76,9 @@ jobs:
 
       - name: Verify form focus and resident payment workflow in Chromium
         run: npm run test:ui
+
+      - name: Simulate all roles with Firestore and the Admin Storage SDK
+        run: npx firebase emulators:exec --project demo-buildmanage --only firestore "npm run test:ui:cloud"
 
       - name: Upload production build artifact
         uses: actions/upload-artifact@v4

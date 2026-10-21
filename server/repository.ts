@@ -1,4 +1,4 @@
-import firebaseConfig from "../firebase-applet-config.json";
+import firebaseConfig from "../firebase-applet-config.json" with { type: "json" };
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isDeepStrictEqual } from "node:util";
 import { createHash, randomUUID } from "node:crypto";
@@ -6,6 +6,7 @@ import { mkdir, readFile, open, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { getApps, initializeApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
+import { dependencyFailure } from './dependencyErrors';
 export type State = Record<string, any>;
 const context = new AsyncLocalStorage<State>();
 export function currentState(): State {
@@ -56,10 +57,11 @@ export class FileRepository implements StateRepository {
         if (error.code !== "ENOENT")
           throw new Error("Unreadable database; restore a verified backup");
       }
-      const before = JSON.stringify(state),
+      const revision = Number(state.__revision) || 0,
+        before = JSON.stringify(state),
         result = await context.run(state, () => run(state));
       if (JSON.stringify(state) !== before) {
-        state.__revision = (Number(state.__revision) || 0) + 1;
+        state.__revision = revision + 1;
         const temporary = `${file}.${randomUUID()}.tmp`,
           handle = await open(temporary, "wx", 0o600);
         try {
@@ -88,15 +90,22 @@ function encode(state: State) {
   const rows = new Map<string, any>();
   function put(group: string, id: string, value: any) {
     const hash = createHash("sha256").update(`${group}\0${id}`).digest("hex");
-    const json = JSON.stringify(value),
-      parts = Math.max(1, Math.ceil(json.length / 60000));
+    const json = JSON.stringify(value), chunks: string[] = [];
+    for (let start = 0; start < json.length;) {
+      let end = Math.min(start + 60000, json.length);
+      // Firestore encodes each string as UTF-8; never split an emoji surrogate pair.
+      if (end < json.length && /[\uD800-\uDBFF]/.test(json[end - 1])) end--;
+      chunks.push(json.slice(start, end));
+      start = end;
+    }
+    const parts = chunks.length;
     for (let part = 0; part < parts; part++)
       rows.set(`${hash}_${part}`, {
         group,
         id,
         part,
         parts,
-        json: json.slice(part * 60000, (part + 1) * 60000),
+        json: chunks[part],
       });
   }
   function walk(value: any, location: string): any {
@@ -106,18 +115,23 @@ function encode(state: State) {
         !value.every((v) => v && typeof v === "object" && !Array.isArray(v))
       )
         return value.map((v, i) => walk(v, `${location}/${i}`));
-      const order: string[] = [],
-        group = `list:${location}`;
-      for (const [index, item] of value.entries()) {
-        const id = String(
+      const order: string[] = [], group = `list:${location}`;
+      const identities = value.map((item, index) => String(
           item.id ||
             item.uid ||
             item.apartmentId ||
             (item.residentId
               ? `${item.residentId}:${item.apartmentNumber || ""}`
               : index),
-        );
-        if (order.includes(id)) throw new Error("Duplicate record identity");
+        ));
+      const repeated = new Set(identities).size !== identities.length;
+      const occurrences = new Map<string, number>();
+      for (const [index, item] of value.entries()) {
+        const candidate = identities[index], occurrence = occurrences.get(candidate) || 0;
+        occurrences.set(candidate, occurrence + 1);
+        // Repeated residents in history/metadata are valid JSON. Storage keys must
+        // preserve every entry without treating a resident ID as a unique event ID.
+        const id = repeated ? JSON.stringify([candidate, occurrence]) : candidate;
         order.push(id);
         put(group, id, walk(item, `${location}/${id}`));
       }
@@ -187,87 +201,90 @@ function decode(rows: any[], revision: number): State {
     __revision: revision,
   };
 }
+class RevisionChanged extends Error {}
 export class FirestoreRepository implements StateRepository {
   private db;
   constructor(databaseId: string) {
     this.db = getFirestore(getApps()[0] || initializeApp(), databaseId);
   }
   async transaction<T>(run: (state: State) => Promise<T>): Promise<T> {
-    return this.db.runTransaction(async (transaction) => {
-      const ref = this.db.doc("platform_internal/state_revision"),
-        meta = await transaction.get(ref);
-      const location = meta.data()?.generation
-        ? `platform_generations/${meta.data()!.generation}/records`
-        : "platform_state";
-      const snapshot = await transaction.get(this.db.collection(location));
-      const old = new Map<string, any>(
-          snapshot.docs.map((d) => [d.id, d.data()]),
-        ),
-        state = decode(
-          snapshot.docs.map((d) => d.data()),
-          Number(meta.data()?.revision || 0),
-        );
-      const before = JSON.stringify(state),
-        result = await context.run(state, () => run(state));
-      if (before === JSON.stringify(state)) return result;
-      const next = encode(state);
-      let writes = 1,
-        bytes = 0;
-      for (const [id, value] of next)
-        if (!isDeepStrictEqual(old.get(id), value)) {
-          writes++;
-          bytes += Buffer.byteLength(JSON.stringify(value));
-        }
-      for (const id of old.keys()) if (!next.has(id)) writes++;
-      state.__revision++;
-      if (writes > 450 || bytes > 7 * 1024 * 1024) {
-        const generation = randomUUID();
-        let batch = this.db.batch(),
-          count = 0,
-          size = 0;
-        for (const [id, value] of next) {
-          const length = Buffer.byteLength(JSON.stringify(value));
-          if (count >= 400 || size + length > 6 * 1024 * 1024) {
-            await batch.commit();
-            batch = this.db.batch();
-            count = 0;
-            size = 0;
+    const ref = this.db.doc("platform_internal/state_revision");
+    try {
+      for (let attempt = 0; attempt < 12; attempt++) {
+        try {
+          // Read one consistent generation without holding pessimistic locks during
+          // SDK uploads, domain work, or staging batches. The monotonic revision is
+          // checked before/after the read and again atomically at commit.
+          const meta = await ref.get();
+          const revision = Number(meta.data()?.revision) || 0;
+          const location = meta.data()?.generation
+            ? `platform_generations/${meta.data()!.generation}/records`
+            : "platform_state";
+          const snapshot = await this.db.collection(location).get();
+          const observed = await ref.get();
+          if ((Number(observed.data()?.revision) || 0) !== revision ||
+              observed.data()?.generation !== meta.data()?.generation) throw new RevisionChanged();
+          const old = new Map<string, any>(snapshot.docs.map(d => [d.id, d.data()]));
+          const state = decode(snapshot.docs.map(d => d.data()), revision);
+          const before = JSON.stringify(state);
+          const result = await context.run(state, () => run(state));
+          if (before === JSON.stringify(state)) return result;
+          const next = encode(state);
+          let writes = 1, bytes = 0;
+          for (const [id, value] of next) if (!isDeepStrictEqual(old.get(id), value)) {
+            writes++;
+            bytes += Buffer.byteLength(JSON.stringify(value));
           }
-          batch.set(
-            this.db.doc(`platform_generations/${generation}/records/${id}`),
-            value,
-          );
-          count++;
-          size += length;
+          for (const id of old.keys()) if (!next.has(id)) writes++;
+          state.__revision = revision + 1;
+          let generation: string | undefined;
+          if (writes > 450 || bytes > 7 * 1024 * 1024) {
+            generation = randomUUID();
+            let batch = this.db.batch(), count = 0, size = 0;
+            for (const [id, value] of next) {
+              const length = Buffer.byteLength(JSON.stringify(value));
+              if (count >= 400 || size + length > 6 * 1024 * 1024) {
+                await batch.commit();
+                batch = this.db.batch(); count = 0; size = 0;
+              }
+              batch.set(this.db.doc(`platform_generations/${generation}/records/${id}`), value);
+              count++; size += length;
+            }
+            if (count) await batch.commit();
+            await this.db.doc(`platform_generations/${generation}`).set({
+              complete: true, records: next.size, createdAt: new Date().toISOString(),
+            });
+          }
+          await this.db.runTransaction(async transaction => {
+            const current = await transaction.get(ref);
+            if ((Number(current.data()?.revision) || 0) !== revision ||
+                current.data()?.generation !== meta.data()?.generation) throw new RevisionChanged();
+            if (!generation) {
+              for (const id of old.keys()) if (!next.has(id)) transaction.delete(this.db.doc(`${location}/${id}`));
+              for (const [id, value] of next) if (!isDeepStrictEqual(old.get(id), value))
+                transaction.set(this.db.doc(`${location}/${id}`), value);
+            }
+            transaction.set(ref, {
+              ...meta.data(), ...(generation ? { generation } : {}),
+              revision: state.__revision, schemaVersion: 1,
+            });
+          }, { maxAttempts: 1 });
+          return result;
+        } catch (error: any) {
+          if (!(error instanceof RevisionChanged) && error?.code !== 10) throw error;
+          if (attempt === 11) throw dependencyFailure('database', new Error('Concurrent writers: retry the request.'));
+          await new Promise(resolve => setTimeout(resolve, Math.min(25 * (attempt + 1), 250) + Math.random() * 25));
         }
-        if (count) await batch.commit();
-        await this.db.doc(`platform_generations/${generation}`).set({
-          complete: true,
-          records: next.size,
-          createdAt: new Date().toISOString(),
-        });
-        transaction.set(ref, {
-          generation,
-          revision: state.__revision,
-          schemaVersion: 1,
-        });
-      } else {
-        for (const id of old.keys())
-          if (!next.has(id))
-            transaction.delete(this.db.doc(`${location}/${id}`));
-        for (const [id, value] of next)
-          if (!isDeepStrictEqual(old.get(id), value))
-            transaction.set(this.db.doc(`${location}/${id}`), value);
-        transaction.set(ref, {
-          ...meta.data(),
-          revision: state.__revision,
-          schemaVersion: 1,
-        });
       }
-      return result;
-    });
+      throw new Error('Database transaction exhausted');
+    } catch (error: any) {
+      if (typeof error?.code === 'number' && !error?.rejected && !error?.status)
+        throw dependencyFailure('database', error);
+      throw error;
+    }
   }
 }
+
 export function createRepository(): StateRepository {
   const mode =
     process.env.SYNDIK_STATE_BACKEND ||

@@ -15,6 +15,7 @@ import {
 import { PLANS, subscriptionCanWrite } from "../utils/subscriptionPolicy";
 import { applyResidentVote, evaluateResolutionStatus } from "../utils/agVoting";
 import { hashPassword } from "./passwords";
+import { privateAttachments } from './attachments';
 export class OperationError extends Error {
   constructor(
     message: string,
@@ -221,6 +222,15 @@ function notice(
     read: false,
     createdAt: new Date().toISOString(),
   });
+}
+function validateAttachments(actor: Actor, b: any, input: unknown, existing?: unknown) {
+  const previous = privateAttachments(existing);
+  for (const url of privateAttachments(input)) {
+    const meta = currentState().__files?.[url.slice('/api/uploads/'.length)];
+    check(meta && meta.buildingId === b.id &&
+      (['admin', 'syndic'].includes(actor.role) || meta.uploadedBy === actor.uid || previous.has(url)),
+      'Pièce jointe privée ou non liée à cet immeuble.');
+  }
 }
 function assertPeriod(b: any, date: any) {
   check(
@@ -716,6 +726,7 @@ export async function runOperation(
     buildingId = b.id;
     canWrite(actor, b);
     check(actor.role !== "provider", "Rôle interdit.");
+    validateAttachments(actor, b, input);
     const id = actor.role === "resident" ? actorIdentity(actor) : actor.uid,
       r = b.residents.find((r: any) => r.id === id) || { name: actor.email };
     args[0] = {
@@ -764,6 +775,7 @@ export async function runOperation(
         ),
         "Intervention non affectée.",
       );
+    validateAttachments(actor, b, [args[1], args[2]], request);
     if (operation !== "updateMaintenanceRequest") {
       check(
         actor.role !== "provider",
@@ -858,6 +870,7 @@ export async function runOperation(
     b = buildingFor(actor, str(m.buildingId), false);
     buildingId = b.id;
     canWrite(actor, b);
+    validateAttachments(actor, b, m);
     const id = actorIdentity(actor),
       peer = m.recipientId;
     check(
@@ -911,6 +924,7 @@ export async function runOperation(
     buildingId = b.id;
     canWrite(actor, b);
     check(actor.role !== "provider", "Rôle interdit.");
+    validateAttachments(actor, b, input);
     const id = actorIdentity(actor);
     args[0] = {
       ...pick(input, [

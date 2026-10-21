@@ -77,6 +77,8 @@ export function readableError(error: unknown, isAr = false): string {
     }
   } catch { /* Ordinary application message. */ }
   const translations: Record<string, string> = {
+    'Le stockage des pièces jointes est indisponible. Votre saisie est conservée. Contactez le gestionnaire.': 'خدمة حفظ المرفقات غير متاحة. تم الاحتفاظ ببياناتك المدخلة. تواصل مع المسؤول.',
+    'La base de données est indisponible. Votre saisie est conservée. Réessayez dans un instant ou contactez le gestionnaire.': 'قاعدة البيانات غير متاحة. تم الاحتفاظ ببياناتك المدخلة. حاول بعد قليل أو تواصل مع المسؤول.',
     'Authentification requise.': 'انتهت جلستك أو لم تسجل الدخول. أعد تسجيل الدخول ثم حاول مجدداً.',
     'Vérifiez votre adresse email.': 'تحقق من بريدك الإلكتروني قبل المتابعة.',
     'Changez votre mot de passe initial avant de continuer.': 'غيّر كلمة المرور الأولية قبل المتابعة.',

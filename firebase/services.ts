@@ -1,5 +1,5 @@
 import { engineStorage, clearBusinessCache } from './cache';
-import { notifyOperation } from '../utils/formFeedback';
+import { notifyOperation, readableError } from '../utils/formFeedback';
 import { getServerRuntime } from './serverRuntime';
 import { applyResidentVote, evaluateResolutionStatus } from '../utils/agVoting';
 import {
@@ -195,6 +195,7 @@ export function sanitizeAccountRecordsInStorage(): void {
 let lastKnownServerRevision = 0;
 let lastSyncTimestampMs = 0;
 let inflightSyncPromise: Promise<Record<string, any> | null> | null = null;
+let stateCacheGeneration = 0;
 
 export async function pushKeyToSharedServer<T>(
   key: string,
@@ -313,6 +314,7 @@ export async function syncAllSharedStateFromServer(
     return null;
   }
 
+  const generation = stateCacheGeneration;
   inflightSyncPromise = (async () => {
     try {
       const url =
@@ -324,12 +326,18 @@ export async function syncAllSharedStateFromServer(
         headers,
         cache: 'no-store',
       });
-      if (!res.ok) return null;
+      if (generation !== stateCacheGeneration) return null;
+      if (!res.ok) {
+        const failure = await readCommandResponse(res);
+        throw new Error(failure.error || 'Chargement des données impossible.');
+      }
       const contentType = res.headers.get('content-type') || '';
-      if (!contentType.includes('application/json')) return null;
+      if (!contentType.includes('application/json')) throw new Error('Le service de données ne répond pas correctement. Réessayez ou contactez le gestionnaire.');
 
       const data = await res.json();
-      if (!data || !data.ok) return null;
+      if (generation !== stateCacheGeneration) return null;
+      if (!data || !data.ok) throw new Error('Le service de données ne répond pas correctement. Réessayez ou contactez le gestionnaire.');
+      if (typeof data.revision === 'number' && data.revision < lastKnownServerRevision) return null;
 
       if (typeof data.revision === 'number') {
         lastKnownServerRevision = data.revision;
@@ -361,10 +369,11 @@ export async function syncAllSharedStateFromServer(
         } else { engineStorage.removeItem(key); }
       }
       return serverStore;
-    } catch {
-      return null;
+    } catch (error) {
+      if (generation !== stateCacheGeneration) return null;
+      throw error;
     } finally {
-      inflightSyncPromise = null;
+      if (generation === stateCacheGeneration) inflightSyncPromise = null;
     }
   })();
 
@@ -380,7 +389,7 @@ if (typeof window !== 'undefined') {
     engineStorage.removeItem(oldKey);
   }
   sanitizeAccountRecordsInStorage();
-  void syncAllSharedStateFromServer();
+  void syncAllSharedStateFromServer().catch(() => {});
 }
 
 // Helper to get or initialize local storage item
@@ -594,7 +603,7 @@ export const addBuilding = async (
   const remainderTantiemes = totalLots > 0 ? 1000 - baseTantiemes * totalLots : 0;
 
   const generatedApts: Apartment[] = (apartments || []).map((apt, idx) => ({
-    id: `apt-${Date.now()}-${idx}`,
+    id: `apt-${crypto.randomUUID()}`,
     buildingId: newBuildingId,
     number: apt.number,
     floor: apt.floor,
@@ -727,7 +736,7 @@ export const addApartment = async (apartmentData: Omit<Apartment, 'id'>) => {
       const bld = syndic.buildings.find((b) => b.id === apartmentData.buildingId);
       if (bld) {
         const newApt: Apartment = {
-          id: `apt-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+          id: `apt-${crypto.randomUUID()}`,
           ...apartmentData,
           monthlyFees: apartmentData.monthlyFees ?? bld.monthlySyndicFees,
           tantiemes: apartmentData.tantiemes ?? 100,
@@ -1638,7 +1647,7 @@ export const submitPaymentProof = async (
   }
 
   const newProof: PaymentProof = {
-    id: `prf-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    id: `prf-${crypto.randomUUID()}`,
     submissionDate: new Date().toISOString(),
     status: 'pending',
     matchScore,
@@ -2110,7 +2119,7 @@ export const createAssembleeGenerale = async (
 
   const ag: AssembleeGenerale = {
     ...agInput,
-    id: agInput.id || `ag-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    id: agInput.id || `ag-${crypto.randomUUID()}`,
     quorumRequired: agInput.quorumRequired ?? Math.ceil((agInput.totalTantiemes || 1000) / 2),
     isVotingOpen:
       agInput.isVotingOpen ??
@@ -2722,7 +2731,7 @@ export const addPrestataireReview = async (
   if (typeof window !== 'undefined') return remoteMutation('addPrestataireReview', [prestataireId, review]);
 
   const newRev: PrestataireReview = {
-    id: `rev-${Date.now()}`,
+    id: `rev-${crypto.randomUUID()}`,
     date: new Date().toISOString().split('T')[0],
     ...review,
   };
@@ -2760,7 +2769,7 @@ export const addTransaction = async (buildingId: string, transaction: Omit<Trans
       : transaction.amount;
 
   const newTrx: Transaction = {
-    id: `trx-${Date.now()}`,
+    id: `trx-${crypto.randomUUID()}`,
     ...transaction,
     amount: Math.round(signedAmount * 100) / 100,
     type: signedAmount >= 0 ? 'income' : 'expense',
@@ -3040,7 +3049,7 @@ export const addMaintenanceRequest = async (request: Omit<MaintenanceRequest, 'i
   });
 
   const initialUpdate: MaintenanceStepUpdate = {
-    id: `upd-${Date.now()}`,
+    id: `upd-${crypto.randomUUID()}`,
     status: normalizedDraft.status || 'pending',
     title: 'Signalement créé et transmis au Syndic',
     note: normalizedDraft.description,
@@ -3122,7 +3131,7 @@ export const updateMaintenanceRequest = async (
             : 'Mise à jour du dossier';
 
         const newStep: MaintenanceStepUpdate = {
-          id: `upd-${Date.now()}`,
+          id: `upd-${crypto.randomUUID()}`,
           status: updates.status || existing.status,
           title: stepInfo.title || statusLabel,
           note:
@@ -3233,7 +3242,7 @@ async function readFileAsDurableDataUrl(file: File): Promise<string> {
 export const uploadDocument = async (buildingId: string,file: File): Promise<Document> => {
   const dataUrl = await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result));reader.onerror=()=>reject(new Error('Lecture impossible.'));reader.readAsDataURL(file);});
   const response = await fetch('/api/uploads',{method:'POST',headers:getAuthenticatedRequestHeaders(),body:JSON.stringify({buildingId,name:file.name,dataUrl})});
-  const result = await response.json();if (!response.ok) throw new Error(result.error || 'Téléversement impossible.');
+  const result = await readCommandResponse(response);if (!response.ok) throw new Error(result.error || 'Téléversement impossible.');
   return remoteMutation('attachDocument',[buildingId,{fileId:result.fileId}]);
 };
 
@@ -3404,7 +3413,7 @@ export const addMarketplaceItem = async (
   if (typeof window !== 'undefined') return remoteMutation('addMarketplaceItem', [item]);
 
   const newItem: MarketplaceItem = {
-    id: `item-${Date.now()}`,
+    id: `item-${crypto.randomUUID()}`,
     createdAt: new Date().toISOString(),
     ...item,
   };
@@ -3460,19 +3469,23 @@ const pendingOperations = new Map<string, string>();
 const ephemeralInvites = new Map<string, any>();
 const preparedOperations = new Map<string, unknown[]>();
 const inflightOperations = new Map<string, Promise<unknown>>();
-export function clearStateCache() { clearBusinessCache(); pendingOperations.clear(); preparedOperations.clear(); inflightOperations.clear(); ephemeralInvites.clear(); lastKnownServerRevision = 0; lastSyncTimestampMs = 0; }
+export function clearStateCache() { stateCacheGeneration++; inflightSyncPromise = null; clearBusinessCache(); pendingOperations.clear(); preparedOperations.clear(); inflightOperations.clear(); ephemeralInvites.clear(); lastKnownServerRevision = 0; lastSyncTimestampMs = 0; }
 export function remoteMutation<T = any>(operation: string, args: unknown[]): Promise<T> {
   args = [...args];
   while (args.length && args.at(-1) === undefined) args.pop();
   const requestKey = JSON.stringify({ operation, args });
   const pending = inflightOperations.get(requestKey);
   if (pending) return pending as Promise<T>;
-  const task = performRemoteMutation<T>(operation, args, requestKey).finally(() => inflightOperations.delete(requestKey));
+  const task = performRemoteMutation<T>(operation, args, requestKey).finally(() => {
+    if (inflightOperations.get(requestKey) === task) inflightOperations.delete(requestKey);
+  });
   inflightOperations.set(requestKey, task);
   return task;
 }
 
 async function performRemoteMutation<T>(operation: string, args: unknown[], requestKey: string): Promise<T> {
+  const generation = stateCacheGeneration;
+  const requireSameIdentity = () => { if (generation !== stateCacheGeneration) throw new Error('La session a changé. Recommencez depuis votre espace.'); };
   try {
   const first: any = args[0];
   const linked = typeof first === 'string' ? [STORAGE_KEYS.MAINTENANCE, STORAGE_KEYS.MARKETPLACE, STORAGE_KEYS.CHAT].flatMap(key => JSON.parse(engineStorage.getItem(key) || '[]')).find(item => item.id === first) : undefined;
@@ -3499,13 +3512,16 @@ async function performRemoteMutation<T>(operation: string, args: unknown[], requ
       return value;
     };
     args = await upload(args);
+    requireSameIdentity();
     preparedOperations.set(requestKey, args);
   }
+  requireSameIdentity();
   // Keep one identity and the same uploaded file URLs across an uncertain response.
   const operationId = pendingOperations.get(requestKey) || crypto.randomUUID();
   pendingOperations.set(requestKey, operationId);
   const response = await fetch('/api/commands', { method: 'POST', headers: getAuthenticatedRequestHeaders(), body: JSON.stringify({ operation,args,operationId }) });
   const data = await readCommandResponse(response);
+  requireSameIdentity();
   if (!response.ok) {
     if (response.status < 500) { pendingOperations.delete(requestKey); preparedOperations.delete(requestKey); }
     throw new Error(data.error || 'Enregistrement impossible.');
@@ -3513,18 +3529,31 @@ async function performRemoteMutation<T>(operation: string, args: unknown[], requ
   pendingOperations.delete(requestKey);
   preparedOperations.delete(requestKey);
   if (data.result?.id && (data.result.invitationCode || data.result.invitationToken)) ephemeralInvites.set(data.result.id,{ invitationCode:data.result.invitationCode,invitationToken:data.result.invitationToken });
-  if (data.store) for (const [key,value] of Object.entries(data.store)) if (key.startsWith('syndik_prod_')) engineStorage.setItem(key,JSON.stringify(value));
+  if (data.store && (typeof data.revision !== 'number' || data.revision >= lastKnownServerRevision)) {
+    if (typeof data.revision === 'number') lastKnownServerRevision = data.revision;
+    lastSyncTimestampMs = Date.now();
+    for (const [key,value] of Object.entries(data.store)) if (key.startsWith('syndik_prod_')) engineStorage.setItem(key,JSON.stringify(value));
+  }
   for (const key of Object.values(STORAGE_KEYS)) notifyStateUpdated(key);
   notifyOperation({ operation });
   return (Array.isArray(data.result) ? Object.assign(data.result,data.resultMeta || {}) : data.result) as T;
   } catch (error) {
-    notifyOperation({ operation, error: error instanceof Error ? error.message : 'Enregistrement impossible.' });
+    if (generation === stateCacheGeneration) notifyOperation({ operation, error: error instanceof Error ? error.message : 'Enregistrement impossible.' });
     throw error;
   }
 }
 
 async function readCommandResponse(response: Response): Promise<any> {
-  try { return await response.json(); }
+  try {
+    const result = await response.json();
+    if (!response.ok && result.error) {
+      const isAr = typeof window !== 'undefined' && window.localStorage.getItem('syndik_lang') === 'ar';
+      result.error = readableError(result.error, isAr);
+      if (result.requestId && ['INTERNAL_ERROR', 'DATABASE_ACCESS', 'DATABASE_MISSING', 'DATABASE_UNAVAILABLE', 'STORAGE_ACCESS', 'STORAGE_MISSING', 'STORAGE_UNAVAILABLE'].includes(result.code))
+        result.error += `\n${isAr ? 'مرجع الدعم' : 'Référence pour le support'} : ${result.requestId}`;
+    }
+    return result;
+  }
   catch {
     if (response.status === 413) throw new Error('Fichier trop volumineux. Joignez un fichier de 5 Mo maximum.');
     if (response.status === 401) throw new Error('Authentification requise.');

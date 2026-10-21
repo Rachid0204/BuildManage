@@ -12,7 +12,9 @@ import {
   buildingFor,
   canWrite,
   recomputeMeeting,
+  actorIdentity,
 } from "./server/operations";
+import { privateAttachments } from './server/attachments';
 import {
   registerIdentityRoutes,
   createIdentityAction,
@@ -24,7 +26,8 @@ import {
   decrypt,
 } from "./server/mailer";
 import { subscriptionCanWrite } from "./utils/subscriptionPolicy";
-import { getStorage } from "firebase-admin/storage";
+import { savePrivateFile, readPrivateFile } from './server/uploads';
+import { DependencyError } from './server/dependencyErrors';
 import express from "express";
 
 import path from "path";
@@ -52,8 +55,10 @@ const DATA_DIR = process.env.SYNDIK_DATA_DIR || path.join(__dirname, ".data");
 const UPLOADS_DIR = path.join(DATA_DIR, "uploads");
 const STATE_FILE = path.join(DATA_DIR, "shared-state.json");
 
-const SERVER_HMAC_SECRET =
-  process.env.SYNDIK_SERVER_SECRET || crypto.randomBytes(32).toString("hex");
+const HAS_CONFIGURED_SERVER_SECRET = (process.env.SYNDIK_SERVER_SECRET?.length || 0) >= 32;
+const SERVER_HMAC_SECRET = HAS_CONFIGURED_SERVER_SECRET
+  ? process.env.SYNDIK_SERVER_SECRET!
+  : crypto.randomBytes(32).toString("hex");
 
 interface ServerStore {
   __revision?: number;
@@ -1289,6 +1294,9 @@ async function startServer() {
   if (process.env.SYNDIK_SERVER_SECRET.length < 32) {
     process.env.SYNDIK_SERVER_SECRET = SERVER_HMAC_SECRET;
   }
+  if (process.env.NODE_ENV === 'production' && !HAS_CONFIGURED_SERVER_SECRET)
+    console.warn(JSON.stringify({ event: 'configuration_warning', code: 'SESSION_SECRET_NOT_CONFIGURED',
+      message: 'Configure one stable SYNDIK_SERVER_SECRET of at least 32 characters across revisions and instances. The temporary key cannot preserve sessions or encrypted retries across restarts.' }));
   process.env.SYNDIK_UPLOAD_BUCKET ||=
     firebaseConfig.storageBucket || "immogest-7faaf.firebasestorage.app";
   process.env.PUBLIC_APP_URL ||= "https://immogest-7faaf.web.app";
@@ -1298,6 +1306,8 @@ async function startServer() {
     sharedStore: ServerStore = sharedState;
   const wrap =
     (handler: any) => async (req: express.Request, res: express.Response) => {
+      const requestId = crypto.randomUUID();
+      res.setHeader('X-Request-ID', requestId);
       const json = res.json.bind(res),
         send = res.send.bind(res);
       let payload: any,
@@ -1344,7 +1354,7 @@ async function startServer() {
           payload = {
             ok: false,
             error:
-              error instanceof OperationError
+              error instanceof OperationError || error instanceof DependencyError
                 ? error.message
                 : error.name === "ZodError" && Array.isArray(error.issues)
                 ? JSON.stringify(error.issues.map((issue: any) => ({
@@ -1357,9 +1367,14 @@ async function startServer() {
                     received: issue.received === "undefined" ? "undefined" : undefined,
                   })))
                 : "Enregistrement impossible. Veuillez réessayer.",
+            code: error instanceof DependencyError ? error.code : error.name === 'ZodError' ? 'VALIDATION_ERROR' : error instanceof OperationError ? 'OPERATION_REJECTED' : 'INTERNAL_ERROR',
+            requestId,
           };
           format = "json";
-          console.error("Transaction failed:", error.message);
+          console.error(JSON.stringify({ event: 'request_failed', requestId, method: req.method,
+            path: req.path, operation: String(req.body?.operation || '').slice(0, 100),
+            code: payload.code, dependency: error instanceof DependencyError ? error.dependency : undefined,
+            message: String(error instanceof DependencyError ? (error.cause as any)?.message : error.message).slice(0, 1000) }));
         }
       } finally {
         res.json = json;
@@ -1400,7 +1415,7 @@ async function startServer() {
 
   // API Health check
   app.get("/api/health", (_req, res) => {
-    res.json({ status: "ok", timestamp: new Date().toISOString() });
+    res.json({ status: "ok", revision: process.env.K_REVISION || 'local', timestamp: new Date().toISOString() });
   });
 
   // Server-side authentication endpoint for Syndics, Residents (Email or CIN), and Providers (Prestataires)
@@ -2079,19 +2094,7 @@ async function startServer() {
         .update(bytes)
         .digest("hex"),
       key = `private/${buildingId}/${fileId}`;
-    if (process.env.NODE_ENV === "production")
-      await getStorage(getApps()[0])
-        .bucket(process.env.SYNDIK_UPLOAD_BUCKET)
-        .file(key)
-        .save(bytes, {
-          resumable: false,
-          contentType: mime,
-          metadata: { cacheControl: "private, no-store" },
-        });
-    else {
-      fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-      fs.writeFileSync(path.join(UPLOADS_DIR, fileId), bytes, { mode: 0o600 });
-    }
+    await savePrivateFile(UPLOADS_DIR, fileId, key, bytes, mime);
     (sharedStore.__files ??= {})[fileId] = {
       fileId,
       key,
@@ -2129,27 +2132,24 @@ async function startServer() {
       assigned = (sharedStore.syndik_prod_maintenance_v1 || []).some(
         (m: any) =>
           m.buildingId === b.id &&
-          ([m.prestataireId, m.assignedTo].includes(caller.prestataireId) ||
-            m.residentId === caller.residentId) &&
-          JSON.stringify(m).includes(`/api/uploads/${id}`),
-      );
+          ((caller.role === 'provider' && caller.prestataireId &&
+            [m.prestataireId, m.assignedTo].includes(caller.prestataireId)) ||
+            (caller.role === 'resident' && caller.residentId && m.residentId === caller.residentId)) &&
+          privateAttachments(m).has(`/api/uploads/${id}`),
+      ),
+      sharedInChat = (sharedStore.syndik_prod_chat_v1 || []).some((m: any) =>
+        m.buildingId === b.id && m.attachmentUrl === `/api/uploads/${id}` &&
+        (!m.recipientId || [m.senderId, m.recipientId].includes(actorIdentity(caller))));
     if (
       !["admin", "syndic"].includes(caller.role) &&
       meta.uploadedBy !== caller.uid &&
       !publicDocument &&
       !marketImage &&
-      !assigned
+      !assigned &&
+      !sharedInChat
     )
       return res.status(403).json({ error: "Fichier privé." });
-    const bytes =
-      process.env.NODE_ENV === "production"
-        ? (
-            await getStorage(getApps()[0])
-              .bucket(process.env.SYNDIK_UPLOAD_BUCKET)
-              .file(meta.key)
-              .download()
-          )[0]
-        : fs.readFileSync(path.join(UPLOADS_DIR, id));
+    const bytes = await readPrivateFile(UPLOADS_DIR, id, meta.key);
     res.setHeader("Content-Type", meta.mimeType);
     res.setHeader("Content-Security-Policy", "sandbox; default-src 'none'");
     res.setHeader("X-Content-Type-Options", "nosniff");
@@ -2187,6 +2187,7 @@ async function startServer() {
             : receipts[key].responseJson,
         ),
         store: filterStoreForCaller(sharedStore, caller),
+        revision: sharedStore.__revision || 0,
       });
     }
     const result = await runOperation(caller, operation, args, operationId),
@@ -2216,6 +2217,7 @@ async function startServer() {
       ok: true,
       ...JSON.parse(responseJson),
       store: filterStoreForCaller(sharedStore, caller),
+      revision: sharedStore.__revision || 0,
     });
   });
   api.get("/api/auth/session", async (req, res) => {
@@ -2261,8 +2263,22 @@ async function startServer() {
     });
   });
   api.get("/api/ready", async (_req, res) =>
-    res.json({ status: "ready", revision: sharedStore.__revision || 0 }),
+    res.json({ status: "ready", revision: sharedStore.__revision || 0, runtimeRevision: process.env.K_REVISION || 'local',
+      checks: { databaseRead: 'ok', storageWrite: 'not_checked' } }),
   );
+  api.get('/api/diagnostics', async (req, res) => {
+    const caller = await extractAndVerifyCaller(req, sharedStore);
+    if (!caller || !['admin', 'syndic'].includes(caller.role))
+      return res.status(403).json({ error: 'Accès réservé au gestionnaire.' });
+    return res.json({
+      revision: process.env.K_REVISION || 'local',
+      database: { backend: process.env.SYNDIK_STATE_BACKEND || (process.env.NODE_ENV === 'production' ? 'firestore' : 'file'), id: process.env.FIRESTORE_DATABASE_ID, read: 'ok' },
+      storage: { backend: process.env.NODE_ENV === 'production' || process.env.SYNDIK_UPLOAD_BACKEND === 'gcs' ? 'gcs' : 'file', bucket: process.env.SYNDIK_UPLOAD_BUCKET, write: 'not_checked' },
+      sessionSecretConfigured: HAS_CONFIGURED_SERVER_SECRET,
+      transactionalMailConfigured: mailIsConfigured(),
+      warnings: HAS_CONFIGURED_SERVER_SECRET ? [] : ['SESSION_SECRET_NOT_CONFIGURED'],
+    });
+  });
   const scheduler = (req: express.Request) => {
     const secret = process.env.SYNDIK_SCHEDULER_SECRET || "";
     return (
