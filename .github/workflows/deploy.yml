@@ -84,7 +84,7 @@ jobs:
             -e FIRESTORE_EMULATOR_HOST=127.0.0.1:1 \
             -e GCE_METADATA_DISABLED=true immogest-startup)
           trap 'docker logs "$container_id"; docker rm -f "$container_id" >/dev/null' EXIT
-          curl --fail --retry 15 --retry-connrefused --retry-delay 1 --max-time 3 http://127.0.0.1:3000/api/health
+          curl --fail --retry 15 --retry-all-errors --retry-delay 1 --max-time 3 http://127.0.0.1:3000/api/health
           curl --fail --max-time 3 http://127.0.0.1:3000/ --output /dev/null
 
       - name: Upload production build artifact
