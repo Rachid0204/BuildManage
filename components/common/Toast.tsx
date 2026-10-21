@@ -22,7 +22,8 @@ interface ConfirmOptions {
 }
 
 interface ToastContextType {
-  showToast: (message: string, type?: ToastType, title?: string) => void;
+  showToast: (message: string, type?: ToastType, title?: string) => string;
+  dismissToast: (id: string) => void;
   confirmAction: (options: ConfirmOptions) => Promise<boolean>;
 }
 
@@ -30,7 +31,7 @@ const ToastContext = createContext<ToastContextType | undefined>(undefined);
 
 export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { tr, isAr } = useI18n();
-  const lastToast = useRef({ message: '', at: 0 });
+  const lastToast = useRef({ message: '', at: 0, id: '' });
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [confirmState, setConfirmState] = useState<{
     isOpen: boolean;
@@ -44,9 +45,9 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const showToast = useCallback((message: string, type: ToastType = 'info', title?: string) => {
     const now = Date.now();
-    if (lastToast.current.message === message && now - lastToast.current.at < 1000) return;
-    lastToast.current = { message, at: now };
+    if (lastToast.current.message === message && now - lastToast.current.at < 1000) return lastToast.current.id;
     const id = `toast-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    lastToast.current = { message, at: now, id };
     setToasts((prev) => {
       const retained = type === 'error' || type === 'success' ? prev.filter(toast => toast.type !== 'error') : prev;
       return [...retained.slice(-2), { id, type, title, message }];
@@ -54,6 +55,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, type === 'error' || type === 'warning' ? 12000 : 6000);
+    return id;
   }, []);
 
   useEffect(() => {
@@ -79,6 +81,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const dismissToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
+    if (lastToast.current.id === id) lastToast.current = { message: '', at: 0, id: '' };
   }, []);
 
   const confirmAction = useCallback((options: ConfirmOptions): Promise<boolean> => {
@@ -99,7 +102,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   return (
-    <ToastContext.Provider value={{ showToast, confirmAction }}>
+    <ToastContext.Provider value={{ showToast, dismissToast, confirmAction }}>
       {children}
 
       {/* Floating Toast Container */}
@@ -193,7 +196,8 @@ export const useToast = (): ToastContextType => {
   const ctx = useContext(ToastContext);
   if (!ctx) {
     return {
-      showToast: (msg: string) => console.info('[Toast]', msg),
+      showToast: (msg: string) => { console.info('[Toast]', msg); return ''; },
+      dismissToast: () => {},
       confirmAction: async (opts: ConfirmOptions) => window.confirm(opts.message),
     };
   }
