@@ -26,11 +26,11 @@ type BuildingModalProps = {
     numApartments: number,
     numberingSystem: 'numeric' | 'alphabetic' | 'floor_numeric',
     floorsCount: number
-  ) => void;
+  ) => Promise<unknown> | void;
   onSaveUpdate?: (
     buildingId: string,
     updates: Partial<BuildingFormPayload> & { syncApartmentFees?: boolean }
-  ) => void;
+  ) => Promise<unknown> | void;
   existingBuilding?: Building | null;
   syndicName: string;
 };
@@ -66,7 +66,7 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
       setName(existingBuilding.name || '');
       setAddress(existingBuilding.address || '');
       setCity(existingBuilding.city || '');
-      setMonthlyFees(String(existingBuilding.monthlySyndicFees || 250));
+      setMonthlyFees(String(existingBuilding.monthlySyndicFees ?? 250));
       setReserveFundRate(String(existingBuilding.reserveFundRate ?? 5));
       setBankName(existingBuilding.bankName || '');
       setBankRib(existingBuilding.bankRib || '');
@@ -89,24 +89,24 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
       setSyncApartmentFees(false);
     }
     setErrors({});
-  }, [existingBuilding, isOpen]);
+  }, [existingBuilding?.id, isOpen]);
 
   const validate = () => {
     const newErrors: Record<string, string> = {};
-    if (!name.trim())
+    if (name.trim().length < 2)
       newErrors.name = t('buildings.modal.validation.nameRequired');
-    if (!address.trim())
+    if (address.trim().length < 3)
       newErrors.address = t('buildings.modal.validation.addressRequired');
-    if (!city.trim())
+    if (city.trim().length < 2)
       newErrors.city = t('buildings.modal.validation.cityRequired');
 
     if (!existingBuilding) {
-      const numApt = parseInt(numApartments, 10);
+      const numApt = Number(numApartments);
       if (!numApartments.trim()) {
         newErrors.numApartments = t(
           'buildings.modal.validation.numApartmentsRequired'
         );
-      } else if (isNaN(numApt) || numApt < 0) {
+      } else if (!Number.isInteger(numApt) || numApt < 0) {
         newErrors.numApartments = t(
           'buildings.modal.validation.numApartmentsInvalid'
         );
@@ -118,17 +118,22 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
       newErrors.monthlyFees = t(
         'buildings.modal.validation.monthlyFeesRequired'
       );
-    } else if (isNaN(fees) || fees <= 0) {
+    } else if (!Number.isFinite(fees) || fees < 0) {
       newErrors.monthlyFees = t(
         'buildings.modal.validation.monthlyFeesInvalid'
       );
     }
 
+    if (!Number.isFinite(Number(reserveFundRate)) || !reserveFundRate.trim() || Number(reserveFundRate) < 0 || Number(reserveFundRate) > 100)
+      newErrors.reserveFundRate = tr('Le fonds de réserve doit être compris entre 0 et 100 %.', 'نسبة الاحتياطي يجب أن تكون بين 0 و100٪.');
+    if (!existingBuilding && (!Number.isInteger(Number(floorsCount)) || Number(floorsCount) < 1))
+      newErrors.floorsCount = tr('Indiquez un nombre entier de niveaux supérieur à zéro.', 'أدخل عدداً صحيحاً موجباً للطوابق.');
     setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
+    if (Object.keys(newErrors).length) throw new Error(Object.values(newErrors).join("\n"));
+    return true;
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!validate()) return;
 
     const payload: BuildingFormPayload = {
@@ -136,7 +141,7 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
       address: address.trim(),
       city: city.trim(),
       monthlySyndicFees: parseFloat(monthlyFees),
-      reserveFundRate: parseFloat(reserveFundRate) || 5,
+      reserveFundRate: Number(reserveFundRate),
       bankName: bankName.trim() || undefined,
       bankRib: bankRib.trim() || undefined,
       managerName: managerName.trim() || undefined,
@@ -144,12 +149,12 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
     };
 
     if (existingBuilding && onSaveUpdate) {
-      onSaveUpdate(existingBuilding.id, {
+      await onSaveUpdate(existingBuilding.id, {
         ...payload,
         syncApartmentFees,
       });
     } else {
-      onSaveCreate(
+      await onSaveCreate(
         payload,
         Math.max(0, parseInt(numApartments, 10) || 0),
         numberingSystem,
@@ -168,6 +173,7 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
+      onSubmit={handleSave}
       title={
         existingBuilding
           ? `${tr("Modifier l'immeuble :", 'تعديل العمارة :')} ${existingBuilding.name}`
@@ -178,7 +184,7 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
           <Button variant="secondary" onClick={onClose}>
             {t('buildings.modal.cancel')}
           </Button>
-          <Button onClick={handleSave} className="ms-3">
+          <Button type="submit" className="ms-3">
             {existingBuilding
               ? tr('Enregistrer les modifications', 'حفظ التعديلات')
               : t('buildings.modal.save')}
@@ -197,7 +203,8 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
           <input
             type="text"
             id="bld-name"
-            value={name}
+            required
+              value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder={t('buildings.modal.namePlaceholder')}
             className={`block w-full px-3 py-2 border rounded-md text-sm ${
@@ -218,6 +225,7 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
             <input
               type="text"
               id="bld-address"
+              required
               value={address}
               onChange={(e) => setAddress(e.target.value)}
               placeholder={t('buildings.modal.addressPlaceholder')}
@@ -237,6 +245,7 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
             <input
               type="text"
               id="bld-city"
+              required
               value={city}
               onChange={(e) => setCity(e.target.value)}
               placeholder={t('buildings.modal.cityPlaceholder')}
@@ -553,12 +562,12 @@ const Buildings: React.FC<{
     numApartments: number,
     numberingSystem: 'numeric' | 'alphabetic' | 'floor_numeric',
     floorsCount?: number
-  ) => void;
+  ) => Promise<unknown> | void;
   onUpdateBuilding?: (
     buildingId: string,
     updates: Partial<BuildingFormPayload> & { syncApartmentFees?: boolean }
-  ) => void;
-  onDeleteBuilding?: (buildingId: string) => void;
+  ) => Promise<unknown> | void;
+  onDeleteBuilding?: (buildingId: string) => Promise<unknown> | void;
   onSelectBuilding: (building: Building) => void;
 }> = ({
   syndic,
@@ -598,9 +607,9 @@ const Buildings: React.FC<{
     setDeletingBuilding(bld);
   };
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (deletingBuilding && onDeleteBuilding) {
-      onDeleteBuilding(deletingBuilding.id);
+      await onDeleteBuilding(deletingBuilding.id);
     }
     setDeletingBuilding(null);
   };

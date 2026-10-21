@@ -9,6 +9,7 @@ import { AGIcon, PlusIcon, DocumentsIcon } from '../icons/IconComponents';
 import {
   getAssembleesGeneralesForBuilding,
   saveAssembleeGenerale,
+  createAssembleeGenerale,
   updateAGAttendee,
   castResidentAGVote,
   toggleAGVoting,
@@ -61,7 +62,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
   }, [agList, activeSessionId]);
 
   const saveAGMutation = useMutation({
-    mutationFn: saveAssembleeGenerale,
+    mutationFn: createAssembleeGenerale,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['ag', building.id] });
       setIsCreateModalOpen(false);
@@ -121,14 +122,14 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
     setIsRecordVoteModalOpen(true);
   };
 
-  const handleConfirmInSessionVote = () => {
-    if (!activeAG || !selectedResolutionForVote || !selectedResidentIdForVote) return;
+  const handleConfirmInSessionVote = async () => {
+    if (!activeAG || !selectedResolutionForVote || !selectedResidentIdForVote) throw new Error(tr('Sélectionnez une résolution et un copropriétaire.', 'حدد قراراً ومالكاً مشتركاً.'));
     const res = building.residents.find((r) => r.id === selectedResidentIdForVote);
     const apt = building.apartments.find((a) => a.ownerId === res?.id || a.id === res?.apartmentId);
-    if (!res) return;
+    if (!res || !apt) throw new Error(tr('Ce copropriétaire doit être associé à un lot.', 'يجب ربط هذا المالك بوحدة.'));
 
     const tantiemes = apt?.tantiemes || 100;
-    castVoteMutation.mutate({
+    return castVoteMutation.mutateAsync({
       agId: activeAG.id,
       resolutionId: selectedResolutionForVote.id,
       residentId: res.id,
@@ -141,14 +142,10 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
     });
   };
 
-  const handleCreateAG = () => {
-    if (!newTitle) {
-      showToast(
-        tr("Veuillez renseigner le titre de l'assemblée.", 'يرجى إدخال عنوان الجمعية العامة.'),
-        'warning'
-      );
-      return;
-    }
+  const handleCreateAG = async () => {
+    if (!newTitle.trim()) throw new Error(tr("Veuillez renseigner le titre de l'assemblée.", 'يرجى إدخال عنوان الجمعية العامة.'));
+    if (!newDate || !newTime || !newLocation.trim()) throw new Error(tr('La date, l’heure et le lieu sont obligatoires.', 'التاريخ والوقت والمكان مطلوبة.'));
+    if (!agendaInput.trim()) throw new Error(tr('Ajoutez au moins un point à l’ordre du jour.', 'أضف نقطة واحدة على الأقل لجدول الأعمال.'));
 
     const eligibleOwners = building.residents.filter((res) => res.isOwner !== false);
     const attendeesPool = eligibleOwners.length > 0 ? eligibleOwners : building.residents;
@@ -206,7 +203,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
       secretaryName: syndic?.name || tr('Le Syndic', 'وكيل الاتحاد (السنديك)'),
     };
 
-    saveAGMutation.mutate(newAG);
+    return saveAGMutation.mutateAsync(newAG);
   };
 
   // Filter resolutions
@@ -674,7 +671,8 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                                       '25000'
                                     );
                                     const parsed = Number(rawBudget);
-                                    if (!parsed || parsed <= 0) return;
+                                    if (rawBudget === null) return;
+                                    if (!Number.isFinite(parsed) || parsed <= 0) throw new Error(tr('Le budget doit être un montant supérieur à zéro.', 'يجب أن تكون الميزانية مبلغاً أكبر من صفر.'));
                                     res.budgetAmount = parsed;
                                     await saveAssembleeGenerale(activeAG);
                                   }
@@ -748,6 +746,8 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
       {/* Modal: Schedule New AG */}
       <Modal
         isOpen={isCreateModalOpen}
+        onSubmit={handleCreateAG}
+        busy={saveAGMutation.isPending}
         onClose={() => setIsCreateModalOpen(false)}
         title={tr('Planifier une Assemblée Générale (Loi 18-00)', 'برمجة جمع عام (القانون 18-00)')}
         footer={
@@ -755,7 +755,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
             <Button variant="secondary" onClick={() => setIsCreateModalOpen(false)}>
               {tr('Annuler', 'إلغاء')}
             </Button>
-            <Button onClick={handleCreateAG}>{tr("Créer & Convoquer l'AG", 'إنشاء واستدعاء الجمع العام')}</Button>
+            <Button type="submit" disabled={saveAGMutation.isPending}>{tr("Créer & Convoquer l'AG", 'إنشاء واستدعاء الجمع العام')}</Button>
           </div>
         }
       >
@@ -835,6 +835,8 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
       {isRecordVoteModalOpen && selectedResolutionForVote && (
         <Modal
           isOpen={isRecordVoteModalOpen}
+          onSubmit={handleConfirmInSessionVote}
+          busy={castVoteMutation.isPending}
           onClose={() => setIsRecordVoteModalOpen(false)}
           title={tr(
             `Enregistrer un Vote · Résolution N° ${selectedResolutionForVote.number}`,
@@ -846,7 +848,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                 {tr('Annuler', 'إلغاء')}
               </Button>
               <Button
-                onClick={handleConfirmInSessionVote}
+                type="submit"
                 disabled={castVoteMutation.isPending}
                 className="bg-teal-700 hover:bg-teal-800 text-white font-bold"
               >

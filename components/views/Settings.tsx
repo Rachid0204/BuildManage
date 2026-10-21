@@ -1,3 +1,4 @@
+import Form from '../common/Form';
 import React, { useState, useEffect } from 'react';
 import type { Syndic } from '../../types';
 import Card from '../common/Card';
@@ -45,19 +46,11 @@ const Settings: React.FC<SettingsProps> = ({ syndic, onUpdate }) => {
     const safePatente = (patente ?? '').trim();
 
     if (!safeName) {
-      setMessage({ type: 'error', text: t('settings.validation.nameRequired') });
-      return;
+      throw new Error(t('settings.validation.nameRequired'));
     }
 
     if (safeIce && !/^\d{15}$/.test(safeIce)) {
-      setMessage({
-        type: 'error',
-        text: tr(
-          "L'identifiant Commun de l'Entreprise (ICE) doit comporter exactement 15 chiffres.",
-          'يجب أن يتكون التعريف الموحد للمقاولة (ICE) من 15 رقماً بالضبط.'
-        ),
-      });
-      return;
+      throw new Error(tr("L'identifiant Commun de l'Entreprise (ICE) doit comporter exactement 15 chiffres.", 'يجب أن يتكون التعريف الموحد للمقاولة (ICE) من 15 رقماً بالضبط.'));
     }
 
     setIsLoading(true);
@@ -107,7 +100,7 @@ const Settings: React.FC<SettingsProps> = ({ syndic, onUpdate }) => {
           {t('settings.profile')}
         </h2>
 
-        <form onSubmit={handleSubmit} className="space-y-6">
+        <Form onSubmit={handleSubmit} className="space-y-6">
           {message && (
             <div
               className={`p-3.5 rounded-lg text-xs font-semibold border ${
@@ -224,7 +217,7 @@ const Settings: React.FC<SettingsProps> = ({ syndic, onUpdate }) => {
               {isLoading ? tr('Enregistrement...', 'جاري الحفظ...') : t('settings.save')}
             </Button>
           </div>
-        </form>
+        </Form>
       </Card>
     </div>
   );

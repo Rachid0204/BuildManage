@@ -1,3 +1,4 @@
+import { notifyOperation } from '../../utils/formFeedback';
 import FinancialTools from './FinancialTools';
 import ResidentPaymentModal from './ResidentPaymentModal';
 import React, { Suspense, useState, useMemo, useRef } from 'react';
@@ -230,11 +231,14 @@ const ResidentDashboard: React.FC = () => {
   const handleMaintGallerySelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
-    const validFiles = Array.from(files)
-      .filter((f) => f.type.startsWith('image/'))
-      .slice(0, 4);
-    const compressed = await Promise.all(validFiles.map((f) => compressImageFile(f)));
-    setMaintPhotos((prev) => [...prev, ...compressed].slice(0, 5));
+    try {
+      const validFiles = Array.from(files);
+      if (validFiles.length + maintPhotos.length > 5 || validFiles.some(f => !['image/jpeg', 'image/png', 'image/webp'].includes(f.type) || f.size > 5 * 1024 * 1024 || !f.size))
+        throw new Error(tr('Choisissez au maximum 5 photos JPG, PNG ou WebP de 5 Mo maximum chacune.', 'اختر حتى 5 صور JPG أو PNG أو WebP بحجم أقصى 5 ميغابايت لكل صورة.'));
+      const compressed = await Promise.all(validFiles.map((f) => compressImageFile(f)));
+      setMaintPhotos((prev) => [...prev, ...compressed]);
+    } catch (error) { notifyOperation({ operation: 'upload', error: error instanceof Error ? error.message : tr('Impossible de lire la photo.', 'تعذر قراءة الصورة.') }); }
+    finally { e.target.value = ''; }
   };
 
   const handleLogout = async () => {
@@ -244,7 +248,7 @@ const ResidentDashboard: React.FC = () => {
 
   const handlePasswordSubmit = async () => {
     setPasswordMsg(null);
-    if (newPassword.trim().length < 10) {
+    if (newPassword.length < 10) {
       setPasswordMsg({
         type: 'error',
         text: tr(
@@ -254,15 +258,16 @@ const ResidentDashboard: React.FC = () => {
       });
       return;
     }
-    if (newPassword.trim() !== confirmPassword.trim()) {
+    if (newPassword !== confirmPassword) {
       setPasswordMsg({
         type: 'error',
         text: tr('Les deux mots de passe ne correspondent pas.', 'كلمتا المرور غير متطابقتين.'),
       });
-      return;
+      throw new Error(tr('Les deux mots de passe ne correspondent pas.', 'كلمتا المرور غير متطابقتين.'));
     }
     try {
-      await changePassword(newPassword.trim());
+      await changePassword(newPassword);
+      notifyOperation({ operation: 'changePassword' });
       setPasswordMsg({
         type: 'success',
         text: tr(
@@ -1230,38 +1235,19 @@ const ResidentDashboard: React.FC = () => {
       <Modal
         isOpen={isReportModalOpen}
         onClose={() => setIsReportModalOpen(false)}
+        busy={reportMutation.isPending}
+        onSubmit={async () => {
+          if (!maintTitle.trim() || !maintDesc.trim()) throw new Error(tr('Le titre et la description sont obligatoires.', 'العنوان والوصف مطلوبان.'));
+          if (!activeBuilding || !currentResident) throw new Error(tr('Votre logement ne peut pas être identifié. Actualisez la page ou contactez votre syndic.', 'تعذر تحديد شقتك. حدّث الصفحة أو تواصل مع السنديك.'));
+          await reportMutation.mutateAsync({ title: maintTitle.trim(), description: maintDesc.trim(), category: maintCategory, priority: maintPriority, location: maintLocation.trim() || currentApartment?.number || tr('Parties communes', 'الأجزاء المشتركة'), photos: maintPhotos });
+        }}
         title={tr('Signaler un incident ou une réparation', 'التبليغ عن عطب أو طلب إصلاح')}
         footer={
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setIsReportModalOpen(false)}>
               {tr('Annuler', 'إلغاء')}
             </Button>
-            <Button
-              disabled={reportMutation.isPending}
-              onClick={() => {
-                if (!maintDesc.trim())
-                  return alert(tr('Description obligatoire.', 'يرجى إدخال وصف العطب.'));
-                reportMutation.mutate({
-                  title:
-                    maintTitle.trim() ||
-                    `${maintCategory.toUpperCase()} — ${
-                      maintLocation.trim() ||
-                      (currentApartment?.number
-                        ? `${tr('Lot', 'شقة')} ${currentApartment.number}`
-                        : tr('Parties communes', 'الأجزاء المشتركة'))
-                    }`,
-                  location:
-                    maintLocation.trim() ||
-                    (currentApartment?.number
-                      ? `${tr('Lot', 'شقة')} ${currentApartment.number}`
-                      : tr('Parties communes', 'الأجزاء المشتركة')),
-                  category: maintCategory,
-                  description: maintDesc.trim(),
-                  priority: maintPriority,
-                  photos: maintPhotos,
-                });
-              }}
-            >
+            <Button type="submit" disabled={reportMutation.isPending}>
               {reportMutation.isPending
                 ? tr('Envoi en cours...', 'جاري الإرسال...')
                 : tr('Envoyer au syndic', 'إرسال إلى السنديك')}
@@ -1276,6 +1262,8 @@ const ResidentDashboard: React.FC = () => {
             </label>
             <input
               type="text"
+              required
+              aria-label={tr("Titre court de l’incident", "عنوان مختصر للعطب")}
               value={maintTitle}
               onChange={(e) => setMaintTitle(e.target.value)}
               placeholder={tr(
@@ -1343,6 +1331,9 @@ const ResidentDashboard: React.FC = () => {
             </label>
             <textarea
               rows={3}
+              required
+              maxLength={3000}
+              aria-label={tr("Description détaillée", "وصف مفصل للعطب")}
               value={maintDesc}
               onChange={(e) => setMaintDesc(e.target.value)}
               placeholder={tr(
@@ -1631,6 +1622,7 @@ const ResidentDashboard: React.FC = () => {
       {/* Change Password Modal */}
       <Modal
         isOpen={isPasswordModalOpen}
+        onSubmit={handlePasswordSubmit}
         onClose={() => setIsPasswordModalOpen(false)}
         title={tr(
           'Sécurité du compte & Mot de passe personnel',
@@ -1641,7 +1633,7 @@ const ResidentDashboard: React.FC = () => {
             <Button variant="secondary" onClick={() => setIsPasswordModalOpen(false)}>
               {tr('Annuler', 'إلغاء')}
             </Button>
-            <Button onClick={handlePasswordSubmit}>
+            <Button type="submit">
               {tr('Enregistrer le mot de passe', 'حفظ كلمة المرور')}
             </Button>
           </div>
@@ -1663,12 +1655,14 @@ const ResidentDashboard: React.FC = () => {
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
               {tr(
-                'Nouveau mot de passe (min. 6 caractères)',
+                'Nouveau mot de passe (min. 10 caractères)',
                 'كلمة المرور الجديدة (10 أحرف على الأقل)'
               )}
             </label>
             <input
               type="password"
+              required
+              minLength={10}
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
               placeholder="••••••••"
@@ -1682,6 +1676,8 @@ const ResidentDashboard: React.FC = () => {
             </label>
             <input
               type="password"
+              required
+              minLength={10}
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
               placeholder="••••••••"

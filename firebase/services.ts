@@ -1,4 +1,5 @@
 import { engineStorage, clearBusinessCache } from './cache';
+import { notifyOperation } from '../utils/formFeedback';
 import { getServerRuntime } from './serverRuntime';
 import { applyResidentVote, evaluateResolutionStatus } from '../utils/agVoting';
 import {
@@ -3457,30 +3458,77 @@ export const deleteMarketplaceItem = async (itemId: string): Promise<boolean> =>
 
 const pendingOperations = new Map<string, string>();
 const ephemeralInvites = new Map<string, any>();
-export function clearStateCache() { clearBusinessCache(); pendingOperations.clear(); ephemeralInvites.clear(); lastKnownServerRevision = 0; lastSyncTimestampMs = 0; }
-export async function remoteMutation<T = any>(operation: string, args: unknown[]): Promise<T> {
-  args = [...args]; while(args.length && args.at(-1) === undefined) args.pop();
+const preparedOperations = new Map<string, unknown[]>();
+const inflightOperations = new Map<string, Promise<unknown>>();
+export function clearStateCache() { clearBusinessCache(); pendingOperations.clear(); preparedOperations.clear(); inflightOperations.clear(); ephemeralInvites.clear(); lastKnownServerRevision = 0; lastSyncTimestampMs = 0; }
+export function remoteMutation<T = any>(operation: string, args: unknown[]): Promise<T> {
+  args = [...args];
+  while (args.length && args.at(-1) === undefined) args.pop();
+  const requestKey = JSON.stringify({ operation, args });
+  const pending = inflightOperations.get(requestKey);
+  if (pending) return pending as Promise<T>;
+  const task = performRemoteMutation<T>(operation, args, requestKey).finally(() => inflightOperations.delete(requestKey));
+  inflightOperations.set(requestKey, task);
+  return task;
+}
+
+async function performRemoteMutation<T>(operation: string, args: unknown[], requestKey: string): Promise<T> {
+  try {
   const first: any = args[0];
   const linked = typeof first === 'string' ? [STORAGE_KEYS.MAINTENANCE, STORAGE_KEYS.MARKETPLACE, STORAGE_KEYS.CHAT].flatMap(key => JSON.parse(engineStorage.getItem(key) || '[]')).find(item => item.id === first) : undefined;
   const buildingId = first?.buildingId || linked?.buildingId;
-  if (buildingId) {
+  if (preparedOperations.has(requestKey)) args = preparedOperations.get(requestKey)!;
+  else if (buildingId) {
+    const uploaded = new Map<string, Promise<string>>();
     const upload = async (value: any, key = ''): Promise<any> => {
       if (typeof value === 'string' && value.startsWith('data:') && ['photoUrl','photos','images','imageUrl','receiptUrl','attachmentUrl','stepPhotos'].includes(key)) {
-        const response = await fetch('/api/uploads', { method: 'POST', headers: getAuthenticatedRequestHeaders(), body: JSON.stringify({ buildingId, name: 'piece-jointe', dataUrl: value }) });
-        const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Téléversement impossible.'); return result.url;
+        let pending = uploaded.get(value);
+        if (!pending) {
+          pending = (async () => {
+            const response = await fetch('/api/uploads', { method: 'POST', headers: getAuthenticatedRequestHeaders(), body: JSON.stringify({ buildingId, name: 'piece-jointe', dataUrl: value }) });
+            const result = await readCommandResponse(response);
+            if (!response.ok) throw new Error(result.error || 'Téléversement impossible.');
+            return result.url as string;
+          })();
+          uploaded.set(value, pending);
+        }
+        return pending;
       }
       if (Array.isArray(value)) return Promise.all(value.map(item => upload(item,key)));
       if (value && typeof value === 'object') return Object.fromEntries(await Promise.all(Object.entries(value).map(async ([field,item]) => [field,await upload(item,field)])));
       return value;
-    }; args = await upload(args);
+    };
+    args = await upload(args);
+    preparedOperations.set(requestKey, args);
   }
-  const serialized = JSON.stringify({ operation,args }), operationId = pendingOperations.get(serialized) || crypto.randomUUID(); pendingOperations.set(serialized, operationId);
+  // Keep one identity and the same uploaded file URLs across an uncertain response.
+  const operationId = pendingOperations.get(requestKey) || crypto.randomUUID();
+  pendingOperations.set(requestKey, operationId);
   const response = await fetch('/api/commands', { method: 'POST', headers: getAuthenticatedRequestHeaders(), body: JSON.stringify({ operation,args,operationId }) });
-  const data = await response.json();
-  if (!response.ok) { if (response.status < 500) pendingOperations.delete(serialized); throw new Error(data.error || 'Enregistrement impossible.'); }
-  pendingOperations.delete(serialized);
+  const data = await readCommandResponse(response);
+  if (!response.ok) {
+    if (response.status < 500) { pendingOperations.delete(requestKey); preparedOperations.delete(requestKey); }
+    throw new Error(data.error || 'Enregistrement impossible.');
+  }
+  pendingOperations.delete(requestKey);
+  preparedOperations.delete(requestKey);
   if (data.result?.id && (data.result.invitationCode || data.result.invitationToken)) ephemeralInvites.set(data.result.id,{ invitationCode:data.result.invitationCode,invitationToken:data.result.invitationToken });
   if (data.store) for (const [key,value] of Object.entries(data.store)) if (key.startsWith('syndik_prod_')) engineStorage.setItem(key,JSON.stringify(value));
   for (const key of Object.values(STORAGE_KEYS)) notifyStateUpdated(key);
+  notifyOperation({ operation });
   return (Array.isArray(data.result) ? Object.assign(data.result,data.resultMeta || {}) : data.result) as T;
+  } catch (error) {
+    notifyOperation({ operation, error: error instanceof Error ? error.message : 'Enregistrement impossible.' });
+    throw error;
+  }
+}
+
+async function readCommandResponse(response: Response): Promise<any> {
+  try { return await response.json(); }
+  catch {
+    if (response.status === 413) throw new Error('Fichier trop volumineux. Joignez un fichier de 5 Mo maximum.');
+    if (response.status === 401) throw new Error('Authentification requise.');
+    if (response.status === 429) throw new Error('Trop de demandes. Patientez un instant avant de réessayer.');
+    throw new Error('Le serveur est temporairement indisponible. Réessayez dans un instant.');
+  }
 }

@@ -1346,6 +1346,16 @@ async function startServer() {
             error:
               error instanceof OperationError
                 ? error.message
+                : error.name === "ZodError" && Array.isArray(error.issues)
+                ? JSON.stringify(error.issues.map((issue: any) => ({
+                    path: issue.path,
+                    code: issue.code,
+                    message: "Valeur invalide",
+                    minimum: issue.minimum,
+                    maximum: issue.maximum,
+                    validation: issue.validation,
+                    received: issue.received === "undefined" ? "undefined" : undefined,
+                  })))
                 : "Enregistrement impossible. Veuillez réessayer.",
           };
           format = "json";

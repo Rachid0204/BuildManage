@@ -23,6 +23,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import Loading from '../common/Loading';
 import ServiceProvidersDirectory from './ServiceProvidersDirectory';
 import { useI18n } from '../../hooks/useI18n';
+import { notifyOperation } from '../../utils/formFeedback';
 
 function formatAuditTimestamp(iso?: string, lang?: string): string {
   if (!iso) return '—';
@@ -258,7 +259,6 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingPrestataire, setEditingPrestataire] = useState<Prestataire | null>(null);
   const [credentialPrestataireId, setCredentialPrestataireId] = useState<string | null>(null);
-  const [formError, setFormError] = useState<string | null>(null);
 
   const [name, setName] = useState('');
   const [category, setCategory] = useState<Prestataire['category']>('plumbing');
@@ -340,7 +340,6 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
     setIsVerifiedBySyndic(true);
     setGenerateCredentials(true);
     setEditingPrestataire(null);
-    setFormError(null);
   };
 
   const handleOpenEdit = (p: Prestataire) => {
@@ -358,7 +357,6 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
     setIsEmergency247(!!p.isEmergency247);
     setIsVerifiedBySyndic(p.isVerifiedBySyndic ?? true);
     setGenerateCredentials(false);
-    setFormError(null);
     setIsModalOpen(true);
   };
 
@@ -369,39 +367,24 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
       if (!p.email || !p.email.includes('@')) {
         handleOpenEdit(p);
         setGenerateCredentials(true);
-        setFormError(
-          tr(
+        notifyOperation({ operation: 'credentials', error: tr(
             "Veuillez renseigner une adresse email professionnelle pour générer les identifiants d'accès de ce prestataire.",
             'يرجى إدخال بريد إلكتروني مهني لتوليد بيانات الولوج الخاصة بمقدم الخدمة هذا.'
-          )
-        );
+          ) });
         return;
       }
       regenerateMutation.mutate(p.id);
     }
   };
 
-  const handleSave = () => {
-    setFormError(null);
+  const handleSave = async () => {
     if (!name.trim() || !phone.trim()) {
-      setFormError(
-        tr(
-          "Le nom de l'entreprise et le téléphone sont obligatoires.",
-          'اسم الشركة ورقم الهاتف إلزاميان.'
-        )
-      );
-      return;
+      throw new Error(tr("Le nom de l'entreprise et le téléphone sont obligatoires.", 'اسم الشركة ورقم الهاتف إلزاميان.'));
     }
 
     const shouldGenerate = !editingPrestataire ? generateCredentials : generateCredentials;
-    if (shouldGenerate && (!email.trim() || !email.includes('@'))) {
-      setFormError(
-        tr(
-          "Une adresse email valide est obligatoire pour créer le compte d'accès Portail Prestataire.",
-          'عنوان بريد إلكتروني صالح إلزامي لإنشاء حساب الولوج إلى بوابة مقدم الخدمة.'
-        )
-      );
-      return;
+    if ((shouldGenerate || editingPrestataire?.hasAccount || email.trim()) && !/^\S+@\S+\.\S+$/.test(email.trim())) {
+      throw new Error(tr('Une adresse email valide est obligatoire pour créer le compte prestataire.', 'البريد الإلكتروني الصحيح مطلوب لإنشاء حساب مقدم الخدمة.'));
     }
 
     const payload: Prestataire = {
@@ -437,7 +420,7 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
       mustChangePassword: editingPrestataire?.mustChangePassword,
     };
 
-    saveMutation.mutate({ prestataire: payload, shouldGenerate });
+    return saveMutation.mutateAsync({ prestataire: payload, shouldGenerate });
   };
 
   const categoryLabels: Record<Prestataire['category'], string> = {
@@ -859,6 +842,8 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
       {/* Modal Add / Edit Prestataire */}
       <Modal
         isOpen={isModalOpen}
+        onSubmit={handleSave}
+        busy={saveMutation.isPending}
         onClose={() => {
           setIsModalOpen(false);
           resetForm();
@@ -879,16 +864,12 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
             >
               {tr('Annuler', 'إلغاء')}
             </Button>
-            <Button onClick={handleSave}>{tr('Enregistrer', 'حفظ')}</Button>
+            <Button type="submit" disabled={saveMutation.isPending}>{tr('Enregistrer', 'حفظ')}</Button>
           </div>
         }
       >
         <div className="space-y-4">
-          {formError && (
-            <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs font-medium text-red-700">
-              {formError}
-            </div>
-          )}
+
 
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
@@ -896,6 +877,7 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
             </label>
             <input
               type="text"
+              required
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder={tr('Ex: Atlas Ascenseurs SARL', 'مثال: أطلس للمصاعد ش.م.م')}
@@ -947,7 +929,8 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
               </label>
               <input
                 type="text"
-                value={phone}
+                required
+              value={phone}
                 onChange={(e) => setPhone(e.target.value)}
                 placeholder="Ex: 0522 34 56 78"
                 className="w-full px-3 py-2 border border-slate-300 rounded text-sm font-mono"
@@ -970,10 +953,11 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
-                {tr('Email de connexion *', 'البريد الإلكتروني للولوج *')}
+                {generateCredentials || editingPrestataire?.hasAccount ? tr('Email de connexion *', 'البريد الإلكتروني للولوج *') : tr('Email (facultatif sans compte portail)', 'البريد الإلكتروني (اختياري بدون حساب البوابة)')}
               </label>
               <input
                 type="email"
+                required={generateCredentials || Boolean(editingPrestataire?.hasAccount)}
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="Ex: contact@atlas-ascenseurs.ma"

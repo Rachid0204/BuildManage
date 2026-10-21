@@ -4,6 +4,7 @@ import { getAuthenticatedRequestHeaders } from "../../utils/security";
 import { useI18n } from "../../hooks/useI18n";
 import { useAuth } from "../../contexts/AuthContext";
 import type { Building } from "../../types";
+import { useToast } from "../common/Toast";
 function download(name: string, content: string, type = "application/json") {
   const url = URL.createObjectURL(new Blob([content], { type })),
     a = document.createElement("a");
@@ -35,6 +36,7 @@ const csv = (rows: any[]) => {
   );
 };
 export default function FinancialTools({ building }: { building: Building }) {
+  const { showToast } = useToast();
   const { tr } = useI18n(),
     { userProfile } = useAuth(),
     managed = ["admin", "syndic"].includes(userProfile?.role || ""),
@@ -65,8 +67,10 @@ export default function FinancialTools({ building }: { building: Building }) {
       await action();
       await load();
       setStatus(tr("Opération enregistrée.", "تم تسجيل العملية."));
+      showToast(tr("Opération terminée. Les relevés sont actualisés.", "اكتملت العملية وتم تحديث الكشوف."), 'success');
     } catch (e: any) {
       setStatus(e.message);
+      showToast(e.message, 'error');
     } finally {
       setBusy(false);
     }

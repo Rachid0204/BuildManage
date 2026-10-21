@@ -1,3 +1,4 @@
+import Form, { FormNotice } from '../common/Form';
 import React, { useEffect, useId, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import Modal from "../common/Modal";
@@ -180,7 +181,7 @@ export default function ResidentPaymentModal({
         </>
       }
     >
-      <form id={formId} onSubmit={handleSubmit} noValidate>
+      <Form id={formId} onSubmit={handleSubmit} noValidate>
         <fieldset disabled={submission.isPending} className="space-y-4">
           <p className="text-xs text-slate-600">
             {tr(
@@ -192,14 +193,7 @@ export default function ResidentPaymentModal({
             {charge?.description} — {tr("Solde restant :", "الرصيد المتبقي:")}{" "}
             {remaining.toFixed(2)} MAD
           </p>
-          {error && (
-            <p
-              role="alert"
-              className="text-sm text-rose-700 bg-rose-50 p-3 rounded"
-            >
-              {error}
-            </p>
-          )}
+          <FormNotice message={error} />
           <div>
             <label
               htmlFor={`${formId}-amount`}
@@ -345,7 +339,7 @@ export default function ResidentPaymentModal({
             />
           </div>
         </fieldset>
-      </form>
+      </Form>
     </Modal>
   );
 }

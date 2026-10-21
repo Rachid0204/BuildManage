@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useRef, useState } from 'react';
+import { notifyOperation } from '../../utils/formFeedback';
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
     children: React.ReactNode;
@@ -15,8 +16,25 @@ const Button: React.FC<ButtonProps> = ({
     leftIcon,
     rightIcon,
     className = '',
+    onClick,
+    disabled,
     ...props
 }) => {
+    const [busy, setBusy] = useState(false);
+    const pending = useRef(false);
+    const handleClick = async (event: React.MouseEvent<HTMLButtonElement>) => {
+        if (pending.current) return;
+        pending.current = true;
+        try {
+            const result = onClick?.(event) as unknown;
+            if (result && typeof (result as Promise<unknown>).then === 'function') {
+                setBusy(true);
+                await result;
+            }
+        } catch (error) {
+            notifyOperation({ operation: 'action', error: error instanceof Error ? error.message : 'Opération impossible.' });
+        } finally { pending.current = false; setBusy(false); }
+    };
     const baseClasses = 'inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed';
     
     const variantClasses = {
@@ -32,7 +50,11 @@ const Button: React.FC<ButtonProps> = ({
             type="button"
             className={`${baseClasses} ${variantClasses[variant]} ${className}`}
             {...props}
+            onClick={onClick ? handleClick : undefined}
+            disabled={disabled || busy}
+            aria-busy={busy || props['aria-busy']}
         >
+            {busy && <span aria-hidden="true" className="me-2 h-4 w-4 border-2 border-current border-t-transparent rounded-full animate-spin" />}
             {resolvedLeftIcon && <span className="me-2 -ms-1 h-5 w-5 flex items-center justify-center">{resolvedLeftIcon}</span>}
             {children}
             {rightIcon && <span className="ms-2 -me-1 h-5 w-5 flex items-center justify-center">{rightIcon}</span>}
