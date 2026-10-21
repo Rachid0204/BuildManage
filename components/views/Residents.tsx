@@ -36,7 +36,7 @@ type ResidentModalProps = {
   onSave: (
     resident: Omit<Resident, 'id' | 'syndicId' | 'buildingId'> | Resident,
     generateCredentials?: boolean
-  ) => void;
+  ) => Promise<unknown> | void;
   existingResident?: Resident | null;
   apartments: Apartment[];
   residents: Resident[];
@@ -90,7 +90,7 @@ const ResidentModal: React.FC<ResidentModalProps> = ({
       setGenerateCredentials(true);
     }
     setErrors({});
-  }, [existingResident, isOpen, apartments]);
+  }, [existingResident?.id, isOpen]);
 
   const validate = () => {
     const newErrors: Record<string, string> = {};
@@ -100,7 +100,7 @@ const ResidentModal: React.FC<ResidentModalProps> = ({
         'الاسم الكامل مطلوب (حرفان على الأقل)'
       );
     }
-    if (!email.trim() || !email.includes('@')) {
+    if (!/^\S+@\S+\.\S+$/.test(email.trim())) {
       newErrors.email = tr(
         'Une adresse email valide est obligatoire',
         'يرجى إدخال بريد إلكتروني صحيح'
@@ -113,10 +113,11 @@ const ResidentModal: React.FC<ResidentModalProps> = ({
       );
     }
     setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
+    if (Object.keys(newErrors).length) throw new Error(Object.values(newErrors).join("\n"));
+    return true;
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!validate()) return;
     const residentData = {
       name: name.trim(),
@@ -127,9 +128,9 @@ const ResidentModal: React.FC<ResidentModalProps> = ({
       apartmentId: apartmentId || undefined,
     };
     if (existingResident) {
-      onSave({ ...existingResident, ...residentData });
+      await onSave({ ...existingResident, ...residentData });
     } else {
-      onSave(residentData, generateCredentials);
+      await onSave(residentData, generateCredentials);
     }
     onClose();
   };
@@ -138,6 +139,7 @@ const ResidentModal: React.FC<ResidentModalProps> = ({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
+      onSubmit={handleSave}
       title={
         existingResident
           ? t('residents.modal.editTitle')
@@ -148,7 +150,7 @@ const ResidentModal: React.FC<ResidentModalProps> = ({
           <Button variant="secondary" onClick={onClose}>
             {t('residents.modal.cancel')}
           </Button>
-          <Button onClick={handleSave} className="ms-3">
+          <Button type="submit" className="ms-3">
             {t('residents.modal.save')}
           </Button>
         </>
@@ -166,6 +168,7 @@ const ResidentModal: React.FC<ResidentModalProps> = ({
             <input
               type="text"
               id="res-name"
+              required
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder={t('residents.modal.namePlaceholder')}
@@ -207,6 +210,7 @@ const ResidentModal: React.FC<ResidentModalProps> = ({
             <input
               type="email"
               id="res-email"
+              required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder={t('residents.modal.emailPlaceholder')}
@@ -229,6 +233,7 @@ const ResidentModal: React.FC<ResidentModalProps> = ({
             <input
               type="tel"
               id="res-phone"
+              required
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
               placeholder={t('residents.modal.phonePlaceholder')}
@@ -366,8 +371,8 @@ type CredentialsModalProps = {
   building: Building;
   apartmentNumber?: string;
   onClose: () => void;
-  onRegenerate?: (residentId: string) => void;
-  onShareRecorded?: (residentId: string, method: 'pdf' | 'copy') => void;
+  onRegenerate?: (residentId: string) => Promise<unknown> | void;
+  onShareRecorded?: (residentId: string, method: 'pdf' | 'copy') => Promise<unknown> | void;
 };
 
 const CredentialsModal: React.FC<CredentialsModalProps> = ({
@@ -601,8 +606,8 @@ const Residents: React.FC<{
     resident: Omit<Resident, 'id' | 'syndicId' | 'buildingId'>,
     generateCredentials?: boolean
   ) => Promise<Resident> | void;
-  onUpdateResident: (resident: Resident) => void;
-  onDeleteResident: (residentId: string) => void;
+  onUpdateResident: (resident: Resident) => Promise<unknown> | void;
+  onDeleteResident: (residentId: string) => Promise<unknown> | void;
   onRegenerateCredentials?: (residentId: string) => Promise<Resident> | void;
 }> = ({
   building,
@@ -662,7 +667,7 @@ const Residents: React.FC<{
     generateCredentials?: boolean
   ) => {
     if ('id' in residentPayload) {
-      onUpdateResident(residentPayload);
+      await onUpdateResident(residentPayload);
     } else {
       const created = await onAddResident(residentPayload, generateCredentials);
       if (generateCredentials && created && typeof created === 'object' && 'id' in created) {
@@ -692,9 +697,9 @@ const Residents: React.FC<{
     }
   };
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (deletingResident) {
-      onDeleteResident(deletingResident.id);
+      await onDeleteResident(deletingResident.id);
       setDeletingResident(null);
     }
   };

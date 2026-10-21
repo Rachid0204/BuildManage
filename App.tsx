@@ -1,3 +1,4 @@
+import Form from './components/common/Form';
 import AccountAction from './components/views/AccountAction';
 import EmailVerificationGate from './components/views/EmailVerificationGate';
 import React, { Suspense, useEffect, useState } from 'react';
@@ -343,7 +344,10 @@ const ProviderPortal: React.FC = () => {
             <h3 className="text-base font-bold text-slate-900 mb-3">
               {t('providerPortal.reportTitle')} (#{activeTicketId})
             </h3>
-            <div className="space-y-3">
+            <Form className="space-y-3" onSubmit={async () => {
+              if (!techNote.trim()) throw new Error(tr('Rédigez le compte-rendu avant de l’envoyer.', 'اكتب التقرير قبل إرساله.'));
+              await updateMutation.mutateAsync({ requestId: activeTicketId, status: nextStatus, note: techNote.trim() });
+            }}>
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
                   {t('providerPortal.newStateLabel')}
@@ -363,6 +367,8 @@ const ProviderPortal: React.FC = () => {
                 </label>
                 <textarea
                   rows={3}
+                  required
+                  maxLength={3000}
                   value={techNote}
                   onChange={(e) => setTechNote(e.target.value)}
                   placeholder={t('providerPortal.techNotePlaceholder')}
@@ -374,19 +380,12 @@ const ProviderPortal: React.FC = () => {
                   {t('providerPortal.cancelBtn')}
                 </Button>
                 <Button
-                  onClick={() => {
-                    if (!techNote.trim()) return;
-                    updateMutation.mutate({
-                      requestId: activeTicketId,
-                      status: nextStatus,
-                      note: techNote.trim(),
-                    });
-                  }}
+                  type="submit" disabled={updateMutation.isPending}
                 >
                   {t('providerPortal.submitReportBtn')}
                 </Button>
               </div>
-            </div>
+            </Form>
           </Card>
         )}
       </main>
@@ -614,7 +613,7 @@ const FirstLoginPasswordGate: React.FC = () => {
           </p>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+        <Form onSubmit={handleSubmit} className="p-6 space-y-4">
           <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900">
             <p className="font-bold">
               {tr(
@@ -690,7 +689,7 @@ const FirstLoginPasswordGate: React.FC = () => {
               {tr('Se déconnecter', 'تسجيل الخروج')}
             </button>
           </div>
-        </form>
+        </Form>
       </div>
     </div>
   );
@@ -891,7 +890,7 @@ const AppContent: React.FC = () => {
     numberingSystem: 'numeric' | 'alphabetic' | 'floor_numeric',
     floorsCount: number = 4
   ) => {
-    if (!syndic) return;
+    if (!syndic) throw new Error(tr('Sélectionnez un cabinet avant de continuer.', 'حدد مكتباً قبل المتابعة.'));
 
     const planLimits: Record<SubscriptionPlan, number> = {
       starter: 4,
@@ -901,7 +900,7 @@ const AppContent: React.FC = () => {
     const currentBuildings = syndic.buildings.length;
     const limit = planLimits[syndic.subscriptionPlan];
 
-    if (currentBuildings >= limit) return;
+    if (currentBuildings >= limit) throw new Error(tr('Limite du forfait atteinte. Changez de forfait pour ajouter un immeuble.', 'تم بلوغ حد الاشتراك. غيّر الاشتراك لإضافة عمارة.'));
 
     const generatedApartments: Omit<Apartment, 'id' | 'buildingId'>[] = [];
     const safeFloors = Math.max(1, floorsCount || 4);
@@ -943,7 +942,7 @@ const AppContent: React.FC = () => {
       });
     }
 
-    addBuildingMutation.mutate({
+    return addBuildingMutation.mutateAsync({
       syndicId: syndic.id,
       building: {
         ...buildingData,
@@ -956,7 +955,7 @@ const AppContent: React.FC = () => {
     residentData: Omit<Resident, 'id' | 'syndicId' | 'buildingId'>,
     generateCredentials?: boolean
   ) => {
-    if (!selectedBuilding || !syndic) return;
+    if (!selectedBuilding || !syndic) throw new Error(tr('Sélectionnez un immeuble avant de continuer.', 'حدد عمارة قبل المتابعة.'));
     const resident = {
       ...residentData,
       syndicId: syndic.id,
@@ -971,16 +970,16 @@ const AppContent: React.FC = () => {
   const handleAddApartment = (
     apartmentData: Omit<Apartment, 'id' | 'buildingId'>
   ) => {
-    if (!selectedBuilding) return;
+    if (!selectedBuilding) throw new Error(tr('Sélectionnez un immeuble avant de continuer.', 'حدد عمارة قبل المتابعة.'));
     const apartment = { ...apartmentData, buildingId: selectedBuilding.id };
-    addApartmentMutation.mutate(apartment);
+    return addApartmentMutation.mutateAsync(apartment);
   };
 
   const handleAddApartmentsBulk = (
     apartmentsList: Omit<Apartment, 'id' | 'buildingId'>[]
   ) => {
-    if (!selectedBuilding) return;
-    addApartmentsBulkMutation.mutate({
+    if (!selectedBuilding) throw new Error(tr('Sélectionnez un immeuble avant de continuer.', 'حدد عمارة قبل المتابعة.'));
+    return addApartmentsBulkMutation.mutateAsync({
       buildingId: selectedBuilding.id,
       apartments: apartmentsList,
     });
@@ -1022,10 +1021,10 @@ const AppContent: React.FC = () => {
                     syndic={syndic}
                     onAddBuilding={handleAddBuilding}
                     onUpdateBuilding={(buildingId, updates) =>
-                      updateBuildingMutation.mutate({ buildingId, updates })
+                      updateBuildingMutation.mutateAsync({ buildingId, updates })
                     }
                     onDeleteBuilding={(buildingId) =>
-                      deleteBuildingMutation.mutate(buildingId)
+                      deleteBuildingMutation.mutateAsync(buildingId)
                     }
                     onSelectBuilding={(building: Building) => {
                       setSelectedBuilding(building);
@@ -1045,8 +1044,8 @@ const AppContent: React.FC = () => {
                   <Residents
                     building={selectedBuilding}
                     onAddResident={handleAddResident}
-                    onUpdateResident={updateResidentMutation.mutate}
-                    onDeleteResident={deleteResidentMutation.mutate}
+                    onUpdateResident={updateResidentMutation.mutateAsync}
+                    onDeleteResident={deleteResidentMutation.mutateAsync}
                     onRegenerateCredentials={(residentId) =>
                       regenerateCredentialsMutation.mutateAsync(residentId)
                     }
@@ -1069,8 +1068,8 @@ const AppContent: React.FC = () => {
                     onRebalanceTantiemes={() =>
                       rebalanceTantiemesMutation.mutate(selectedBuilding.id)
                     }
-                    onUpdateApartment={updateApartmentMutation.mutate}
-                    onDeleteApartment={deleteApartmentMutation.mutate}
+                    onUpdateApartment={updateApartmentMutation.mutateAsync}
+                    onDeleteApartment={deleteApartmentMutation.mutateAsync}
                   />
                 ) : (
                   <Navigate to="/buildings" replace />

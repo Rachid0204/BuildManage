@@ -2,10 +2,13 @@ import React, { useState } from "react";
 import { getAuthenticatedRequestHeaders } from "../../utils/security";
 import { useAuth } from "../../contexts/AuthContext";
 import { useI18n } from "../../hooks/useI18n";
+import Button from "../common/Button";
+import { useToast } from "../common/Toast";
 export default function EmailVerificationGate() {
   const { logout } = useAuth(),
     { tr } = useI18n(),
     [message, setMessage] = useState("");
+  const { showToast } = useToast();
   const resend = async () => {
     try {
       const r = await fetch("/api/auth/verification/request", {
@@ -13,11 +16,15 @@ export default function EmailVerificationGate() {
         headers: getAuthenticatedRequestHeaders(),
       });
       const d = await r.json();
+      if (!r.ok) throw new Error(d.error || tr('Envoi impossible.', 'تعذر الإرسال.'));
       setMessage(
         r.ok ? tr("Le lien a été envoyé.", "تم إرسال الرابط.") : d.error,
       );
-    } catch {
-      setMessage(tr("Envoi impossible.", "تعذر الإرسال."));
+      showToast(tr("Le lien a été envoyé.", "تم إرسال الرابط."), 'success');
+    } catch (error) {
+      const text = error instanceof Error ? error.message : tr("Envoi impossible.", "تعذر الإرسال.");
+      setMessage(text);
+      showToast(text, 'error');
     }
   };
   return (
@@ -32,9 +39,9 @@ export default function EmailVerificationGate() {
         )}
       </p>
       <div className="flex gap-3">
-        <button onClick={() => void resend()}>
+        <Button onClick={resend}>
           {tr("Renvoyer le lien", "إعادة إرسال الرابط")}
-        </button>
+        </Button>
         <button onClick={() => window.location.reload()}>
           {tr("Actualiser", "تحديث")}
         </button>

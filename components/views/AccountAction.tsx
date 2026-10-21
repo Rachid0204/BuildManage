@@ -1,5 +1,7 @@
 import React, { useState } from "react";
 import { useI18n } from "../../hooks/useI18n";
+import Form from "../common/Form";
+import { useToast } from "../common/Toast";
 export default function AccountAction() {
   const { tr } = useI18n(),
     params = new URLSearchParams(window.location.search),
@@ -7,7 +9,10 @@ export default function AccountAction() {
     [password, setPassword] = useState(""),
     [message, setMessage] = useState(""),
     [busy, setBusy] = useState(false);
+  const { showToast } = useToast();
   const complete = async () => {
+    if (!params.get("token")) throw new Error(tr("Lien incomplet. Demandez un nouveau lien.", "الرابط غير مكتمل. اطلب رابطاً جديداً."));
+    if (mode !== "verify" && password.length < 10) throw new Error(tr("Le mot de passe doit contenir au moins 10 caractères.", "يجب أن تتكون كلمة المرور من 10 أحرف على الأقل."));
     setBusy(true);
     try {
       const response = await fetch("/api/auth/recovery/complete", {
@@ -23,8 +28,10 @@ export default function AccountAction() {
           "تمت العملية. يمكنك تسجيل الدخول.",
         ),
       );
+      showToast(tr("Terminé. Vous pouvez vous connecter.", "تمت العملية. يمكنك تسجيل الدخول."), 'success');
     } catch (e: any) {
       setMessage(e.message);
+      throw e;
     } finally {
       setBusy(false);
     }
@@ -36,6 +43,7 @@ export default function AccountAction() {
           ? tr("Vérifier mon adresse", "تأكيد بريدي الإلكتروني")
           : tr("Nouveau mot de passe", "كلمة مرور جديدة")}
       </h1>
+      <Form onSubmit={complete} className="space-y-4">
       {mode !== "verify" && (
         <label className="block">
           {tr("Au moins 10 caractères", "عشرة أحرف على الأقل")}
@@ -44,6 +52,7 @@ export default function AccountAction() {
             type="password"
             autoComplete="new-password"
             minLength={10}
+            required
             value={password}
             onChange={(e) => setPassword(e.target.value)}
           />
@@ -51,11 +60,12 @@ export default function AccountAction() {
       )}
       <button
         className="bg-teal-700 text-white rounded p-3"
-        disabled={busy || (mode !== "verify" && password.length < 10)}
-        onClick={() => void complete()}
+        disabled={busy}
+        type="submit"
       >
         {busy ? tr("En cours…", "جاري التنفيذ…") : tr("Confirmer", "تأكيد")}
       </button>
+      </Form>
       <p role="status">{message}</p>
       <a className="text-teal-700 underline" href="/login">
         {tr("Connexion", "تسجيل الدخول")}

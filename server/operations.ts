@@ -548,12 +548,15 @@ export async function runOperation(
       (x: any) => x.id === p.id,
     );
     check(!old || old.buildingId === b.id, "Prestataire non lié.");
-    p.email = z.string().email().parse(p.email).toLowerCase();
-    check(
-      emailAvailable(String(p.email), "prestataireId", String(p.id || "")),
-      "Email déjà lié.",
-      409,
-    );
+    const needsAccount = Boolean(args[1] || old?.hasAccount);
+    const email = String(p.email || '').trim().toLowerCase();
+    p.email = needsAccount || email ? z.string().email().parse(email) : '';
+    if (p.email)
+      check(
+        emailAvailable(String(p.email), "prestataireId", String(p.id || "")),
+        "Email déjà lié.",
+        409,
+      );
     for (const field of [...secretFields, "hasAccount"]) delete p[field];
     if (old?.hasAccount && old.email.toLowerCase() !== p.email)
       changedCredentials = { kind: "Prestataire", id: String(p.id) };

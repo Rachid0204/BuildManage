@@ -4,6 +4,7 @@ import type { Building, Prestataire } from '../../types';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import Modal from '../common/Modal';
+import { useToast } from '../common/Toast';
 import {
   PrestatairesIcon,
   PhoneIcon,
@@ -32,6 +33,7 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
   onManageCredentials,
 }) => {
   const { tr } = useI18n();
+  const { showToast } = useToast();
   const queryClient = useQueryClient();
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -86,7 +88,7 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
       setIsReviewModalOpen(false);
       setReviewComment('');
       setRatingScore(5);
-      alert(tr('Merci ! Votre avis a été publié pour vos voisins.', 'شكراً! تم نشر تقييمكم لفائدة جيرانكم.'));
+
     },
   });
 
@@ -118,7 +120,8 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
   };
 
   const handleSendWhatsAppRequest = () => {
-    if (!targetPrestataire) return;
+    if (!targetPrestataire) throw new Error(tr('Sélectionnez un prestataire.', 'حدد مقدم خدمة.'));
+    if (!problemDescription.trim()) throw new Error(tr('Décrivez votre besoin avant de préparer le message WhatsApp.', 'صف طلبك قبل إعداد رسالة واتساب.'));
     const cleanPhone = (targetPrestataire.whatsapp || targetPrestataire.phone)
       .replace(/\s+/g, '')
       .replace('+', '');
@@ -128,7 +131,9 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
         `مرحباً ${targetPrestataire.contactPerson || targetPrestataire.name}،\nأنا ${residentName} ساكن في ${building.name} (${apartmentNumber}).\nأحتاج إلى تدخل تقني : ${problemDescription || 'طلب إصلاح'}.\nدرجة الاستعجال : ${urgencyLevel === 'urgent' ? 'مستعجل جداً' : 'عادي'}.\nشكراً للتواصل معي!`
       )
     );
-    window.open(`https://wa.me/${cleanPhone}?text=${text}`, '_blank');
+    const opened = window.open(`https://wa.me/${cleanPhone}?text=${text}`, '_blank');
+    if (!opened) throw new Error(tr('Autorisez les fenêtres contextuelles pour ouvrir WhatsApp.', 'اسمح بالنوافذ المنبثقة لفتح واتساب.'));
+    showToast(tr('WhatsApp est ouvert. Vérifiez le message puis envoyez-le dans WhatsApp.', 'تم فتح واتساب. راجع الرسالة ثم أرسلها داخل واتساب.'), 'info');
     setIsRequestModalOpen(false);
   };
 
@@ -488,6 +493,17 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
       {/* MODAL 1: ADD REVIEW */}
       <Modal
         isOpen={isReviewModalOpen}
+        busy={reviewMutation.isPending}
+        onSubmit={async () => {
+                if (!targetPrestataire) throw new Error(tr('Sélectionnez un prestataire.', 'حدد مقدم خدمة.'));
+                if (!reviewComment.trim())
+                  throw new Error(tr('Veuillez rédiger un court commentaire.', 'يرجى كتابة تعليق قصير.'));
+                await reviewMutation.mutateAsync({
+                  prestataireId: targetPrestataire.id,
+                  rating: ratingScore,
+                  comment: reviewComment.trim(),
+                });
+              }}
         onClose={() => setIsReviewModalOpen(false)}
         title={`${tr('Laisser un avis sur', 'إضافة تقييم حول')} ${targetPrestataire?.name || ''}`}
         footer={
@@ -496,16 +512,7 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
               {tr('Annuler', 'إلغاء')}
             </Button>
             <Button
-              onClick={() => {
-                if (!targetPrestataire) return;
-                if (!reviewComment.trim())
-                  return alert(tr('Veuillez rédiger un court commentaire.', 'يرجى كتابة تعليق قصير.'));
-                reviewMutation.mutate({
-                  prestataireId: targetPrestataire.id,
-                  rating: ratingScore,
-                  comment: reviewComment.trim(),
-                });
-              }}
+              type="submit"
               disabled={reviewMutation.isPending}
             >
               {tr("Publier l'avis", 'نشر التقييم')}
@@ -568,6 +575,7 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
       {/* MODAL 2: REQUEST INTERVENTION / QUOTE */}
       <Modal
         isOpen={isRequestModalOpen}
+        onSubmit={handleSendWhatsAppRequest}
         onClose={() => setIsRequestModalOpen(false)}
         title={`${tr("Demande d'intervention à", 'طلب تدخل تقني من')} ${targetPrestataire?.name || ''}`}
         footer={
@@ -575,7 +583,7 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
             <Button variant="secondary" onClick={() => setIsRequestModalOpen(false)}>
               {tr('Annuler', 'إلغاء')}
             </Button>
-            <Button onClick={handleSendWhatsAppRequest} className="bg-emerald-600 hover:bg-emerald-700">
+            <Button type="submit" className="bg-emerald-600 hover:bg-emerald-700">
               <span className="flex items-center gap-1.5">
                 <WhatsAppIcon />
                 <span>{tr('Envoyer sur WhatsApp', 'إرسال عبر واتساب')}</span>

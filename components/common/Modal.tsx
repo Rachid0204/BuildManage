@@ -1,5 +1,6 @@
-import React, { useEffect, useId, useRef } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import { useI18n } from '../../hooks/useI18n';
+import Form from './Form';
 
 interface ModalProps {
   isOpen: boolean;
@@ -8,6 +9,8 @@ interface ModalProps {
   children: React.ReactNode;
   footer?: React.ReactNode;
   maxWidthClass?: string;
+  onSubmit?: (event: React.FormEvent<HTMLFormElement>) => unknown;
+  busy?: boolean;
 }
 
 const FOCUSABLE_SELECTOR =
@@ -20,8 +23,12 @@ const Modal: React.FC<ModalProps> = ({
   children,
   footer,
   maxWidthClass = 'max-w-lg',
+  onSubmit,
+  busy = false,
 }) => {
   const modalRef = useRef<HTMLDivElement>(null);
+  const [formBusy, setFormBusy] = useState(false);
+  const isBusy = busy || formBusy;
   const previousActiveElementRef = useRef<HTMLElement | null>(null);
   const titleId = useId();
   const { tr } = useI18n();
@@ -29,8 +36,8 @@ const Modal: React.FC<ModalProps> = ({
 
   // Call the latest handler without restarting focus management on form edits.
   useEffect(() => {
-    onCloseRef.current = onClose;
-  }, [onClose]);
+    onCloseRef.current = () => { if (!isBusy) onClose(); };
+  }, [onClose, isBusy]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -50,6 +57,9 @@ const Modal: React.FC<ModalProps> = ({
     }, 10);
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      const dialogs = document.querySelectorAll('[role="dialog"][aria-modal="true"]');
+      const top = dialogs[dialogs.length - 1];
+      if (!modalRef.current || !top?.contains(modalRef.current)) return;
       if (event.key === 'Escape') {
         event.stopPropagation();
         onCloseRef.current();
@@ -108,7 +118,7 @@ const Modal: React.FC<ModalProps> = ({
       aria-labelledby={titleId}
       role="dialog"
       aria-modal="true"
-      onClick={onClose}
+      onClick={() => onCloseRef.current()}
     >
       <div
         ref={modalRef}
@@ -123,7 +133,8 @@ const Modal: React.FC<ModalProps> = ({
           </h3>
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => onCloseRef.current()}
+            disabled={isBusy}
             className="text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 p-1 rounded transition-colors focus:outline-none focus:ring-2 focus:ring-teal-500"
             aria-label={tr('Fermer la boîte de dialogue', 'إغلاق النافذة')}
           >
@@ -138,15 +149,15 @@ const Modal: React.FC<ModalProps> = ({
           </button>
         </div>
 
-        {/* Body */}
-        <div className="p-6 space-y-4 overflow-y-auto text-sm text-slate-700">{children}</div>
-
-        {/* Footer */}
-        {footer && (
-          <div className="flex justify-end items-center px-6 py-3.5 bg-slate-50 border-t border-slate-200 gap-2">
-            {footer}
-          </div>
-        )}
+        {onSubmit ? (
+          <Form onSubmit={onSubmit} onBusyChange={setFormBusy} className="flex flex-col min-h-0">
+            <div className="p-6 space-y-4 overflow-y-auto text-sm text-slate-700">{children}</div>
+            {footer && <div className="flex justify-end items-center px-6 py-3.5 bg-slate-50 border-t border-slate-200 gap-2">{footer}</div>}
+          </Form>
+        ) : <>
+          <div className="p-6 space-y-4 overflow-y-auto text-sm text-slate-700">{children}</div>
+          {footer && <div className="flex justify-end items-center px-6 py-3.5 bg-slate-50 border-t border-slate-200 gap-2">{footer}</div>}
+        </>}
       </div>
     </div>
   );

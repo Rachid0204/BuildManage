@@ -1,4 +1,6 @@
-import React, { useState, useMemo, useRef } from 'react';
+import { notifyOperation } from '../../utils/formFeedback';
+import Form from '../common/Form';
+import React, { useState, useMemo, useRef, useId } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getMaintenanceRequestsForBuilding,
@@ -142,6 +144,7 @@ const compressPhotoFile = (file: File, maxWidth = 1100, maxHeight = 1100, qualit
 // Visual 4-Stage Progress Stepper
 const MaintenanceProgressStepper: React.FC<{ request: MaintenanceRequest }> = ({ request }) => {
   const { tr, isAr } = useI18n();
+
   let activeStage = 1;
   if (request.status === 'completed') {
     activeStage = 4;
@@ -251,6 +254,8 @@ const Maintenance: React.FC<MaintenanceProps> = ({
   currentApartmentNumber = 'Lot A-102',
 }) => {
   const { tr, isAr } = useI18n();
+  const createFormId = useId();
+  const updateFormId = useId();
   const queryClient = useQueryClient();
   const updatePhotoInputRef = useRef<HTMLInputElement | null>(null);
   const newTicketPhotoInputRef = useRef<HTMLInputElement | null>(null);
@@ -478,13 +483,13 @@ const Maintenance: React.FC<MaintenanceProps> = ({
     setStepPhotos([]);
   };
 
-  const handleSaveUpdate = (e: React.FormEvent) => {
+  const handleSaveUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedRequest) return;
 
     const updates: Partial<MaintenanceRequest> = isResidentPortal ? {} : {status:editStatus,assignedTo:editAssignedTo || undefined,cost:editCost?parseFloat(editCost):undefined,invoiceRef:editInvoiceRef || undefined,syndicNotes:stepNote.trim() || undefined};
 
-    updateMutation.mutate({
+    return updateMutation.mutateAsync({
       id: selectedRequest.id,
       updates,
       stepInfo: {
@@ -507,12 +512,12 @@ const Maintenance: React.FC<MaintenanceProps> = ({
     });
   };
 
-  const handleCreateTicket = (e: React.FormEvent) => {
+  const handleCreateTicket = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newDescription.trim()) return;
+    if (!newTitle.trim() || !newDescription.trim()) throw new Error(tr('Le titre et la description sont obligatoires.', 'العنوان والوصف مطلوبان.'));
 
     const catLabel = isAr ? CATEGORY_META[newCategory].labelAr : CATEGORY_META[newCategory].labelFr;
-    createMutation.mutate({
+    return createMutation.mutateAsync({
       buildingId: building.id,
       residentId: isResidentPortal ? currentResidentId : building.residents[0]?.id || 'res-1',
       residentName: isResidentPortal ? currentResidentName : tr('SyndicPro Gestion (Inspection)', 'مكتب السنديك (معاينة)'),
@@ -536,9 +541,13 @@ const Maintenance: React.FC<MaintenanceProps> = ({
     if (!files || files.length === 0) return;
     setIsUploadingPhotos(true);
     try {
-      const validFiles = Array.from(files).filter((f) => f.type.startsWith('image/')).slice(0, 4);
+      const validFiles = Array.from(files);
+      if (validFiles.length > 5 || validFiles.some(f => !['image/jpeg', 'image/png', 'image/webp'].includes(f.type) || f.size > 5 * 1024 * 1024 || !f.size))
+        throw new Error(tr('Choisissez au maximum 5 photos JPG, PNG ou WebP de 5 Mo maximum chacune.', 'اختر حتى 5 صور JPG أو PNG أو WebP بحجم أقصى 5 ميغابايت لكل صورة.'));
       const compressed = await Promise.all(validFiles.map((f) => compressPhotoFile(f)));
       targetSetter((prev) => [...prev, ...compressed].slice(0, 5));
+    } catch (error) {
+      notifyOperation({ operation: "upload", error: error instanceof Error ? error.message : tr("Impossible de lire les photos.", "تعذر قراءة الصور.") });
     } finally {
       setIsUploadingPhotos(false);
     }
@@ -1011,6 +1020,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
       {selectedRequest && (
         <Modal
           isOpen={!!selectedRequest}
+          busy={updateMutation.isPending || isUploadingPhotos}
           onClose={() => setSelectedRequest(null)}
           title={
             isResidentPortal
@@ -1029,7 +1039,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                 {tr('Annuler', 'إلغاء')}
               </Button>
               <Button
-                onClick={handleSaveUpdate}
+                type="submit" form={updateFormId}
                 disabled={updateMutation.isPending || isUploadingPhotos}
                 className="bg-teal-700 hover:bg-teal-800 text-white font-bold"
               >
@@ -1040,7 +1050,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
             </div>
           }
         >
-          <form onSubmit={handleSaveUpdate} className="space-y-4 text-xs">
+          <Form id={updateFormId} onSubmit={handleSaveUpdate} className="space-y-4 text-xs">
             <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
               <div className="font-bold text-slate-900 text-sm">
                 {selectedRequest.title || selectedRequest.description}
@@ -1221,7 +1231,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                 </div>
               )}
             </div>
-          </form>
+          </Form>
         </Modal>
       )}
 
@@ -1229,6 +1239,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
       {isCreateModalOpen && (
         <Modal
           isOpen={isCreateModalOpen}
+          busy={createMutation.isPending || isUploadingPhotos}
           onClose={() => setIsCreateModalOpen(false)}
           title={tr('Signaler un incident ou demander une réparation', 'التبليغ عن عطب أو طلب إصلاح')}
           footer={
@@ -1237,8 +1248,8 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                 {tr('Annuler', 'إلغاء')}
               </Button>
               <Button
-                onClick={handleCreateTicket}
-                disabled={createMutation.isPending || !newDescription.trim()}
+                type="submit" form={createFormId}
+                disabled={createMutation.isPending || isUploadingPhotos}
                 className="bg-teal-700 hover:bg-teal-800 text-white font-bold"
               >
                 {createMutation.isPending
@@ -1248,7 +1259,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
             </div>
           }
         >
-          <form onSubmit={handleCreateTicket} className="space-y-4 text-xs">
+          <Form id={createFormId} onSubmit={handleCreateTicket} className="space-y-4 text-xs">
             <div>
               <label className="block font-bold text-slate-700 mb-1">
                 {tr("Titre court de l'incident * :", 'عنوان مختصر للعطب * :')}
@@ -1376,7 +1387,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                 </div>
               )}
             </div>
-          </form>
+          </Form>
         </Modal>
       )}
 

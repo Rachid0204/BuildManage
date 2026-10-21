@@ -1,3 +1,5 @@
+import { useToast } from '../common/Toast';
+import Form from '../common/Form';
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import type { Syndic, UserProfile, SubscriptionPlan } from '../../types';
@@ -45,6 +47,7 @@ const PLAN_DETAILS: Record<
 
 const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
   const { tr, language } = useI18n();
+  const { showToast } = useToast();
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -138,7 +141,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
       }
       redirectUserToCorrectPage(profile);
     } catch (err: any) {
-      console.error(err);
+      showToast(err.message || tr('Connexion impossible. Vérifiez vos identifiants.', 'تعذر تسجيل الدخول. تحقق من بياناتك.'), 'error');
       setError(
         err.message ||
           tr(
@@ -276,7 +279,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
                 </div>
               </div>
 
-              <form onSubmit={handleSubmit} className="space-y-3.5">
+              <Form onSubmit={handleSubmit} className="space-y-3.5">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
@@ -430,7 +433,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
                         'تفعيل مكتب السنديك والولوج إلى لوحة القيادة ←'
                       )}
                 </Button>
-              </form>
+              </Form>
             </div>
           ) : (
             /* ============================================================
@@ -449,7 +452,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
                 </p>
               </div>
 
-              <form onSubmit={handleSubmit} className="space-y-4">
+              <Form onSubmit={handleSubmit} className="space-y-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
                     {tr(
@@ -521,7 +524,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
                     ? tr('Authentification et redirection...', 'جاري التحقق والتوجيه...')
                     : tr('Se connecter', 'تسجيل الدخول')}
                 </Button>
-              </form>
+              </Form>
 
               <div>
                 <button
@@ -583,6 +586,14 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
       {/* Password Recovery Modal */}
       <Modal
         isOpen={isForgotOpen}
+        onSubmit={async () => {
+          const target = forgotEmail.trim();
+          if (!/^\S+@\S+\.\S+$/.test(target)) throw new Error(tr('Indiquez l’adresse email associée à votre compte.', 'أدخل البريد الإلكتروني المرتبط بحسابك.'));
+          const response = await fetch('/api/auth/recovery/request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: target }) });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error || tr('Envoi impossible.', 'تعذر الإرسال.'));
+          setForgotSent(true);
+        }}
         onClose={() => setIsForgotOpen(false)}
         title={tr('Réinitialisation du mot de passe', 'إعادة تعيين كلمة المرور')}
         footer={
@@ -592,13 +603,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
             </Button>
             {!forgotSent && (
               <Button
-                onClick={async () => {
-                  const target = forgotEmail.trim();
-                  if (!target) return;
-                  const response = await fetch('/api/auth/recovery/request', { method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:target}) });
-                  const data = await response.json();if (!response.ok) { setError(data.error || tr('Envoi impossible.', 'تعذر الإرسال.'));return; }
-                  setForgotSent(true);
-                }}
+                type="submit"
               >
                 {tr('Envoyer les instructions', 'إرسال التعليمات')}
               </Button>
@@ -633,19 +638,19 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
             <>
               <p className="text-xs text-slate-600">
                 {tr(
-                  "Saisissez votre adresse e-mail ou numéro CIN. Si vous êtes résident ou prestataire d'un immeuble géré, votre Syndic peut aussi vous rééditer votre fiche d'accès PDF.",
-                  'أدخل بريدك الإلكتروني أو رقم البطاقة الوطنية CIN. إذا كنت ساكناً أو مقدم خدمة، يمكن للسنديك أيضاً إعادة إصدار بطاقة الولوج PDF الخاصة بك.'
+                  "Saisissez l’adresse e-mail associée à votre compte. Si vous êtes résident ou prestataire d'un immeuble géré, votre Syndic peut aussi vous rééditer votre fiche d'accès PDF.",
+                  'أدخل البريد الإلكتروني المرتبط بحسابك. إذا كنت ساكناً أو مقدم خدمة، يمكن للسنديك أيضاً إعادة إصدار بطاقة الولوج PDF الخاصة بك.'
                 )}
               </p>
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  {tr('Adresse e-mail ou N° CIN', 'البريد الإلكتروني أو رقم CIN')}
+                  {tr('Adresse e-mail du compte', 'البريد الإلكتروني للحساب')}
                 </label>
                 <input
                   type="text"
                   value={forgotEmail}
                   onChange={(e) => setForgotEmail(e.target.value)}
-                  placeholder="Ex: contact@moncabinet.ma / BE458921"
+                  placeholder="Ex: contact@moncabinet.ma"
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
                 />
               </div>

@@ -50,6 +50,10 @@ const profiles = [
     emailVerified: true,
   },
 ];
+profiles.push(
+  { uid: 'admin-ui', email: 'admin@ui.invalid', displayName: 'Admin UI', role: 'admin', emailVerified: true } as any,
+  { uid: 'user-prest-p-ui', email: 'provider@ui.invalid', displayName: 'Provider UI', role: 'provider', syndicId: 's-ui', buildingId: 'b-ui', prestataireId: 'p-ui', emailVerified: true } as any,
+);
 const pdf = {
   name: "bank-receipt.pdf",
   mimeType: "application/pdf",
@@ -139,6 +143,8 @@ test.beforeAll(async () => {
           ],
         },
       ],
+      syndik_prod_prestataires_v1: [{ id: 'p-ui', buildingId: 'b-ui', syndicId: 's-ui', name: 'Synthetic Provider', phone: '0600000007', email: 'provider@ui.invalid', category: 'plumbing', active: true, hasAccount: true, reviews: [] }],
+      syndik_prod_maintenance_v1: [{ id: 'provider-ticket-ui', buildingId: 'b-ui', syndicId: 's-ui', residentId: 'r-ui', title: 'Provider test assignment', description: 'Synthetic assignment requiring a report.', category: 'plumbing', priority: 'medium', status: 'pending', assignedTo: 'p-ui', prestataireId: 'p-ui', createdAt: new Date().toISOString() }],
       syndik_prod_charges_v1: [
         charge("Monthly fees partial", 200, 40),
         charge("Monthly fees rejected", 50),
@@ -249,7 +255,8 @@ async function login(page: Page, index = 1, language = "fr") {
     },
     { token: data.token, language },
   );
-  await page.goto(`${base}${index === 0 ? "/financials" : "/resident"}`);
+  const home = profiles[index].role === 'admin' ? '/admin' : profiles[index].role === 'provider' ? '/provider' : index === 0 ? '/financials' : '/resident';
+  await page.goto(`${base}${home}`);
   return data.token as string;
 }
 
@@ -397,7 +404,7 @@ test("resident uploads a private receipt, sees errors, retries once, and syndic 
   await submit.click();
   await expect(modal).toBeHidden();
   await expect(
-    page.getByRole("status").filter({ hasText: "Justificatif envoyé" }),
+    page.getByRole("status").filter({ hasText: "Justificatif envoyé" }).first(),
   ).toBeVisible();
   const state = disk();
   const proofs = state.syndik_prod_proofs_v1.filter(
@@ -544,4 +551,306 @@ test("a rejected proof can be resubmitted from the exact charge on mobile in Ara
   await expect(
     page.getByRole("dialog").getByLabel("رقم المرجع / رقم العملية"),
   ).toHaveValue("");
+});
+
+async function field(page: Page, label: string | RegExp) {
+  return page.getByRole('dialog').locator('label').filter({ hasText: label }).first().locator('..').locator('input, textarea, select').first();
+}
+
+async function failNextSave(page: Page) {
+  await page.route('**/api/commands', route => route.fulfill({ status: 503, json: { error: 'Synthetic save failure — please retry' } }));
+}
+
+async function expectRetryableFailure(page: Page, submit: string | RegExp) {
+  const dialog = page.getByRole('dialog');
+  await failNextSave(page);
+  await dialog.getByRole('button', { name: submit }).click();
+  await expect(dialog.getByRole('alert').first()).toContainText('Synthetic save failure');
+  await expect(dialog).toBeVisible();
+  await page.unroute('**/api/commands');
+}
+
+test('building creation explains missing fields, keeps the draft on failure and closes only after saving', async ({ page }, testInfo) => {
+  await login(page, 0);
+  await page.goto(`${base}/buildings`);
+  await page.getByRole('button', { name: /Ajouter.*immeuble/i }).first().click();
+  const dialog = page.getByRole('dialog');
+  await dialog.locator('button[type=submit]').click();
+  await expect(dialog.getByRole('alert')).toContainText(/nom/i);
+  await dialog.locator('#bld-name').pressSequentially('Form audit residence', { delay: 20 });
+  await expect(dialog.locator('#bld-name')).toBeFocused();
+  await dialog.locator('#bld-address').fill('123 Synthetic Street');
+  await dialog.locator('#bld-city').fill('Casablanca');
+  await expectRetryableFailure(page, /Enregistrer|Créer|Ajouter/);
+  await expect(dialog.locator('#bld-name')).toHaveValue('Form audit residence');
+  await dialog.locator('button[type=submit]').click();
+  await expect(dialog).toBeHidden();
+  expect(disk().syndik_prod_syndics_v1[0].buildings.filter((b: any) => b.name === 'Form audit residence')).toHaveLength(1);
+  await expect(page.getByRole('status').filter({ hasText: 'Immeuble créé' })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('building-success.png') });
+});
+
+test('lot and resident forms retain drafts on failures and persist complete records', async ({ page }) => {
+  await login(page, 0);
+  await page.goto(`${base}/apartments`);
+  await page.getByRole('button', { name: 'Ajouter un lot', exact: true }).click();
+  let dialog = page.getByRole('dialog');
+  await dialog.locator('button[type=submit]').click();
+  await expect(dialog.getByRole('alert')).toContainText(/numéro/i);
+  await dialog.locator('input').first().fill('AUDIT-02');
+  await expectRetryableFailure(page, /Enregistrer/);
+  await dialog.locator('button[type=submit]').click();
+  await expect(dialog).toBeHidden();
+  expect(disk().syndik_prod_syndics_v1[0].buildings[0].apartments.some((a: any) => a.number === 'AUDIT-02')).toBe(true);
+
+  await page.goto(`${base}/residents`);
+  await page.getByRole('button', { name: /Ajouter.*résident/i }).click();
+  dialog = page.getByRole('dialog');
+  await dialog.locator('button[type=submit]').click();
+  await expect(dialog.getByRole('alert')).toContainText(/e-?mail/i);
+  await dialog.locator('#res-name').fill('Form Audit Resident');
+  await dialog.locator('#res-email').fill('new-resident@ui.invalid');
+  await dialog.locator('#res-phone').fill('0600000099');
+  const newLot = disk().syndik_prod_syndics_v1[0].buildings[0].apartments.find((a: any) => a.number === 'AUDIT-02');
+  await dialog.locator('#res-apartment').selectOption(newLot.id);
+  await dialog.locator('input[type=checkbox]').uncheck();
+  await expectRetryableFailure(page, /Enregistrer/);
+  await expect(dialog.locator('#res-email')).toHaveValue('new-resident@ui.invalid');
+  await dialog.locator('button[type=submit]').click();
+  await expect(dialog).toBeHidden();
+  expect(disk().syndik_prod_syndics_v1[0].buildings[0].residents.some((r: any) => r.email === 'new-resident@ui.invalid')).toBe(true);
+});
+
+test('maintenance validates required fields, preserves failed reports and saves the selected urgency', async ({ page }, testInfo) => {
+  await login(page);
+  await page.getByRole('button', { name: /Incidents.*Suivi/ }).first().click();
+  await page.getByRole('button', { name: 'Signaler un incident', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('button', { name: 'Envoyer le signalement' }).click();
+  await expect(dialog.getByRole('alert')).toContainText(/Titre|Description/);
+  await dialog.locator('input[type=text]').first().pressSequentially('Form audit elevator', { delay: 20 });
+  await expect(dialog.locator('input[type=text]').first()).toBeFocused();
+  await dialog.locator('textarea').fill('Elevator stopped on floor 2. Please arrange an inspection.');
+  await dialog.locator('select').nth(1).selectOption('high');
+  await expectRetryableFailure(page, 'Envoyer le signalement');
+  await expect(dialog.locator('textarea')).toHaveValue('Elevator stopped on floor 2. Please arrange an inspection.');
+  await page.screenshot({ path: testInfo.outputPath('maintenance-retry.png') });
+  await dialog.getByRole('button', { name: 'Envoyer le signalement' }).click();
+  await expect(dialog).toBeHidden();
+  expect(disk().syndik_prod_maintenance_v1.find((r: any) => r.title === 'Form audit elevator')).toMatchObject({ priority: 'high', residentId: resident.id, status: 'pending' });
+  await expect(page.getByRole('status').filter({ hasText: 'Signalement envoyé' })).toBeVisible();
+});
+
+test('announcements, provider and assembly forms explain missing information and save real data', async ({ page }) => {
+  await login(page, 0);
+  await page.goto(`${base}/announcements`);
+  await page.getByRole('button', { name: /Nouvelle annonce|Créer.*annonce/i }).first().click();
+  let dialog = page.getByRole('dialog');
+  await dialog.locator('button[type=submit]').click();
+  await expect(dialog.getByRole('alert')).toContainText(/Titre|Contenu/);
+  await dialog.locator('#title').fill('Form audit announcement');
+  await dialog.locator('#content').fill('Scheduled lift inspection on Saturday.');
+  await expectRetryableFailure(page, /Publier/);
+  await dialog.locator('button[type=submit]').click();
+  await expect(dialog).toBeHidden();
+  expect(disk().syndik_prod_syndics_v1[0].buildings[0].announcements.some((a: any) => a.title === 'Form audit announcement')).toBe(true);
+
+  await page.goto(`${base}/prestataires`);
+  await page.getByRole('button', { name: /Ajouter.*prestataire/i }).first().click();
+  dialog = page.getByRole('dialog');
+  await dialog.locator('button[type=submit]').click();
+  await expect(dialog.getByRole('alert')).toContainText(/nom|téléphone/i);
+  await (await field(page, /Nom de l'Entreprise/)).fill('Form Audit Plumbing');
+  await (await field(page, /Téléphone/)).fill('0600000088');
+  await dialog.locator('input[type=checkbox]').last().uncheck();
+  await expectRetryableFailure(page, 'Enregistrer');
+  await dialog.locator('button[type=submit]').click();
+  await expect(dialog).toBeHidden();
+  expect(disk().syndik_prod_prestataires_v1.some((p: any) => p.name === 'Form Audit Plumbing')).toBe(true);
+
+  await page.goto(`${base}/ag`);
+  await page.getByRole('button', { name: /Planifier.*AG|Planifier.*Assemblée|Nouvelle.*AG|Convoquer/i }).first().click();
+  dialog = page.getByRole('dialog');
+  await dialog.locator('button[type=submit]').click();
+  await expect(dialog.getByRole('alert')).toContainText(/titre/i);
+  await dialog.locator('input[type=text]').first().fill('Form audit assembly');
+  await expectRetryableFailure(page, /Créer.*AG/);
+  await dialog.locator('button[type=submit]').click();
+  await expect(dialog).toBeHidden();
+  expect(disk().syndik_prod_ag_v1.some((a: any) => a.title === 'Form audit assembly')).toBe(true);
+});
+
+test('expense form saves a positive input as one negative ledger entry', async ({ page }) => {
+  await login(page, 0);
+  await page.getByRole('button', { name: /Nouvelle.*Opération|Ajouter.*opération|Nouvelle écriture/i }).first().click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('button', { name: 'Valider & Enregistrer' }).click();
+  await expect(dialog.getByRole('alert')).toContainText(/montant|libellé/i);
+  await (await field(page, /Libellé/)).fill('Form audit plumbing expense');
+  await (await field(page, /Montant/)).fill('25');
+  await (await field(page, /Nom.*Raison sociale/i)).fill('Synthetic Plumber');
+  await (await field(page, /N°.*Facture|Numéro.*facture|N° de facture/i)).fill('AUDIT-INVOICE-25');
+  await expectRetryableFailure(page, 'Valider & Enregistrer');
+  await dialog.getByRole('button', { name: 'Valider & Enregistrer' }).click();
+  await expect(dialog).toBeHidden();
+  const entries = disk().syndik_prod_syndics_v1[0].buildings[0].financials.transactions.filter((t: any) => t.description === 'Form audit plumbing expense');
+  expect(entries).toHaveLength(1);
+  expect(entries[0]).toMatchObject({ amount: -25, type: 'expense' });
+});
+
+test('Arabic mobile form validation is visible, focuses the missing field and does not overflow', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await login(page, 0, 'ar');
+  await page.goto(`${base}/announcements`);
+  await page.getByRole('button', { name: /إعلان جديد|إنشاء إعلان|إعلان/ }).last().click();
+  const dialog = page.getByRole('dialog');
+  await dialog.locator('button[type=submit]').click();
+  await expect(dialog.getByRole('alert')).toContainText('يرجى تصحيح');
+  await expect(dialog.locator('#title')).toBeFocused();
+  await expect(page.locator('html')).toHaveAttribute('dir', 'rtl');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('arabic-validation-mobile.png') });
+});
+
+test('password recovery errors stay inside the dialog and short reset passwords are explained', async ({ page }) => {
+  await page.route('**/*', route => new URL(route.request().url()).origin === base ? route.continue() : route.abort());
+  await page.goto(`${base}/login`);
+  await page.getByRole('button', { name: /Mot de passe oublié/i }).click();
+  let dialog = page.getByRole('dialog');
+  await dialog.getByRole('button', { name: 'Envoyer les instructions' }).click();
+  await expect(dialog.getByRole('alert')).toContainText(/e-?mail/i);
+  await dialog.locator('input').fill('resident@ui.invalid');
+  await dialog.getByRole('button', { name: 'Envoyer les instructions' }).click();
+  await expect(dialog.getByRole('alert')).toContainText('Email indisponible');
+  await expect(dialog.locator('input')).toHaveValue('resident@ui.invalid');
+  await page.goto(`${base}/account-action?mode=reset&token=synthetic-expired`);
+  await page.getByRole('button', { name: 'Confirmer', exact: true }).click();
+  await expect(page.getByRole('alert').first()).toContainText(/obligatoire|caractères/i);
+});
+
+test('retry after a lost publication response reuses the upload and does not create a duplicate listing', async ({ page }) => {
+  await login(page);
+  await page.getByRole('button', { name: /Souk Voisins/ }).first().click();
+  await page.getByRole('button', { name: /Publier une annonce/ }).first().click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByPlaceholder('Ex: Table basse salon marocain...').fill('Uncertain publication response');
+  await dialog.locator('textarea').fill('Retry this publication without creating a second advertisement.');
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6b6sAAAAASUVORK5CYII=', 'base64');
+  await dialog.locator('input[type=file]').setInputFiles({ name: 'synthetic.png', mimeType: 'image/png', buffer: png });
+  await expect(dialog.getByText(/Photos de l’objet \(1\/5\)|Photos de l'objet \(1\/5\)/)).toBeVisible();
+  const ids: string[] = [];
+  let uploads = 0;
+  page.on('request', request => { if (new URL(request.url()).pathname === '/api/uploads') uploads++; });
+  await page.route('**/api/commands', async route => {
+    ids.push(route.request().postDataJSON().operationId);
+    if (ids.length === 1) {
+      const committed = await route.fetch();
+      expect(committed.status()).toBe(200);
+      await route.fulfill({ status: 503, json: { error: 'Synthetic lost response after commit' } });
+    } else await route.continue();
+  });
+  await dialog.getByRole('button', { name: 'Publier mon annonce' }).click();
+  await expect(dialog.getByRole('alert')).toContainText('Synthetic lost response');
+  await dialog.getByRole('button', { name: 'Publier mon annonce' }).click();
+  await expect(dialog).toBeHidden();
+  expect(ids).toHaveLength(2);
+  expect(ids[0]).toBe(ids[1]);
+  expect(uploads).toBe(1);
+  expect(disk().syndik_prod_marketplace_v1.filter((item: any) => item.title === 'Uncertain publication response')).toHaveLength(1);
+});
+
+test('document upload rejects unsupported files and previews the actual private PDF', async ({ page }) => {
+  await login(page, 0);
+  await page.goto(`${base}/documents`);
+  const upload = page.locator('input[type=file]');
+  await upload.setInputFiles({ name: 'unsupported.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: Buffer.from('synthetic') });
+  await expect(page.getByRole('alert').filter({ hasText: 'Formats acceptés' })).toBeVisible();
+  await upload.setInputFiles(pdf);
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  const src = await dialog.locator('iframe').getAttribute('src');
+  expect(src).toMatch(/^\/api\/uploads\//);
+  const response = await page.request.get(base + src);
+  expect(response.status()).toBe(200);
+  expect(await response.body()).toEqual(pdf.buffer);
+});
+
+test('cabinet settings and chat preserve input after errors and save successfully on retry', async ({ page }) => {
+  await login(page, 0);
+  await page.goto(`${base}/settings`);
+  const name = page.locator('#companyName');
+  await name.fill('Audited Cabinet');
+  await failNextSave(page);
+  await page.locator('button[type=submit]').click();
+  await expect(page.getByRole('alert').filter({ hasText: 'Synthetic save failure' }).first()).toBeVisible();
+  await expect(name).toHaveValue('Audited Cabinet');
+  await page.unroute('**/api/commands');
+  await page.locator('button[type=submit]').click();
+  await expect.poll(() => disk().syndik_prod_syndics_v1[0].name).toBe('Audited Cabinet');
+
+  await page.goto(`${base}/chat`);
+  const message = page.getByPlaceholder(/Écrire un message/);
+  await message.fill('Synthetic chat draft retained after failure');
+  await failNextSave(page);
+  await page.getByRole('button', { name: /^Envoyer/ }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'Synthetic save failure' }).first()).toBeVisible();
+  await expect(message).toHaveValue('Synthetic chat draft retained after failure');
+  await page.unroute('**/api/commands');
+  await page.getByRole('button', { name: /^Envoyer/ }).click();
+  await expect(message).toHaveValue('');
+  expect(disk().syndik_prod_chat_v1.filter((m: any) => m.content === 'Synthetic chat draft retained after failure')).toHaveLength(1);
+});
+
+test('admin cabinet creation validates and retries, and provider reports require a note before saving', async ({ page }) => {
+  await login(page, 3);
+  await page.getByRole('button', { name: /Nouveau Cabinet|Créer.*Cabinet/i }).first().click();
+  let dialog = page.getByRole('dialog');
+  await dialog.locator('button[type=submit]').click();
+  await expect(dialog.getByRole('alert')).toContainText(/nom.*cabinet/i);
+  await (await field(page, /Nom.*Cabinet/i)).fill('Synthetic Admin Cabinet');
+  await (await field(page, /Email de connexion/i)).fill('new-cabinet@ui.invalid');
+  await expectRetryableFailure(page, /Créer le Cabinet/);
+  await dialog.locator('button[type=submit]').click();
+  await expect(dialog).toBeHidden();
+  expect(disk().syndik_prod_syndics_v1.some((s: any) => s.name === 'Synthetic Admin Cabinet')).toBe(true);
+
+  await login(page, 4);
+  await page.getByRole('button', { name: /Mettre à jour|Compte.rendu/i }).first().click();
+  await page.getByRole('button', { name: 'Envoyer le rapport' }).click();
+  await expect(page.getByRole('alert').first()).toContainText(/obligatoire/i);
+  const report = page.locator('textarea');
+  await report.fill('Synthetic repair inspection completed; replacement ordered.');
+  await failNextSave(page);
+  await page.getByRole('button', { name: 'Envoyer le rapport' }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'Synthetic save failure' }).first()).toBeVisible();
+  await expect(report).toHaveValue('Synthetic repair inspection completed; replacement ordered.');
+  await page.unroute('**/api/commands');
+  await page.getByRole('button', { name: 'Envoyer le rapport' }).click();
+  await expect(report).toBeHidden();
+  expect(disk().syndik_prod_maintenance_v1.find((r: any) => r.id === 'provider-ticket-ui').status).toBe('in_progress');
+});
+
+test('monthly charges use the period selected in the form', async ({ page }) => {
+  await login(page, 0);
+  await page.getByRole('button', { name: 'Lancer un appel de fonds', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.locator('input[type=month]').fill('2027-02');
+  await expectRetryableFailure(page, 'Générer pour tous les lots');
+  await expect(dialog.locator('input[type=month]')).toHaveValue('2027-02');
+  await dialog.getByRole('button', { name: 'Générer pour tous les lots' }).click();
+  await expect(dialog).toBeHidden();
+  expect(disk().syndik_prod_charges_v1.some((c: any) => c.period === '2027-02')).toBe(true);
+});
+
+test('server validation returns safe field details instead of an unexplained save failure', async () => {
+  const sessionResponse = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ identifier: profiles[0].email, password }) });
+  const session = await sessionResponse.json();
+  expect(sessionResponse.status, JSON.stringify(session)).toBe(200);
+  const before = disk().syndik_prod_syndics_v1[0].buildings[0].financials.transactions.length;
+  const response = await fetch(`${base}/api/commands`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.token}` }, body: JSON.stringify({ operation: 'addTransaction', args: ['b-ui', { description: 'Rejected negative magnitude', amount: -25, type: 'expense', fundType: 'courant', date: '2026-10-21' }], operationId: 'synthetic-invalid-amount-ui-1234' }) });
+  const data = await response.json();
+  expect(response.status, JSON.stringify(data)).toBe(400);
+  expect(JSON.parse(data.error)).toEqual(expect.arrayContaining([expect.objectContaining({ path: ['amount'], code: 'too_small' })]));
+  expect(data.error).not.toContain('stack');
+  expect(disk().syndik_prod_syndics_v1[0].buildings[0].financials.transactions).toHaveLength(before);
 });

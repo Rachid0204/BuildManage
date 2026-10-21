@@ -147,7 +147,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
   // Charge Generation Form State
   const [useTantiemes, setUseTantiemes] = useState(true);
   const [periodName, setPeriodName] = useState(
-    new Date().toLocaleDateString(isAr ? 'ar-MA' : 'fr-FR', { month: 'long', year: 'numeric' })
+    new Date().toISOString().slice(0, 7)
   );
   const [totalBudgetInput, setTotalBudgetInput] = useState(
     String(
@@ -249,9 +249,8 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
 
   const generateChargesMutation = useMutation({
     mutationFn: () =>
-      generateMonthlyCharges(building.id, building.syndicId, {
+      generateMonthlyCharges(building.id, building.syndicId, periodName, {
         useTantiemes,
-        periodName,
         totalMonthlyBudget: parseFloat(totalBudgetInput) || undefined,
       }),
     onSuccess: () => {
@@ -556,11 +555,11 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
   };
 
   // Submit Handler with Law 18-00 Validations
-  const handleSubmitTransaction = () => {
+  const handleSubmitTransaction = async () => {
     const errors: Record<string, string> = {};
     const numericAmount = parseFloat(trxAmount);
 
-    if (isNaN(numericAmount) || numericAmount <= 0) {
+    if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
       errors.amount = tr('Veuillez saisir un montant valide strictement supérieur à 0 MAD', 'يرجى إدخال مبلغ صحيح أكبر من 0 درهم');
     }
 
@@ -578,14 +577,16 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
 
     if (Object.keys(errors).length > 0) {
       setFormErrors(errors);
-      return;
+      throw new Error(Object.values(errors).join("\n"));
     }
 
+    if (!trxDate || Number.isNaN(Date.parse(trxDate))) throw new Error(tr('Indiquez une date valide.', 'أدخل تاريخاً صالحاً.'));
     setFormErrors({});
 
-    const finalAmount = trxType === 'income' ? numericAmount : -numericAmount;
+    // The server accepts a positive magnitude and applies the income/expense sign.
+    const finalAmount = numericAmount;
 
-    addTrxMutation.mutate({
+    return addTrxMutation.mutateAsync({
       date: new Date(trxDate).toISOString(),
       description: trxDesc.trim(),
       amount: finalAmount,
@@ -1708,6 +1709,8 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
       {/* MODAL 1: ADD TRANSACTION */}
       <Modal
         isOpen={isTrxModalOpen}
+        onSubmit={handleSubmitTransaction}
+        busy={addTrxMutation.isPending}
         onClose={() => {
           setIsTrxModalOpen(false);
           resetTrxForm();
@@ -1729,7 +1732,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                 {tr('Annuler', 'إلغاء')}
               </Button>
               <Button
-                onClick={handleSubmitTransaction}
+                type="submit"
                 disabled={addTrxMutation.isPending}
                 className="bg-teal-700 hover:bg-teal-800 text-white flex items-center gap-1.5"
               >
@@ -2323,6 +2326,12 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
       {/* MODAL 2: GENERATE MONTHLY CHARGES */}
       <Modal
         isOpen={isGenerateModalOpen}
+        busy={generateChargesMutation.isPending}
+        onSubmit={async () => {
+          if (!periodName.trim()) throw new Error(tr('Indiquez la période des cotisations.', 'أدخل فترة المساهمات.'));
+          if (totalBudgetInput && (!Number.isFinite(Number(totalBudgetInput)) || Number(totalBudgetInput) <= 0)) throw new Error(tr('Le budget doit être un montant supérieur à zéro.', 'يجب أن تكون الميزانية مبلغاً أكبر من صفر.'));
+          await generateChargesMutation.mutateAsync();
+        }}
         onClose={() => setIsGenerateModalOpen(false)}
         title={tr('Lancer un Appel de Fonds Général (Loi 18-00)', 'إصدار طلب مساهمات عام (القانون 18-00)')}
         footer={
@@ -2330,7 +2339,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
             <Button variant="secondary" onClick={() => setIsGenerateModalOpen(false)}>
               {tr('Annuler', 'إلغاء')}
             </Button>
-            <Button onClick={() => generateChargesMutation.mutate()}>
+            <Button type="submit" disabled={generateChargesMutation.isPending}>
               {tr('Générer pour tous les lots', 'إصدار لجميع الشقق')}
             </Button>
           </div>
@@ -2349,10 +2358,10 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
               {tr('Période concernée', 'الفترة المعنية')}
             </label>
             <input
-              type="text"
+              type="month"
               value={periodName}
               onChange={(e) => setPeriodName(e.target.value)}
-              placeholder={tr('Ex: Novembre 2026 ou 4ème Trimestre 2026', 'مثال: نونبر 2026 أو الربع الرابع 2026')}
+              required
               className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
             />
           </div>
@@ -2398,41 +2407,30 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
       {/* MODAL 3: MOROCCAN QUITTANCE GENERATOR */}
       <Modal
         isOpen={isQuittanceModalOpen}
-        onClose={() => setIsQuittanceModalOpen(false)}
-        title={tr('Générateur de Quittance Libératoire (Loi n° 18-00 & 106-12)', 'مُصدر وصل الأداء المبرئ للذمة (القانون 18-00 و 106-12)')}
-        footer={
-          <div className="flex justify-between items-center w-full">
-            <span className="text-[11px] text-slate-500 font-mono hidden sm:inline">
-              {tr("Reçu traçable à partir du règlement enregistré", 'وصل مرتبط بالدفعة المسجلة')}
-            </span>
-            <div className="flex items-center gap-2">
-              <Button variant="secondary" onClick={() => setIsQuittanceModalOpen(false)}>
-                {tr('Annuler', 'إلغاء')}
-              </Button>
-              <Button
-                onClick={() => {
+        busy={createQuittanceMutation.isPending}
+        onSubmit={async () => {
                   const numAmt = parseFloat(quittanceAmount);
-                  if (!numAmt || numAmt <= 0) {
-                    alert(tr('Veuillez saisir un montant de cotisation valide.', 'يرجى إدخال مبلغ مساهمة صحيح.'));
-                    return;
+                  if (!Number.isFinite(numAmt) || numAmt <= 0) {
+                    throw new Error(tr('Veuillez saisir un montant de cotisation valide.', 'يرجى إدخال مبلغ مساهمة صحيح.'));
                   }
                   if (!quittanceApartmentId) {
-                    alert(tr('Veuillez sélectionner un lot.', 'يرجى اختيار الشقة.'));
-                    return;
+                    throw new Error(tr('Veuillez sélectionner un lot.', 'يرجى اختيار الشقة.'));
                   }
 
                   const apt = building.apartments.find((a) => a.id === quittanceApartmentId);
                   const res = building.residents.find((r) => r.id === quittanceResidentId);
 
+                  if (!apt || !res) throw new Error(tr('Sélectionnez un lot et son résident.', 'حدد الوحدة وساكنها.'));
+                  if (!quittancePaymentDate || Number.isNaN(Date.parse(quittancePaymentDate))) throw new Error(tr('Indiquez une date de paiement valide.', 'أدخل تاريخ أداء صالحاً.'));
                   const { reserveFundAmount: reserveAmt, chargesCourantesAmount: courantesAmt } =
                     splitChargeReserveAndOperating(numAmt, quittanceReserveRatio);
 
-                  createQuittanceMutation.mutate({
+                  await createQuittanceMutation.mutateAsync({
                     chargeId: quittanceChargeId,
                     paymentId: quittancePaymentId,
-                    residentId: quittanceResidentId || res?.id || 'res-1',
+                    residentId: quittanceResidentId,
                     residentName: res?.name || tr('Copropriétaire', 'مالك مشترك'),
-                    residentCin: quittanceResidentCin || res?.cin || 'AB123456',
+                    residentCin: quittanceResidentCin || res?.cin,
                     apartmentId: quittanceApartmentId,
                     apartmentNumber: apt?.number || 'Lot',
                     tantiemes: apt?.tantiemes || 100,
@@ -2452,6 +2450,19 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                     addTransactionToLedger: quittanceAddLedgerTrx,
                   });
                 }}
+        onClose={() => setIsQuittanceModalOpen(false)}
+        title={tr('Générateur de Quittance Libératoire (Loi n° 18-00 & 106-12)', 'مُصدر وصل الأداء المبرئ للذمة (القانون 18-00 و 106-12)')}
+        footer={
+          <div className="flex justify-between items-center w-full">
+            <span className="text-[11px] text-slate-500 font-mono hidden sm:inline">
+              {tr("Reçu traçable à partir du règlement enregistré", 'وصل مرتبط بالدفعة المسجلة')}
+            </span>
+            <div className="flex items-center gap-2">
+              <Button variant="secondary" onClick={() => setIsQuittanceModalOpen(false)}>
+                {tr('Annuler', 'إلغاء')}
+              </Button>
+              <Button
+                type="submit"
                 disabled={createQuittanceMutation.isPending}
                 className="bg-teal-700 hover:bg-teal-800 text-white font-bold flex items-center gap-1.5"
               >

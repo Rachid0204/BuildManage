@@ -10,7 +10,7 @@ import { exportApartmentsPDF, exportApartmentsCSV } from '../../services/pdfServ
 type ApartmentModalProps = {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (apartment: Omit<Apartment, 'id' | 'buildingId'> | Apartment) => void;
+  onSave: (apartment: Omit<Apartment, 'id' | 'buildingId'> | Apartment) => Promise<unknown> | void;
   existingApartment?: Apartment | null;
   residents: Resident[];
   apartments: Apartment[];
@@ -31,7 +31,7 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
   const [floor, setFloor] = useState('1');
   const [area, setArea] = useState('80');
   const [tantiemes, setTantiemes] = useState('100');
-  const [monthlyFees, setMonthlyFees] = useState(String(monthlySyndicFees || 250));
+  const [monthlyFees, setMonthlyFees] = useState(String(monthlySyndicFees ?? 250));
   const [coproType, setCoproType] = useState<Apartment['coproType']>('apartment');
   const [ownerId, setOwnerId] = useState<string | null>(null);
   const [tenantId, setTenantId] = useState<string | null>(null);
@@ -42,8 +42,8 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
       setNumber(existingApartment.number);
       setFloor(String(existingApartment.floor));
       setArea(String(existingApartment.area));
-      setTantiemes(String(existingApartment.tantiemes || 100));
-      setMonthlyFees(String(existingApartment.monthlyFees || monthlySyndicFees || 250));
+      setTantiemes(String(existingApartment.tantiemes ?? 100));
+      setMonthlyFees(String(existingApartment.monthlyFees ?? monthlySyndicFees ?? 250));
       setCoproType(existingApartment.coproType || 'apartment');
       setOwnerId(existingApartment.ownerId);
       setTenantId(existingApartment.tenantId);
@@ -52,13 +52,13 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
       setFloor('1');
       setArea('80');
       setTantiemes('100');
-      setMonthlyFees(String(monthlySyndicFees || 250));
+      setMonthlyFees(String(monthlySyndicFees ?? 250));
       setCoproType('apartment');
       setOwnerId(null);
       setTenantId(null);
     }
     setErrors({});
-  }, [existingApartment, isOpen, monthlySyndicFees]);
+  }, [existingApartment?.id, isOpen]);
 
   const handleAreaChange = (val: string) => {
     setArea(val);
@@ -78,33 +78,38 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
         apt.id !== existingApartment?.id
     );
     if (numberExists) newErrors.number = t('apartments.modal.validation.numberExists');
-    if (floor === '' || isNaN(parseInt(floor, 10))) {
+    if (floor === '' || !Number.isInteger(Number(floor)) || Number(floor) < -5) {
       newErrors.floor = t('apartments.modal.validation.floorRequired');
     }
     if (!area.trim() || isNaN(parseFloat(area)) || parseFloat(area) <= 0) {
       newErrors.area = t('apartments.modal.validation.areaRequired');
     }
 
+    if (!tantiemes.trim() || !Number.isFinite(Number(tantiemes)) || Number(tantiemes) < 0)
+      newErrors.tantiemes = tr('Les tantièmes doivent être un nombre positif ou nul.', 'يجب أن تكون الحصص رقماً موجباً أو صفراً.');
+    if (!monthlyFees.trim() || !Number.isFinite(Number(monthlyFees)) || Number(monthlyFees) < 0)
+      newErrors.monthlyFees = tr('Les frais mensuels doivent être un montant positif ou nul.', 'يجب أن تكون المساهمة الشهرية مبلغاً موجباً أو صفراً.');
     setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
+    if (Object.keys(newErrors).length) throw new Error(Object.values(newErrors).join("\n"));
+    return true;
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!validate()) return;
     const apartmentData = {
       number: number.trim(),
       floor: parseInt(floor, 10),
       area: parseFloat(area),
-      tantiemes: parseInt(tantiemes, 10) || 100,
-      monthlyFees: parseFloat(monthlyFees) || monthlySyndicFees,
+      tantiemes: Number(tantiemes),
+      monthlyFees: Number(monthlyFees),
       coproType: coproType || 'apartment',
       ownerId: ownerId || null,
       tenantId: tenantId || null,
     };
     if (existingApartment) {
-      onSave({ ...existingApartment, ...apartmentData });
+      await onSave({ ...existingApartment, ...apartmentData });
     } else {
-      onSave(apartmentData);
+      await onSave(apartmentData);
     }
     onClose();
   };
@@ -117,6 +122,7 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
+      onSubmit={handleSave}
       title={
         existingApartment
           ? `${tr('Modifier le lot', 'تعديل الشقة / الوحدة')} ${existingApartment.number}`
@@ -127,7 +133,7 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
           <Button variant="secondary" onClick={onClose}>
             {t('apartments.modal.cancel')}
           </Button>
-          <Button onClick={handleSave} className="ms-3">
+          <Button type="submit" className="ms-3">
             {t('apartments.modal.save')}
           </Button>
         </>
@@ -141,6 +147,7 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
             </label>
             <input
               type="text"
+              required
               value={number}
               onChange={(e) => setNumber(e.target.value)}
               placeholder={tr('Ex: A-101 ou 12', 'مثال: A-101 أو 12')}
@@ -176,6 +183,7 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
             </label>
             <input
               type="number"
+              required
               value={floor}
               onChange={(e) => setFloor(e.target.value)}
               placeholder="Ex: 1"
@@ -192,6 +200,7 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
             </label>
             <input
               type="number"
+              required
               value={area}
               onChange={(e) => handleAreaChange(e.target.value)}
               placeholder="Ex: 95"
@@ -303,7 +312,7 @@ type DraftBulkApartment = {
 type BulkApartmentModalProps = {
   isOpen: boolean;
   onClose: () => void;
-  onBulkCreate: (apartments: Omit<Apartment, 'id' | 'buildingId'>[]) => void;
+  onBulkCreate: (apartments: Omit<Apartment, 'id' | 'buildingId'>[]) => Promise<unknown> | void;
   existingApartments: Apartment[];
   defaultMonthlyFees: number;
 };
@@ -428,9 +437,9 @@ const BulkApartmentModal: React.FC<BulkApartmentModalProps> = ({
 
   const duplicateCount = previewRows.length - validNonDuplicateRows.length;
 
-  const handleConfirmBulk = () => {
-    if (validNonDuplicateRows.length === 0) return;
-    onBulkCreate(
+  const handleConfirmBulk = async () => {
+    if (validNonDuplicateRows.length === 0) throw new Error(tr('Aucun lot valide à créer. Vérifiez les numéros et les doublons.', 'لا توجد وحدات صالحة للإنشاء. تحقق من الأرقام والتكرارات.'));
+    await onBulkCreate(
       validNonDuplicateRows.map((r) => ({
         number: r.number.trim(),
         floor: Number(r.floor),
@@ -449,6 +458,7 @@ const BulkApartmentModal: React.FC<BulkApartmentModalProps> = ({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
+      onSubmit={handleConfirmBulk}
       title={tr(
         'Création en masse de lots (Générateur par étages / blocs)',
         'إنشاء جماعي للشقق والوحدات (حسب الطوابق / الأجنحة)'
@@ -469,7 +479,7 @@ const BulkApartmentModal: React.FC<BulkApartmentModalProps> = ({
               {tr('Annuler', 'إلغاء')}
             </Button>
             <Button
-              onClick={handleConfirmBulk}
+              type="submit"
               disabled={validNonDuplicateRows.length === 0}
             >
               {tr(
@@ -751,11 +761,11 @@ const BulkApartmentModal: React.FC<BulkApartmentModalProps> = ({
 type ApartmentsProps = {
   building: Building;
   residents: Resident[];
-  onAddApartment: (apartment: Omit<Apartment, 'id' | 'buildingId'>) => void;
-  onAddApartmentsBulk?: (apartments: Omit<Apartment, 'id' | 'buildingId'>[]) => void;
-  onRebalanceTantiemes?: () => void;
-  onUpdateApartment: (apartment: Apartment) => void;
-  onDeleteApartment: (apartmentId: string) => void;
+  onAddApartment: (apartment: Omit<Apartment, 'id' | 'buildingId'>) => Promise<unknown> | void;
+  onAddApartmentsBulk?: (apartments: Omit<Apartment, 'id' | 'buildingId'>[]) => Promise<unknown> | void;
+  onRebalanceTantiemes?: () => Promise<unknown> | void;
+  onUpdateApartment: (apartment: Apartment) => Promise<unknown> | void;
+  onDeleteApartment: (apartmentId: string) => Promise<unknown> | void;
 };
 
 const Apartments: React.FC<ApartmentsProps> = ({
@@ -793,9 +803,9 @@ const Apartments: React.FC<ApartmentsProps> = ({
     setIsModalOpen(true);
   };
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (deletingApartment) {
-      onDeleteApartment(deletingApartment.id);
+      await onDeleteApartment(deletingApartment.id);
       setDeletingApartment(null);
     }
   };

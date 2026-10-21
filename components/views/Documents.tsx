@@ -37,7 +37,8 @@ const Documents: React.FC<{
     if (
       previewDoc.url &&
       previewDoc.url !== '#' &&
-      (previewDoc.url.startsWith('data:') ||
+      (previewDoc.url.startsWith('/api/uploads/') ||
+        previewDoc.url.startsWith('data:') ||
         previewDoc.url.startsWith('blob:') ||
         previewDoc.url.startsWith('http'))
     ) {
@@ -62,7 +63,8 @@ const Documents: React.FC<{
     if (
       docItem.url &&
       docItem.url !== '#' &&
-      (docItem.url.startsWith('data:') ||
+      (docItem.url.startsWith('/api/uploads/') ||
+        docItem.url.startsWith('data:') ||
         docItem.url.startsWith('blob:') ||
         docItem.url.startsWith('http'))
     ) {
@@ -103,8 +105,9 @@ const Documents: React.FC<{
     onError: (error) => {
       console.error('Upload failed', error);
       setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
       showToast(
-        tr('Erreur lors du téléversement du document.', 'حدث خطأ أثناء رفع الوثيقة.'),
+        error instanceof Error ? error.message : tr('Erreur lors du téléversement du document.', 'حدث خطأ أثناء رفع الوثيقة.'),
         'error'
       );
     },
@@ -121,14 +124,20 @@ const Documents: React.FC<{
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
-      if (file.size > 10 * 1024 * 1024) {
+      if (file.size > 5 * 1024 * 1024 || file.size === 0) {
         showToast(
           tr(
-            'Le fichier dépasse la taille maximale autorisée (10 Mo).',
-            'يتجاوز الملف الحجم الأقصى المسموح به (10 ميغابايت).'
+            'Le fichier dépasse la taille maximale autorisée (5 Mo).',
+            'يتجاوز الملف الحجم الأقصى المسموح به (5 ميغابايت).'
           ),
           'warning'
         );
+        e.target.value = '';
+        return;
+      }
+      if (!['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+        showToast(tr('Formats acceptés : PDF, JPG, PNG ou WebP.', 'الصيغ المقبولة: PDF أو JPG أو PNG أو WebP.'), 'error');
+        e.target.value = '';
         return;
       }
       uploadMutation.mutate(file);
@@ -175,7 +184,7 @@ const Documents: React.FC<{
             ref={fileInputRef}
             className="hidden"
             onChange={handleFileChange}
-            accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
+            accept="application/pdf,image/jpeg,image/png,image/webp"
           />
           <Button
             icon={<PlusIcon />}

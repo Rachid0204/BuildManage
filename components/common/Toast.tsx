@@ -1,6 +1,8 @@
-import React, { createContext, useContext, useState, useCallback } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import Modal from './Modal';
 import Button from './Button';
+import { useI18n } from '../../hooks/useI18n';
+import { operationSuccess, readableError, type FormFeedbackEvent } from '../../utils/formFeedback';
 
 export type ToastType = 'success' | 'error' | 'warning' | 'info';
 
@@ -27,6 +29,8 @@ interface ToastContextType {
 const ToastContext = createContext<ToastContextType | undefined>(undefined);
 
 export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { tr, isAr } = useI18n();
+  const lastToast = useRef({ message: '', at: 0 });
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [confirmState, setConfirmState] = useState<{
     isOpen: boolean;
@@ -39,12 +43,39 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   });
 
   const showToast = useCallback((message: string, type: ToastType = 'info', title?: string) => {
+    const now = Date.now();
+    if (lastToast.current.message === message && now - lastToast.current.at < 1000) return;
+    lastToast.current = { message, at: now };
     const id = `toast-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    setToasts((prev) => [...prev, { id, type, title, message }]);
+    setToasts((prev) => {
+      const retained = type === 'error' || type === 'success' ? prev.filter(toast => toast.type !== 'error') : prev;
+      return [...retained.slice(-2), { id, type, title, message }];
+    });
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 4500);
+    }, type === 'error' || type === 'warning' ? 12000 : 6000);
   }, []);
+
+  useEffect(() => {
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    const feedback = (event: Event) => {
+      const { operation, error } = (event as CustomEvent<FormFeedbackEvent>).detail;
+      const previous = lastToast.current;
+      // Existing forms can supply a more specific toast in their completion handler.
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        if (!error && lastToast.current !== previous) return;
+        const message = error ? readableError(error, isAr) : operationSuccess(operation, isAr);
+        if (message) showToast(message, error ? 'error' : 'success');
+      }, 0);
+      timers.add(timer);
+    };
+    window.addEventListener('syndik-operation-feedback', feedback);
+    return () => {
+      window.removeEventListener('syndik-operation-feedback', feedback);
+      timers.forEach(clearTimeout);
+    };
+  }, [isAr, showToast]);
 
   const dismissToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
@@ -74,7 +105,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       {/* Floating Toast Container */}
       <div
         aria-live="polite"
-        className="fixed bottom-20 lg:bottom-6 end-4 z-[60] flex flex-col gap-2.5 max-w-sm w-full pointer-events-none px-3 sm:px-0"
+        className="fixed top-4 end-4 z-[100] flex flex-col gap-2.5 w-[calc(100%-2rem)] max-w-sm pointer-events-none"
       >
         {toasts.map((toast) => {
           const styles: Record<ToastType, { bg: string; border: string; text: string; badge: string }> = {
@@ -108,7 +139,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           return (
             <div
               key={toast.id}
-              role="status"
+              role={toast.type === 'error' ? 'alert' : 'status'}
               className={`pointer-events-auto flex items-start gap-3 p-3.5 rounded-xl border shadow-xl backdrop-blur-xs transition-all ${st.bg} ${st.border}`}
             >
               <span className="w-5 h-5 rounded-md bg-white/15 flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">
@@ -116,13 +147,13 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               </span>
               <div className="flex-1 min-w-0">
                 {toast.title && <p className="text-xs font-bold text-white mb-0.5">{toast.title}</p>}
-                <p className={`text-xs leading-relaxed ${st.text}`}>{toast.message}</p>
+                <p className={`text-sm leading-relaxed whitespace-pre-line ${st.text}`}>{toast.message}</p>
               </div>
               <button
                 type="button"
                 onClick={() => dismissToast(toast.id)}
                 className="text-white/60 hover:text-white text-xs px-1.5 py-0.5 rounded"
-                aria-label="Fermer"
+                aria-label={tr('Fermer le message', 'إغلاق الرسالة')}
               >
                 ✕
               </button>
@@ -140,13 +171,13 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           footer={
             <>
               <Button variant="secondary" onClick={() => handleConfirmClose(false)}>
-                {confirmState.options.cancelLabel || 'Annuler'}
+                {confirmState.options.cancelLabel || tr('Annuler', 'إلغاء')}
               </Button>
               <Button
                 variant={confirmState.options.variant === 'danger' ? 'danger' : 'primary'}
                 onClick={() => handleConfirmClose(true)}
               >
-                {confirmState.options.confirmLabel || 'Confirmer'}
+                {confirmState.options.confirmLabel || tr('Confirmer', 'تأكيد')}
               </Button>
             </>
           }

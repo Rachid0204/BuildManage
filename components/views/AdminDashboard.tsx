@@ -115,9 +115,10 @@ const AdminDashboard: React.FC = () => {
     setEditExpiry((syndic.subscriptionExpiry || new Date().toISOString()).split('T')[0]);
   };
 
-  const handleSaveSyndic = () => {
-    if (!selectedSyndic) return;
-    updateSyndicMutation.mutate({
+  const handleSaveSyndic = async () => {
+    if (!selectedSyndic) throw new Error(tr('Sélectionnez un cabinet.', 'حدد مكتباً.'));
+    if (!editExpiry || Number.isNaN(Date.parse(editExpiry))) throw new Error(tr('Indiquez une date de fin valide.', 'أدخل تاريخ انتهاء صالحاً.'));
+    return updateSyndicMutation.mutateAsync({
       ...selectedSyndic,
       subscriptionPlan: editPlan,
       subscriptionStatus: editStatus,
@@ -381,6 +382,11 @@ const AdminDashboard: React.FC = () => {
       {isCreateModalOpen && (
         <Modal
           isOpen={isCreateModalOpen}
+          onSubmit={async () => {
+            if (newCabinetName.trim().length < 2 || !/^\S+@\S+\.\S+$/.test(newEmail.trim())) throw new Error(tr("Renseignez le nom du cabinet et une adresse email valide.", "أدخل اسم المكتب وبريداً إلكترونياً صحيحاً."));
+            await createSyndicMutation.mutateAsync();
+          }}
+          busy={createSyndicMutation.isPending}
           onClose={() => setIsCreateModalOpen(false)}
           title={tr('Créer un Nouveau Cabinet Syndic', 'إنشاء مكتب سنديك جديد')}
           footer={
@@ -389,7 +395,7 @@ const AdminDashboard: React.FC = () => {
                 {tr('Annuler', 'إلغاء')}
               </Button>
               <Button
-                onClick={() => createSyndicMutation.mutate()}
+                type="submit"
                 disabled={createSyndicMutation.isPending}
                 className="bg-teal-700 hover:bg-teal-800 text-white font-bold"
               >
@@ -562,6 +568,8 @@ const AdminDashboard: React.FC = () => {
       {selectedSyndic && (
         <Modal
           isOpen={!!selectedSyndic}
+          onSubmit={handleSaveSyndic}
+          busy={updateSyndicMutation.isPending}
           onClose={() => setSelectedSyndic(null)}
           title={`${tr('Gérer le Cabinet :', 'إدارة المكتب :')} ${selectedSyndic.name}`}
           footer={
@@ -570,7 +578,7 @@ const AdminDashboard: React.FC = () => {
                 {tr('Annuler', 'إلغاء')}
               </Button>
               <Button
-                onClick={handleSaveSyndic}
+                type="submit"
                 disabled={updateSyndicMutation.isPending}
                 className="bg-teal-700 hover:bg-teal-800 text-white font-bold"
               >
@@ -645,7 +653,7 @@ const AdminDashboard: React.FC = () => {
                   `العمارات التابعة (${selectedSyndic.buildings?.length || 0}) :`
                 )}
               </div>
-              <fieldset className="border rounded-xl p-3 space-y-2"><legend>{tr('Encaisser l’abonnement plateforme','تسجيل دفع اشتراك المنصة')}</legend><label className="block">{tr('Nombre de mois','عدد الأشهر')}<input className="border rounded p-2 ms-2" type="number" min={1} max={12} value={subscriptionMonths} onChange={e=>setSubscriptionMonths(Number(e.target.value))}/></label><label className="block">{tr('Référence bancaire unique','مرجع بنكي فريد')}<input className="border rounded p-2 w-full" value={subscriptionReference} onChange={e=>setSubscriptionReference(e.target.value)}/></label><p>{PLAN_PRICES[editPlan]*subscriptionMonths} MAD</p><Button disabled={!subscriptionReference.trim()} onClick={async()=>{try{await remoteMutation('recordSubscriptionPayment',[{syndicId:selectedSyndic.id,plan:editPlan,months:subscriptionMonths,reference:subscriptionReference.trim(),amount:PLAN_PRICES[editPlan]*subscriptionMonths}]);setSubscriptionMessage(tr('Abonnement prolongé et paiement enregistré.','تم تمديد الاشتراك وتسجيل الدفع.'));void queryClient.invalidateQueries({queryKey:['syndics']});}catch(e:any){setSubscriptionMessage(e.message);}}}>{tr('Enregistrer le paiement','تسجيل الدفع')}</Button><p role="status">{subscriptionMessage}</p></fieldset>
+              <fieldset className="border rounded-xl p-3 space-y-2"><legend>{tr('Encaisser l’abonnement plateforme','تسجيل دفع اشتراك المنصة')}</legend><label className="block">{tr('Nombre de mois','عدد الأشهر')}<input className="border rounded p-2 ms-2" type="number" min={1} max={12} value={subscriptionMonths} onChange={e=>setSubscriptionMonths(Number(e.target.value))}/></label><label className="block">{tr('Référence bancaire unique','مرجع بنكي فريد')}<input className="border rounded p-2 w-full" value={subscriptionReference} onChange={e=>setSubscriptionReference(e.target.value)}/></label><p>{PLAN_PRICES[editPlan]*subscriptionMonths} MAD</p><Button onClick={async()=>{try{if (!subscriptionReference.trim()) throw new Error(tr('La référence bancaire est obligatoire.', 'المرجع البنكي مطلوب.'));if (!Number.isInteger(subscriptionMonths) || subscriptionMonths < 1 || subscriptionMonths > 12) throw new Error(tr('Choisissez entre 1 et 12 mois.', 'اختر من شهر إلى 12 شهراً.'));await remoteMutation('recordSubscriptionPayment',[{syndicId:selectedSyndic.id,plan:editPlan,months:subscriptionMonths,reference:subscriptionReference.trim(),amount:PLAN_PRICES[editPlan]*subscriptionMonths}]);setSubscriptionMessage(tr('Abonnement prolongé et paiement enregistré.','تم تمديد الاشتراك وتسجيل الدفع.'));void queryClient.invalidateQueries({queryKey:['syndics']});}catch(e:any){setSubscriptionMessage(e.message);throw e;}}}>{tr('Enregistrer le paiement','تسجيل الدفع')}</Button><p role="status">{subscriptionMessage}</p></fieldset>
               {(selectedSyndic.buildings || []).map((b) => (
                 <div key={b.id} className="flex justify-between text-slate-600 font-mono text-[11px]">
                   <span>

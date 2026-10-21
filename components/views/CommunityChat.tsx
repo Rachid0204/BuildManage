@@ -1,3 +1,4 @@
+import Form from '../common/Form';
 import React, { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Building, ChatMessage, ChatChannelType } from '../../types';
@@ -529,7 +530,7 @@ export const CommunityChat: React.FC<CommunityChatProps> = ({
           </div>
 
           {/* Message Input Box Form */}
-          <form
+          <Form
             onSubmit={handleSend}
             className="p-3 bg-white border-t border-slate-200 flex items-center gap-2"
           >
@@ -553,7 +554,7 @@ export const CommunityChat: React.FC<CommunityChatProps> = ({
               <span>{tr('Envoyer', 'إرسال')}</span>
               <span>✈️</span>
             </Button>
-          </form>
+          </Form>
         </div>
       </div>
     </div>

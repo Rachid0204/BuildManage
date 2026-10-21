@@ -50,7 +50,7 @@ const Announcements: React.FC<AnnouncementsProps> = ({ building }) => {
   });
 
   const handleGenerateContent = async () => {
-    if (!aiTopic.trim()) return;
+    if (!aiTopic.trim()) { setAiError(tr('Indiquez le sujet à rédiger.', 'أدخل موضوع الإعلان.')); return; }
     setIsGenerating(true);
     setAiError(null);
     try {
@@ -73,10 +73,10 @@ const Announcements: React.FC<AnnouncementsProps> = ({ building }) => {
     }
   };
 
-  const handleAddAnnouncement = () => {
-    if (!newTitle.trim() || !newContent.trim()) return;
+  const handleAddAnnouncement = async () => {
+    if (!newTitle.trim() || !newContent.trim()) throw new Error(tr('Le titre et le contenu sont obligatoires.', 'العنوان والمحتوى مطلوبان.'));
     setSaveError(null);
-    addMutation.mutate({ title: newTitle.trim(), content: newContent.trim() });
+    return addMutation.mutateAsync({ title: newTitle.trim(), content: newContent.trim() });
   };
 
   const dateLocale = language === 'ar' ? 'ar-MA' : 'fr-FR';
@@ -84,9 +84,9 @@ const Announcements: React.FC<AnnouncementsProps> = ({ building }) => {
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
-        <h2 className="text-2xl font-bold text-slate-800">{t('announcements.title')}</h2>
+        <h2 className="text-2xl font-bold text-slate-800">{t('announcements.title', { buildingName: building.name })}</h2>
         <Button onClick={() => setIsModalOpen(true)} icon={<PlusIcon />}>
-          {t('announcements.newAnnouncement')}
+          {t('announcements.add')}
         </Button>
       </div>
 
@@ -119,24 +119,26 @@ const Announcements: React.FC<AnnouncementsProps> = ({ building }) => {
 
       <Modal
         isOpen={isModalOpen}
+        onSubmit={handleAddAnnouncement}
+        busy={addMutation.isPending}
         onClose={() => {
           setIsModalOpen(false);
           setAiError(null);
           setSaveError(null);
         }}
-        title={t('announcements.createModalTitle')}
+        title={t('announcements.modal.title')}
         footer={
           <>
             <Button variant="secondary" onClick={() => setIsModalOpen(false)}>
-              {t('common.cancel')}
+              {t('announcements.modal.cancel')}
             </Button>
             <Button
-              onClick={handleAddAnnouncement}
-              disabled={addMutation.isPending || !newTitle.trim() || !newContent.trim()}
+              type="submit"
+              disabled={addMutation.isPending}
             >
               {addMutation.isPending
-                ? t('announcements.publishing')
-                : t('announcements.publish')}
+                ? tr('Publication...', 'جاري النشر...')
+                : t('announcements.modal.post')}
             </Button>
           </>
         }
@@ -150,21 +152,23 @@ const Announcements: React.FC<AnnouncementsProps> = ({ building }) => {
 
           <div>
             <label htmlFor="title" className="block text-sm font-medium text-slate-700">
-              {t('announcements.announcementTitle')}
+              {t('announcements.modal.announcementTitle')}
             </label>
             <input
               type="text"
               id="title"
+              required
+              maxLength={200}
               value={newTitle}
               onChange={(e) => setNewTitle(e.target.value)}
               className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-xs focus:outline-hidden focus:ring-primary focus:border-primary sm:text-sm"
-              placeholder={t('announcements.titlePlaceholder')}
+              placeholder={t('announcements.modal.titlePlaceholder')}
             />
           </div>
 
           <div className="p-4 bg-slate-50 rounded-lg border border-slate-200 space-y-2">
             <label htmlFor="ai-topic" className="block text-sm font-medium text-slate-700">
-              {t('announcements.generateWithAi')}
+              {t('announcements.modal.generateWithAi')}
             </label>
             <div className="flex flex-col sm:flex-row gap-2">
               <input
@@ -176,14 +180,14 @@ const Announcements: React.FC<AnnouncementsProps> = ({ building }) => {
                   if (aiError) setAiError(null);
                 }}
                 className="grow block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-xs focus:outline-hidden focus:ring-primary focus:border-primary sm:text-sm"
-                placeholder={t('announcements.aiTopicPlaceholder')}
+                placeholder={t('announcements.modal.aiPlaceholder')}
               />
               <Button
                 onClick={handleGenerateContent}
-                disabled={isGenerating || !aiTopic.trim()}
+                disabled={isGenerating}
                 icon={<SparklesIcon />}
               >
-                {isGenerating ? t('announcements.generating') : t('announcements.generate')}
+                {isGenerating ? t('announcements.modal.generating') : tr('Générer le texte', 'إنشاء النص')}
               </Button>
             </div>
             {aiError && (
@@ -195,15 +199,17 @@ const Announcements: React.FC<AnnouncementsProps> = ({ building }) => {
 
           <div>
             <label htmlFor="content" className="block text-sm font-medium text-slate-700">
-              {t('announcements.contentLabel')}
+              {t('announcements.modal.content')}
             </label>
             <textarea
               id="content"
+              required
+              maxLength={10000}
               rows={8}
               value={newContent}
               onChange={(e) => setNewContent(e.target.value)}
               className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-xs focus:outline-hidden focus:ring-primary focus:border-primary sm:text-sm"
-              placeholder={t('announcements.contentPlaceholder')}
+              placeholder={tr('Rédigez le message destiné aux résidents...', 'اكتب الرسالة الموجهة للسكان...')}
             />
           </div>
         </div>

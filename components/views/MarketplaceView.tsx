@@ -1,3 +1,5 @@
+import Form from '../common/Form';
+import { useToast } from '../common/Toast';
 import React, { useState, useMemo, useRef, useId } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Building, MarketplaceItem, MarketplaceCategory, MarketplaceListingType, MarketplaceCondition, ChatMessage } from '../../types';
@@ -408,6 +410,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const publishFormId = useId();
+  const { showToast } = useToast();
 
   const [activeTypeTab, setActiveTypeTab] = useState<'all' | 'sale' | 'free' | 'service'>('all');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -527,12 +530,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
       queryClient.invalidateQueries({ queryKey: ['marketplaceItems', building.id] });
       setIsPublishModalOpen(false);
       resetForm();
-      alert(
-        tr(
-          'Votre annonce avec photos a été publiée avec succès sur le Souk des Résidents !',
-          'تم نشر إعلانك مع الصور بنجاح في سوق الساكنة!'
-        )
-      );
+
     },
   });
 
@@ -571,14 +569,14 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
 
   // Image upload handler
   const handleFilesSelected = async (files: FileList | File[]) => {
-    const fileArray = Array.from(files).filter((f) => f.type.startsWith('image/'));
-    if (fileArray.length === 0) {
-      alert(tr('Veuillez sélectionner des fichiers image valides (JPG, PNG, WebP).', 'يرجى اختيار ملفات صور صالحة (JPG, PNG, WebP).'));
+    const fileArray = Array.from(files);
+    if (fileArray.length === 0 || fileArray.some(file => !['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 5 * 1024 * 1024 || !file.size)) {
+      showToast(tr('Choisissez des photos JPG, PNG ou WebP de 5 Mo maximum chacune.', 'اختر صور JPG أو PNG أو WebP بحجم أقصى 5 ميغابايت لكل صورة.'), 'error');
       return;
     }
 
     if (uploadedPhotos.length + fileArray.length > 5) {
-      alert(tr('Vous pouvez télécharger un maximum de 5 photos par annonce.', 'يمكنك تحميل 5 صور كحد أقصى لكل إعلان.'));
+      showToast(tr('Vous pouvez télécharger un maximum de 5 photos par annonce.', 'يمكنك تحميل 5 صور كحد أقصى لكل إعلان.'));
     }
 
     const availableSlots = Math.max(0, 5 - uploadedPhotos.length);
@@ -590,7 +588,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
       setUploadedPhotos((prev) => [...prev, ...results]);
     } catch (err) {
       console.error('Erreur compression image:', err);
-      alert(tr("Une erreur s'est produite lors de la lecture des photos.", 'حدث خطأ أثناء قراءة الصور.'));
+      showToast(tr("Une erreur s'est produite lors de la lecture des photos.", 'حدث خطأ أثناء قراءة الصور.'));
     } finally {
       setIsCompressing(false);
     }
@@ -620,18 +618,21 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
 
   const handleAddSampleImage = (url: string) => {
     if (uploadedPhotos.length >= 5) {
-      return alert(tr('Limite de 5 photos atteinte.', 'تم بلوغ الحد الأقصى (5 صور).'));
+      return showToast(tr('Limite de 5 photos atteinte.', 'تم بلوغ الحد الأقصى (5 صور).'));
     }
     setUploadedPhotos((prev) => [...prev, url]);
   };
 
-  const handlePublish = (e: React.FormEvent) => {
+  const handlePublish = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim() || !description.trim()) {
-      return alert(tr('Le titre et la description sont obligatoires.', 'العنوان والوصف إجباريان.'));
+      throw new Error(tr('Le titre et la description sont obligatoires.', 'العنوان والوصف إجباريان.'));
     }
 
-    const finalPrice = listingType === 'free' ? 0 : Number(price) || 0;
+    const finalPrice = listingType === 'free' ? 0 : Number(price);
+    if (!Number.isFinite(finalPrice) || finalPrice < 0 || (listingType === 'sale' && (price === '' || finalPrice <= 0)))
+      throw new Error(tr('Indiquez un prix supérieur à zéro pour une vente, ou choisissez Don Gratuit.', 'أدخل سعراً أكبر من صفر للبيع، أو اختر تبرعاً مجانياً.'));
+    if (!building.id || !currentResidentId) throw new Error(tr('Votre immeuble ou votre compte ne peut pas être identifié. Actualisez la page.', 'تعذر تحديد العمارة أو الحساب. حدّث الصفحة.'));
     const finalPhotos = uploadedPhotos.length > 0 ? uploadedPhotos : [SAMPLE_IMAGES[0].url];
 
     const payload: Omit<MarketplaceItem, 'id' | 'createdAt'> = {
@@ -652,7 +653,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
       images: finalPhotos,
     };
 
-    publishMutation.mutate(payload);
+    return publishMutation.mutateAsync(payload);
   };
 
   const filteredItems = useMemo(() => {
@@ -849,6 +850,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
       {/* MODAL 1: PUBLISH NEW LISTING WITH PHOTO UPLOAD */}
       <Modal
         isOpen={isPublishModalOpen}
+        busy={publishMutation.isPending || isCompressing}
         onClose={() => setIsPublishModalOpen(false)}
         title={tr('Publier une annonce sur le Souk des Résidents', 'نشر إعلان في سوق الجيران')}
         footer={
@@ -867,8 +869,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
           </div>
         }
       >
-        <form id={publishFormId} onSubmit={handlePublish} className="space-y-4 text-xs sm:text-sm">
-          {publishMutation.isError && <p role="alert" className="p-3 rounded bg-rose-50 text-rose-700">{publishMutation.error.message || tr('Publication impossible. Réessayez.', 'تعذر النشر. حاول مجدداً.')}</p>}
+        <Form id={publishFormId} onSubmit={handlePublish} className="space-y-4 text-xs sm:text-sm">
           {/* Listing Type Selection */}
           <div>
             <label className="block font-semibold text-slate-700 mb-1">{tr("Type d'annonce :", 'نوع الإعلان:')}</label>
@@ -904,6 +905,8 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
               <input
                 type="text"
                 required
+                maxLength={200}
+                aria-label={tr("Titre de l’annonce", "عنوان الإعلان")}
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder={tr('Ex: Table basse salon marocain...', 'مثال: طاولة صالون مغربي...')}
@@ -933,6 +936,8 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
               <label className="block font-semibold text-slate-700 mb-1">{tr('Prix (en DH) :', 'السعر (بالدرهم):')}</label>
               <input
                 type="number"
+                min={listingType === 'sale' ? "0.01" : "0"}
+                step="0.01"
                 disabled={listingType === 'free'}
                 value={listingType === 'free' ? 0 : price}
                 onChange={(e) => setPrice(e.target.value === '' ? '' : Number(e.target.value))}
@@ -962,6 +967,8 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
             <textarea
               rows={3}
               required
+              maxLength={3000}
+              aria-label={tr("Description de l’annonce", "وصف الإعلان")}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder={tr(
@@ -1133,7 +1140,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
               </div>
             </div>
           </div>
-        </form>
+        </Form>
       </Modal>
 
       {/* MODAL 2: FULL DETAIL & PHOTO GALLERY LIGHTBOX */}
@@ -1476,7 +1483,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
               ))}
             </div>
 
-            <form onSubmit={handleSendMarketplaceChat} className="flex items-center gap-2 pt-1">
+            <Form onSubmit={handleSendMarketplaceChat} className="flex items-center gap-2 pt-1">
               <input
                 type="text"
                 value={chatInputText}
@@ -1494,7 +1501,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
               >
                 {sendChatMutation.isPending ? tr('Envoi...', 'جاري الإرسال...') : tr('Envoyer ✈️', 'إرسال ✈️')}
               </Button>
-            </form>
+            </Form>
           </div>
         </Modal>
       )}
