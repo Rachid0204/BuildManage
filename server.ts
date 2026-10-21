@@ -1286,22 +1286,33 @@ async function startServer() {
   app.use(express.json({ limit: "15mb" }));
 
   if (process.env.NODE_ENV === "production") {
+    const errors: string[] = [];
     if (
       !process.env.SYNDIK_SERVER_SECRET ||
       process.env.SYNDIK_SERVER_SECRET.length < 32
     )
-      throw new Error(
-        "Configure a stable SYNDIK_SERVER_SECRET of at least 32 random characters",
+      errors.push(
+        "SYNDIK_SERVER_SECRET: configure a stable secret of at least 32 random characters",
       );
-    if (!process.env.SYNDIK_UPLOAD_BUCKET)
-      throw new Error(
-        "Configure SYNDIK_UPLOAD_BUCKET for private durable uploads",
+    if (!process.env.SYNDIK_UPLOAD_BUCKET?.trim())
+      errors.push(
+        "SYNDIK_UPLOAD_BUCKET: configure the private Cloud Storage bucket name",
       );
+    try {
+      if (new URL(process.env.PUBLIC_APP_URL || "").protocol !== "https:")
+        throw new Error("HTTPS required");
+    } catch {
+      errors.push("PUBLIC_APP_URL: configure the public HTTPS application URL");
+    }
     if (
-      !process.env.PUBLIC_APP_URL ||
-      new URL(process.env.PUBLIC_APP_URL).protocol !== "https:"
+      process.env.SYNDIK_STATE_BACKEND &&
+      process.env.SYNDIK_STATE_BACKEND !== "firestore"
     )
-      throw new Error("Configure an HTTPS PUBLIC_APP_URL");
+      errors.push("SYNDIK_STATE_BACKEND: production requires firestore");
+    if (errors.length)
+      throw new Error(
+        `Production configuration is incomplete:\n- ${errors.join("\n- ")}\nSet these on the Cloud Run service before deploying. See DEPLOYMENT.md.`,
+      );
   }
   process.env.SYNDIK_SERVER_SECRET ||= SERVER_HMAC_SECRET;
   process.env.FIRESTORE_DATABASE_ID ||=
@@ -2479,4 +2490,7 @@ async function startServer() {
   });
 }
 
-startServer();
+startServer().catch((error) => {
+  console.error("[startup] Server failed before listening:", error);
+  process.exitCode = 1;
+});

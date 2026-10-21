@@ -68,6 +68,25 @@ jobs:
           VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
           VITE_FIRESTORE_DATABASE_ID: ${{ secrets.VITE_FIRESTORE_DATABASE_ID }}
 
+      - name: Verify compiled production startup and configuration errors
+        run: npm run test:startup
+
+      - name: Verify production container serves HTTP without development dependencies
+        run: |
+          docker build -t immogest-startup .
+          container_id=$(docker run -d -p 127.0.0.1:3000:3000 \
+            -e PORT=3000 \
+            -e SYNDIK_SERVER_SECRET=synthetic-startup-secret-never-use-in-production \
+            -e SYNDIK_UPLOAD_BUCKET=demo-startup.invalid \
+            -e PUBLIC_APP_URL=https://startup.invalid \
+            -e GOOGLE_CLOUD_PROJECT=demo-buildmanage \
+            -e FIRESTORE_DATABASE_ID='(default)' \
+            -e FIRESTORE_EMULATOR_HOST=127.0.0.1:1 \
+            -e GCE_METADATA_DISABLED=true immogest-startup)
+          trap 'docker logs "$container_id"; docker rm -f "$container_id" >/dev/null' EXIT
+          curl --fail --retry 15 --retry-connrefused --retry-delay 1 --max-time 3 http://127.0.0.1:3000/api/health
+          curl --fail --max-time 3 http://127.0.0.1:3000/ --output /dev/null
+
       - name: Upload production build artifact
         uses: actions/upload-artifact@v4
         with:

@@ -41,6 +41,48 @@ Provision a minimum of one instance if required for acceptable cold-start latenc
 The supplied Dockerfile builds the frontend and compiled backend; it does not
 include developer credentials or local data.
 
+## Cloud Run startup: service `immogest`
+
+The message "failed to start and listen on PORT=3000" also occurs when the process
+exits before opening a socket. The backend already binds `0.0.0.0` and reads the
+Cloud Run `PORT`. Missing production configuration stops it deliberately; increasing
+the timeout does not repair that failure. Read the first application error in the
+failed revision logs, especially the `[startup]` entry listing invalid settings.
+
+In Google Cloud Console, select project `immogest-7faaf`, open Cloud Run, select
+`immogest`, then **Edit & deploy new revision → Containers → Variables & Secrets**.
+Preserve existing variables and secret bindings. Configure:
+
+| Setting | Value for this application |
+| --- | --- |
+| `NODE_ENV` | `production` (already supplied by the Docker image) |
+| `GOOGLE_CLOUD_PROJECT` | `immogest-7faaf` |
+| `FIRESTORE_DATABASE_ID` | `ai-studio-immogest-6d16b790-183d-49fd-9d4f-086d99dc2be3`, if this is still the intended database; verify in Firestore Console |
+| `SYNDIK_UPLOAD_BUCKET` | Existing private upload bucket name, without `gs://`; the checked-in Firebase config names `immogest-7faaf.firebasestorage.app`, but confirm that bucket exists and is intended for private uploads |
+| `PUBLIC_APP_URL` | The exact public HTTPS service URL shown on the Cloud Run service page, or its configured custom domain |
+| `SYNDIK_SERVER_SECRET` | Secret Manager reference to a stable random secret of at least 32 characters; reuse the existing secret if one is already in use |
+
+For a new installation, generate the server secret once locally with
+`node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`,
+save it in Secret Manager, and expose that secret version as the environment variable
+`SYNDIK_SERVER_SECRET`. Grant the runtime service account Secret Manager Secret
+Accessor on that secret, plus the required access to the intended database and
+upload bucket. Never commit the secret or regenerate it per deployment. GitHub
+Actions secrets and frontend `VITE_*` values are not automatically Cloud Run runtime
+settings. The image excludes `.env*` files.
+
+Keep the container port at `3000` and use the Dockerfile command
+`node dist-server/server.js` (clear any older command/argument override). Deploy the
+new revision and check `/api/health`, then `/api/ready`. Health confirms the process
+is serving; readiness confirms a database read. Configure transactional email and
+the scheduler separately before enabling their workflows, as described above.
+
+To reproduce startup locally after `npm ci && npm run build`, run
+`npm run test:startup`. It uses synthetic settings and blocks external calls; it
+tests configuration errors and the compiled server on port 3000 and another port.
+CI also builds and starts the actual Docker image with only runtime dependencies.
+These checks do not validate production IAM, real bucket access, or mail delivery.
+
 ## Data migration
 
 1. Freeze old writes, disable the old monthly billing schedule, and download the
