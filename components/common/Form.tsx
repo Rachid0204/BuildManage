@@ -13,12 +13,14 @@ function labelFor(control: Control) {
 
 export function FormNotice({ message }: { message?: string | null }) {
   const ref = useRef<HTMLDivElement>(null);
-  const { showToast } = useToast();
+  const { showToast, dismissToast } = useToast();
   useEffect(() => {
     if (!message) return;
-    showToast(message, 'error');
+    const toastId = showToast(message, 'error');
     ref.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-  }, [message, showToast]);
+    // An old validation popup must not contradict a corrected or closed form.
+    return () => dismissToast(toastId);
+  }, [message, showToast, dismissToast]);
   return message ? <div ref={ref} role="alert" className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800 whitespace-pre-line">{message}</div> : null;
 }
 

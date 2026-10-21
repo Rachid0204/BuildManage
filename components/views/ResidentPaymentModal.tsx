@@ -1,5 +1,5 @@
 import Form, { FormNotice } from '../common/Form';
-import React, { useEffect, useId, useState } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import Modal from "../common/Modal";
 import Button from "../common/Button";
@@ -41,12 +41,15 @@ export default function ResidentPaymentModal({
 }: Props) {
   const { tr } = useI18n();
   const formId = useId();
+  const receiptInput = useRef<HTMLInputElement>(null);
+  const receiptPicker = useRef<HTMLButtonElement>(null);
   const [bankName, setBankName] = useState("Attijariwafa Bank");
   const [reference, setReference] = useState("");
   const [method, setMethod] = useState<PaymentMethod>("virement");
   const [note, setNote] = useState("");
   const [amount, setAmount] = useState("");
   const [receipt, setReceipt] = useState<File | null>(null);
+  const [receiptError, setReceiptError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const remaining = Math.max(
     0,
@@ -101,6 +104,8 @@ export default function ResidentPaymentModal({
     setReference("");
     setNote("");
     setReceipt(null);
+    setReceiptError(null);
+    if (receiptInput.current) receiptInput.current.value = "";
     setAmount(remaining.toFixed(2));
     setError(null);
     submission.reset();
@@ -144,19 +149,26 @@ export default function ResidentPaymentModal({
           "أدخل مبلغاً موجباً لا يتجاوز الرصيد المتبقي، بمنزلتين عشريتين كحد أقصى.",
         ),
       );
-    if (!receipt)
-      return setError(
-        tr(
-          "Veuillez joindre votre justificatif de paiement.",
-          "يرجى إرفاق إثبات الأداء.",
-        ),
+    if (!receipt) {
+      const message = tr(
+        "Veuillez joindre votre justificatif de paiement.",
+        "يرجى إرفاق إثبات الأداء.",
       );
+      setError(message);
+      setReceiptError(message);
+      requestAnimationFrame(() => {
+        receiptPicker.current?.focus({ preventScroll: true });
+        receiptPicker.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+      });
+      return;
+    }
     submission.mutate();
   };
 
   return (
     <Modal
       isOpen={isOpen}
+      busy={submission.isPending}
       onClose={() => {
         if (!submission.isPending) onClose();
       }}
@@ -285,22 +297,27 @@ export default function ResidentPaymentModal({
               className="w-full p-2 border rounded font-mono"
             />
           </div>
-          <div>
+          <div className={`rounded-lg border p-3 space-y-2 ${receiptError ? "border-rose-400 bg-rose-50" : receipt ? "border-primary-300 bg-primary-50" : "border-slate-300 bg-slate-50"}`}>
             <label
               htmlFor={`${formId}-receipt`}
-              className="block text-xs font-semibold mb-1"
+              className="block text-sm font-semibold text-slate-900"
             >
               {tr("Justificatif de paiement", "إثبات الأداء")}
             </label>
             <input
+              ref={receiptInput}
               key={`${isOpen}-${charge?.id}`}
               id={`${formId}-receipt`}
               type="file"
               accept="application/pdf,image/png,image/jpeg,image/webp"
               required
-              className="w-full text-xs"
+              hidden
+              aria-describedby={`${formId}-receipt-help ${formId}-receipt-status`}
+              aria-invalid={receiptError ? true : undefined}
               onChange={(e) => {
                 const file = e.target.files?.[0] || null;
+                // Cancelling the picker must not discard a previously selected receipt.
+                if (!file) return;
                 setError(null);
                 if (
                   file &&
@@ -310,18 +327,55 @@ export default function ResidentPaymentModal({
                 ) {
                   setReceipt(null);
                   e.target.value = "";
-                  setError(
-                    tr(
-                      "Joignez un PDF, PNG, JPEG ou WebP de 5 Mo maximum.",
-                      "أرفق ملف PDF أو PNG أو JPEG أو WebP بحجم لا يتجاوز 5 ميغابايت.",
-                    ),
+                  const message = tr(
+                    "Joignez un PDF, PNG, JPEG ou WebP de 5 Mo maximum.",
+                    "أرفق ملف PDF أو PNG أو JPEG أو WebP بحجم لا يتجاوز 5 ميغابايت.",
                   );
-                } else setReceipt(file);
+                  setReceiptError(message);
+                  setError(message);
+                } else {
+                  setReceipt(file);
+                  setReceiptError(null);
+                }
               }}
             />
-            <p className="text-xs text-slate-500 mt-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                ref={receiptPicker}
+                type="button"
+                disabled={submission.isPending}
+                aria-describedby={`${formId}-receipt-help ${formId}-receipt-status${receiptError ? ` ${formId}-receipt-error` : ""}`}
+                aria-invalid={receiptError ? true : undefined}
+                className="inline-flex items-center justify-center rounded-md bg-primary-600 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 focus-visible:ring-2 focus-visible:ring-primary-600 focus-visible:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                onClick={() => {
+                  // Keep this synchronous so browsers retain the user's activation.
+                  receiptInput.current?.click();
+                }}
+              >
+                {receipt
+                  ? tr("Changer le justificatif", "تغيير إثبات الأداء")
+                  : tr("Joindre un justificatif", "إرفاق إثبات الأداء")}
+              </button>
+              {receipt && (
+                <Button variant="secondary" disabled={submission.isPending} onClick={() => {
+                  setReceipt(null);
+                  setReceiptError(null);
+                  setError(null);
+                  if (receiptInput.current) receiptInput.current.value = "";
+                }}>
+                  {tr("Retirer le fichier", "إزالة الملف")}
+                </Button>
+              )}
+            </div>
+            <p id={`${formId}-receipt-status`} role="status" aria-live="polite" className="text-sm text-slate-700 break-all">
+              {receipt
+                ? `${tr("Prêt à envoyer :", "جاهز للإرسال:")} ${receipt.name} (${Math.max(1, Math.ceil(receipt.size / 1024))} ${tr("Ko", "ك.ب")})`
+                : tr("Aucun fichier sélectionné. Cliquez sur le bouton pour choisir votre reçu.", "لم يتم اختيار ملف. اضغط على الزر لاختيار وصل الأداء.")}
+            </p>
+            <p id={`${formId}-receipt-help`} className="text-xs text-slate-600">
               PDF, PNG, JPEG, WebP — {tr("5 Mo maximum", "5 ميغابايت كحد أقصى")}
             </p>
+            {receiptError && <p id={`${formId}-receipt-error`} className="text-sm font-medium text-rose-800">{receiptError}</p>}
           </div>
           <div>
             <label

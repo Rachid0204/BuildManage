@@ -334,6 +334,58 @@ test("typing preserves focus and caret in payment and marketplace forms; dialog 
   ).toHaveLength(1);
 });
 
+test('receipt picker opens by click and keyboard, confirms the file, and resets only when removed or reopened', async ({ page }, testInfo) => {
+  await login(page);
+  const trigger = page.getByRole('button', { name: 'Transmettre Justificatif', exact: true }).first();
+  await trigger.click();
+  const modal = page.getByRole('dialog');
+  const input = modal.getByLabel('Justificatif de paiement', { exact: true });
+  let uploads = 0;
+  page.on('request', request => { if (request.url().endsWith('/api/uploads') && request.method() === 'POST') uploads++; });
+  await modal.getByLabel("N° Référence / Numéro d'opération").fill('PICKER-ONLY');
+  await modal.getByRole('button', { name: 'Envoyer pour validation' }).click();
+  const picker = modal.getByRole('button', { name: 'Joindre un justificatif', exact: true });
+  await expect(picker).toBeEnabled();
+  await expect(picker).toBeFocused();
+  await expect(picker).toHaveAttribute('aria-invalid', 'true');
+  const chooserPromise = page.waitForEvent('filechooser');
+  await picker.click();
+  const chooser = await chooserPromise;
+  expect(chooser.isMultiple()).toBe(false);
+  await chooser.setFiles(pdf);
+  await expect(modal.getByRole('status')).toContainText(`Prêt à envoyer : ${pdf.name}`);
+  await expect(modal.getByRole('alert')).toHaveCount(0);
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await modal.getByLabel('Note pour le syndic').fill('Keep the chosen receipt');
+  expect(await input.evaluate((element: HTMLInputElement) => element.files?.[0]?.name)).toBe(pdf.name);
+  const replace = modal.getByRole('button', { name: 'Changer le justificatif', exact: true });
+  await replace.focus();
+  const replacePromise = page.waitForEvent('filechooser');
+  await replace.press('Space');
+  await (await replacePromise).setFiles({ ...pdf, name: 'replacement.pdf' });
+  await expect(modal.getByRole('status')).toContainText('replacement.pdf');
+  await modal.getByRole('button', { name: 'Retirer le fichier' }).click();
+  await expect(modal.getByRole('status')).toContainText('Aucun fichier sélectionné');
+  expect(await input.evaluate((element: HTMLInputElement) => element.files?.length)).toBe(0);
+  await picker.focus();
+  const reselectPromise = page.waitForEvent('filechooser');
+  await picker.press('Enter');
+  await (await reselectPromise).setFiles(pdf);
+  await expect(modal.getByRole('status')).toContainText(pdf.name);
+  expect(uploads).toBe(0); // Selection is not reported as an upload or payment.
+  await page.screenshot({ path: testInfo.outputPath('receipt-picker-desktop.png') });
+  await modal.getByRole('button', { name: 'Annuler', exact: true }).click();
+  await trigger.click();
+  await expect(modal.getByRole('status')).toContainText('Aucun fichier sélectionné');
+  await expect(picker).toBeEnabled();
+  expect(await input.evaluate((element: HTMLInputElement) => element.files?.length)).toBe(0);
+  await modal.getByLabel("N° Référence / Numéro d'opération").fill('PICKER-REOPEN');
+  await modal.getByRole('button', { name: 'Envoyer pour validation' }).click();
+  await expect(modal.getByRole('alert')).toContainText('joindre');
+  await modal.getByRole('button', { name: 'Annuler', exact: true }).click();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
 test("resident uploads a private receipt, sees errors, retries once, and syndic approves the remaining balance", async ({
   page,
 }) => {
@@ -390,6 +442,9 @@ test("resident uploads a private receipt, sees errors, retries once, and syndic 
   await expect(
     modal.getByRole("button", { name: "Envoi en cours..." }),
   ).toBeDisabled();
+  await expect(modal.getByRole('button', { name: 'Changer le justificatif' })).toBeDisabled();
+  await expect(modal.getByRole('button', { name: 'Retirer le fichier' })).toBeDisabled();
+  await expect(modal.getByRole('button', { name: 'Fermer la boîte de dialogue' })).toBeDisabled();
   release();
   await expect(modal.getByRole("alert")).toContainText(
     "Synthetic submission failure",
@@ -400,6 +455,8 @@ test("resident uploads a private receipt, sees errors, retries once, and syndic 
   await expect(modal.getByLabel("Note pour le syndic")).toHaveValue(
     "Synthetic bank transfer",
   );
+  await expect(modal.getByRole('button', { name: 'Changer le justificatif' })).toBeEnabled();
+  await expect(modal.getByRole('status')).toContainText(pdf.name);
   await page.unroute("**/api/commands");
   await submit.click();
   await expect(modal).toBeHidden();
@@ -499,7 +556,10 @@ test("a rejected proof can be resubmitted from the exact charge on mobile in Ara
   await modal
     .getByLabel("ملاحظة للسنديك")
     .pressSequentially("إثبات جديد", { delay: 35 });
-  await modal.getByLabel("إثبات الأداء", { exact: true }).setInputFiles(pdf);
+  const arabicChooser = page.waitForEvent('filechooser');
+  await modal.getByRole('button', { name: 'إرفاق إثبات الأداء', exact: true }).click();
+  await (await arabicChooser).setFiles(pdf);
+  await expect(modal.getByRole('status')).toContainText(`جاهز للإرسال: ${pdf.name}`);
   await page.screenshot({ path: testInfo.outputPath("payment-ar-mobile.png") });
   expect(
     await page.evaluate(
