@@ -20,7 +20,8 @@
     "test:recovery": "node --import ./tests/helpers/networkGuard.mjs --import tsx tests/adminRecovery.ts",
     "test:integration": "node --import tsx tests/firestoreIntegration.ts",
     "test:emulator": "firebase emulators:exec --project demo-buildmanage --only firestore \"npm run test:integration\"",
-    "state:admin": "node --env-file-if-exists=.env.local --import tsx scripts/stateAdmin.ts"
+    "state:admin": "node --env-file-if-exists=.env.local --import tsx scripts/stateAdmin.ts",
+    "test:ui": "playwright test"
   },
   "dependencies": {
     "@google/genai": "^0.2.0",
@@ -40,6 +41,7 @@
   "devDependencies": {
     "@firebase/eslint-plugin-security-rules": "^0.0.2",
     "@firebase/rules-unit-testing": "^5.0.2",
+    "@playwright/test": "1.62.1",
     "@tailwindcss/vite": "^4.3.3",
     "@types/express": "^5.0.6",
     "@types/node": "^22.14.0",

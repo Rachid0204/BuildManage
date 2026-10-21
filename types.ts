@@ -139,6 +139,7 @@ export interface PaymentProof {
   referenceNumber: string;
   submissionDate: string;
   receiptNote?: string;
+  receiptUrl?: string;
   proofImageUrl?: string;
   status: 'pending' | 'approved' | 'rejected';
   reviewedAt?: string;

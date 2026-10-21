@@ -624,6 +624,9 @@ export async function runOperation(
       "Montant supérieur au solde.",
       400,
     );
+    const resident = b.residents.find((r: any) => r.id === charge.residentId),
+      apartment = b.apartments.find((a: any) => a.id === charge.apartmentId);
+    check(resident && apartment, "Résident ou lot non lié à la charge.", 400);
     args[0] = {
       ...pick(proof, [
         "amount",
@@ -638,6 +641,9 @@ export async function runOperation(
       buildingId: b.id,
       syndicId: b.syndicId,
       residentId: charge.residentId,
+      residentName: resident.name,
+      apartmentId: apartment.id,
+      apartmentNumber: apartment.number,
       status: "pending",
       submittedAt: new Date().toISOString(),
     };
@@ -645,7 +651,6 @@ export async function runOperation(
     const row = record(actor, "syndik_prod_proofs_v1", str(args[0]));
     b = row.b;
     buildingId = b.id;
-    args[2] = actor.uid;
     check(
       ["approved", "rejected"].includes(args[1]),
       "Décision invalide.",

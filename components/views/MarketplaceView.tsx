@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useId } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Building, MarketplaceItem, MarketplaceCategory, MarketplaceListingType, MarketplaceCondition, ChatMessage } from '../../types';
 import Card from '../common/Card';
@@ -407,6 +407,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
   const { tr, isAr } = useI18n();
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const publishFormId = useId();
 
   const [activeTypeTab, setActiveTypeTab] = useState<'all' | 'sale' | 'free' | 'service'>('all');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -856,7 +857,8 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
               {tr('Annuler', 'إلغاء')}
             </Button>
             <Button
-              onClick={handlePublish}
+              type="submit"
+              form={publishFormId}
               disabled={publishMutation.isPending || isCompressing}
               className="bg-teal-700 hover:bg-teal-800 text-white font-bold"
             >
@@ -865,7 +867,8 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
           </div>
         }
       >
-        <form onSubmit={handlePublish} className="space-y-4 text-xs sm:text-sm">
+        <form id={publishFormId} onSubmit={handlePublish} className="space-y-4 text-xs sm:text-sm">
+          {publishMutation.isError && <p role="alert" className="p-3 rounded bg-rose-50 text-rose-700">{publishMutation.error.message || tr('Publication impossible. Réessayez.', 'تعذر النشر. حاول مجدداً.')}</p>}
           {/* Listing Type Selection */}
           <div>
             <label className="block font-semibold text-slate-700 mb-1">{tr("Type d'annonce :", 'نوع الإعلان:')}</label>

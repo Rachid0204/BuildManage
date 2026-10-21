@@ -36,3 +36,5 @@ dist-ssr
 dist-server/
 *-debug.log
 *.enc.json
+test-results/
+playwright-report/
