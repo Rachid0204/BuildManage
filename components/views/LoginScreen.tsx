@@ -7,7 +7,6 @@ import Modal from '../common/Modal';
 import LanguageToggle from '../common/LanguageToggle';
 import { useI18n } from '../../hooks/useI18n';
 import { useAuth, getHomeRouteForRole } from '../../contexts/AuthContext';
-import { sendPasswordResetEmail } from 'firebase/auth';
 import { auth } from '../../firebase/config';
 import { BuildingsIcon } from '../icons/IconComponents';
 
@@ -357,7 +356,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
                     <input
                       type="password"
                       required
-                      minLength={6}
+                      minLength={10}
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       placeholder="••••••••"
@@ -596,13 +595,8 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
                 onClick={async () => {
                   const target = forgotEmail.trim();
                   if (!target) return;
-                  if (target.includes('@')) {
-                    try {
-                      await sendPasswordResetEmail(auth, target);
-                    } catch {
-                      // Local/shared accounts or offline demo mode fall back to Syndic regeneration notice
-                    }
-                  }
+                  const response = await fetch('/api/auth/recovery/request', { method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:target}) });
+                  const data = await response.json();if (!response.ok) { setError(data.error || tr('Envoi impossible.', 'تعذر الإرسال.'));return; }
                   setForgotSent(true);
                 }}
               >

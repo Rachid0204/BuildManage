@@ -253,7 +253,6 @@ const PrestataireCredentialsModal: React.FC<{
 
 const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
   const { tr, language } = useI18n();
-  const { registerOrUpdateUserCredentials } = useAuth();
   const queryClient = useQueryClient();
   const [activeViewMode, setActiveViewMode] = useState<'directory' | 'legal'>('directory');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -283,25 +282,7 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
   const activeCredentialPrestataire =
     prestataires.find((p) => p.id === credentialPrestataireId) || null;
 
-  const syncProviderToAuthRegistry = (saved: Prestataire) => {
-    const secret = saved.generatedPassword || saved.invitationToken || saved.invitationCode;
-    if (saved.email && secret) {
-      registerOrUpdateUserCredentials(saved.email, secret, {
-        uid: `user-prest-${saved.id}`,
-        email: saved.email.trim().toLowerCase(),
-        displayName: saved.name,
-        role: 'provider',
-        syndicId: saved.syndicId || building.syndicId,
-        buildingId: saved.buildingId || building.id,
-        buildingName: building.name,
-        prestataireId: saved.id,
-        prestataireCategory: saved.category,
-        providerCategory: saved.category,
-        phone: saved.phone,
-        mustChangePassword: saved.mustChangePassword ?? true,
-      });
-    }
-  };
+
 
   const saveMutation = useMutation({
     mutationFn: ({
@@ -320,7 +301,7 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
         saved.hasAccount &&
         (saved.generatedPassword || saved.invitationToken || saved.invitationCode)
       ) {
-        syncProviderToAuthRegistry(saved);
+
         if (variables.shouldGenerate) {
           setCredentialPrestataireId(saved.id);
         }
@@ -333,7 +314,7 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
     onSuccess: (updated) => {
       queryClient.invalidateQueries({ queryKey: ['prestataires', building.id] });
       if (updated) {
-        syncProviderToAuthRegistry(updated);
+
         setCredentialPrestataireId(updated.id);
       }
     },

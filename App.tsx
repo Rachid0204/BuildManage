@@ -1,3 +1,5 @@
+import AccountAction from './components/views/AccountAction';
+import EmailVerificationGate from './components/views/EmailVerificationGate';
 import React, { Suspense, useEffect, useState } from 'react';
 import {
   BrowserRouter as Router,
@@ -364,6 +366,7 @@ const SyndicDataProvider: React.FC<{ children: React.ReactNode }> = ({
   const { setSyndicData } = useBuilding();
   const { tr } = useI18n();
   const [unassignedAccount, setUnassignedAccount] = useState(false);
+  const [readyForIdentity,setReadyForIdentity] = useState<string | null>(null);
 
   const { data: syndics = [], isLoading } = useQuery({
     queryKey: ['syndics', userProfile?.uid || 'anon'],
@@ -372,6 +375,7 @@ const SyndicDataProvider: React.FC<{ children: React.ReactNode }> = ({
   });
 
   useEffect(() => {
+    if (userProfile && !isLoading) setReadyForIdentity(userProfile.uid);
     if (!userProfile) {
       setSyndicData(null);
       setUnassignedAccount(false);
@@ -433,31 +437,10 @@ const SyndicDataProvider: React.FC<{ children: React.ReactNode }> = ({
       }
     }
 
-    if (!isLoading && userProfile.role === 'syndic') {
-      const fallbackSyndicId = userProfile.syndicId || `syndic-${userProfile.uid}`;
-      const trialExpiry = new Date(Date.now() + 30 * 86400000).toISOString();
-      const autoSyndic: Syndic = {
-        id: fallbackSyndicId,
-        name: userProfile.displayName || 'Cabinet Syndic',
-        email: userProfile.email,
-        phone: userProfile.phone || '+212 6 00 00 00 00',
-        logoUrl: '',
-        createdBy: userProfile.uid,
-        subscriptionPlan: 'starter',
-        subscriptionStatus: 'active',
-        subscriptionExpiry: trialExpiry,
-        buildings: [],
-      };
-      setUnassignedAccount(false);
-      setSyndicData(autoSyndic);
-      void saveSyndic(autoSyndic);
-    } else if (!isLoading) {
-      setSyndicData(null);
-      setUnassignedAccount(true);
-    }
+    if (!isLoading) { setSyndicData(null); setUnassignedAccount(true); }
   }, [syndics, isLoading, userProfile, setSyndicData]);
 
-  if (isLoading)
+  if (isLoading || (!unassignedAccount && readyForIdentity !== userProfile?.uid))
     return (
       <Loading
         message={tr(
@@ -510,11 +493,11 @@ const FirstLoginPasswordGate: React.FC = () => {
     e.preventDefault();
     setError(null);
 
-    if (newPassword.trim().length < 6) {
+    if (newPassword.trim().length < 10) {
       setError(
         tr(
-          'Votre nouveau mot de passe doit contenir au moins 6 caractères.',
-          'يجب أن تتكون كلمة المرور الجديدة من 6 أحرف على الأقل.'
+          'Votre nouveau mot de passe doit contenir au moins 10 caractères.',
+          'يجب أن تتكون كلمة المرور الجديدة من 10 أحرف على الأقل.'
         )
       );
       return;
@@ -638,7 +621,7 @@ const FirstLoginPasswordGate: React.FC = () => {
               required
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
-              placeholder={tr('Minimum 6 caractères', '6 أحرف على الأقل')}
+              placeholder={tr('Minimum 6 caractères', '10 أحرف على الأقل')}
               className="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 focus:border-teal-500"
             />
           </div>
@@ -695,10 +678,8 @@ const ProtectedRoute: React.FC<{
     return <Navigate to={correctHome} replace />;
   }
 
-  if (
-    userProfile.mustChangePassword &&
-    (userProfile.role === 'resident' || userProfile.role === 'provider')
-  ) {
+  if (userProfile.emailVerified === false) return <EmailVerificationGate />;
+  if (userProfile.mustChangePassword) {
     return <FirstLoginPasswordGate />;
   }
 
@@ -723,34 +704,12 @@ const VIEW_TO_ROUTE: Record<View, string> = {
 };
 
 const AppContent: React.FC = () => {
-  const { userProfile, registerOrUpdateUserCredentials } = useAuth();
-  const { selectedBuilding, setSelectedBuilding, syndic } = useBuilding();
+  const { userProfile } = useAuth();
+  const { selectedBuilding: storedBuilding, setSelectedBuilding, syndic } = useBuilding();
+  const selectedBuilding = storedBuilding || syndic?.buildings[0] || null;
   const { tr } = useI18n();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-
-  const syncResidentToAuthRegistry = (res: Resident) => {
-    const inviteSecret = res.invitationCode || res.invitationToken || res.generatedPassword;
-    if (res.email && inviteSecret) {
-      const aptNum = selectedBuilding?.apartments.find((a) => a.id === res.apartmentId)?.number;
-      registerOrUpdateUserCredentials(res.email, inviteSecret, {
-        uid: `user-res-${res.id}`,
-        email: res.email.trim().toLowerCase(),
-        displayName: res.name,
-        role: 'resident',
-        syndicId: res.syndicId,
-        buildingId: res.buildingId,
-        buildingName: selectedBuilding?.name,
-        apartmentId: res.apartmentId,
-        apartmentNumber: aptNum,
-        residentId: res.id,
-        cin: res.cin,
-        phone: res.phone,
-        isOwner: res.isOwner,
-        mustChangePassword: res.mustChangePassword ?? true,
-      });
-    }
-  };
 
   // --- Global Mutations ---
 
@@ -797,7 +756,7 @@ const AppContent: React.FC = () => {
     onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ['syndics'] });
       if (created && created.hasAccount) {
-        syncResidentToAuthRegistry(created);
+
       }
     },
   });
@@ -817,7 +776,7 @@ const AppContent: React.FC = () => {
     onSuccess: (updated) => {
       queryClient.invalidateQueries({ queryKey: ['syndics'] });
       if (updated && updated.hasAccount) {
-        syncResidentToAuthRegistry(updated);
+
       }
     },
   });
@@ -1262,6 +1221,7 @@ const App: React.FC = () => {
       <BuildingProvider>
         <RouteErrorBoundary>
           <Routes>
+            <Route path="/account-action" element={<AccountAction />} />
             <Route
               path="/welcome"
               element={<LandingRouteWrapper onDone={() => setShowLanding(false)} />}

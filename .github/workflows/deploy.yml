@@ -1,4 +1,4 @@
-name: Build, Verify & Deploy ImmoGest
+name: Build and Verify ImmoGest
 
 on:
   push:
@@ -18,10 +18,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js 20
+      - name: Set up Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies strictly from lockfile
@@ -42,6 +42,18 @@ jobs:
       - name: Verify HTTP identity and authorization boundaries
         run: npm run test:security
 
+      - name: Verify production operations and encrypted recovery
+        run: npm run test:production && npm run test:recovery
+
+      - name: Set up Java for Firebase emulators
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Verify Firestore persistence and client denial
+        run: npm run test:emulator
+
       - name: Compile Firebase Cloud Functions
         run: npm run build:functions
 
@@ -60,5 +72,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dist-bundle
-          path: dist/
+          path: |
+            dist/
+            dist-server/
           retention-days: 7

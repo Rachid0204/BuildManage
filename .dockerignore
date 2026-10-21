@@ -1,0 +1,9 @@
+.git
+node_modules
+dist
+dist-server
+.data
+.env*
+*.enc.json
+*-debug.log
+functions/lib

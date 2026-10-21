@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import ArchiveBuildings from './ArchiveBuildings';
 import type { Building, Syndic, SubscriptionPlan } from '../../types';
 import Card from '../common/Card';
 import Button from '../common/Button';
@@ -606,6 +607,7 @@ const Buildings: React.FC<{
 
   return (
     <div>
+      <ArchiveBuildings />
       <BuildingModal
         isOpen={isModalOpen}
         onClose={() => {

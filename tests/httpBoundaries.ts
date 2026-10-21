@@ -16,7 +16,7 @@ const record = (profile: typeof owner | typeof admin) => ({ uid: profile.uid, em
 const state = {
   syndik_prod_registered_users_v1: [record(owner), record(admin)],
   syndik_prod_syndics_v1: [
-    { id: 's-a', createdBy: owner.uid, subscriptionPlan: 'starter', subscriptionStatus: 'trialing', buildings: [
+    { id: 's-a', createdBy: owner.uid, subscriptionPlan: 'starter', subscriptionStatus: 'trialing', subscriptionExpiry: '2099-01-01', buildings: [
       { id: 'b-a', syndicId: 's-a', residents: [resident('r-a', 'a@audit.invalid')], apartments: [{ id: 'lot-a', number: '1', ownerId: 'r-a', tantiemes: 1000 }] },
     ] },
     { id: 's-b', createdBy: 'owner-b', buildings: [{ id: 'b-b', residents: [resident('r-b', 'b@audit.invalid')], apartments: [] }] },
@@ -37,8 +37,8 @@ const port = await new Promise<number>((resolvePort) => { const server = createS
   server.close(() => resolvePort(value));
 }); });
 const child = spawn(process.execPath, ['--import', join(root, 'tests/helpers/networkGuard.mjs'), '--import', 'tsx', 'server.ts'], {
-  cwd: root, env: { ...process.env, PORT: String(port), NODE_ENV: 'production', SYNDIK_DATA_DIR: dataDir,
-    SYNDIK_SERVER_SECRET: '', GEMINI_API_KEY: '', FIREBASE_SERVICE_ACCOUNT_JSON: '' }, stdio: ['ignore', 'pipe', 'pipe'],
+  cwd: root, env: { ...process.env, PORT: String(port), NODE_ENV: 'test', SYNDIK_STATE_BACKEND: 'file', SYNDIK_DATA_DIR: dataDir,
+    SYNDIK_SERVER_SECRET: 'synthetic-server-secret-12345678901234567890', GEMINI_API_KEY: '', FIREBASE_SERVICE_ACCOUNT_JSON: '' }, stdio: ['ignore', 'pipe', 'pipe'],
 });
 let logs = '';
 child.stderr.on('data', (d) => { logs += d; });
@@ -95,10 +95,13 @@ try {
   assert.equal((await call('/api/shared-state', ownerHeaders, { key: 'syndik_prod_registered_users_v1', value: [escalation] })).status, 403);
   const entitlement = structuredClone(state.syndik_prod_syndics_v1[0]); entitlement.subscriptionStatus = 'active';
   assert.equal((await call('/api/shared-state', ownerHeaders, { key: 'syndik_prod_syndics_v1', value: [entitlement] })).status, 403);
-  const upload = await call('/api/uploads', residentHeaders, { name: 'fixture.txt', buildingId: 'b-a', dataUrl: 'data:text/plain;base64,' + Buffer.from('PRIVATE-FIXTURE').toString('base64') });
+  const upload = await call('/api/uploads', residentHeaders, { name: 'fixture.pdf', buildingId: 'b-a', dataUrl: 'data:application/pdf;base64,' + Buffer.from('%PDF-1.4\nPRIVATE-FIXTURE').toString('base64') });
   assert.equal(upload.status, 200); assert.equal((await call(upload.data.url)).status, 401);
-  assert.equal((await call(upload.data.url, residentHeaders)).data, 'PRIVATE-FIXTURE');
+  assert.equal((await call(upload.data.url, residentHeaders)).data, '%PDF-1.4\nPRIVATE-FIXTURE');
   assert.equal((await call(upload.data.url, await login('b@audit.invalid'))).status, 403);
+  const archived = await call('/api/commands',ownerHeaders,{operation:'deleteResident',args:['r-a'],operationId:crypto.randomUUID()});
+  assert.equal(archived.status,200,JSON.stringify(archived.data));
+  assert.equal((await call('/api/shared-state',residentHeaders)).status,401);
   console.log('PASS: registration isolation, token verification, roles, scoped voting, proof review and private files.');
 } finally {
   clearTimeout(timeout);
