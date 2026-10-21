@@ -633,27 +633,28 @@ const Buildings: React.FC<{
       <Modal
         isOpen={!!deletingBuilding}
         onClose={() => setDeletingBuilding(null)}
-        title={tr("Confirmer la suppression de l'immeuble", 'تأكيد حذف العمارة')}
+        onSubmit={confirmDelete}
+        title={tr("Archiver l'immeuble", 'أرشفة العمارة')}
         footer={
           <>
             <Button variant="secondary" onClick={() => setDeletingBuilding(null)}>
               {tr('Annuler', 'إلغاء')}
             </Button>
-            <Button variant="danger" onClick={confirmDelete} className="ms-3">
-              {tr('Supprimer définitivement', 'حذف نهائي')}
+            <Button variant="danger" type="submit" className="ms-3">
+              {tr("Archiver l'immeuble", 'أرشفة العمارة')}
             </Button>
           </>
         }
       >
         <div className="space-y-3 text-sm text-slate-600">
           <p>
-            {tr('Êtes-vous sûr de vouloir supprimer la résidence', 'هل أنت متأكد من رغبتك في حذف الإقامة')}{' '}
+            {tr('Voulez-vous archiver la résidence', 'هل تريد أرشفة الإقامة')}{' '}
             <strong className="text-slate-900">{deletingBuilding?.name}</strong> ?
           </p>
           <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-800">
             {tr(
-              `Cette action supprimera également les ${deletingBuilding?.apartments.length || 0} lots et ${deletingBuilding?.residents.length || 0} résidents rattachés à cet immeuble.`,
-              `سيؤدي هذا الإجراء أيضاً إلى حذف ${deletingBuilding?.apartments.length || 0} شقة و ${deletingBuilding?.residents.length || 0} ساكن مرتبطين بهذه العمارة.`
+              'Les lots, résidents et historiques sont conservés. La résidence sera masquée des listes actives et pourra être restaurée depuis les immeubles archivés.',
+              'سيتم الاحتفاظ بالشقق والسكان والسجلات. ستُخفى الإقامة من القوائم النشطة ويمكن استعادتها من العمارات المؤرشفة.'
             )}
           </div>
         </div>
@@ -721,7 +722,7 @@ const Buildings: React.FC<{
                           type="button"
                           onClick={(e) => handleOpenDelete(e, building)}
                           className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-                          title={tr("Supprimer l'immeuble", 'حذف العمارة')}
+                          title={tr("Archiver l'immeuble", 'أرشفة العمارة')}
                         >
                           <TrashIcon />
                         </button>

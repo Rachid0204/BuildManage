@@ -100,7 +100,7 @@ const ResidentDashboard: React.FC = () => {
   const [paymentNotice, setPaymentNotice] = useState('');
 
   // Fetch Syndic and Building Data
-  const { data: syndics = [] } = useQuery({
+  const { data: syndics = [], isLoading: loadingResidence } = useQuery({
     queryKey: ['syndics'],
     queryFn: getSyndics,
   });
@@ -112,6 +112,7 @@ const ResidentDashboard: React.FC = () => {
     let foundResident: Resident | undefined;
 
     const targetUid = userProfile?.uid;
+    const targetResidentId = userProfile?.residentId || targetUid?.replace(/^(user-res-|res-)/, '');
     const targetEmail = userProfile?.email?.trim().toLowerCase();
     const targetCin = userProfile?.cin?.trim().toLowerCase();
 
@@ -120,8 +121,9 @@ const ResidentDashboard: React.FC = () => {
       for (const b of s.buildings) {
         const match = b.residents.find(
           (r) =>
+            (targetResidentId && r.id === targetResidentId) ||
             (targetUid && r.id === targetUid) ||
-            (targetEmail && r.email.trim().toLowerCase() === targetEmail) ||
+            (targetEmail && r.email?.trim().toLowerCase() === targetEmail) ||
             (targetCin && r.cin && r.cin.trim().toLowerCase() === targetCin)
         );
         if (match) {
@@ -156,7 +158,7 @@ const ResidentDashboard: React.FC = () => {
     };
   }, [syndics, userProfile]);
 
-  const isOwnerResident = currentResident ? currentResident.isOwner : userProfile?.isOwner ?? true;
+  const isOwnerResident = currentResident ? currentResident.isOwner : userProfile?.isOwner ?? false;
 
   // Fetch Charges for Resident
   const { data: myCharges = [], isLoading: loadingCharges } = useQuery({
@@ -309,12 +311,23 @@ const ResidentDashboard: React.FC = () => {
     return null;
   }
 
-  if (loadingCharges)
+  if (loadingResidence || loadingCharges)
     return (
       <Loading
         message={tr('Chargement de votre espace résident...', 'جاري تحميل فضاء الساكن الخاص بكم...')}
       />
     );
+
+  if (!activeBuilding || !currentResident) return (
+    <div role="alert" className="min-h-screen flex items-center justify-center p-6 bg-slate-50">
+      <Card className="max-w-md space-y-4">
+        <h1 className="text-lg font-bold">{tr('Logement indisponible', 'الشقة غير متاحة')}</h1>
+        <p>{tr('Votre résidence est archivée ou votre logement ne peut pas être identifié. Contactez votre syndic pour rétablir votre accès.', 'تمت أرشفة الإقامة أو تعذر تحديد شقتك. تواصل مع السنديك لاستعادة الوصول.')}</p>
+        <Button onClick={() => window.location.reload()}>{tr('Actualiser', 'تحديث')}</Button>
+        <Button variant="secondary" onClick={logout}>{tr('Déconnexion', 'تسجيل الخروج')}</Button>
+      </Card>
+    </div>
+  );
 
   const dateLocale = language === 'ar' ? 'ar-MA' : 'fr-MA';
 
@@ -586,7 +599,7 @@ const ResidentDashboard: React.FC = () => {
                       <p className="text-xs text-teal-100 mt-1">
                         {tr('Vous disposez de', 'تتوفرون على')}{' '}
                         <strong>
-                          {currentApartment?.tantiemes || 260} {tr('tantièmes', 'جزءاً عقارياً')}
+                          {currentApartment?.tantiemes ?? 0} {tr('tantièmes', 'جزءاً عقارياً')}
                         </strong>{' '}
                         {tr('de copropriété pour voter.', 'من الملكية المشتركة للتصويت.')}
                         {unvotedResolutionsCount > 0 ? (
@@ -630,8 +643,8 @@ const ResidentDashboard: React.FC = () => {
                       {activeBuilding?.name || tr('Résidence', 'الإقامة')}
                     </h3>
                     <p className="text-sm text-teal-800 font-semibold mt-0.5">
-                      {tr('Appartement Lot', 'شقة رقم')} {currentApartment?.number || 'A-102'} (
-                      {tr('Étage', 'الطابق')} {currentApartment?.floor ?? 1})
+                      {tr('Appartement Lot', 'شقة رقم')} {currentApartment?.number || '—'} (
+                      {tr('Étage', 'الطابق')} {currentApartment?.floor ?? '—'})
                     </p>
                   </div>
                   <span className="text-xs font-mono font-bold text-teal-700 bg-teal-50 px-2.5 py-1 rounded">
@@ -640,7 +653,7 @@ const ResidentDashboard: React.FC = () => {
                 </div>
                 <div className="mt-4 pt-3 border-t border-slate-100 flex justify-between text-xs text-slate-600 font-mono">
                   <span>
-                    {tr('Superficie :', 'المساحة :')} {currentApartment?.area || 110} m²
+                    {tr('Superficie :', 'المساحة :')} {currentApartment?.area ?? '—'} m²
                   </span>
                   <span>
                     {tr('Statut :', 'الصفة :')}{' '}

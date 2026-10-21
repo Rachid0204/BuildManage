@@ -6,6 +6,9 @@ import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { createServer } from "node:net";
 import { hashPasswordSync } from "../../utils/security";
+import { initializeApp, deleteApp, type App } from "firebase-admin/app";
+import { FirestoreRepository } from "../../server/repository";
+import { startStorageEmulator } from '../helpers/storageEmulator';
 
 const root = resolve(import.meta.dirname, "../..");
 const password = "Synthetic-Resident-Forms-42!";
@@ -47,6 +50,7 @@ const profiles = [
     residentId: "peer-ui",
     syndicId: "s-ui",
     buildingId: "b-ui",
+    apartmentId: "lot-ui",
     emailVerified: true,
   },
 ];
@@ -64,8 +68,13 @@ let directory: string,
   server: ChildProcess,
   exited: Promise<unknown>;
 let logs = "";
-const disk = () =>
-  JSON.parse(readFileSync(join(directory, "shared-state.json"), "utf8"));
+const useFirestore = process.env.UI_TEST_BACKEND === 'firestore';
+let testApp: App | undefined;
+let testRepository: FirestoreRepository | undefined;
+let storage: Awaited<ReturnType<typeof startStorageEmulator>> | undefined;
+const disk = async () => testRepository
+  ? testRepository.transaction(async state => JSON.parse(JSON.stringify(state)))
+  : JSON.parse(readFileSync(join(directory, "shared-state.json"), "utf8"));
 
 test.beforeAll(async () => {
   directory = mkdtempSync(join(tmpdir(), "buildmanage-ui-"));
@@ -120,6 +129,7 @@ test.beforeAll(async () => {
                   phone: "0600000001",
                   isOwner: false,
                   hasAccount: true,
+                  apartmentId: 'lot-ui',
                 },
               ],
               apartments: [
@@ -128,6 +138,7 @@ test.beforeAll(async () => {
                   buildingId: "b-ui",
                   number: "12",
                   ownerId: resident.id,
+                  tenantId: 'peer-ui',
                   floor: 1,
                   area: 80,
                   tantiemes: 1000,
@@ -182,6 +193,17 @@ test.beforeAll(async () => {
       ],
     }),
   );
+  if (useFirestore) {
+    if (!process.env.FIRESTORE_EMULATOR_HOST?.startsWith('127.0.0.1:')) throw new Error('UI Firestore tests require the local emulator');
+    testApp = initializeApp({ projectId: 'demo-buildmanage' });
+    testRepository = new FirestoreRepository('(default)');
+    storage = await startStorageEmulator();
+    const seed = JSON.parse(readFileSync(join(directory, 'shared-state.json'), 'utf8'));
+    await testRepository.transaction(async state => {
+      for (const key of Object.keys(state)) delete state[key];
+      Object.assign(state, seed);
+    });
+  }
   const port = await new Promise<number>((done, reject) => {
     const listener = createServer();
     listener.on("error", reject);
@@ -200,7 +222,12 @@ test.beforeAll(async () => {
         ...process.env,
         NODE_ENV: "test",
         PORT: String(port),
-        SYNDIK_STATE_BACKEND: "file",
+        SYNDIK_STATE_BACKEND: useFirestore ? 'firestore' : 'file',
+        GOOGLE_CLOUD_PROJECT: 'demo-buildmanage',
+        FIRESTORE_DATABASE_ID: '(default)',
+        GOOGLE_APPLICATION_CREDENTIALS: '',
+        STORAGE_EMULATOR_HOST: storage?.url || '',
+        SYNDIK_UPLOAD_BACKEND: storage ? 'gcs' : 'file',
         SYNDIK_DATA_DIR: directory,
         SYNDIK_SERVER_SECRET: "synthetic-ui-server-secret-32-characters",
         SENDGRID_API_KEY: "",
@@ -228,6 +255,8 @@ test.afterAll(async () => {
   if (server && server.exitCode === null && server.signalCode === null)
     server.kill("SIGTERM");
   if (exited) await exited;
+  if (testApp) await deleteApp(testApp);
+  if (storage) await storage.close();
   if (directory) rmSync(directory, { recursive: true, force: true });
 });
 
@@ -257,6 +286,8 @@ async function login(page: Page, index = 1, language = "fr") {
   );
   const home = profiles[index].role === 'admin' ? '/admin' : profiles[index].role === 'provider' ? '/provider' : index === 0 ? '/financials' : '/resident';
   await page.goto(`${base}${home}`);
+  // A completed navigation is not the same as completed asynchronous restoration.
+  await expect(page.getByRole('button', { name: /Déconnexion|تسجيل الخروج/ }).first()).toBeVisible();
   return data.token as string;
 }
 
@@ -328,7 +359,7 @@ test("typing preserves focus and caret in payment and marketplace forms; dialog 
   await listing.getByRole("button", { name: "Publier mon annonce" }).click();
   await expect(listing).toBeHidden();
   expect(
-    disk().syndik_prod_marketplace_v1.filter(
+    (await disk()).syndik_prod_marketplace_v1.filter(
       (item: any) => item.title === "Table focus regression",
     ),
   ).toHaveLength(1);
@@ -384,6 +415,34 @@ test('receipt picker opens by click and keyboard, confirms the file, and resets 
   await expect(modal.getByRole('alert')).toContainText('joindre');
   await modal.getByRole('button', { name: 'Annuler', exact: true }).click();
   await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
+test('storage permission and missing-bucket failures explain the problem without losing the payment form', async ({ page }) => {
+  test.skip(!storage, 'Runs against the real Admin Storage client in the Firestore simulation');
+  await login(page);
+  await page.getByRole('button', { name: 'Transmettre Justificatif', exact: true }).first().click();
+  const modal = page.getByRole('dialog');
+  await modal.getByLabel("N° Référence / Numéro d'opération").fill('STORAGE-FAILURE-DRAFT');
+  await modal.getByLabel('Justificatif de paiement', { exact: true }).setInputFiles(pdf);
+  const before = Object.keys((await disk()).__files || {}).length;
+  try {
+    for (const [status, code] of [[403, 'STORAGE_ACCESS'], [404, 'STORAGE_MISSING']] as const) {
+      storage!.faults.status = status;
+      const failedResponse = page.waitForResponse(response => response.url().endsWith('/api/uploads') && response.request().method() === 'POST');
+      await modal.getByRole('button', { name: 'Envoyer pour validation' }).click();
+      const response = await failedResponse;
+      const result = await response.json();
+      expect(response.status()).toBe(503);
+      expect(result.code).toBe(code);
+      expect(response.headers()['x-request-id']).toBe(result.requestId);
+      await expect(modal.getByRole('alert')).toContainText('stockage des pièces jointes');
+      await expect(modal.getByRole('alert')).toContainText(result.requestId);
+      await expect(modal.getByLabel("N° Référence / Numéro d'opération")).toHaveValue('STORAGE-FAILURE-DRAFT');
+      await expect(modal.getByRole('status')).toContainText(pdf.name);
+      expect(Object.keys((await disk()).__files || {})).toHaveLength(before);
+    }
+  } finally { storage!.faults.status = 0; }
+  await modal.getByRole('button', { name: 'Annuler', exact: true }).click();
 });
 
 test("resident uploads a private receipt, sees errors, retries once, and syndic approves the remaining balance", async ({
@@ -463,7 +522,7 @@ test("resident uploads a private receipt, sees errors, retries once, and syndic 
   await expect(
     page.getByRole("status").filter({ hasText: "Justificatif envoyé" }).first(),
   ).toBeVisible();
-  const state = disk();
+  const state = (await disk());
   const proofs = state.syndik_prod_proofs_v1.filter(
     (p: any) => p.referenceNumber === "VIR-UI-RETRY",
   );
@@ -477,6 +536,7 @@ test("resident uploads a private receipt, sees errors, retries once, and syndic 
     apartmentNumber: "12",
   });
   expect(proof.receiptUrl).toMatch(/^\/api\/uploads\//);
+  if (storage) expect([...storage.objects.values()].some(item => item.bytes.equals(pdf.buffer))).toBe(true);
   expect(state.syndik_prod_charges_v1[0].paidAmount).toBe(40);
   expect(state.syndik_prod_quittances_v1 || []).toHaveLength(0);
   const peerLogin = await page.request.post(`${base}/api/auth/login`, {
@@ -511,12 +571,12 @@ test("resident uploads a private receipt, sees errors, retries once, and syndic 
     .click();
   await expect
     .poll(
-      () =>
-        disk().syndik_prod_proofs_v1.find((p: any) => p.id === proof.id)
+      async () =>
+        (await disk()).syndik_prod_proofs_v1.find((p: any) => p.id === proof.id)
           ?.status,
     )
     .toBe("approved");
-  const posted = disk();
+  const posted = (await disk());
   expect(posted.syndik_prod_charges_v1[0]).toMatchObject({
     paidAmount: 200,
     status: "paid",
@@ -568,7 +628,7 @@ test("a rejected proof can be resubmitted from the exact charge on mobile in Ara
   ).toBe(true);
   await modal.getByRole("button", { name: "إرسال للمصادقة" }).click();
   await expect(modal).toBeHidden();
-  const proof = disk().syndik_prod_proofs_v1.find(
+  const proof = (await disk()).syndik_prod_proofs_v1.find(
     (p: any) => p.referenceNumber === "NEW-REF-AR",
   );
   expect(proof).toMatchObject({
@@ -577,7 +637,7 @@ test("a rejected proof can be resubmitted from the exact charge on mobile in Ara
     receiptNote: "إثبات جديد",
   });
   expect(
-    disk().syndik_prod_proofs_v1.find((p: any) => p.id === "rejected-ui")
+    (await disk()).syndik_prod_proofs_v1.find((p: any) => p.id === "rejected-ui")
       .status,
   ).toBe("rejected");
   await login(page, 0);
@@ -594,13 +654,13 @@ test("a rejected proof can be resubmitted from the exact charge on mobile in Ara
   await row.getByRole("button", { name: "Rejeter", exact: true }).click();
   await expect
     .poll(
-      () =>
-        disk().syndik_prod_proofs_v1.find((p: any) => p.id === proof.id)
+      async () =>
+        (await disk()).syndik_prod_proofs_v1.find((p: any) => p.id === proof.id)
           ?.status,
     )
     .toBe("rejected");
   expect(
-    disk().syndik_prod_proofs_v1.find((p: any) => p.id === proof.id)
+    (await disk()).syndik_prod_proofs_v1.find((p: any) => p.id === proof.id)
       .rejectionReason,
   ).toBe("Receipt unclear - please resend");
   await login(page, 1, "ar");
@@ -645,7 +705,7 @@ test('building creation explains missing fields, keeps the draft on failure and 
   await expect(dialog.locator('#bld-name')).toHaveValue('Form audit residence');
   await dialog.locator('button[type=submit]').click();
   await expect(dialog).toBeHidden();
-  expect(disk().syndik_prod_syndics_v1[0].buildings.filter((b: any) => b.name === 'Form audit residence')).toHaveLength(1);
+  expect((await disk()).syndik_prod_syndics_v1[0].buildings.filter((b: any) => b.name === 'Form audit residence')).toHaveLength(1);
   await expect(page.getByRole('status').filter({ hasText: 'Immeuble créé' })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('building-success.png') });
 });
@@ -661,7 +721,7 @@ test('lot and resident forms retain drafts on failures and persist complete reco
   await expectRetryableFailure(page, /Enregistrer/);
   await dialog.locator('button[type=submit]').click();
   await expect(dialog).toBeHidden();
-  expect(disk().syndik_prod_syndics_v1[0].buildings[0].apartments.some((a: any) => a.number === 'AUDIT-02')).toBe(true);
+  expect((await disk()).syndik_prod_syndics_v1[0].buildings[0].apartments.some((a: any) => a.number === 'AUDIT-02')).toBe(true);
 
   await page.goto(`${base}/residents`);
   await page.getByRole('button', { name: /Ajouter.*résident/i }).click();
@@ -671,14 +731,14 @@ test('lot and resident forms retain drafts on failures and persist complete reco
   await dialog.locator('#res-name').fill('Form Audit Resident');
   await dialog.locator('#res-email').fill('new-resident@ui.invalid');
   await dialog.locator('#res-phone').fill('0600000099');
-  const newLot = disk().syndik_prod_syndics_v1[0].buildings[0].apartments.find((a: any) => a.number === 'AUDIT-02');
+  const newLot = (await disk()).syndik_prod_syndics_v1[0].buildings[0].apartments.find((a: any) => a.number === 'AUDIT-02');
   await dialog.locator('#res-apartment').selectOption(newLot.id);
   await dialog.locator('input[type=checkbox]').uncheck();
   await expectRetryableFailure(page, /Enregistrer/);
   await expect(dialog.locator('#res-email')).toHaveValue('new-resident@ui.invalid');
   await dialog.locator('button[type=submit]').click();
   await expect(dialog).toBeHidden();
-  expect(disk().syndik_prod_syndics_v1[0].buildings[0].residents.some((r: any) => r.email === 'new-resident@ui.invalid')).toBe(true);
+  expect((await disk()).syndik_prod_syndics_v1[0].buildings[0].residents.some((r: any) => r.email === 'new-resident@ui.invalid')).toBe(true);
 });
 
 test('maintenance validates required fields, preserves failed reports and saves the selected urgency', async ({ page }, testInfo) => {
@@ -697,7 +757,7 @@ test('maintenance validates required fields, preserves failed reports and saves 
   await page.screenshot({ path: testInfo.outputPath('maintenance-retry.png') });
   await dialog.getByRole('button', { name: 'Envoyer le signalement' }).click();
   await expect(dialog).toBeHidden();
-  expect(disk().syndik_prod_maintenance_v1.find((r: any) => r.title === 'Form audit elevator')).toMatchObject({ priority: 'high', residentId: resident.id, status: 'pending' });
+  expect((await disk()).syndik_prod_maintenance_v1.find((r: any) => r.title === 'Form audit elevator')).toMatchObject({ priority: 'high', residentId: resident.id, status: 'pending' });
   await expect(page.getByRole('status').filter({ hasText: 'Signalement envoyé' })).toBeVisible();
 });
 
@@ -713,7 +773,7 @@ test('announcements, provider and assembly forms explain missing information and
   await expectRetryableFailure(page, /Publier/);
   await dialog.locator('button[type=submit]').click();
   await expect(dialog).toBeHidden();
-  expect(disk().syndik_prod_syndics_v1[0].buildings[0].announcements.some((a: any) => a.title === 'Form audit announcement')).toBe(true);
+  expect((await disk()).syndik_prod_syndics_v1[0].buildings[0].announcements.some((a: any) => a.title === 'Form audit announcement')).toBe(true);
 
   await page.goto(`${base}/prestataires`);
   await page.getByRole('button', { name: /Ajouter.*prestataire/i }).first().click();
@@ -726,7 +786,7 @@ test('announcements, provider and assembly forms explain missing information and
   await expectRetryableFailure(page, 'Enregistrer');
   await dialog.locator('button[type=submit]').click();
   await expect(dialog).toBeHidden();
-  expect(disk().syndik_prod_prestataires_v1.some((p: any) => p.name === 'Form Audit Plumbing')).toBe(true);
+  expect((await disk()).syndik_prod_prestataires_v1.some((p: any) => p.name === 'Form Audit Plumbing')).toBe(true);
 
   await page.goto(`${base}/ag`);
   await page.getByRole('button', { name: /Planifier.*AG|Planifier.*Assemblée|Nouvelle.*AG|Convoquer/i }).first().click();
@@ -737,7 +797,7 @@ test('announcements, provider and assembly forms explain missing information and
   await expectRetryableFailure(page, /Créer.*AG/);
   await dialog.locator('button[type=submit]').click();
   await expect(dialog).toBeHidden();
-  expect(disk().syndik_prod_ag_v1.some((a: any) => a.title === 'Form audit assembly')).toBe(true);
+  expect((await disk()).syndik_prod_ag_v1.some((a: any) => a.title === 'Form audit assembly')).toBe(true);
 });
 
 test('expense form saves a positive input as one negative ledger entry', async ({ page }) => {
@@ -753,7 +813,7 @@ test('expense form saves a positive input as one negative ledger entry', async (
   await expectRetryableFailure(page, 'Valider & Enregistrer');
   await dialog.getByRole('button', { name: 'Valider & Enregistrer' }).click();
   await expect(dialog).toBeHidden();
-  const entries = disk().syndik_prod_syndics_v1[0].buildings[0].financials.transactions.filter((t: any) => t.description === 'Form audit plumbing expense');
+  const entries = (await disk()).syndik_prod_syndics_v1[0].buildings[0].financials.transactions.filter((t: any) => t.description === 'Form audit plumbing expense');
   expect(entries).toHaveLength(1);
   expect(entries[0]).toMatchObject({ amount: -25, type: 'expense' });
 });
@@ -816,7 +876,7 @@ test('retry after a lost publication response reuses the upload and does not cre
   expect(ids).toHaveLength(2);
   expect(ids[0]).toBe(ids[1]);
   expect(uploads).toBe(1);
-  expect(disk().syndik_prod_marketplace_v1.filter((item: any) => item.title === 'Uncertain publication response')).toHaveLength(1);
+  expect((await disk()).syndik_prod_marketplace_v1.filter((item: any) => item.title === 'Uncertain publication response')).toHaveLength(1);
 });
 
 test('document upload rejects unsupported files and previews the actual private PDF', async ({ page }) => {
@@ -846,7 +906,7 @@ test('cabinet settings and chat preserve input after errors and save successfull
   await expect(name).toHaveValue('Audited Cabinet');
   await page.unroute('**/api/commands');
   await page.locator('button[type=submit]').click();
-  await expect.poll(() => disk().syndik_prod_syndics_v1[0].name).toBe('Audited Cabinet');
+  await expect.poll(async () => (await disk()).syndik_prod_syndics_v1[0].name).toBe('Audited Cabinet');
 
   await page.goto(`${base}/chat`);
   const message = page.getByPlaceholder(/Écrire un message/);
@@ -858,7 +918,7 @@ test('cabinet settings and chat preserve input after errors and save successfull
   await page.unroute('**/api/commands');
   await page.getByRole('button', { name: /^Envoyer/ }).click();
   await expect(message).toHaveValue('');
-  expect(disk().syndik_prod_chat_v1.filter((m: any) => m.content === 'Synthetic chat draft retained after failure')).toHaveLength(1);
+  expect((await disk()).syndik_prod_chat_v1.filter((m: any) => m.content === 'Synthetic chat draft retained after failure')).toHaveLength(1);
 });
 
 test('admin cabinet creation validates and retries, and provider reports require a note before saving', async ({ page }) => {
@@ -872,7 +932,7 @@ test('admin cabinet creation validates and retries, and provider reports require
   await expectRetryableFailure(page, /Créer le Cabinet/);
   await dialog.locator('button[type=submit]').click();
   await expect(dialog).toBeHidden();
-  expect(disk().syndik_prod_syndics_v1.some((s: any) => s.name === 'Synthetic Admin Cabinet')).toBe(true);
+  expect((await disk()).syndik_prod_syndics_v1.some((s: any) => s.name === 'Synthetic Admin Cabinet')).toBe(true);
 
   await login(page, 4);
   await page.getByRole('button', { name: /Mettre à jour|Compte.rendu/i }).first().click();
@@ -887,7 +947,7 @@ test('admin cabinet creation validates and retries, and provider reports require
   await page.unroute('**/api/commands');
   await page.getByRole('button', { name: 'Envoyer le rapport' }).click();
   await expect(report).toBeHidden();
-  expect(disk().syndik_prod_maintenance_v1.find((r: any) => r.id === 'provider-ticket-ui').status).toBe('in_progress');
+  expect((await disk()).syndik_prod_maintenance_v1.find((r: any) => r.id === 'provider-ticket-ui').status).toBe('in_progress');
 });
 
 test('monthly charges use the period selected in the form', async ({ page }) => {
@@ -899,18 +959,177 @@ test('monthly charges use the period selected in the form', async ({ page }) => 
   await expect(dialog.locator('input[type=month]')).toHaveValue('2027-02');
   await dialog.getByRole('button', { name: 'Générer pour tous les lots' }).click();
   await expect(dialog).toBeHidden();
-  expect(disk().syndik_prod_charges_v1.some((c: any) => c.period === '2027-02')).toBe(true);
+  expect((await disk()).syndik_prod_charges_v1.some((c: any) => c.period === '2027-02')).toBe(true);
 });
 
 test('server validation returns safe field details instead of an unexplained save failure', async () => {
   const sessionResponse = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ identifier: profiles[0].email, password }) });
   const session = await sessionResponse.json();
   expect(sessionResponse.status, JSON.stringify(session)).toBe(200);
-  const before = disk().syndik_prod_syndics_v1[0].buildings[0].financials.transactions.length;
+  const before = (await disk()).syndik_prod_syndics_v1[0].buildings[0].financials.transactions.length;
   const response = await fetch(`${base}/api/commands`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.token}` }, body: JSON.stringify({ operation: 'addTransaction', args: ['b-ui', { description: 'Rejected negative magnitude', amount: -25, type: 'expense', fundType: 'courant', date: '2026-10-21' }], operationId: 'synthetic-invalid-amount-ui-1234' }) });
   const data = await response.json();
   expect(response.status, JSON.stringify(data)).toBe(400);
   expect(JSON.parse(data.error)).toEqual(expect.arrayContaining([expect.objectContaining({ path: ['amount'], code: 'too_small' })]));
   expect(data.error).not.toContain('stack');
-  expect(disk().syndik_prod_syndics_v1[0].buildings[0].financials.transactions).toHaveLength(before);
+  expect((await disk()).syndik_prod_syndics_v1[0].buildings[0].financials.transactions).toHaveLength(before);
+});
+
+test('temporary session failures preserve credentials and offer retry instead of silently logging out', async ({ page }) => {
+  await login(page, 0);
+  for (const failure of ['server', 'network'] as const) {
+    const token = await page.evaluate(() => JSON.parse(localStorage.getItem('syndik_auth_session_v1')!).serverToken);
+    await page.route('**/api/auth/session', route => failure === 'server'
+      ? route.fulfill({ status: 503, json: { error: 'Synthetic dependency outage' } }) : route.abort());
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'Connexion au serveur interrompue' })).toBeVisible();
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('syndik_auth_session_v1')!).serverToken)).toBe(token);
+    await page.unroute('**/api/auth/session');
+    await page.getByRole('button', { name: 'Réessayer la connexion' }).click();
+    await expect(page.getByRole('button', { name: 'Déconnexion' }).first()).toBeVisible();
+  }
+});
+
+test('database read failures offer recovery instead of claiming the account has no cabinet', async ({ page }) => {
+  await login(page, 0);
+  await page.route('**/api/shared-state*', route => route.fulfill({ status: 503, json: { error: 'Synthetic database outage' } }));
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Données temporairement indisponibles' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Compte en attente de rattachement' })).toHaveCount(0);
+  await page.unroute('**/api/shared-state*');
+  await page.getByRole('button', { name: 'Réessayer le chargement' }).click();
+  await expect(page.getByRole('button', { name: 'Déconnexion' }).first()).toBeVisible();
+});
+
+test('every syndic module renders through an authenticated navigation without browser exceptions', async ({ page }) => {
+  test.setTimeout(90_000);
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await login(page, 0);
+  for (const route of ['/', '/buildings', '/apartments', '/residents', '/financials', '/announcements', '/documents', '/maintenance', '/ag', '/prestataires', '/chat', '/marketplace', '/analytics', '/settings']) {
+    await page.goto(base + route);
+    await expect(page.getByRole('button', { name: 'Déconnexion' }).first(), route).toBeVisible();
+    await expect(page.locator('main'), route).toBeVisible();
+    await expect(page.locator('main'), route).not.toHaveText('');
+    await expect(page.getByText('Une erreur est survenue lors du chargement du module')).toHaveCount(0);
+    expect(new URL(page.url()).pathname).toBe(route);
+  }
+  expect(errors).toEqual([]);
+});
+
+test('owner and tenant can visit every resident module and cannot enter admin or syndic routes', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  for (const profile of [1, 2]) {
+    await login(page, profile);
+    for (const name of ['Mon Logement & Finances', 'AG & Vote Digital', 'Incidents & Suivi', 'Chat Résidence', 'Prestataires & Artisans', 'Souk Voisins']) {
+      await page.getByRole('button', { name: new RegExp(name) }).first().click();
+      await expect(page.getByRole('button', { name: 'Déconnexion' }).first()).toBeVisible();
+      await expect(page.getByText('Une erreur est survenue lors du chargement du module')).toHaveCount(0);
+    }
+    await page.goto(base + '/admin');
+    await expect(page).toHaveURL(base + '/resident');
+    await page.goto(base + '/financials');
+    await expect(page).toHaveURL(base + '/resident');
+  }
+  expect(errors).toEqual([]);
+});
+
+async function apiSession(index: number) {
+  const response = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ identifier: profiles[index].email, password }) });
+  const data = await response.json();
+  expect(response.status, JSON.stringify(data)).toBe(200);
+  return data.token as string;
+}
+async function apiCall(token: string, path: string, body?: unknown) {
+  const response = await fetch(base + path, {
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    ...(body === undefined ? {} : { method: 'POST', body: JSON.stringify(body) }),
+  });
+  return { status: response.status, data: await response.json() };
+}
+const apiCommand = (token: string, operation: string, args: unknown[]) => apiCall(token, '/api/commands', { operation, args, operationId: crypto.randomUUID() });
+
+test('maintenance assignment, private attachments, completion, notifications and accounting remain connected across roles', async () => {
+  const owner = await apiSession(0), reporter = await apiSession(1), peer = await apiSession(2), provider = await apiSession(4);
+  const before = (await disk()).syndik_prod_syndics_v1[0].buildings[0].financials;
+  const upload = await apiCall(reporter, '/api/uploads', { buildingId: 'b-ui', name: 'private-maintenance.pdf', dataUrl: `data:application/pdf;base64,${Buffer.from('%PDF-1.4\nPRIVATE-MAINTENANCE-ATTACHMENT').toString('base64')}` });
+  expect(upload.status, JSON.stringify(upload.data)).toBe(200);
+  const fileStatus = async (token: string) => (await fetch(base + upload.data.url, { headers: { Authorization: `Bearer ${token}` } })).status;
+  const created = await apiCommand(reporter, 'addMaintenanceRequest', [{ buildingId: 'b-ui', title: 'Connected maintenance cycle', description: 'Private file shared with the assigned provider only.', category: 'plumbing', priority: 'high', photos: [upload.data.url] }]);
+  expect(created.status, JSON.stringify(created.data)).toBe(200);
+  const id = created.data.result.id;
+  expect(await fileStatus(peer)).toBe(403);
+  expect(await fileStatus(provider)).toBe(403);
+  const stolen = await apiCommand(peer, 'addMarketplaceItem', [{ buildingId: 'b-ui', title: 'Forbidden private file reuse', description: 'Cannot republish someone else\'s receipt.', price: 1, imageUrl: upload.data.url }]);
+  expect(stolen.status).toBe(403);
+  expect(await fileStatus(peer)).toBe(403);
+  const assigned = await apiCommand(owner, 'updateMaintenanceRequest', [id, { prestataireId: 'p-ui', assignedTo: 'p-ui', status: 'in_progress', cost: 75 }, { note: 'Assigned after review' }]);
+  expect(assigned.status, JSON.stringify(assigned.data)).toBe(200);
+  expect(await fileStatus(provider)).toBe(200);
+  expect((await apiCommand(peer, 'updateMaintenanceRequest', [id, { description: 'Unauthorized edit' }])).status).toBe(403);
+  const completion = await apiCommand(provider, 'updateMaintenanceRequest', [id, { status: 'completed' }, { note: 'Repair complete, resident confirmation requested' }]);
+  expect(completion.status, JSON.stringify(completion.data)).toBe(200);
+  expect(completion.data.result).toMatchObject({ status: 'in_progress', completionPending: true });
+  expect((await apiCommand(reporter, 'confirmMaintenanceCompletion', [id, 'Resident checked the repair'])).status).toBe(200);
+  expect((await disk()).syndik_prod_maintenance_v1.find((m: any) => m.id === id)).toMatchObject({ status: 'completed', completionPending: false });
+  const notices = (await apiCall(reporter, '/api/shared-state')).data.store.syndik_prod_notifications_v1;
+  const notice = notices.find((n: any) => n.type === 'maintenance' && !n.read);
+  expect(notice).toBeTruthy();
+  expect((await apiCommand(reporter, 'markNotificationAsRead', [notice.id])).status).toBe(200);
+  expect((await apiCommand(reporter, 'reopenMaintenance', [id, 'Issue returned after confirmation'])).status).toBe(200);
+  expect((await apiCommand(owner, 'updateMaintenanceRequest', [id, { prestataireId: '', assignedTo: '' }, { note: 'Assignment removed' }])).status).toBe(200);
+  expect(await fileStatus(provider)).toBe(403);
+  expect((await disk()).syndik_prod_syndics_v1[0].buildings[0].financials).toEqual(before);
+});
+
+test('private chat attachments reach the named recipient and stay private to other accounts', async () => {
+  const sender = await apiSession(1), recipient = await apiSession(2), provider = await apiSession(4);
+  const upload = await apiCall(sender, '/api/uploads', { buildingId: 'b-ui', name: 'private-chat.pdf', dataUrl: `data:application/pdf;base64,${Buffer.from('%PDF-1.4\nPRIVATE-CHAT-FILE').toString('base64')}` });
+  expect(upload.status, JSON.stringify(upload.data)).toBe(200);
+  const sent = await apiCommand(sender, 'sendChatMessage', [{ buildingId: 'b-ui', channelId: 'private', recipientId: 'peer-ui', content: 'Private file for the tenant', attachmentUrl: upload.data.url, attachmentName: 'private-chat.pdf' }]);
+  expect(sent.status, JSON.stringify(sent.data)).toBe(200);
+  const response = await fetch(base + upload.data.url, { headers: { Authorization: `Bearer ${recipient}` } });
+  expect(response.status).toBe(200);
+  expect(Buffer.from(await response.arrayBuffer()).toString()).toContain('PRIVATE-CHAT-FILE');
+  expect((await fetch(base + upload.data.url, { headers: { Authorization: `Bearer ${provider}` } })).status).toBe(403);
+  const providerState = await apiCall(provider, '/api/shared-state');
+  expect(providerState.data.store.syndik_prod_chat_v1.some((m: any) => m.id === sent.data.result.id)).toBe(false);
+});
+
+test('deployment diagnostics expose safe configuration to managers and deny other roles', async () => {
+  const owner = await apiSession(0), reporter = await apiSession(1), provider = await apiSession(4);
+  const result = await apiCall(owner, '/api/diagnostics');
+  expect(result.status).toBe(200);
+  expect(result.data.sessionSecretConfigured).toBe(true);
+  expect(result.data.database.read).toBe('ok');
+  expect(result.data.storage.write).toBe('not_checked');
+  expect(JSON.stringify(result.data)).not.toContain('synthetic-ui-server-secret');
+  expect((await apiCall(reporter, '/api/diagnostics')).status).toBe(403);
+  expect((await apiCall(provider, '/api/diagnostics')).status).toBe(403);
+  const ready = await fetch(base + '/api/ready');
+  expect(ready.status).toBe(200);
+  expect((await ready.json()).checks).toEqual({ databaseRead: 'ok', storageWrite: 'not_checked' });
+});
+
+test('building archive confirmation preserves records and the archive view restores the building', async ({ page }) => {
+  const token = await apiSession(0);
+  const created = await apiCommand(token, 'addBuilding', ['s-ui', { name: 'Archive simulation', address: 'Synthetic archive address', city: 'Casablanca', monthlySyndicFees: 100 }]);
+  expect(created.status, JSON.stringify(created.data)).toBe(200);
+  const id = created.data.result.id;
+  await login(page, 0);
+  await page.goto(base + '/buildings');
+  await page.getByRole('heading', { name: 'Archive simulation', exact: true }).locator('../..').getByTitle("Archiver l'immeuble").click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toContainText('Les lots, résidents et historiques sont conservés');
+  await expectRetryableFailure(page, "Archiver l'immeuble");
+  await dialog.getByRole('button', { name: "Archiver l'immeuble", exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole('heading', { name: 'Archive simulation', exact: true })).toHaveCount(0);
+  expect((await disk()).syndik_prod_syndics_v1[0].buildings.find((b: any) => b.id === id).archivedAt).toBeTruthy();
+  await page.locator('summary').filter({ hasText: 'Immeubles archivés' }).click();
+  await page.getByRole('button', { name: 'Charger les archives' }).click();
+  await page.getByRole('button', { name: 'Restaurer Archive simulation' }).click();
+  await expect(page.getByRole('heading', { name: 'Archive simulation', exact: true })).toBeVisible();
+  expect((await disk()).syndik_prod_syndics_v1[0].buildings.find((b: any) => b.id === id).archivedAt).toBeUndefined();
 });

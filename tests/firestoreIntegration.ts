@@ -45,10 +45,15 @@ try {
       buildingId: "building",
     }));
     state.__counter = { value: 0 };
+    state.__historyProbe = { entries: Array.from({ length: 12 }, (_, index) => ({ residentId: 'same-resident', note: `Repeated history entry ${index}` })) };
+    state.__unicodeProbe = { text: '🧾'.repeat(65000) + ' محفوظ بالفرنسية والعربية' };
   });
   await second.transaction(async (state) => {
     assert.equal(state.syndik_prod_charges_v1.length, 650);
     assert.equal(state.syndik_prod_syndics_v1[0].buildings[0].id, "building");
+    assert.equal(state.__historyProbe.entries.length, 12);
+    assert.equal(state.__historyProbe.entries[11].note, 'Repeated history entry 11');
+    assert.equal(state.__unicodeProbe.text, '🧾'.repeat(65000) + ' محفوظ بالفرنسية والعربية');
   });
   await Promise.all(
     Array.from({ length: 8 }, (_, i) =>
@@ -93,8 +98,19 @@ try {
     );
   }
   console.log(
-    "PASS: Firestore staged bulk writes, cross-repository concurrency, rollback and denied browser reads/writes.",
+    "PASS: Firestore staged bulk writes, repeated history identities, Unicode chunks, cross-repository concurrency, rollback and denied browser reads/writes.",
   );
+  await first.transaction(async state => {
+    // Replacing an already staged generation used to deadlock its own bulk writes.
+    for (const key of Object.keys(state)) delete state[key];
+    state.__replacement = { complete: true };
+  });
+  await second.transaction(async state => {
+    assert.equal(state.__replacement.complete, true);
+    assert.equal(state.syndik_prod_charges_v1, undefined);
+    assert.ok(Number.isFinite(state.__revision) && state.__revision > 8);
+  });
+  console.log('PASS: large generation replacement commits without read locks or revision resets.');
 } finally {
   await env.cleanup();
   await deleteApp(app);

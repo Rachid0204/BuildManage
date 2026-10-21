@@ -40,6 +40,7 @@ interface AuthContextType {
   currentUser: User | null;
   userProfile: UserProfile | null;
   loading: boolean;
+  sessionError: boolean;
   signInWithGoogle: () => Promise<UserProfile>;
   loginWithGoogle: () => Promise<UserProfile>;
   login: (email: string, pass?: string) => Promise<UserProfile>;
@@ -204,12 +205,14 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [user, setUser] = useState<User | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [sessionError, setSessionError] = useState(false);
 
   const persistSession = (
     profile: UserProfile | null,
     firebaseUser?: User | null,
     serverToken?: string
   ) => {
+    setSessionError(false);
     if (!profile || profile.uid !== userProfile?.uid) { clearStateCache(); queryClient.clear(); }
     if (!profile) {
       localStorage.removeItem(SESSION_STORAGE_KEY);
@@ -242,14 +245,27 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   useEffect(() => {
     let active = true;
+    const controller = new AbortController();
+    const cancel = () => { active = false; controller.abort(); };
     const restore = async () => {
       const raw = localStorage.getItem(SESSION_STORAGE_KEY); if (!raw) return false;
+      let cached: { serverToken?: string };
+      try { cached = JSON.parse(raw); }
+      catch { if (active) persistSession(null); return false; }
+      if (!cached.serverToken) { if (active) persistSession(null); return false; }
       try {
-        const cached = JSON.parse(raw);if (!cached.serverToken) throw new Error('No server session');
-        const response = await fetch('/api/auth/session', { headers: { Authorization: `Bearer ${cached.serverToken}` } });
-        if (!response.ok) throw new Error('Expired session'); const data = await response.json();
+        const response = await fetch('/api/auth/session', { signal: controller.signal, headers: { Authorization: `Bearer ${cached.serverToken}` } });
+        if ([401, 403].includes(response.status)) { if (active) persistSession(null); return false; }
+        if (!response.ok) throw new Error('Session service unavailable');
+        const data = await response.json();
+        if (!data.profile || !data.token) throw new Error('Incomplete session response');
         if (active) persistSession(data.profile,undefined,data.token);return true;
-      } catch { if (active) persistSession(null);return false; }
+      } catch {
+        // A timeout, interrupted navigation or server outage does not revoke a login.
+        // Keep the token and block protected views until the user can retry verification.
+        if (active && !controller.signal.aborted) setSessionError(true);
+        return true;
+      }
     };
     const restored = restore();
     const unsubscribe = onAuthStateChanged(auth, async currentUser => {
@@ -257,7 +273,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (active && !hasSession && currentUser) try { await exchangeFirebaseSession(currentUser); } catch { persistSession(null); }
       if (active) setLoading(false);
     });
-    return () => { active=false;unsubscribe(); };
+    return () => { cancel(); unsubscribe(); };
   }, []);
 
   const exchangeFirebaseSession = async (firebaseUser: User): Promise<UserProfile> => {
@@ -385,6 +401,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         currentUser: user,
         userProfile,
         loading,
+        sessionError,
         signInWithGoogle,
         loginWithGoogle: signInWithGoogle,
         login,

@@ -14,14 +14,17 @@
     "preview": "vite preview",
     "test:business": "node --import ./tests/helpers/networkGuard.mjs --import tsx tests/paymentBoundaries.ts",
     "test:security": "node --import ./tests/helpers/networkGuard.mjs --import tsx tests/httpBoundaries.ts",
-    "check:local": "npm run typecheck && npm run lint && npm run test:verify && npm run test:business && npm run test:security && npm run test:production && npm run test:recovery && npm run build:functions && npm run build",
+    "check:local": "npm run typecheck && npm run lint && npm run test:verify && npm run test:business && npm run test:cache && npm run test:security && npm run test:production && npm run test:recovery && npm run build:functions && npm run build",
     "build:server": "esbuild server.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-server/server.js",
     "test:production": "node --import ./tests/helpers/networkGuard.mjs --import tsx tests/productionReadiness.ts",
     "test:recovery": "node --import ./tests/helpers/networkGuard.mjs --import tsx tests/adminRecovery.ts",
     "test:integration": "node --import tsx tests/firestoreIntegration.ts",
     "test:emulator": "firebase emulators:exec --project demo-buildmanage --only firestore \"npm run test:integration\"",
     "state:admin": "node --env-file-if-exists=.env.local --import tsx scripts/stateAdmin.ts",
-    "test:ui": "playwright test"
+    "test:ui": "playwright test",
+    "test:cache": "node --import ./tests/helpers/networkGuard.mjs --import tsx tests/cacheBoundaries.ts",
+    "test:ui:cloud": "node tests/helpers/runCloudUi.mjs",
+    "diagnose": "node scripts/diagnoseDeployment.mjs"
   },
   "dependencies": {
     "@google/genai": "^0.2.0",

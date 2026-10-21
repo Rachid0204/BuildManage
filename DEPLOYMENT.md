@@ -35,7 +35,8 @@ existing sessions and unsent encrypted outbox bodies depend on it.
 
 Bind `SYNDIK_SCHEDULER_SECRET` to the scheduled Functions with `firebase functions:secrets:set SYNDIK_SCHEDULER_SECRET`; the source declares that secret for each job. Set the nonsecret backend origin in the Functions environment.
 
-The file adapter is for development and synthetic tests. Production refuses it.
+The file adapter is for development and synthetic tests. Production defaults to
+Firestore; a file override on Cloud Run does not provide durable application data.
 `/api/health` is a liveness probe; `/api/ready` also reads the configured database.
 Provision a minimum of one instance if required for acceptable cold-start latency.
 The supplied Dockerfile builds the frontend and compiled backend; it does not
@@ -136,7 +137,8 @@ confirming that no local process owns the database. This does not apply to produ
   backup scheduling, a full restore drill, and the deployed readiness probe.
 - Measure latency and Firestore read/write costs with representative data. The
   repository currently reads the aggregate state and uses a global revision to
-  serialize writes. It protects correctness but is a pilot architecture, not a
+serialize writes. Bulk staging runs outside read locks, with an atomic revision
+comparison before activation. It protects correctness but is a pilot architecture, not a
   claim of unbounded multi-tenant throughput. Partition tenant aggregates and add
   paginated queries before a large rollout.
 

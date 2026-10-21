@@ -403,10 +403,11 @@ const SyndicDataProvider: React.FC<{ children: React.ReactNode }> = ({
   const [unassignedAccount, setUnassignedAccount] = useState(false);
   const [readyForIdentity,setReadyForIdentity] = useState<string | null>(null);
 
-  const { data: syndics = [], isLoading } = useQuery({
+  const { data: syndics = [], isLoading, error: dataError, refetch } = useQuery({
     queryKey: ['syndics', userProfile?.uid || 'anon'],
     queryFn: getSyndics,
     enabled: !!currentUser,
+    retry: 1,
   });
 
   useEffect(() => {
@@ -452,7 +453,7 @@ const SyndicDataProvider: React.FC<{ children: React.ReactNode }> = ({
                 (r) =>
                   r.id === userProfile.uid ||
                   r.id === cleanResId ||
-                  (normalizedEmail && r.email.trim().toLowerCase() === normalizedEmail)
+                  (normalizedEmail && r.email?.trim().toLowerCase() === normalizedEmail)
               )
           )
         );
@@ -474,6 +475,17 @@ const SyndicDataProvider: React.FC<{ children: React.ReactNode }> = ({
 
     if (!isLoading) { setSyndicData(null); setUnassignedAccount(true); }
   }, [syndics, isLoading, userProfile, setSyndicData]);
+
+  if (dataError) return (
+    <div role="alert" className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
+      <Card className="max-w-md space-y-4">
+        <h1 className="text-lg font-bold">{tr('Données temporairement indisponibles', 'البيانات غير متاحة مؤقتاً')}</h1>
+        <p>{tr('Vos accès sont conservés. Réessayez de charger votre espace.', 'تم الاحتفاظ بجلستك. أعد محاولة تحميل حسابك.')}</p>
+        <p className="text-sm whitespace-pre-line">{dataError instanceof Error ? dataError.message : String(dataError)}</p>
+        <Button onClick={() => refetch()}>{tr('Réessayer le chargement', 'إعادة محاولة التحميل')}</Button>
+      </Card>
+    </div>
+  );
 
   if (isLoading || (!unassignedAccount && readyForIdentity !== userProfile?.uid))
     return (
@@ -703,6 +715,8 @@ const ProtectedRoute: React.FC<{
   const location = useLocation();
 
   if (loading) return <Loading />;
+
+
 
   if (!currentUser || !userProfile) {
     return <Navigate to="/login" state={{ from: location }} replace />;
@@ -1241,7 +1255,8 @@ const LandingRouteWrapper: React.FC<{ onDone: () => void }> = ({ onDone }) => {
 
 const App: React.FC = () => {
   const [showLanding, setShowLanding] = React.useState(true);
-  const { currentUser, userProfile, loading } = useAuth();
+  const { currentUser, userProfile, loading, sessionError } = useAuth();
+  const { tr } = useI18n();
 
   useEffect(() => {
     if (!loading && currentUser) {
@@ -1250,6 +1265,16 @@ const App: React.FC = () => {
   }, [currentUser, loading]);
 
   if (loading) return <Loading />;
+
+  if (sessionError) return (
+    <div className="min-h-screen flex items-center justify-center p-6 bg-slate-50">
+      <div role="alert" className="max-w-md rounded-xl border border-amber-300 bg-white p-6 shadow-sm space-y-4">
+        <h1 className="text-lg font-bold">{tr('Connexion au serveur interrompue', 'انقطع الاتصال بالخادم')}</h1>
+        <p>{tr('Votre session est conservée. Vérifiez votre connexion, puis réessayez pour accéder à votre espace.', 'تم الاحتفاظ بجلستك. تحقق من اتصالك ثم أعد المحاولة للوصول إلى حسابك.')}</p>
+        <Button onClick={() => window.location.reload()}>{tr('Réessayer la connexion', 'إعادة محاولة الاتصال')}</Button>
+      </div>
+    </div>
+  );
 
   return (
     <Router>

@@ -27,6 +27,7 @@ npm run typecheck
 npm run lint
 npm run test:verify
 npm run test:business
+npm run test:cache
 npm run test:security
 npm run test:production
 npm run test:recovery
@@ -80,6 +81,18 @@ private access, payment submission failures, partial balances, syndic approval,
 invoice/journal updates, and rejected proof resubmission on mobile in Arabic.
 Submitting a resident proof records a pending request. Only the syndic's approval
 posts the payment and creates its receipt.
+
+For the full role simulation with Firestore and the Admin Storage SDK, run:
+
+```bash
+npx firebase emulators:exec --project demo-buildmanage --only firestore "npm run test:ui:cloud"
+```
+
+This runs all 26 browser scenarios with a demo database and a local Storage protocol
+double, including storage permission/missing-bucket failures. It does not contact
+live Google Cloud storage. See [the workflow audit](AUDIT-2026-10-22.md) for findings,
+module coverage and deployment acceptance. A read-only live-service check is available
+with `npm run diagnose -- --url https://YOUR-CLOUD-RUN-URL`.
 
 ## Deployment
 
