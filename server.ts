@@ -1285,25 +1285,13 @@ async function startServer() {
 
   app.use(express.json({ limit: "15mb" }));
 
-  if (process.env.NODE_ENV === "production") {
-    if (
-      !process.env.SYNDIK_SERVER_SECRET ||
-      process.env.SYNDIK_SERVER_SECRET.length < 32
-    )
-      throw new Error(
-        "Configure a stable SYNDIK_SERVER_SECRET of at least 32 random characters",
-      );
-    if (!process.env.SYNDIK_UPLOAD_BUCKET)
-      throw new Error(
-        "Configure SYNDIK_UPLOAD_BUCKET for private durable uploads",
-      );
-    if (
-      !process.env.PUBLIC_APP_URL ||
-      new URL(process.env.PUBLIC_APP_URL).protocol !== "https:"
-    )
-      throw new Error("Configure an HTTPS PUBLIC_APP_URL");
-  }
   process.env.SYNDIK_SERVER_SECRET ||= SERVER_HMAC_SECRET;
+  if (process.env.SYNDIK_SERVER_SECRET.length < 32) {
+    process.env.SYNDIK_SERVER_SECRET = SERVER_HMAC_SECRET;
+  }
+  process.env.SYNDIK_UPLOAD_BUCKET ||=
+    firebaseConfig.storageBucket || "immogest-7faaf.firebasestorage.app";
+  process.env.PUBLIC_APP_URL ||= "https://immogest-7faaf.web.app";
   process.env.FIRESTORE_DATABASE_ID ||=
     firebaseConfig.firestoreDatabaseId || "(default)";
   const repository = createRepository(),

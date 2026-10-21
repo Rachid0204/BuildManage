@@ -263,7 +263,7 @@ export interface MaintenanceRequest {
     | 'other';
   location?: string;
   status: 'pending' | 'in_progress' | 'completed';
-  priority: 'low' | 'medium' | 'high';
+  priority?: 'low' | 'medium' | 'high' | 'emergency';
   createdAt: string;
   completedAt?: string;
   date?: string;
