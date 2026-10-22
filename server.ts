@@ -34,8 +34,11 @@ import path from "path";
 import fs from "fs";
 import crypto from "crypto";
 import { isDeepStrictEqual } from "node:util";
-import { getApps, initializeApp } from "firebase-admin/app";
-import { getAuth } from "firebase-admin/auth";
+import {
+  usesFirebaseAuth, firebaseAdminAuth, identityAccounts, accountUid,
+  registerFirebaseAccount, firebasePasswordLogin, migrateLegacyLogin,
+  bindFirebaseAccount, firebaseSessionUser, sendFirebaseVerification,
+} from './server/firebaseIdentity';
 import firebaseConfig from "./firebase-applet-config.json";
 import { applyResidentVote } from "./utils/agVoting";
 import type { AssembleeGenerale, Building } from "./types";
@@ -342,6 +345,7 @@ function sanitizeAccountPayload(list: any[], stripHash = false): any[] {
 
 interface AuthCallerContext {
   sessionVersion?: number;
+  firebaseAuthTime?: number;
   uid: string;
   email?: string;
   role: string;
@@ -372,6 +376,7 @@ function issueServerSessionToken(profile: Record<string, any>): string {
       ? String(profile.prestataireId)
       : undefined,
     sessionVersion: currentState().__sessionVersions?.[profile.uid] || 0,
+    firebaseAuthTime: profile.firebaseAuthTime,
     iat: Date.now(),
     exp: Date.now() + 12 * 3600 * 1000,
   };
@@ -408,6 +413,7 @@ function verifyServerSessionToken(token: string): AuthCallerContext | null {
     }
     return {
       sessionVersion: Number(payload.sessionVersion || 0),
+      firebaseAuthTime: typeof payload.firebaseAuthTime === "number" ? payload.firebaseAuthTime : undefined,
       uid: String(payload.uid),
       email: payload.email ? String(payload.email).toLowerCase() : undefined,
       role: String(payload.role),
@@ -568,16 +574,11 @@ async function verifiedFirebaseIdentity(token: string) {
     const parts = token.split(".");
     if (
       parts.length !== 3 ||
-      JSON.parse(Buffer.from(parts[0], "base64url").toString()).alg !== "RS256"
+      (JSON.parse(Buffer.from(parts[0], "base64url").toString()).alg !== "RS256" &&
+        !(process.env.NODE_ENV !== "production" && process.env.FIREBASE_AUTH_EMULATOR_HOST))
     )
       return null;
-    const app =
-      getApps().find((a) => a.name === "buildmanage-server") ||
-      initializeApp(
-        { projectId: firebaseConfig.projectId },
-        "buildmanage-server",
-      );
-    return await getAuth(app).verifyIdToken(token, true);
+    return await firebaseAdminAuth().verifyIdToken(token, true);
   } catch {
     return null;
   }
@@ -630,6 +631,7 @@ async function extractAndVerifyCaller(
     String(req.headers.authorization || "").replace(/^Bearer /, "") || cookie;
   if (!token) return null;
   let identity: AuthCallerContext | null = null;
+  let firebaseIdentityUid: string | undefined;
   if (token.startsWith("syndik-srv1.")) {
     identity = verifyServerSessionToken(token);
   } else {
@@ -637,7 +639,9 @@ async function extractAndVerifyCaller(
     // Firebase signature, issuer, audience and expiry are verified by the Admin SDK.
     const decoded = await verifiedFirebaseIdentity(token);
     if (!decoded) return null;
-    let candidates = lookupCandidateProfilesInStore(store, decoded.uid);
+    firebaseIdentityUid = decoded.uid;
+    const bound = identityAccounts(store).find(a => a.firebaseUid === decoded.uid);
+    let candidates = lookupCandidateProfilesInStore(store, bound ? accountUid(bound) : decoded.uid);
     if (!candidates.length && decoded.email_verified && decoded.email) {
       const registered = (store.syndik_prod_registered_users_v1 || []).find(
         (u: any) =>
@@ -646,7 +650,7 @@ async function extractAndVerifyCaller(
       if (registered)
         candidates = lookupCandidateProfilesInStore(store, registered.uid);
     }
-    identity = candidates.length ? (candidates[0] as AuthCallerContext) : null;
+    identity = candidates.length ? { ...candidates[0], firebaseAuthTime: decoded.auth_time } as AuthCallerContext : null;
   }
   if (!identity) return null;
   const accounts = [
@@ -671,6 +675,10 @@ async function extractAndVerifyCaller(
         (store.__sessionVersions?.[identity.uid] || 0))
   )
     return null;
+  if (account?.firebaseUid && firebaseIdentityUid && account.firebaseUid !== firebaseIdentityUid) return null;
+  const firebaseUser = await firebaseSessionUser(account || {}, identity.firebaseAuthTime);
+  if (firebaseUser === null) return null;
+  if (firebaseUser && account?.profile) account.profile.emailVerified = firebaseUser.emailVerified;
   // Resolve current trusted membership on every request; a token does not grant a caller-selected tenant.
   const current = lookupCandidateProfilesInStore(store, identity.uid).find(
     (p) => p.role === identity!.role && p.email === identity!.email,
@@ -679,6 +687,9 @@ async function extractAndVerifyCaller(
   return {
     ...account?.profile,
     ...current,
+    firebaseAuthTime: identity.firebaseAuthTime,
+    firebaseUid: account?.firebaseUid,
+    emailVerified: firebaseUser?.emailVerified ?? account?.profile?.emailVerified,
     mustChangePassword:
       account?.mustChangePassword ??
       account?.profile?.mustChangePassword ??
@@ -1299,7 +1310,7 @@ async function startServer() {
       message: 'Configure one stable SYNDIK_SERVER_SECRET of at least 32 characters across revisions and instances. The temporary key cannot preserve sessions or encrypted retries across restarts.' }));
   process.env.SYNDIK_UPLOAD_BUCKET ||=
     firebaseConfig.storageBucket || "immogest-7faaf.firebasestorage.app";
-  process.env.PUBLIC_APP_URL ||= "https://immogest-7faaf.web.app";
+  process.env.PUBLIC_APP_URL ||= "https://immogest.cloud.run";
   process.env.FIRESTORE_DATABASE_ID ||=
     firebaseConfig.firestoreDatabaseId || "(default)";
   const repository = createRepository(),
@@ -1315,6 +1326,7 @@ async function startServer() {
         requestState: any;
       try {
         await repository.transaction(async (state) => {
+          res.locals.afterCommit = undefined;
           requestState = state;
           res.statusCode = 200;
           res.json = ((value: any) => {
@@ -1338,6 +1350,15 @@ async function startServer() {
               rejected: true,
             });
         });
+        if (res.statusCode < 400 && res.locals.afterCommit) {
+          try { await res.locals.afterCommit(); }
+          catch (error: any) {
+            console.error(JSON.stringify({ event: 'firebase_email_failed', requestId, path: req.path,
+              code: error.firebaseCode || 'EMAIL_DELIVERY_FAILED' }));
+            if (['/api/auth/register', '/api/auth/login'].includes(req.path)) payload.verificationEmailSent = false;
+            else { res.status(error.status || 503); payload = { error: error.message || 'Envoi impossible.', requestId }; }
+          }
+        }
         if (payload && typeof payload === "object" && "revision" in payload)
           payload.revision = requestState.__revision;
         if (payload?.token)
@@ -1444,31 +1465,47 @@ async function startServer() {
       ...(sharedStore.syndik_prod_resident_accounts_v1 || []),
       ...(sharedStore.syndik_prod_prestataire_accounts_v1 || []),
     ];
-    const account = records.find(
-      (u: any) =>
-        !u.disabled &&
-        (u.email?.trim().toLowerCase() === identifier ||
-          u.cin?.trim().toLowerCase() === identifier ||
-          u.profile?.cin?.trim().toLowerCase() === identifier) &&
-        verifyPassword(password, u.passwordHash || u.password, u.email),
-    );
-    const uid =
-      account?.uid ||
-      account?.profile?.uid ||
-      (account?.residentId
-        ? `user-res-${account.residentId}`
-        : account?.prestataireId
-          ? `user-prest-${account.prestataireId}`
-          : "");
+    const account = records.find((u: any) => !u.disabled &&
+      (u.email?.trim().toLowerCase() === identifier || u.cin?.trim().toLowerCase() === identifier ||
+        u.profile?.cin?.trim().toLowerCase() === identifier));
+    const uid = account ? accountUid(account) : '';
+    const wasLinked = Boolean(account?.firebaseUid);
+    let firebaseCredential: Awaited<ReturnType<typeof firebasePasswordLogin>> | undefined;
+    if (account) {
+      if (account.firebaseUid) {
+        try {
+          firebaseCredential = await firebasePasswordLogin(account.email.trim().toLowerCase(), password);
+          if (firebaseCredential.user.uid !== account.firebaseUid) return res.status(401).json({ error: 'Identifiants invalides.' });
+        } catch (error: any) {
+          if (error.status !== 401) throw error;
+        }
+      } else if (usesFirebaseAuth()) {
+        if (verifyPassword(password, account.passwordHash || account.password, account.email)) {
+          firebaseCredential = await migrateLegacyLogin(sharedStore, account, password);
+        } else {
+          // A pre-existing, VERIFIED Firebase identity is also proof of ownership
+          // of this email, even when its password differs from the legacy hash.
+          try {
+            const existing = await firebasePasswordLogin(account.email.trim().toLowerCase(), password);
+            if (existing.user.emailVerified) {
+              bindFirebaseAccount(sharedStore, account, existing.user);
+              firebaseCredential = existing;
+            }
+          } catch (error: any) { if (error.status !== 401) throw error; }
+        }
+      }
+    }
+    const passwordValid = account && (account.firebaseUid ? Boolean(firebaseCredential)
+      : !usesFirebaseAuth() && verifyPassword(password, account.passwordHash || account.password, account.email));
     const trusted = lookupCandidateProfilesInStore(sharedStore, uid)[0];
-    if (!account || !trusted || invitationExpired(sharedStore, trusted)) {
+    if (!passwordValid || !trusted || invitationExpired(sharedStore, trusted)) {
       for (const key of keys) attempts[key].count++;
       return res
         .status(401)
         .json({ error: "Identifiants invalides ou invitation expirée." });
     }
     for (const key of keys) delete attempts[key];
-    if (!account.passwordHash?.startsWith("scrypt$v1$")) {
+    if (!account.firebaseUid && !account.passwordHash?.startsWith("scrypt$v1$")) {
       const upgraded = hashPassword(password);
       for (const item of records)
         if (item.email?.toLowerCase() === account.email.toLowerCase()) {
@@ -1482,16 +1519,18 @@ async function startServer() {
         (u: any) => u.uid === uid,
       )?.profile,
       ...trusted,
+      firebaseAuthTime: firebaseCredential?.authTime,
+      firebaseUid: account.firebaseUid,
+      emailVerified: firebaseCredential?.user.emailVerified ?? account.profile?.emailVerified,
       mustChangePassword:
         account.mustChangePassword ??
         account.profile?.mustChangePassword ??
         false,
     };
-    return res.json({
-      ok: true,
-      profile,
-      token: issueServerSessionToken(profile),
-    });
+    if (firebaseCredential && account.profile) account.profile.emailVerified = firebaseCredential.user.emailVerified;
+    if (firebaseCredential && !wasLinked && !firebaseCredential.user.emailVerified)
+      res.locals.afterCommit = () => sendFirebaseVerification(firebaseCredential.idToken);
+    return res.json({ ok: true, profile, firebaseAuth: Boolean(firebaseCredential), token: issueServerSessionToken(profile) });
   });
 
   api.post("/api/auth/firebase-session", async (req, res) => {
@@ -1500,14 +1539,17 @@ async function startServer() {
       "",
     );
     const decoded = await verifiedFirebaseIdentity(token);
-    if (!decoded || !decoded.email || decoded.email_verified !== true) {
+    if (!decoded || !decoded.email) {
       return res.status(401).json({
         error: "Une identité Firebase avec email vérifié est requise.",
       });
     }
-    let candidates = lookupCandidateProfilesInStore(sharedStore, decoded.uid);
+    const linked = identityAccounts(sharedStore).find(a => a.firebaseUid === decoded.uid);
+    if (!decoded.email_verified && !linked) return res.status(401).json({ error: 'Vérifiez votre adresse email.' });
+    if (linked?.disabled) return res.status(403).json({ error: 'Compte désactivé.' });
+    let candidates = lookupCandidateProfilesInStore(sharedStore, linked ? accountUid(linked) : decoded.uid);
     if (
-      process.env.SYNDIK_BOOTSTRAP_ADMIN_EMAIL?.toLowerCase() ===
+      decoded.email_verified && process.env.SYNDIK_BOOTSTRAP_ADMIN_EMAIL?.toLowerCase() ===
         decoded.email.toLowerCase() &&
       !candidates.some((p) => p.role === "admin")
     ) {
@@ -1534,6 +1576,9 @@ async function startServer() {
         candidates = lookupCandidateProfilesInStore(sharedStore, known.uid);
     }
     let profile = candidates[0];
+    const knownAccount = identityAccounts(sharedStore).find(a => profile && accountUid(a) === profile.uid);
+    if (knownAccount?.disabled) return res.status(403).json({ error: 'Compte désactivé.' });
+    if (knownAccount && usesFirebaseAuth()) bindFirebaseAccount(sharedStore, knownAccount, await firebaseAdminAuth().getUser(decoded.uid));
     if (profile && invitationExpired(sharedStore, profile))
       return res.status(403).json({ error: "Invitation expirée." });
     if (!profile) {
@@ -1573,11 +1618,15 @@ async function startServer() {
       ];
       savePersistedState(sharedStore);
     }
-    const storedProfile =
-      registered.find((u) => u.uid === profile.uid)?.profile || {};
+    const firebaseAccount = identityAccounts(sharedStore).find(a => accountUid(a) === profile.uid);
+    if (firebaseAccount && usesFirebaseAuth()) bindFirebaseAccount(sharedStore, firebaseAccount, await firebaseAdminAuth().getUser(decoded.uid));
+    const storedProfile = registered.find((u) => u.uid === profile.uid)?.profile || {};
     profile = {
       ...storedProfile,
       ...profile,
+      firebaseAuthTime: decoded.auth_time,
+      firebaseUid: firebaseAccount?.firebaseUid,
+      emailVerified: decoded.email_verified === true,
       displayName:
         storedProfile.displayName ||
         profile.displayName ||
@@ -1616,7 +1665,7 @@ async function startServer() {
     const role = String(profile.role || "syndic");
     if (
       !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailNorm) ||
-      rawPass.length < 10 ||
+      rawPass.length < 10 || rawPass.length > 200 ||
       isAlreadyHashedPassword(rawPass)
     ) {
       return res
@@ -1662,7 +1711,11 @@ async function startServer() {
           "Une invitation du syndic est nécessaire pour rejoindre un cabinet existant.",
       });
     }
-    const uid = `usr-${crypto.randomUUID()}`;
+    const firebaseCredential = usesFirebaseAuth()
+      ? await ((req as any).firebaseRegistration ??= registerFirebaseAccount(emailNorm, rawPass)) : undefined;
+    const uid = firebaseCredential?.user.uid || `usr-${crypto.randomUUID()}`;
+    if (identityAccounts(sharedStore).some(a => accountUid(a) === uid))
+      return res.status(409).json({ error: 'Cette identité possède déjà un compte. Connectez-vous.' });
     const cleanProfile: Record<string, any> = {
       uid,
       email: emailNorm,
@@ -1733,27 +1786,25 @@ async function startServer() {
       cabinets.push(createdSyndic);
     }
     // Resident/provider public accounts remain unassigned; an existing invitation uses the login flow.
-    (cleanProfile as any).emailVerified = process.env.NODE_ENV !== "production";
-    if (process.env.NODE_ENV === "production") {
-      if (!mailIsConfigured())
-        return res
-          .status(503)
-          .json({ error: "Configurez le service email avant inscription." });
-      createIdentityAction(sharedStore, emailNorm, "verify");
+    cleanProfile.emailVerified = firebaseCredential ? firebaseCredential.user.emailVerified : process.env.NODE_ENV !== 'production';
+    cleanProfile.firebaseAuthTime = firebaseCredential?.authTime;
+    cleanProfile.firebaseUid = firebaseCredential?.user.uid;
+    if (firebaseCredential && !cleanProfile.emailVerified) {
+      res.locals.afterCommit = () => sendFirebaseVerification(firebaseCredential.idToken);
+    } else if (!firebaseCredential && process.env.NODE_ENV === 'production') {
+      if (!mailIsConfigured()) return res.status(503).json({ error: 'Configurez le service email avant inscription.' });
+      createIdentityAction(sharedStore, emailNorm, 'verify');
     }
-    registered.push({
-      uid,
-      email: emailNorm,
-      passwordHash: hashPassword(rawPass),
-      profile: cleanProfile,
-      createdAt: new Date().toISOString(),
-    });
+    registered.push({ uid, email: emailNorm,
+      ...(firebaseCredential ? { firebaseUid: firebaseCredential.user.uid } : { passwordHash: hashPassword(rawPass) }),
+      profile: cleanProfile, createdAt: new Date().toISOString() });
     sharedStore.syndik_prod_registered_users_v1 = registered;
     sharedStore.syndik_prod_syndics_v1 = cabinets;
     savePersistedState(sharedStore);
     return res.json({
       ok: true,
       profile: cleanProfile,
+      firebaseAuth: Boolean(firebaseCredential),
       syndic: createdSyndic,
       token: issueServerSessionToken(cleanProfile),
       revision: sharedStore.__revision,
@@ -1829,7 +1880,14 @@ async function startServer() {
         .json({ ok: false, error: "Missing account email context" });
     }
 
-    const newPasswordHash = hashPassword(newPassword);
+    const boundAccount = identityAccounts(sharedStore).find(a => accountUid(a) === caller.uid && a.firebaseUid);
+    let firebaseAuthTime = caller.firebaseAuthTime;
+    if (boundAccount) {
+      await firebaseAdminAuth().updateUser(boundAccount.firebaseUid, { password: newPassword });
+      await firebaseAdminAuth().revokeRefreshTokens(boundAccount.firebaseUid);
+      firebaseAuthTime = (await firebasePasswordLogin(effectiveEmail, newPassword)).authTime;
+    }
+    const newPasswordHash = boundAccount ? undefined : hashPassword(newPassword);
 
     if (caller.role === "resident" && callerResId) {
       const resAccounts: any[] = Array.isArray(
@@ -1942,10 +2000,11 @@ async function startServer() {
     savePersistedState(sharedStore);
     (sharedStore.__sessionVersions ??= {})[caller.uid] =
       (sharedStore.__sessionVersions?.[caller.uid] || 0) + 1;
-    const profile = { ...caller, mustChangePassword: false };
+    const profile = { ...caller, firebaseAuthTime, mustChangePassword: false };
     return res.json({
       ok: true,
       profile,
+      firebaseAuth: Boolean(boundAccount),
       token: issueServerSessionToken(profile),
       revision: sharedStore.__revision,
     });
@@ -2190,8 +2249,22 @@ async function startServer() {
         revision: sharedStore.__revision || 0,
       });
     }
-    const result = await runOperation(caller, operation, args, operationId),
-      resultMeta = Array.isArray(result)
+    const firebaseBefore = new Map(identityAccounts(sharedStore).filter(a => a.firebaseUid)
+      .map(a => [accountUid(a), { firebaseUid: a.firebaseUid, email: a.email }]));
+    const result = await runOperation(caller, operation, args, operationId);
+    for (const [uid, before] of firebaseBefore) {
+      const accounts = identityAccounts(sharedStore).filter(a => accountUid(a) === uid);
+      if (accounts.some(a => a.email?.toLowerCase() !== before.email?.toLowerCase()))
+        throw new OperationError('L’adresse liée à Firebase doit être modifiée par une procédure de vérification email.', 409);
+      const secret = result?.generatedPassword || result?.invitationCode || result?.invitationToken;
+      if (accounts.some(a => a.passwordHash) && secret &&
+          accounts.some(a => verifyPassword(secret, a.passwordHash, a.email))) {
+        await firebaseAdminAuth().updateUser(before.firebaseUid, { password: secret });
+        await firebaseAdminAuth().revokeRefreshTokens(before.firebaseUid);
+      }
+      for (const a of accounts) { a.firebaseUid = before.firebaseUid; delete a.password; delete a.passwordHash; }
+    }
+    const resultMeta = Array.isArray(result)
         ? Object.fromEntries(
             Object.entries(result).filter(([k]) => !/^\d+$/.test(k)),
           )
@@ -2231,6 +2304,8 @@ async function startServer() {
   });
   api.post("/api/auth/logout", async (req, res) => {
     const caller = await extractAndVerifyCaller(req, sharedStore);
+    const firebaseAccount = caller && identityAccounts(sharedStore).find(a => accountUid(a) === caller.uid && a.firebaseUid);
+    if (firebaseAccount) await firebaseAdminAuth().revokeRefreshTokens(firebaseAccount.firebaseUid);
     if (caller)
       (sharedStore.__sessionVersions ??= {})[caller.uid] =
         (sharedStore.__sessionVersions?.[caller.uid] || 0) + 1;
@@ -2275,6 +2350,9 @@ async function startServer() {
       database: { backend: process.env.SYNDIK_STATE_BACKEND || (process.env.NODE_ENV === 'production' ? 'firestore' : 'file'), id: process.env.FIRESTORE_DATABASE_ID, read: 'ok' },
       storage: { backend: process.env.NODE_ENV === 'production' || process.env.SYNDIK_UPLOAD_BACKEND === 'gcs' ? 'gcs' : 'file', bucket: process.env.SYNDIK_UPLOAD_BUCKET, write: 'not_checked' },
       sessionSecretConfigured: HAS_CONFIGURED_SERVER_SECRET,
+      authenticationProvider: usesFirebaseAuth() ? 'firebase' : 'legacy',
+      accountEmailProvider: usesFirebaseAuth() ? 'firebase' : 'sendgrid',
+      firebaseAuthentication: { configured: Boolean(process.env.FIREBASE_API_KEY || firebaseConfig.apiKey), liveCheck: 'not_checked' },
       transactionalMailConfigured: mailIsConfigured(),
       warnings: HAS_CONFIGURED_SERVER_SECRET ? [] : ['SESSION_SECRET_NOT_CONFIGURED'],
     });
@@ -2494,3 +2572,4 @@ async function startServer() {
 }
 
 startServer();
+
