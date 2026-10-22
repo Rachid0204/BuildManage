@@ -40,6 +40,7 @@ export type View =
   | 'marketplace';
 
 export interface UserProfile {
+  firebaseUid?: string;
   emailVerified?: boolean;
   uid: string;
   email: string;
@@ -576,3 +577,4 @@ export interface Syndic {
   email?: string;
   buildings: Building[];
 }
+

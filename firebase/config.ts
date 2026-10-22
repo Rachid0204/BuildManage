@@ -5,12 +5,13 @@ import {
   getDocFromServer,
 } from 'firebase/firestore';
 import { getFunctions } from 'firebase/functions';
-import { getAuth } from 'firebase/auth';
+import { getAuth, connectAuthEmulator } from 'firebase/auth';
 import { getStorage } from 'firebase/storage';
 import firebaseConfigJson from '../firebase-applet-config.json';
 
-const metaEnv = ((import.meta as unknown as { env?: Record<string, string | undefined> })?.env ||
-  {}) as Record<string, string | undefined>;
+// Keep this as a direct import.meta.env access so Vite replaces it in the browser.
+// Optional chaining on import.meta itself prevents Vite's environment substitution.
+const metaEnv = (import.meta as { env?: Record<string, string | boolean | undefined> }).env || {};
 
 const nodeEnv =
   typeof process !== 'undefined' && process.env
@@ -19,7 +20,7 @@ const nodeEnv =
 
 const readEnv = (key: string, fallback: string): string => {
   const val = metaEnv[key] ?? nodeEnv[key];
-  return val && val.trim().length > 0 ? val.trim() : fallback;
+  return typeof val === 'string' && val.trim().length > 0 ? val.trim() : fallback;
 };
 
 export const firebaseConfig = {
@@ -53,6 +54,12 @@ export const isMock =
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 export const db = getFirestore(app, FIRESTORE_DATABASE_ID);
 export const auth = getAuth(app);
+const authEmulatorUrl = readEnv('VITE_FIREBASE_AUTH_EMULATOR_URL', '');
+if (isBrowserRuntime && authEmulatorUrl && metaEnv.DEV &&
+    ['localhost', '127.0.0.1'].includes(window.location.hostname) &&
+    ['localhost', '127.0.0.1'].includes(new URL(authEmulatorUrl).hostname)) {
+  connectAuthEmulator(auth, authEmulatorUrl, { disableWarnings: true });
+}
 export const functions = getFunctions(app);
 export const storage = getStorage(app);
 
@@ -126,3 +133,4 @@ async function testConnection() {
   }
 }
 void testConnection();
+

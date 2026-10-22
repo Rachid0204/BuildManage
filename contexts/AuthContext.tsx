@@ -167,7 +167,7 @@ function createVerifiedIdentityAdapter(profile: UserProfile, apiToken: string): 
     email: profile.email,
     displayName: profile.displayName || profile.email?.split('@')[0] || 'Utilisateur',
     photoURL: profile.photoURL || null,
-    emailVerified: false,
+    emailVerified: profile.emailVerified === true,
     isAnonymous: false,
     metadata: {},
     providerData: [],
@@ -175,7 +175,7 @@ function createVerifiedIdentityAdapter(profile: UserProfile, apiToken: string): 
     tenantId: profile.syndicId || null,
     delete: async () => {},
     getIdToken: async () => {
-      if (auth.currentUser && auth.currentUser.uid === profile.uid) {
+      if (auth.currentUser && auth.currentUser.uid === (profile.firebaseUid || profile.uid)) {
         return auth.currentUser.getIdToken();
       }
       return apiToken;
@@ -221,7 +221,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setUserProfile(null);
       return;
     }
-    if (!firebaseUser && auth.currentUser && auth.currentUser.uid !== profile.uid) {
+    if (!firebaseUser && auth.currentUser && auth.currentUser.uid !== (profile.firebaseUid || profile.uid)) {
       void signOut(auth).catch(() => {});
     }
     const existingEnvelopeRaw = localStorage.getItem(SESSION_STORAGE_KEY);
@@ -302,7 +302,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         body: JSON.stringify({ identifier, password }) });
       const data = await response.json();
       if (response.ok && data.profile && data.token) {
-        persistSession(data.profile, undefined, data.token);
+        const firebaseUser = data.firebaseAuth
+          ? (await signInWithEmailAndPassword(auth, data.profile.email, password)).user : undefined;
+        persistSession(data.profile, firebaseUser, data.token);
         await syncAllSharedStateFromServer(true);
         return data.profile;
       }
@@ -361,7 +363,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           } : undefined }) });
       const data = await response.json();
       if (!response.ok || !data.profile || !data.token) throw new Error(data.error || 'Inscription impossible.');
-      persistSession(data.profile, undefined, data.token);
+      const firebaseUser = data.firebaseAuth
+        ? (await signInWithEmailAndPassword(auth, input.email.trim().toLowerCase(), input.password)).user : undefined;
+      persistSession(data.profile, firebaseUser, data.token);
       await syncAllSharedStateFromServer(true);
       return data.profile;
     } finally { setLoading(false); }
@@ -375,8 +379,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       headers: getAuthenticatedRequestHeaders(), body: JSON.stringify({ newPassword: password }) });
     const data = await response.json();
     if (!response.ok || !data.ok) throw new Error(data.error || 'Le mot de passe n’a pas été enregistré.');
+    const firebaseUser = data.firebaseAuth
+      ? (await signInWithEmailAndPassword(auth, userProfile.email, password)).user : undefined;
+    persistSession(data.profile || { ...userProfile, mustChangePassword:false },firebaseUser,data.token);
     await syncAllSharedStateFromServer(true);
-    persistSession(data.profile || { ...userProfile, mustChangePassword:false },undefined,data.token);
   };
 
   const logout = async () => {
@@ -425,3 +431,4 @@ export const useAuth = () => {
   }
   return context;
 };
+

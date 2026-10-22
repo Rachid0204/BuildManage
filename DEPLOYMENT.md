@@ -17,8 +17,10 @@ is needed only for `npm run test:emulator`.
 | `FIRESTORE_DATABASE_ID` | Backend | Existing named database or `(default)`; explicitly match the intended project |
 | `GOOGLE_CLOUD_PROJECT` | Backend and migration job | Explicit staging/production project |
 | `SYNDIK_UPLOAD_BUCKET` | Backend | Private Cloud Storage bucket for uploads |
-| `SENDGRID_API_KEY` | Backend secret store | Transactional email API credential |
-| `SENDGRID_FROM_EMAIL` | Backend | Verified sender address; configure SPF/DKIM in SendGrid |
+| `SYNDIK_AUTH_PROVIDER` | Backend | `firebase` (production default); `legacy` is retained for test/rollback only |
+| `FIREBASE_API_KEY` | Backend | Optional Firebase Web API key override; defaults to the checked-in Firebase app configuration |
+| `SENDGRID_API_KEY` | Backend secret store | Optional legacy/general-purpose transactional email credential; unnecessary for Firebase account emails |
+| `SENDGRID_FROM_EMAIL` | Backend | Optional verified sender for SendGrid only |
 | `SYNDIK_SCHEDULER_SECRET` | Backend and Functions secret stores | Separate random secret, at least 32 characters |
 | `SYNDIK_BACKEND_URL` | Functions | Public HTTPS backend origin |
 | `SYNDIK_BOOTSTRAP_ADMIN_EMAIL` | Backend | Optional exact email of a verified Google account allowed to bootstrap platform administration |
@@ -41,6 +43,13 @@ Firestore; a file override on Cloud Run does not provide durable application dat
 Provision a minimum of one instance if required for acceptable cold-start latency.
 The supplied Dockerfile builds the frontend and compiled backend; it does not
 include developer credentials or local data.
+
+## Firebase account email setup
+
+For switching an existing Cloud Run deployment from SendGrid account emails to
+Firebase Authentication, follow [FIREBASE_AUTH_SETUP.md](FIREBASE_AUTH_SETUP.md).
+The provider must be enabled and the runtime account authorized before deployment.
+This does not require the general data migration below.
 
 ## Data migration
 
@@ -153,3 +162,4 @@ CMI checkout and callback remain unavailable. There is no simulated financial
 success. Bank transfer, deposit, cheque and cash are recorded by authorized managers;
 residents submit proofs for human review. A future card gateway must post through
 the same idempotent operation service after merchant-tested webhook verification.
+

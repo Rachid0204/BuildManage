@@ -3,6 +3,7 @@ import { getAuthenticatedRequestHeaders } from "../../utils/security";
 import { useAuth } from "../../contexts/AuthContext";
 import { useI18n } from "../../hooks/useI18n";
 import Button from "../common/Button";
+import { auth } from "../../firebase/config";
 import { useToast } from "../common/Toast";
 export default function EmailVerificationGate() {
   const { logout } = useAuth(),
@@ -14,6 +15,7 @@ export default function EmailVerificationGate() {
       const r = await fetch("/api/auth/verification/request", {
         method: "POST",
         headers: getAuthenticatedRequestHeaders(),
+        body: JSON.stringify({ idToken: await auth.currentUser?.getIdToken(true) }),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || tr('Envoi impossible.', 'تعذر الإرسال.'));
@@ -53,3 +55,4 @@ export default function EmailVerificationGate() {
     </main>
   );
 }
+
