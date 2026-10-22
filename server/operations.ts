@@ -1425,7 +1425,7 @@ async function createCabinet(actor: Actor, input: any) {
           floor: 0,
           area: 0,
           monthlyFees: fee,
-          tantiemes: Math.floor(1000 / count) + (i === 0 ? 1000 % count : 0),
+          tantiemes: Math.floor(1000 / count) + (i < 1000 % count ? 1 : 0),
           ownerId: null,
           tenantId: null,
         })),

@@ -962,6 +962,111 @@ test('monthly charges use the period selected in the form', async ({ page }) => 
   expect((await disk()).syndik_prod_charges_v1.some((c: any) => c.period === '2027-02')).toBe(true);
 });
 
+test('250 MAD monthly fees stay fixed as residents are added and opening setup unlocks payment approval', async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  page.setDefaultTimeout(10_000);
+  await page.setViewportSize({ width: 393, height: 852 });
+  await page.route('**/*', route => new URL(route.request().url()).origin === base ? route.continue() : route.abort());
+  const registered = await apiCall('', '/api/auth/register', {
+    email: 'monthly-fees@ui.invalid', password,
+    profile: { role: 'syndic', displayName: 'Monthly Fees Manager' },
+    syndic: { name: 'Monthly Fees Cabinet', city: 'Casablanca', initialBuilding: {
+      name: 'Monthly Fees Residence', address: 'Synthetic test address', apartmentsCount: 12, monthlyFees: 250,
+    } },
+  });
+  expect(registered.status, JSON.stringify(registered.data)).toBe(200);
+  const token = registered.data.token, cabinetId = registered.data.syndic.id;
+  const building = () => disk().then(s => s.syndik_prod_syndics_v1.find((s: any) => s.id === cabinetId).buildings[0]);
+  const initial = await building(), bId = initial.id;
+  expect(initial.apartments.reduce((sum: number, a: any) => sum + a.tantiemes, 0)).toBe(1000);
+  expect(Math.max(...initial.apartments.map((a: any) => a.tantiemes)) - Math.min(...initial.apartments.map((a: any) => a.tantiemes))).toBe(1);
+  // Existing buildings retain the old 87/83 shares: the monthly fee must still be 250.
+  for (let i = 0; i < 4; i++) {
+    const result = await apiCommand(token, 'updateApartment', [{ ...initial.apartments[i], tantiemes: i === 0 ? 87 : 83 }]);
+    expect(result.status, JSON.stringify(result.data)).toBe(200);
+  }
+  const addResident = async (index: number) => {
+    const result = await apiCommand(token, 'addResident', [{ syndicId: cabinetId, buildingId: bId,
+      name: `Monthly Resident ${index}`, email: `monthly-resident-${index}@ui.invalid`, phone: '0600000000',
+      isOwner: true, apartmentId: initial.apartments[index].id }, false]);
+    expect(result.status, JSON.stringify(result.data)).toBe(200);
+    return result.data.result;
+  };
+  await addResident(0);
+  await page.goto(`${base}/welcome`);
+  await page.evaluate(token => {
+    localStorage.setItem('syndik_auth_session_v1', JSON.stringify({ serverToken: token }));
+    localStorage.setItem('syndik_lang', 'fr');
+  }, token);
+  await page.goto(`${base}/financials`);
+  await expect(page.getByText('Avant le premier encaissement : confirmez les soldes initiaux')).toBeVisible();
+  await expect(page.getByLabel('Fonds courant MAD')).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('opening-balances-mobile.png'), fullPage: true });
+  const issue = async (expectedRows: number, weightedPreview = false) => {
+    await page.getByRole('button', { name: 'Lancer un appel de fonds', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Période concernée').fill('2027-04');
+    const weighted = dialog.getByRole('checkbox', { name: /Répartir un budget global/ });
+    await expect(weighted).not.toBeChecked();
+    const rows = dialog.getByRole('table', { name: 'Aperçu des cotisations' }).locator('tbody tr');
+    await expect(rows).toHaveCount(expectedRows);
+    for (const row of await rows.all()) await expect(row).toContainText(/250,00/);
+    if (weightedPreview) {
+      await weighted.check();
+      await expect(rows.first()).toContainText(/261,00/);
+      await weighted.uncheck();
+      await expect(rows.first()).toContainText(/250,00/);
+      await page.screenshot({ path: testInfo.outputPath('monthly-fee-preview-mobile.png') });
+    }
+    await dialog.getByRole('button', { name: 'Générer pour tous les lots' }).click();
+    await expect(dialog).toBeHidden();
+  };
+  await issue(1, true);
+  const resident2 = await addResident(1);
+  await page.reload();
+  await issue(2);
+  await issue(2); // Reissuing the same month must not duplicate either resident's charge.
+  let state = await disk();
+  const issued = state.syndik_prod_charges_v1.filter((c: any) => c.buildingId === bId);
+  expect(issued).toHaveLength(2);
+  expect(issued.map((c: any) => c.amount)).toEqual([250, 250]);
+  const charge = issued.find((c: any) => c.residentId === resident2.id);
+  const uploaded = await apiCall(token, '/api/uploads', { buildingId: bId, name: 'monthly-receipt.pdf',
+    dataUrl: `data:application/pdf;base64,${pdf.buffer.toString('base64')}` });
+  expect(uploaded.status, JSON.stringify(uploaded.data)).toBe(200);
+  const submitted = await apiCommand(token, 'submitPaymentProof', [{ chargeId: charge.id, amount: 250,
+    receiptUrl: uploaded.data.url, bankName: 'Synthetic Bank', referenceNumber: 'MONTHLY-250', paymentMethod: 'virement' }]);
+  expect(submitted.status, JSON.stringify(submitted.data)).toBe(200);
+  const proofId = submitted.data.result.id;
+  const blocked = await apiCommand(token, 'reviewPaymentProof', [proofId, 'approved']);
+  expect(blocked.status).toBe(409);
+  expect((await disk()).syndik_prod_proofs_v1.find((p: any) => p.id === proofId).status).toBe('pending');
+  await page.reload(); // Load the proof submitted through the separate API session.
+  await page.getByRole('button', { name: /Vérification des Virements/ }).click();
+  await page.getByRole('button', { name: /Valider les virements conformes/ }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'Confirmez les soldes initiaux' }).first()).toBeVisible();
+  await page.getByRole('button', { name: 'Configurer les soldes initiaux' }).click();
+  await expect(page.getByLabel('Fonds courant MAD')).toBeFocused();
+  await page.getByLabel('Fonds courant MAD').fill('0');
+  await page.getByLabel('Réserve MAD', { exact: true }).fill('0');
+  await page.getByLabel('Motif de confirmation des soldes').fill('Verified zero opening funds for this new residence');
+  await page.getByRole('button', { name: 'Confirmer une fois' }).click();
+  await expect(page.getByRole('button', { name: 'Configurer les soldes initiaux' })).toHaveCount(0);
+  await page.getByRole('button', { name: /Vérification des Virements/ }).click();
+  await page.getByRole('button', { name: 'Valider & Délivrer Quittance' }).click();
+  await expect.poll(async () => (await disk()).syndik_prod_proofs_v1.find((p: any) => p.id === proofId).status).toBe('approved');
+  expect((await apiCommand(token, 'reviewPaymentProof', [proofId, 'approved'])).status).toBe(200);
+  state = await disk();
+  expect(state.syndik_prod_charges_v1.find((c: any) => c.id === charge.id)).toMatchObject({ amount: 250, paidAmount: 250, status: 'paid' });
+  expect(state.syndik_prod_invoices_v1.find((i: any) => i.residentId === resident2.id)).toMatchObject({ totalAmount: 250, paidAmount: 250, status: 'paid' });
+  expect(state.syndik_prod_quittances_v1.filter((q: any) => q.buildingId === bId)).toHaveLength(1);
+  const financials = (await building()).financials;
+  expect(financials.balance).toBe(237.5);
+  expect(financials.reserveFundBalance).toBe(12.5);
+  expect(financials.transactions.reduce((sum: number, t: any) => sum + t.amount, 0)).toBe(250);
+  await expect(page.getByRole('button', { name: 'Valider & Délivrer Quittance' })).toHaveCount(0);
+});
+
 test('server validation returns safe field details instead of an unexplained save failure', async () => {
   const sessionResponse = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ identifier: profiles[0].email, password }) });
   const session = await sessionResponse.json();

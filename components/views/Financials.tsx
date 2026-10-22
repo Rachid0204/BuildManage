@@ -25,6 +25,7 @@ import {
   generateQuittanceForCharge,
   addTransaction,
   generateMonthlyCharges,
+  normalizeBillingPeriodKey,
   getPrestatairesForBuilding,
 } from '../../firebase/services';
 import {
@@ -37,6 +38,7 @@ import {
 import {
   computeBuildingFundBalances,
   splitChargeReserveAndOperating,
+  allocateBudgetInCentimes,
 } from '../../utils/security';
 import Loading from '../common/Loading';
 import { useI18n } from '../../hooks/useI18n';
@@ -77,6 +79,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
   const [isTrxModalOpen, setIsTrxModalOpen] = useState(false);
   const [isGenerateModalOpen, setIsGenerateModalOpen] = useState(false);
   const [selectedTrxForView, setSelectedTrxForView] = useState<Transaction | null>(null);
+  const [approvingBatch, setApprovingBatch] = useState(false);
 
   const CATEGORY_LABELS: Record<string, string> = useMemo(
     () => ({
@@ -145,7 +148,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
   // Charge Generation Form State
-  const [useTantiemes, setUseTantiemes] = useState(true);
+  const [useTantiemes, setUseTantiemes] = useState(false);
   const [periodName, setPeriodName] = useState(
     new Date().toISOString().slice(0, 7)
   );
@@ -204,6 +207,29 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
     queryFn: () => getPrestatairesForBuilding(building.id),
   });
 
+  const openChargeGeneration = () => {
+    setUseTantiemes(false);
+    setTotalBudgetInput(String(building.apartments
+      .filter((a: any) => !a.archivedAt)
+      .reduce((sum, a) => sum + (a.monthlyFees ?? building.monthlySyndicFees ?? 0), 0)));
+    setIsGenerateModalOpen(true);
+  };
+  const chargePreview = useMemo(() => {
+    const lots = building.apartments.filter((a: any) => !a.archivedAt);
+    const allocations = useTantiemes
+      ? allocateBudgetInCentimes(Number(totalBudgetInput), lots.map(a => ({ id: a.id, tantiemes: a.tantiemes ?? 100 })), building.totalTantiemes || 1000)
+      : null;
+    return lots.flatMap(apt => {
+      const residentId = apt.ownerId || apt.tenantId || building.residents.find((r: any) => !r.archivedAt && r.apartmentId === apt.id)?.id;
+      if (!residentId) return [];
+      const existing = charges.find(c => c.apartmentId === apt.id &&
+        normalizeBillingPeriodKey(c.period || '') === normalizeBillingPeriodKey(periodName) &&
+        (c.chargeType || 'courante') === 'courante');
+      return [{ id: apt.id, number: apt.number, existing: !!existing,
+        amount: existing?.amount ?? allocations?.get(apt.id) ?? Math.round((apt.monthlyFees ?? building.monthlySyndicFees ?? 0) * 100) / 100 }];
+    });
+  }, [building, charges, periodName, totalBudgetInput, useTantiemes]);
+
   // Reset form helper
   const resetTrxForm = () => {
     setTrxType('expense');
@@ -251,7 +277,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
     mutationFn: () =>
       generateMonthlyCharges(building.id, building.syndicId, periodName, {
         useTantiemes,
-        totalMonthlyBudget: parseFloat(totalBudgetInput) || undefined,
+        ...(useTantiemes ? { totalMonthlyBudget: Number(totalBudgetInput) } : {}),
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['charges', building.id] });
@@ -613,7 +639,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
 
   return (
     <div className="space-y-6">
-      <FinancialTools building={building} />
+      <FinancialTools key={building.id} building={building} />
       {/* Top Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-2 border-b border-slate-200">
         <div>
@@ -647,7 +673,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
           </Button>
           <Button
             variant="secondary"
-            onClick={() => setIsGenerateModalOpen(true)}
+            onClick={openChargeGeneration}
             className="text-xs sm:text-sm flex items-center gap-1.5"
           >
             <span>{tr('Lancer un appel de fonds', 'إصدار طلب المساهمات')}</span>
@@ -1063,13 +1089,13 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
             <div>
               <h3 className="font-semibold text-slate-800 text-sm">{tr('Appels de Charges de Copropriété', 'طلبات مساهمات الملكية المشتركة')}</h3>
               <p className="text-xs text-slate-500">
-                {tr('Montants calculés selon la quote-part en tantièmes de chaque lot (Loi 18-00)', 'المبالغ محتسبة حسب الحصة الشائعة لكل شقة (القانون 18-00)')}
+                {tr('Cotisations configurées par lot ou budget réparti selon les tantièmes, selon le mode choisi à l’émission.', 'مساهمات محددة لكل شقة أو ميزانية موزعة حسب الحصص وفق طريقة الإصدار المختارة.')}
               </p>
             </div>
             <div className="flex items-center gap-2">
               <Button
                 variant="secondary"
-                onClick={() => setIsGenerateModalOpen(true)}
+                onClick={openChargeGeneration}
                 className="text-xs"
               >
                 {tr('+ Nouvel Appel Général', '+ طلب مساهمات عام جديد')}
@@ -1252,19 +1278,27 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
               </label>
               {stats.pendingProofsCount > 0 && (
                 <Button
+                  disabled={approvingBatch}
                   onClick={async () => {
-                    const res = await approvePaymentProofsBatch(building.id);
-                    await queryClient.invalidateQueries({ queryKey: ['proofs', building.id] });
-                    await queryClient.invalidateQueries({ queryKey: ['charges', building.id] });
-                    await queryClient.invalidateQueries({ queryKey: ['quittances', building.id] });
-                    await queryClient.invalidateQueries({ queryKey: ['syndics'] });
-                    showToast(
-                      tr(
-                        `${res.approvedCount} justificatif(s) conforme(s) validé(s) (${res.totalAmountMad} MAD).`,
-                        `تمت المصادقة على ${res.approvedCount} إثباتات مطابقة (${res.totalAmountMad} درهم).`
-                      ),
-                      res.approvedCount > 0 ? 'success' : 'info'
-                    );
+                    setApprovingBatch(true);
+                    try {
+                      const res = await approvePaymentProofsBatch(building.id);
+                      await queryClient.invalidateQueries({ queryKey: ['proofs', building.id] });
+                      await queryClient.invalidateQueries({ queryKey: ['charges', building.id] });
+                      await queryClient.invalidateQueries({ queryKey: ['quittances', building.id] });
+                      await queryClient.invalidateQueries({ queryKey: ['syndics'] });
+                      showToast(
+                        tr(
+                          `${res.approvedCount} justificatif(s) conforme(s) validé(s) (${res.totalAmountMad} MAD).`,
+                          `تمت المصادقة على ${res.approvedCount} إثباتات مطابقة (${res.totalAmountMad} درهم).`
+                        ),
+                        res.approvedCount > 0 ? 'success' : 'info'
+                      );
+                    } catch (error: any) {
+                      showToast(error.message, 'error');
+                    } finally {
+                      setApprovingBatch(false);
+                    }
                   }}
                   className="text-xs bg-teal-700 hover:bg-teal-800 text-white font-bold"
                 >
@@ -1333,6 +1367,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                   {proof.status === 'pending' && (
                     <div className="flex items-center gap-2">
                       <Button
+                        disabled={reviewProofMutation.isPending}
                         onClick={() =>
                           reviewProofMutation.mutate({ proofId: proof.id, decision: 'approve' })
                         }
@@ -1342,6 +1377,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                       </Button>
                       <Button
                         variant="secondary"
+                        disabled={reviewProofMutation.isPending}
                         onClick={() => {
                           const reason = prompt(
                             tr('Motif du rejet :', 'سبب الرفض:'),
@@ -2329,7 +2365,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
         busy={generateChargesMutation.isPending}
         onSubmit={async () => {
           if (!periodName.trim()) throw new Error(tr('Indiquez la période des cotisations.', 'أدخل فترة المساهمات.'));
-          if (totalBudgetInput && (!Number.isFinite(Number(totalBudgetInput)) || Number(totalBudgetInput) <= 0)) throw new Error(tr('Le budget doit être un montant supérieur à zéro.', 'يجب أن تكون الميزانية مبلغاً أكبر من صفر.'));
+          if (useTantiemes && (!totalBudgetInput.trim() || !Number.isFinite(Number(totalBudgetInput)) || Number(totalBudgetInput) <= 0)) throw new Error(tr('Le budget doit être un montant supérieur à zéro.', 'يجب أن تكون الميزانية مبلغاً أكبر من صفر.'));
           await generateChargesMutation.mutateAsync();
         }}
         onClose={() => setIsGenerateModalOpen(false)}
@@ -2348,17 +2384,18 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
         <div className="space-y-4">
           <p className="text-xs text-slate-600">
             {tr(
-              `Cette action génère les avis de cotisation pour l'ensemble des ${building.apartments.length} lots de la résidence.`,
-              `يقوم هذا الإجراء بإصدار إشعارات المساهمة لجميع الشقق (${building.apartments.length} وحدة) في الإقامة.`
+              'Les lots liés à un résident sont facturés une seule fois par période. Les avis déjà émis conservent leur montant.',
+              'تصدر المساهمات للشقق المرتبطة بساكن مرة واحدة لكل فترة. لا تتغير مبالغ الإشعارات الصادرة سابقاً.'
             )}
           </p>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">
+            <label htmlFor="charge-period" className="block text-xs font-semibold text-slate-700 mb-1">
               {tr('Période concernée', 'الفترة المعنية')}
             </label>
             <input
               type="month"
+              id="charge-period"
               value={periodName}
               onChange={(e) => setPeriodName(e.target.value)}
               required
@@ -2367,6 +2404,9 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
           </div>
 
           <div className="p-3 bg-teal-50 border border-teal-200 rounded-lg space-y-2">
+            <p className="text-xs font-semibold text-teal-900">
+              {tr('Par défaut : cotisation mensuelle configurée pour chaque lot, sans supplément.', 'افتراضياً: المساهمة الشهرية المحددة لكل شقة دون زيادة.')}
+            </p>
             <label className="flex items-start gap-2 cursor-pointer">
               <input
                 type="checkbox"
@@ -2376,12 +2416,12 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
               />
               <div>
                 <span className="text-xs font-bold text-teal-900 block">
-                  {tr('Calculer selon les tantièmes de copropriété (Loi 18-00)', 'الاحتساب حسب الحصة الشائعة (الأجزاء) وفق القانون 18-00')}
+                  {tr('Répartir un budget global selon les tantièmes', 'توزيع ميزانية إجمالية حسب الحصص الشائعة')}
                 </span>
                 <span className="text-[11px] text-teal-700 block">
                   {tr(
-                    'La cotisation est calculée proportionnellement à la quote-part de chaque lot sur 1000 tantièmes.',
-                    'يتم احتساب المساهمة بشكل تناسبي مع حصة كل شقة على أساس 1000 جزء.'
+                    'Optionnel : remplace les cotisations configurées par une répartition du budget. Les montants peuvent différer entre lots.',
+                    'اختياري: يستبدل المساهمات المحددة بتوزيع الميزانية وقد تختلف المبالغ بين الشقق.'
                   )}
                 </span>
               </div>
@@ -2389,17 +2429,31 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
 
             {useTantiemes && (
               <div className="mt-2 pt-2 border-t border-teal-200">
-                <label className="block text-xs font-semibold text-teal-900 mb-1">
+                <label htmlFor="charge-budget" className="block text-xs font-semibold text-teal-900 mb-1">
                   {tr('Budget global mensuel à répartir (MAD)', 'الميزانية الشهرية الإجمالية للتوزيع (درهم)')}
                 </label>
                 <input
                   type="number"
+                  id="charge-budget"
+                  min="0.01"
+                  step="0.01"
                   value={totalBudgetInput}
                   onChange={(e) => setTotalBudgetInput(e.target.value)}
                   className="w-full px-3 py-1.5 border border-teal-300 rounded text-sm font-mono bg-white"
                 />
               </div>
             )}
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs" aria-label={tr('Aperçu des cotisations', 'معاينة المساهمات')}>
+              <thead><tr><th className="text-start p-2">{tr('Lot', 'الشقة')}</th><th className="text-end p-2">{tr('Montant', 'المبلغ')}</th><th className="p-2">{tr('Émission', 'الإصدار')}</th></tr></thead>
+              <tbody>{chargePreview.map(row => <tr key={row.id}>
+                <td className="p-2">{row.number}</td>
+                <td className="p-2 text-end font-mono">{Number.isFinite(row.amount) ? currencyFormatter.format(row.amount) : '—'}</td>
+                <td className="p-2">{row.existing ? tr('Déjà émis — inchangé', 'صدر سابقاً — دون تغيير') : tr('À émettre', 'سيصدر')}</td>
+              </tr>)}</tbody>
+            </table>
+            {chargePreview.length === 0 && <p className="text-xs text-slate-600">{tr('Liez un résident à un lot avant de générer les cotisations.', 'اربط ساكناً بشقة قبل إصدار المساهمات.')}</p>}
           </div>
         </div>
       </Modal>
