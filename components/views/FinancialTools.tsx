@@ -44,7 +44,6 @@ export default function FinancialTools({ building }: { building: Building }) {
   const { tr } = useI18n(),
     { userProfile } = useAuth(),
     managed = ["admin", "syndic"].includes(userProfile?.role || ""),
-    [reportEnabled, setReportEnabled] = useState(false),
     [status, setStatus] = useState(""),
     [busy, setBusy] = useState(false),
     [working, setWorking] = useState("0"),
@@ -61,7 +60,6 @@ export default function FinancialTools({ building }: { building: Building }) {
   }, [openingRequired]);
   const { data: report, refetch: refetchReport } = useQuery({
     queryKey: ['financialReport', building.id],
-    enabled: reportEnabled,
     queryFn: async ({ signal }): Promise<any> => {
       const response = await fetch(`/api/reports?buildingId=${encodeURIComponent(building.id)}`, {
         headers: getAuthenticatedRequestHeaders(), signal, cache: 'no-store',
@@ -72,7 +70,6 @@ export default function FinancialTools({ building }: { building: Building }) {
     },
   });
   const load = async () => {
-    setReportEnabled(true);
     return (await refetchReport({ throwOnError: true })).data;
   };
   const run = async (action: () => Promise<unknown>) => {

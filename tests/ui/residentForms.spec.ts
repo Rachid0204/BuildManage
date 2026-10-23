@@ -1189,8 +1189,12 @@ test('live state changes update separate resident and syndic sessions through pa
   page.setDefaultTimeout(10_000);
   const owner = await login(page, 0);
   await page.locator('summary').filter({ hasText: 'Relevés, corrections et clôture' }).click();
-  await page.getByRole('button', { name: 'Actualiser les relevés', exact: true }).click();
   const statement = page.getByRole('table', { name: 'Relevés des résidents' }).getByRole('row').filter({ hasText: resident.name });
+  await expect(statement).toBeVisible();
+  await page.getByRole('button', { name: 'Maintenance', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Nouveau ticket travaux', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Finances', exact: true }).click();
+  await page.locator('summary').filter({ hasText: 'Relevés, corrections et clôture' }).click();
   await expect(statement).toBeVisible();
   const paidBefore = await statement.locator('td').nth(2).textContent();
   const imported = await apiCommand(owner, 'importOpeningArrears', ['b-ui', [{ residentId: 'r-ui', apartmentId: 'lot-ui',
@@ -1441,7 +1445,6 @@ test('building archive confirmation preserves records and the archive view resto
   await expect(page.getByRole('heading', { name: 'Archive simulation', exact: true })).toHaveCount(0);
   expect((await disk()).syndik_prod_syndics_v1[0].buildings.find((b: any) => b.id === id).archivedAt).toBeTruthy();
   await page.locator('summary').filter({ hasText: 'Immeubles archivés' }).click();
-  await page.getByRole('button', { name: 'Charger les archives' }).click();
   await page.evaluate(() => { (window as any).__archiveProbe = 'same-document'; });
   await page.getByRole('button', { name: 'Restaurer Archive simulation' }).click();
   await expect(page.getByRole('heading', { name: 'Archive simulation', exact: true })).toBeVisible();

@@ -6,11 +6,10 @@ import { useI18n } from "../../hooks/useI18n";
 
 export default function ArchiveBuildings() {
   const { tr } = useI18n();
-  const [enabled, setEnabled] = useState(false);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const { data: items = [], refetch, isFetching, error } = useQuery({
-    queryKey: ['archivedBuildings'], enabled,
+    queryKey: ['archivedBuildings'],
     queryFn: async ({ signal }): Promise<Array<{ id: string; name: string }>> => {
       const response = await fetch('/api/archives', { headers: getAuthenticatedRequestHeaders(), signal, cache: 'no-store' });
       const data = await response.json();
@@ -19,7 +18,6 @@ export default function ArchiveBuildings() {
     },
   });
   const load = async () => {
-    setEnabled(true);
     setMessage('');
     try {
       await refetch({ throwOnError: true });
@@ -61,7 +59,7 @@ export default function ArchiveBuildings() {
           </button>
         ))}
       </div>
-      <p role="status">{message || error?.message || (enabled && !isFetching && !items.length ? tr('Aucun immeuble archivé.', 'لا توجد عمارات مؤرشفة.') : '')}</p>
+      <p role="status">{message || error?.message || (!isFetching && !items.length ? tr('Aucun immeuble archivé.', 'لا توجد عمارات مؤرشفة.') : '')}</p>
     </details>
   );
 }
