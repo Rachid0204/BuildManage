@@ -1095,6 +1095,198 @@ test('temporary session failures preserve credentials and offer retry instead of
   }
 });
 
+test('connection retry verifies the saved session without reloading and transient outages recover automatically', async ({ page }) => {
+  test.setTimeout(60_000);
+  page.setDefaultTimeout(10_000);
+  await login(page, 0);
+  for (const automatic of [false, true]) {
+    let available = false, failures = 0;
+    await page.route('**/api/auth/session', route => {
+      if (available || (automatic && failures >= 2)) return route.continue();
+      failures++;
+      return route.fulfill({ status: 503, json: { error: 'Synthetic temporary outage' } });
+    });
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'Connexion au serveur interrompue' })).toBeVisible();
+    await page.evaluate(() => { (window as any).__retryProbe = 'keep-this-document'; });
+    expect(await page.evaluate(() => !!JSON.parse(localStorage.getItem('syndik_auth_session_v1')!).serverToken)).toBe(true);
+    if (!automatic) {
+      available = true;
+      await page.getByRole('button', { name: 'Réessayer la connexion', exact: true }).click();
+    }
+    await expect(page.getByRole('heading', { name: 'Gestion Financière & Recouvrement' })).toBeVisible({ timeout: 20_000 });
+    expect(await page.evaluate(() => (window as any).__retryProbe)).toBe('keep-this-document');
+    await page.unroute('**/api/auth/session');
+  }
+});
+
+test('a newly created provider is assigned by ID through the maintenance form and can be unassigned', async ({ page }) => {
+  page.setDefaultTimeout(10_000);
+  const token = await login(page, 0);
+  await page.goto(`${base}/prestataires`);
+  await page.getByRole('button', { name: /Ajouter.*prestataire/i }).first().click();
+  let dialog = page.getByRole('dialog');
+  await (await field(page, /Nom de l'Entreprise/)).fill('Live Assignment Plumbing');
+  await (await field(page, /Téléphone/)).fill('0600000093');
+  await dialog.locator('input[type=checkbox]').last().uncheck();
+  await dialog.locator('button[type=submit]').click();
+  await expect(dialog).toBeHidden();
+  const provider = (await disk()).syndik_prod_prestataires_v1.find((p: any) => p.name === 'Live Assignment Plumbing');
+  expect(provider).toBeTruthy();
+  const created = await apiCommand(token, 'addMaintenanceRequest', [{ buildingId: 'b-ui',
+    title: 'Provider assignment browser regression', description: 'Synthetic plumbing request.', category: 'plumbing', priority: 'medium' }]);
+  expect(created.status, JSON.stringify(created.data)).toBe(200);
+  await page.goto(`${base}/maintenance`);
+  await page.getByPlaceholder('Rechercher ascenseur, fuite, artisan...').fill('Provider assignment browser regression');
+  await page.getByRole('button', { name: 'Mettre à jour statut & suivi' }).click();
+  dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Prestataire / Artisan assigné :', { exact: true }).selectOption(provider.id);
+  await dialog.locator('select').first().selectOption('in_progress');
+  await dialog.locator('textarea').fill('The selected plumber will inspect the leak.');
+  await dialog.getByRole('button', { name: 'Enregistrer dans le journal' }).click();
+  await expect(dialog).toBeHidden();
+  const saved = () => disk().then(s => s.syndik_prod_maintenance_v1.find((m: any) => m.id === created.data.result.id));
+  expect(await saved()).toMatchObject({ assignedTo: provider.id, prestataireId: provider.id, status: 'in_progress' });
+  await expect(page.getByText(provider.name, { exact: true }).first()).toBeVisible();
+  const rejected = await apiCommand(token, 'updateMaintenanceRequest', [created.data.result.id, { assignedTo: 'not-a-provider-in-this-building' }, { note: 'Rejected foreign assignment' }]);
+  expect(rejected.status).toBe(400);
+  expect((await saved()).prestataireId).toBe(provider.id);
+  await page.getByRole('button', { name: 'Mettre à jour statut & suivi' }).click();
+  dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Prestataire / Artisan assigné :', { exact: true }).selectOption('');
+  await dialog.locator('textarea').fill('The provider assignment has been withdrawn.');
+  await dialog.getByRole('button', { name: 'Enregistrer dans le journal' }).click();
+  await expect(dialog).toBeHidden();
+  expect(await saved()).toMatchObject({ assignedTo: '', prestataireId: '' });
+});
+
+test('offline recovery preserves an open form and live changes appear without page navigation', async ({ page, context }) => {
+  page.setDefaultTimeout(10_000);
+  const token = await login(page, 0);
+  await page.goto(`${base}/maintenance`);
+  await page.getByRole('button', { name: 'Nouveau ticket travaux', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.locator('input[type=text]').first().fill('Unsaved maintenance draft');
+  await dialog.locator('textarea').fill('Keep this report while the connection recovers.');
+  await page.evaluate(() => { (window as any).__liveProbe = 'original-document'; });
+  try {
+    await context.setOffline(true);
+    await expect(page.getByRole('status').filter({ hasText: 'Connexion interrompue' })).toBeVisible();
+    const created = await apiCommand(token, 'addMaintenanceRequest', [{ buildingId: 'b-ui',
+      title: 'Live change during offline interval', description: 'Created by a different client while this form is offline.', category: 'other', priority: 'low' }]);
+    expect(created.status, JSON.stringify(created.data)).toBe(200);
+    await context.setOffline(false);
+    await expect(page.getByRole('heading', { name: 'Live change during offline interval', exact: true })).toHaveCount(1, { timeout: 20_000 });
+    await expect(dialog.locator('input[type=text]').first()).toHaveValue('Unsaved maintenance draft');
+    await expect(dialog.locator('textarea')).toHaveValue('Keep this report while the connection recovers.');
+    expect(await page.evaluate(() => (window as any).__liveProbe)).toBe('original-document');
+    await dialog.getByRole('button', { name: 'Annuler', exact: true }).click();
+  } finally { await context.setOffline(false); }
+});
+
+test('live state changes update separate resident and syndic sessions through payment approval', async ({ page, browser }) => {
+  test.setTimeout(90_000);
+  page.setDefaultTimeout(10_000);
+  const owner = await login(page, 0);
+  await page.locator('summary').filter({ hasText: 'Relevés, corrections et clôture' }).click();
+  await page.getByRole('button', { name: 'Actualiser les relevés', exact: true }).click();
+  const statement = page.getByRole('table', { name: 'Relevés des résidents' }).getByRole('row').filter({ hasText: resident.name });
+  await expect(statement).toBeVisible();
+  const paidBefore = await statement.locator('td').nth(2).textContent();
+  const imported = await apiCommand(owner, 'importOpeningArrears', ['b-ui', [{ residentId: 'r-ui', apartmentId: 'lot-ui',
+    amount: 79.25, period: '2027-09', description: 'Live payment probe' }], 'Synthetic opening arrears for live regression']);
+  expect(imported.status, JSON.stringify(imported.data)).toBe(200);
+  const residentContext = await browser.newContext();
+  const residentPage = await residentContext.newPage();
+  residentPage.setDefaultTimeout(10_000);
+  try {
+    await login(residentPage);
+    await page.getByRole('button', { name: /Vérification des Virements/ }).click();
+    const chargeRow = residentPage.getByText('Live payment probe', { exact: true }).locator('../..');
+    await expect(chargeRow).toBeVisible();
+    await page.evaluate(() => { (window as any).__liveProbe = 'syndic-original-document'; });
+    await residentPage.evaluate(() => { (window as any).__liveProbe = 'resident-original-document'; });
+    await chargeRow.getByRole('button', { name: 'Transmettre Justificatif', exact: true }).click();
+    const modal = residentPage.getByRole('dialog');
+    await modal.getByLabel("N° Référence / Numéro d'opération").fill('LIVE-CROSS-SESSION-79');
+    await modal.getByLabel('Justificatif de paiement', { exact: true }).setInputFiles(pdf);
+    await modal.getByRole('button', { name: 'Envoyer pour validation' }).click();
+    await expect(modal).toBeHidden();
+    const proofRow = page.locator('div.p-4').filter({ has: page.locator('strong', { hasText: 'LIVE-CROSS-SESSION-79' }) }).last();
+    await expect(proofRow.getByRole('button', { name: 'Valider & Délivrer Quittance' })).toBeVisible({ timeout: 20_000 });
+    await proofRow.getByRole('button', { name: 'Valider & Délivrer Quittance' }).click();
+    await expect(chargeRow.getByText('✓ Réglé', { exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(chargeRow.getByRole('button', { name: 'Quittance PDF', exact: true })).toBeVisible();
+    await expect(statement.locator('td').nth(2)).not.toHaveText(paidBefore!);
+    const reports = await apiCall(owner, '/api/reports?buildingId=b-ui');
+    const paid = reports.data.statements.find((row: any) => row.residentId === resident.id).paid;
+    await expect(statement.locator('td').nth(2)).toHaveText(`${paid} MAD`);
+    expect(await page.evaluate(() => (window as any).__liveProbe)).toBe('syndic-original-document');
+    expect(await residentPage.evaluate(() => (window as any).__liveProbe)).toBe('resident-original-document');
+    expect((await page.request.get(`${base}/api/events`)).status()).toBe(401);
+  } finally { await residentContext.close(); }
+});
+
+test('live updates fall back to background reads when the event stream is unavailable', async ({ page }) => {
+  let streamAttempts = 0;
+  const token = await login(page, 0);
+  await page.route('**/api/events', route => {
+    streamAttempts++;
+    return route.fulfill({ status: 503, json: { error: 'Synthetic stream outage' } });
+  });
+  await page.goto(`${base}/maintenance`);
+  await expect(page.getByRole('button', { name: 'Nouveau ticket travaux', exact: true })).toBeVisible();
+  await expect.poll(() => streamAttempts).toBeGreaterThan(0);
+  await page.evaluate(() => { (window as any).__liveProbe = 'polling-document'; });
+  const created = await apiCommand(token, 'addMaintenanceRequest', [{ buildingId: 'b-ui',
+    title: 'Fallback synchronization probe', description: 'Created while every event stream request fails.', category: 'other', priority: 'low' }]);
+  expect(created.status, JSON.stringify(created.data)).toBe(200);
+  await expect(page.getByRole('heading', { name: 'Fallback synchronization probe', exact: true })).toBeVisible({ timeout: 15_000 });
+  expect(await page.evaluate(() => (window as any).__liveProbe)).toBe('polling-document');
+});
+
+test('authenticated live events publish committed revisions without exposing business records', async () => {
+  const token = await apiSession(0);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  try {
+    const response = await fetch(`${base}/api/events`, { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toContain('text/event-stream');
+    reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    const nextRevision = async () => {
+      while (true) {
+        let boundary: number;
+        while ((boundary = buffer.indexOf('\n\n')) >= 0) {
+          const frame = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          const data = frame.split('\n').find(line => line.startsWith('data: '));
+          if (!data) continue;
+          const payload = JSON.parse(data.slice(6));
+          expect(Object.keys(payload)).toEqual(['revision']);
+          expect(Number.isSafeInteger(payload.revision)).toBe(true);
+          return payload.revision as number;
+        }
+        const chunk = await reader!.read();
+        if (chunk.done) throw new Error('Live stream ended before a committed revision arrived');
+        buffer += decoder.decode(chunk.value, { stream: true });
+      }
+    };
+    const initial = await nextRevision();
+    const created = await apiCommand(token, 'addMaintenanceRequest', [{ buildingId: 'b-ui',
+      title: 'Authenticated revision probe', description: 'This private description must not appear in the event stream.', category: 'other', priority: 'low' }]);
+    expect(created.status, JSON.stringify(created.data)).toBe(200);
+    expect(await nextRevision()).toBeGreaterThan(initial);
+  } finally {
+    clearTimeout(timeout);
+    controller.abort();
+    await reader?.cancel().catch(() => {});
+  }
+});
+
 test('database read failures offer recovery instead of claiming the account has no cabinet', async ({ page }) => {
   await login(page, 0);
   await page.route('**/api/shared-state*', route => route.fulfill({ status: 503, json: { error: 'Synthetic database outage' } }));
@@ -1234,7 +1426,13 @@ test('building archive confirmation preserves records and the archive view resto
   expect((await disk()).syndik_prod_syndics_v1[0].buildings.find((b: any) => b.id === id).archivedAt).toBeTruthy();
   await page.locator('summary').filter({ hasText: 'Immeubles archivés' }).click();
   await page.getByRole('button', { name: 'Charger les archives' }).click();
+  await page.evaluate(() => { (window as any).__archiveProbe = 'same-document'; });
   await page.getByRole('button', { name: 'Restaurer Archive simulation' }).click();
   await expect(page.getByRole('heading', { name: 'Archive simulation', exact: true })).toBeVisible();
   expect((await disk()).syndik_prod_syndics_v1[0].buildings.find((b: any) => b.id === id).archivedAt).toBeUndefined();
+  expect(await page.evaluate(() => (window as any).__archiveProbe)).toBe('same-document');
+  const archived = await apiCommand(token, 'deleteBuilding', [id]);
+  expect(archived.status, JSON.stringify(archived.data)).toBe(200);
+  await expect(page.getByRole('heading', { name: 'Archive simulation', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Restaurer Archive simulation' })).toBeVisible();
 });

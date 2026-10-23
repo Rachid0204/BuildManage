@@ -6,6 +6,7 @@ import App from './App';
 import { I18nProvider } from './hooks/useI18n';
 import { AuthProvider } from './contexts/AuthContext';
 import { ToastProvider } from './components/common/Toast';
+import LiveDataSync from './components/LiveDataSync';
 
 const queryClient = new QueryClient({
   mutationCache: new MutationCache({
@@ -31,6 +32,7 @@ root.render(
       <I18nProvider>
         <ToastProvider>
           <AuthProvider>
+            <LiveDataSync />
             <App />
           </AuthProvider>
         </ToastProvider>

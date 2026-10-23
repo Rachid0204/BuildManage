@@ -142,7 +142,7 @@ const compressPhotoFile = (file: File, maxWidth = 1100, maxHeight = 1100, qualit
 };
 
 // Visual 4-Stage Progress Stepper
-const MaintenanceProgressStepper: React.FC<{ request: MaintenanceRequest }> = ({ request }) => {
+const MaintenanceProgressStepper: React.FC<{ request: MaintenanceRequest; providerLabel?: string }> = ({ request, providerLabel }) => {
   const { tr, isAr } = useI18n();
 
   let activeStage = 1;
@@ -163,7 +163,7 @@ const MaintenanceProgressStepper: React.FC<{ request: MaintenanceRequest }> = ({
     {
       step: 2,
       label: tr('2. Artisan Assigné', '2. تعيين المهني'),
-      sub: request.assignedTo ? request.assignedTo : tr('En attente syndic', 'في انتظار السنديك'),
+      sub: providerLabel || request.assignedTo || tr('En attente syndic', 'في انتظار السنديك'),
     },
     {
       step: 3,
@@ -309,6 +309,8 @@ const Maintenance: React.FC<MaintenanceProps> = ({
     queryFn: () => getPrestatairesForBuilding(building.id),
     enabled: !!building.id,
   });
+
+  const providerName = (id?: string) => prestataires.find(p => p.id === id)?.name || id || '';
 
   const residentMap = useMemo(
     () => new Map((building.residents || []).map((r) => [r.id, r])),
@@ -469,7 +471,8 @@ const Maintenance: React.FC<MaintenanceProps> = ({
   const handleOpenUpdateModal = (req: MaintenanceRequest) => {
     setSelectedRequest(req);
     setEditStatus(req.status);
-    setEditAssignedTo(req.assignedTo || '');
+    setEditAssignedTo(req.prestataireId || prestataires.find(p => p.id === req.assignedTo)?.id ||
+      (prestataires.filter(p => p.name === req.assignedTo).length === 1 ? prestataires.find(p => p.name === req.assignedTo)!.id : ''));
     setEditCost(req.cost !== undefined ? String(req.cost) : '');
     setEditInvoiceRef(req.invoiceRef || '');
     setStepTitle(
@@ -487,7 +490,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
     e.preventDefault();
     if (!selectedRequest) return;
 
-    const updates: Partial<MaintenanceRequest> = isResidentPortal ? {} : {status:editStatus,assignedTo:editAssignedTo || undefined,cost:editCost?parseFloat(editCost):undefined,invoiceRef:editInvoiceRef || undefined,syndicNotes:stepNote.trim() || undefined};
+    const updates: Partial<MaintenanceRequest> = isResidentPortal ? {} : {status:editStatus,assignedTo:editAssignedTo,prestataireId:editAssignedTo,cost:editCost?parseFloat(editCost):undefined,invoiceRef:editInvoiceRef || undefined,syndicNotes:stepNote.trim() || undefined};
 
     return updateMutation.mutateAsync({
       id: selectedRequest.id,
@@ -502,7 +505,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
           stepNote.trim() ||
           (editStatus === 'completed'
             ? tr('Travaux achevés et réceptionnés sans réserve.', 'انتهت الأشغال وتم استلامها بدون تحفظ.')
-            : tr(`Mise à jour du dossier (${editAssignedTo || 'Syndic'}).`, `تحديث الملف (${editAssignedTo || 'السنديك'}).`)),
+            : tr(`Mise à jour du dossier (${providerName(editAssignedTo) || 'Syndic'}).`, `تحديث الملف (${providerName(editAssignedTo) || 'السنديك'}).`)),
         updatedBy: isResidentPortal
           ? `${currentResidentName} (${currentApartmentNumber})`
           : tr('SyndicPro Gestion (Bureau Syndic)', 'مكتب السنديك'),
@@ -565,7 +568,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
         const matchDesc = req.description.toLowerCase().includes(q);
         const matchTitle = (req.title || '').toLowerCase().includes(q);
         const matchLoc = (req.location || '').toLowerCase().includes(q);
-        const matchProvider = (req.assignedTo || '').toLowerCase().includes(q);
+        const matchProvider = providerName(req.prestataireId || req.assignedTo).toLowerCase().includes(q);
         if (!matchDesc && !matchTitle && !matchLoc && !matchProvider) return false;
       }
       return true;
@@ -857,7 +860,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                     <div className="flex items-center justify-between">
                       <span className="text-slate-500 font-medium">{tr('Prestataire mandaté :', 'المهني المكلف:')}</span>
                       <span className="font-bold text-slate-900">
-                        {req.assignedTo || tr('En attente de désignation', 'في انتظار التعيين')}
+                        {providerName(req.prestataireId || req.assignedTo) || tr('En attente de désignation', 'في انتظار التعيين')}
                       </span>
                     </div>
                     <div className="flex items-center justify-between">
@@ -908,7 +911,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
               </div>
 
               {/* 4-Stage Visual Progress Stepper */}
-              <MaintenanceProgressStepper request={req} />
+              <MaintenanceProgressStepper request={req} providerLabel={providerName(req.prestataireId || req.assignedTo)} />
 
               {/* Collapsible Detailed Audit Timeline */}
               <div className="pt-1">
@@ -970,7 +973,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                           </span>
                           {upd.assignedTo && (
                             <span className="font-semibold text-teal-800">
-                              {tr('Artisan :', 'المهني:')} {upd.assignedTo}
+                              {tr('Artisan :', 'المهني:')} {providerName(upd.assignedTo)}
                               {upd.cost ? ` · ${currencyFormatter.format(upd.cost)}` : ''}
                             </span>
                           )}
@@ -1079,24 +1082,22 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                   </div>
 
                   <div>
-                    <label className="block font-bold text-slate-700 mb-1">
+                    <label htmlFor="maintenance-provider" className="block font-bold text-slate-700 mb-1">
                       {tr('Prestataire / Artisan assigné :', 'المهني / المقاول المكلف:')}
                     </label>
-                    <input
-                      type="text"
-                      list="building-providers-list"
+                    <select
+                      id="maintenance-provider"
                       value={editAssignedTo}
                       onChange={(e) => setEditAssignedTo(e.target.value)}
-                      placeholder={tr('Sélectionner ou saisir un artisan...', 'اختر أو أدخل اسم المهني...')}
                       className="w-full p-2.5 rounded-lg border border-slate-300 bg-white"
-                    />
-                    <datalist id="building-providers-list">
-                      {prestataires.map((p) => (
-                        <option key={p.id} value={p.name}>
-                          {p.contactPerson} — {p.phone}
+                    >
+                      <option value="">{tr('Non assigné', 'غير معين')}</option>
+                      {prestataires.filter(p => p.active !== false).map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name} — {p.phone}
                         </option>
                       ))}
-                    </datalist>
+                    </select>
                   </div>
                 </div>
 

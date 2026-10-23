@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { isDeepStrictEqual } from "node:util";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, open, rename, rm } from "node:fs/promises";
+import { watch } from "node:fs";
 import path from "node:path";
 import { getApps, initializeApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
@@ -30,9 +31,29 @@ export const sharedState = new Proxy({} as State, {
 });
 export interface StateRepository {
   transaction<T>(run: (state: State) => Promise<T>): Promise<T>;
+  watchRevision?(onRevision: (revision: number) => void, onError: (error: Error) => void): () => void;
 }
 export class FileRepository implements StateRepository {
   constructor(public directory: string) {}
+  watchRevision(onRevision: (revision: number) => void, onError: (error: Error) => void) {
+    let closed = false, timer: ReturnType<typeof setTimeout> | undefined;
+    const read = async () => {
+      try {
+        const state = JSON.parse(await readFile(path.join(this.directory, 'shared-state.json'), 'utf8'));
+        if (!closed) onRevision(Number(state.__revision) || 0);
+      } catch (error: any) {
+        if (!closed && error.code !== 'ENOENT') onError(error);
+      }
+    };
+    const watcher = watch(this.directory, (_event, file) => {
+      if (file && String(file) !== 'shared-state.json') return;
+      clearTimeout(timer);
+      timer = setTimeout(() => void read(), 30);
+    });
+    watcher.on('error', onError);
+    void read();
+    return () => { closed = true; clearTimeout(timer); watcher.close(); };
+  }
   async transaction<T>(run: (state: State) => Promise<T>): Promise<T> {
     await mkdir(this.directory, { recursive: true });
     const lock = path.join(this.directory, ".state-lock");
@@ -206,6 +227,10 @@ export class FirestoreRepository implements StateRepository {
   private db;
   constructor(databaseId: string) {
     this.db = getFirestore(getApps()[0] || initializeApp(), databaseId);
+  }
+  watchRevision(onRevision: (revision: number) => void, onError: (error: Error) => void) {
+    return this.db.doc('platform_internal/state_revision').onSnapshot(
+      snapshot => onRevision(Number(snapshot.data()?.revision) || 0), onError);
   }
   async transaction<T>(run: (state: State) => Promise<T>): Promise<T> {
     const ref = this.db.doc("platform_internal/state_revision");

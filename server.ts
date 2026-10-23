@@ -1,4 +1,5 @@
 import { buildingReport } from "./server/reports";
+import { registerLiveUpdates } from "./server/realtime";
 import {
   createRepository,
   currentState,
@@ -1426,6 +1427,7 @@ async function startServer() {
     post: (route: string, handler: any) => app.post(route, wrap(handler)),
   };
   registerIdentityRoutes(api, extractAndVerifyCaller);
+  registerLiveUpdates(app, repository, extractAndVerifyCaller);
   app.disable("x-powered-by");
   app.set("trust proxy", Number(process.env.TRUST_PROXY_HOPS || 0));
   app.use("/api", (_req, res, next) => {
@@ -2082,7 +2084,7 @@ async function startServer() {
         .status(401)
         .json({ ok: false, error: "Unauthorized: authentication required" });
     }
-    const currentRevision = Number(sharedStore.__revision) || 1;
+    const currentRevision = Number(sharedStore.__revision) || 0;
     const etag = `"rev-${currentRevision}-${caller.uid}"`;
     res.setHeader("ETag", etag);
 

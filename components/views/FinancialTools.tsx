@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { remoteMutation } from "../../firebase/services";
 import { getAuthenticatedRequestHeaders } from "../../utils/security";
 import { useI18n } from "../../hooks/useI18n";
@@ -44,7 +44,7 @@ export default function FinancialTools({ building }: { building: Building }) {
   const { tr } = useI18n(),
     { userProfile } = useAuth(),
     managed = ["admin", "syndic"].includes(userProfile?.role || ""),
-    [report, setReport] = useState<any>(),
+    [reportEnabled, setReportEnabled] = useState(false),
     [status, setStatus] = useState(""),
     [busy, setBusy] = useState(false),
     [working, setWorking] = useState("0"),
@@ -59,15 +59,21 @@ export default function FinancialTools({ building }: { building: Building }) {
   useEffect(() => {
     if (openingRequired && detailsRef.current) detailsRef.current.open = true;
   }, [openingRequired]);
+  const { data: report, refetch: refetchReport } = useQuery({
+    queryKey: ['financialReport', building.id],
+    enabled: reportEnabled,
+    queryFn: async ({ signal }): Promise<any> => {
+      const response = await fetch(`/api/reports?buildingId=${encodeURIComponent(building.id)}`, {
+        headers: getAuthenticatedRequestHeaders(), signal, cache: 'no-store',
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error);
+      return data;
+    },
+  });
   const load = async () => {
-    const r = await fetch(
-      `/api/reports?buildingId=${encodeURIComponent(building.id)}`,
-      { headers: getAuthenticatedRequestHeaders() },
-    );
-    const d = await r.json();
-    if (!r.ok) throw new Error(d.error);
-    setReport(d);
-    return d;
+    setReportEnabled(true);
+    return (await refetchReport({ throwOnError: true })).data;
   };
   const run = async (action: () => Promise<unknown>) => {
     setBusy(true);
@@ -163,7 +169,7 @@ export default function FinancialTools({ building }: { building: Building }) {
         </div>
         {report && (
           <div className="overflow-auto">
-            <table className="w-full text-sm">
+            <table className="w-full text-sm" aria-label={tr('Relevés des résidents', 'كشوف السكان')}>
               <thead>
                 <tr>
                   <th>{tr("Résident", "الساكن")}</th>
