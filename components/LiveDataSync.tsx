@@ -4,6 +4,9 @@ import { useAuth } from '../contexts/AuthContext';
 import { useI18n } from '../hooks/useI18n';
 import { startLiveSync, type LiveStatus } from '../firebase/liveSync';
 
+const directServerQuery = (query: { queryKey: readonly unknown[] }) =>
+  ['financialReport', 'archivedBuildings'].includes(String(query.queryKey[0]));
+
 export default function LiveDataSync() {
   const { userProfile, retrySession } = useAuth();
   const queryClient = useQueryClient();
@@ -23,7 +26,12 @@ export default function LiveDataSync() {
       queued = true;
       queueMicrotask(() => {
         queued = false;
-        if (active) void queryClient.invalidateQueries({}, { cancelRefetch: false });
+        if (active) {
+          // Cache readers may be completing the very sync that emitted this event.
+          // Independent HTTP reports must cancel older responses to avoid stale totals.
+          void queryClient.invalidateQueries({ predicate: query => !directServerQuery(query) }, { cancelRefetch: false });
+          void queryClient.invalidateQueries({ predicate: directServerQuery });
+        }
       });
     };
     const resume = () => {

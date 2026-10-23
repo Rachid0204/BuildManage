@@ -1199,6 +1199,8 @@ test('live state changes update separate resident and syndic sessions through pa
   const residentContext = await browser.newContext();
   const residentPage = await residentContext.newPage();
   residentPage.setDefaultTimeout(10_000);
+  let releaseOldReport = () => {};
+  const oldReportGate = new Promise<void>(resolve => { releaseOldReport = resolve; });
   try {
     await login(residentPage);
     await page.getByRole('button', { name: /Vérification des Virements/ }).click();
@@ -1214,9 +1216,23 @@ test('live state changes update separate resident and syndic sessions through pa
     await expect(modal).toBeHidden();
     const proofRow = page.locator('div.p-4').filter({ has: page.locator('strong', { hasText: 'LIVE-CROSS-SESSION-79' }) }).last();
     await expect(proofRow.getByRole('button', { name: 'Valider & Délivrer Quittance' })).toBeVisible({ timeout: 20_000 });
+    let captured = false, oldReportReady = false;
+    await page.route('**/api/reports?*', async route => {
+      if (captured) return route.continue();
+      captured = true;
+      const response = await route.fetch();
+      oldReportReady = true;
+      await oldReportGate;
+      await route.fulfill({ response }).catch(() => {});
+    });
+    const probe = await apiCommand(owner, 'addMaintenanceRequest', [{ buildingId: 'b-ui',
+      title: 'Report concurrency probe', description: 'Trigger a report refresh before the payment changes.', category: 'other', priority: 'low' }]);
+    expect(probe.status, JSON.stringify(probe.data)).toBe(200);
+    await expect.poll(() => oldReportReady).toBe(true);
     await proofRow.getByRole('button', { name: 'Valider & Délivrer Quittance' }).click();
     await expect(chargeRow.getByText('✓ Réglé', { exact: true })).toBeVisible({ timeout: 20_000 });
     await expect(chargeRow.getByRole('button', { name: 'Quittance PDF', exact: true })).toBeVisible();
+    releaseOldReport();
     await expect(statement.locator('td').nth(2)).not.toHaveText(paidBefore!);
     const reports = await apiCall(owner, '/api/reports?buildingId=b-ui');
     const paid = reports.data.statements.find((row: any) => row.residentId === resident.id).paid;
@@ -1224,7 +1240,7 @@ test('live state changes update separate resident and syndic sessions through pa
     expect(await page.evaluate(() => (window as any).__liveProbe)).toBe('syndic-original-document');
     expect(await residentPage.evaluate(() => (window as any).__liveProbe)).toBe('resident-original-document');
     expect((await page.request.get(`${base}/api/events`)).status()).toBe(401);
-  } finally { await residentContext.close(); }
+  } finally { releaseOldReport(); await residentContext.close(); }
 });
 
 test('live updates fall back to background reads when the event stream is unavailable', async ({ page }) => {
