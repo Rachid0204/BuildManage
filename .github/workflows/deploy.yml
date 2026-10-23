@@ -45,6 +45,9 @@ jobs:
       - name: Verify HTTP identity and authorization boundaries
         run: npm run test:security
 
+      - name: Verify legacy and new assembly snapshot privacy
+        run: npm run test:assembly-privacy
+
       - name: Verify production operations and encrypted recovery
         run: npm run test:production && npm run test:recovery
 

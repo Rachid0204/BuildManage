@@ -1,5 +1,6 @@
 import { buildingReport } from "./server/reports";
 import { registerLiveUpdates } from "./server/realtime";
+import { projectAssemblyForRole } from './server/assemblyPrivacy';
 import {
   createRepository,
   currentState,
@@ -986,6 +987,10 @@ function filterStoreForCaller(store: ServerStore, caller: AuthCallerContext) {
         return true;
       });
   }
+  if (Array.isArray(result.syndik_prod_ag_v1))
+    result.syndik_prod_ag_v1 = result.syndik_prod_ag_v1.map(
+      (assembly: AssembleeGenerale) => projectAssemblyForRole(assembly, caller.role),
+    );
   return clean(result);
 }
 
@@ -2052,7 +2057,7 @@ async function startServer() {
       canWrite(caller, building);
       const result = applyResidentVote(
         ag,
-        (ag as any).votingSnapshot || building,
+        ag.votingSnapshot || building,
         residentId,
         String(req.body.resolutionId || ""),
         req.body.choice,
@@ -2068,7 +2073,7 @@ async function startServer() {
       list[index] = result;
       sharedStore.syndik_prod_ag_v1 = list;
       savePersistedState(sharedStore);
-      return res.json({ ag: result, revision: sharedStore.__revision });
+      return res.json({ ag: projectAssemblyForRole(result, caller.role), revision: sharedStore.__revision });
     } catch (error) {
       return res.status(400).json({
         error: error instanceof Error ? error.message : "Vote invalide.",

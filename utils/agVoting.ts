@@ -1,4 +1,4 @@
-import type { AGResolution, AssembleeGenerale, Building } from '../types';
+import type { AGResolution, AGVotingSnapshot, AssembleeGenerale } from '../types';
 
 export function evaluateResolutionStatus(res: AGResolution, ag: AssembleeGenerale): AGResolution['status'] {
   const totalTantiemes = ag.totalTantiemes || 1000;
@@ -46,7 +46,7 @@ export function evaluateResolutionStatus(res: AGResolution, ag: AssembleeGeneral
 
 /** A vote is a scoped operation, never a replacement of client-provided meeting totals. */
 export function applyResidentVote(
-  source: AssembleeGenerale, building: Building, residentId: string, resolutionId: string,
+  source: AssembleeGenerale, building: AGVotingSnapshot, residentId: string, resolutionId: string,
   choice: 'for' | 'against' | 'abstain', apartmentId?: string, comment?: string
 ): AssembleeGenerale {
   if (!['for', 'against', 'abstain'].includes(choice)) throw new Error('Choix de vote invalide.');

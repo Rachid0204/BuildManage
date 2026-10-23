@@ -359,8 +359,16 @@ export interface AGAttendee {
   proxyHolderName?: string;
 }
 
+/** Frozen voting inputs only; owner contact and financial data belong to the building. */
+export interface AGVotingSnapshot {
+  id: Building['id'];
+  syndicId: Building['syndicId'];
+  residents: Pick<Resident, 'id' | 'name' | 'isOwner'>[];
+  apartments: Pick<Apartment, 'id' | 'number' | 'ownerId' | 'tantiemes'>[];
+}
+
 export interface AssembleeGenerale {
-  votingSnapshot?: Partial<Building>;
+  votingSnapshot?: AGVotingSnapshot;
   id: string;
   buildingId: string;
   syndicId: string;
