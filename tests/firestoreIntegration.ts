@@ -82,6 +82,24 @@ try {
   await second.transaction(async (state) =>
     assert.equal(state.__counter.value, 8),
   );
+  const revisions: number[] = [];
+  let watchError: Error | undefined;
+  const unwatch = first.watchRevision(revision => revisions.push(revision), error => { watchError = error; });
+  try {
+    const waitUntil = async (predicate: () => boolean) => {
+      const deadline = Date.now() + 10_000;
+      while (!predicate()) {
+        if (watchError) throw watchError;
+        assert.ok(Date.now() < deadline, 'Committed Firestore revision did not reach the other repository listener');
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+    };
+    await waitUntil(() => revisions.length > 0);
+    const initialRevision = revisions.at(-1)!;
+    await second.transaction(async state => { state.__liveProbe = { value: 'committed by another instance' }; });
+    await waitUntil(() => revisions.some(revision => revision > initialRevision));
+    console.log('PASS: live revision listener observes commits from another Firestore repository.');
+  } finally { unwatch(); }
   for (const c of [
     env.unauthenticatedContext(),
     env.authenticatedContext("resident", { role: "resident" }),

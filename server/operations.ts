@@ -825,15 +825,16 @@ export async function runOperation(
       Object.keys(object(args[1])).every((k) => fields.includes(k)),
       "Champ de suivi protégé.",
     );
-    for (const field of ["prestataireId", "assignedTo"])
-      if (args[1][field])
-        check(
-          (state.syndik_prod_prestataires_v1 || []).some(
-            (p: any) =>
-              p.id === args[1][field] && p.buildingId === b.id && !p.archivedAt,
-          ),
-          "Prestataire non lié.",
-        );
+    if ('prestataireId' in args[1] || 'assignedTo' in args[1]) {
+      const id = args[1].prestataireId ?? args[1].assignedTo ?? '';
+      check(!args[1].prestataireId || !args[1].assignedTo || args[1].prestataireId === args[1].assignedTo,
+        'Sélectionnez un seul prestataire.', 400);
+      if (id) check((state.syndik_prod_prestataires_v1 || []).some((p: any) =>
+        p.id === id && p.buildingId === b.id && !p.archivedAt && p.active !== false),
+        'Sélectionnez un prestataire actif de cet immeuble.', 400);
+      args[1].prestataireId = id;
+      args[1].assignedTo = id;
+    }
     if (args[1].status)
       check(
         ["pending", "in_progress", "completed"].includes(args[1].status),

@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query';
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 import { User, onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut, signInWithEmailAndPassword } from 'firebase/auth';
 import { auth } from '../firebase/config';
 import { STORAGE_KEYS, pushKeyToSharedServer, syncAllSharedStateFromServer, sanitizeAccountRecordsInStorage, clearStateCache } from '../firebase/services';
@@ -41,6 +41,8 @@ interface AuthContextType {
   userProfile: UserProfile | null;
   loading: boolean;
   sessionError: boolean;
+  sessionRetrying: boolean;
+  retrySession: () => Promise<void>;
   signInWithGoogle: () => Promise<UserProfile>;
   loginWithGoogle: () => Promise<UserProfile>;
   login: (email: string, pass?: string) => Promise<UserProfile>;
@@ -206,14 +208,23 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [sessionError, setSessionError] = useState(false);
+  const [sessionRetrying, setSessionRetrying] = useState(false);
+  const profileRef = useRef<UserProfile | null>(null);
+  const epochRef = useRef(0);
+  const requestIdRef = useRef(0);
+  const sessionRequestRef = useRef<Promise<'authenticated' | 'empty' | 'invalid' | 'unavailable'> | null>(null);
+  const controllerRef = useRef<AbortController | null>(null);
 
-  const persistSession = (
+  const persistSession = useCallback((
     profile: UserProfile | null,
     firebaseUser?: User | null,
     serverToken?: string
   ) => {
+    epochRef.current++;
     setSessionError(false);
-    if (!profile || profile.uid !== userProfile?.uid) { clearStateCache(); queryClient.clear(); }
+    const scope = (p: UserProfile | null) => p && [p.uid, p.role, p.syndicId, p.buildingId, p.residentId, p.prestataireId].join(':');
+    if (!profile || scope(profile) !== scope(profileRef.current)) { clearStateCache(); queryClient.clear(); }
+    profileRef.current = profile;
     if (!profile) {
       localStorage.removeItem(SESSION_STORAGE_KEY);
       setActiveAuthContext(null, null);
@@ -241,51 +252,125 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setActiveAuthContext(profile, preservedServerToken || null);
     setUserProfile(profile);
     setUser(firebaseUser || createVerifiedIdentityAdapter(profile, preservedServerToken || ''));
-  };
+  }, [queryClient]);
 
-  useEffect(() => {
-    let active = true;
-    const controller = new AbortController();
-    const cancel = () => { active = false; controller.abort(); };
-    const restore = async () => {
-      const raw = localStorage.getItem(SESSION_STORAGE_KEY); if (!raw) return false;
-      let cached: { serverToken?: string };
-      try { cached = JSON.parse(raw); }
-      catch { if (active) persistSession(null); return false; }
-      if (!cached.serverToken) { if (active) persistSession(null); return false; }
-      try {
-        const response = await fetch('/api/auth/session', { signal: controller.signal, headers: { Authorization: `Bearer ${cached.serverToken}` } });
-        if ([401, 403].includes(response.status)) { if (active) persistSession(null); return false; }
-        if (!response.ok) throw new Error('Session service unavailable');
-        const data = await response.json();
-        if (!data.profile || !data.token) throw new Error('Incomplete session response');
-        if (active) persistSession(data.profile,undefined,data.token);return true;
-      } catch {
-        // A timeout, interrupted navigation or server outage does not revoke a login.
-        // Keep the token and block protected views until the user can retry verification.
-        if (active && !controller.signal.aborted) setSessionError(true);
-        return true;
-      }
-    };
-    const restored = restore();
-    const unsubscribe = onAuthStateChanged(auth, async currentUser => {
-      const hasSession = await restored;
-      if (active && !hasSession && currentUser) try { await exchangeFirebaseSession(currentUser); } catch { persistSession(null); }
-      if (active) setLoading(false);
-    });
-    return () => { cancel(); unsubscribe(); };
-  }, []);
-
-  const exchangeFirebaseSession = async (firebaseUser: User): Promise<UserProfile> => {
+  const exchangeFirebaseSession = useCallback(async (firebaseUser: User): Promise<UserProfile> => {
+    const epoch = epochRef.current;
     const token = await firebaseUser.getIdToken();
     const response = await fetch('/api/auth/firebase-session', { method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } });
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(15000) });
     const data = await response.json();
-    if (!response.ok || !data.profile || !data.token) throw new Error(data.error || 'Connexion au serveur impossible.');
+    if (epoch !== epochRef.current) throw new Error('La session a changé.');
+    if (!response.ok || !data.profile || !data.token)
+      throw Object.assign(new Error(data.error || 'Connexion au serveur impossible.'), { status: response.status });
     persistSession(data.profile, firebaseUser, data.token);
     await syncAllSharedStateFromServer(true);
     return data.profile;
-  };
+  }, [persistSession]);
+
+  const restoreSession = useCallback(() => {
+    if (sessionRequestRef.current) return sessionRequestRef.current;
+    const id = ++requestIdRef.current, epoch = epochRef.current;
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    const current = () => id === requestIdRef.current && epoch === epochRef.current;
+    setSessionRetrying(true);
+    const task = (async (): Promise<'authenticated' | 'empty' | 'invalid' | 'unavailable'> => {
+      try {
+        const raw = localStorage.getItem(SESSION_STORAGE_KEY);
+        if (!raw) return 'empty';
+        let cached: { serverToken?: string };
+        try { cached = JSON.parse(raw); } catch { if (current()) persistSession(null); return 'invalid'; }
+        if (!cached.serverToken) { if (current()) persistSession(null); return 'invalid'; }
+        const response = await fetch('/api/auth/session', { signal: controller.signal,
+          cache: 'no-store', headers: { Authorization: `Bearer ${cached.serverToken}` } });
+        if ([401, 403].includes(response.status)) {
+          if (current()) { persistSession(null); void signOut(auth).catch(() => {}); }
+          return 'invalid';
+        }
+        if (!response.ok) throw new Error('Session service unavailable');
+        const data = await response.json();
+        if (!data.profile || !data.token) throw new Error('Incomplete session response');
+        if (current()) persistSession(data.profile, undefined, data.token);
+        return 'authenticated';
+      } catch {
+        if (current()) setSessionError(true);
+        return 'unavailable';
+      } finally {
+        clearTimeout(timeout);
+        if (id === requestIdRef.current) {
+          controllerRef.current = null;
+          sessionRequestRef.current = null;
+          setSessionRetrying(false);
+        }
+      }
+    })();
+    sessionRequestRef.current = task;
+    // Empty/malformed sessions can resolve before the promise is assigned.
+    void task.finally(() => { if (sessionRequestRef.current === task) sessionRequestRef.current = null; });
+    return task;
+  }, [persistSession]);
+
+  const sessionRecoveryFailed = useCallback((error: any, epoch: number) => {
+    if (epoch !== epochRef.current) return;
+    if ([401, 403].includes(error?.status) ||
+        ['auth/user-disabled', 'auth/user-token-expired', 'auth/invalid-user-token'].includes(error?.code)) {
+      persistSession(null);
+      void signOut(auth).catch(() => {});
+    } else setSessionError(true);
+  }, [persistSession]);
+
+  const retrySession = useCallback(async () => {
+    const result = await restoreSession();
+    if (result === 'empty' && auth.currentUser) {
+      const epoch = epochRef.current;
+      setSessionRetrying(true);
+      try { await exchangeFirebaseSession(auth.currentUser); }
+      catch (error) { sessionRecoveryFailed(error, epoch); }
+      finally { setSessionRetrying(false); }
+    }
+  }, [restoreSession, exchangeFirebaseSession, sessionRecoveryFailed]);
+
+  useEffect(() => {
+    let active = true, initialAuthHandled = false;
+    const restored = restoreSession();
+    const unsubscribe = onAuthStateChanged(auth, async currentUser => {
+      if (initialAuthHandled) return;
+      initialAuthHandled = true;
+      const result = await restored;
+      if (active && result === 'empty' && currentUser) {
+        const epoch = epochRef.current;
+        try { await exchangeFirebaseSession(currentUser); }
+        catch (error) { if (active) sessionRecoveryFailed(error, epoch); }
+      }
+      if (active) setLoading(false);
+    });
+    return () => {
+      active = false;
+      epochRef.current++;
+      requestIdRef.current++;
+      controllerRef.current?.abort();
+      controllerRef.current = null;
+      sessionRequestRef.current = null;
+      unsubscribe();
+    };
+  }, [restoreSession, exchangeFirebaseSession, sessionRecoveryFailed]);
+
+  useEffect(() => {
+    if (!sessionError) return;
+    let active = true, attempt = 0;
+    let timer: ReturnType<typeof setTimeout>;
+    const run = async () => {
+      if (!active) return;
+      if (navigator.onLine !== false) await retrySession();
+      if (active) timer = setTimeout(run, Math.min(1000 * 2 ** ++attempt, 30000));
+    };
+    const wake = () => { clearTimeout(timer); void run(); };
+    timer = setTimeout(run, 1000);
+    window.addEventListener('online', wake);
+    return () => { active = false; clearTimeout(timer); window.removeEventListener('online', wake); };
+  }, [sessionError, retrySession]);
 
   const signInWithGoogle = async (): Promise<UserProfile> => {
     const result = await signInWithPopup(auth, new GoogleAuthProvider());
@@ -408,6 +493,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         userProfile,
         loading,
         sessionError,
+        sessionRetrying,
+        retrySession,
         signInWithGoogle,
         loginWithGoogle: signInWithGoogle,
         login,
@@ -431,4 +518,3 @@ export const useAuth = () => {
   }
   return context;
 };
-

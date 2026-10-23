@@ -109,12 +109,12 @@ const broadcastChannel =
     ? new BroadcastChannel('syndik_realtime_sync')
     : null;
 
-function notifyStateUpdated(key: string) {
+function notifyStateUpdated(key: string, broadcast = true) {
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('syndik-state-updated', { detail: { key } }));
   }
   try {
-    broadcastChannel?.postMessage({ type: 'STATE_UPDATED', key, timestamp: Date.now() });
+    if (broadcast) broadcastChannel?.postMessage({ type: 'STATE_UPDATED', key, timestamp: Date.now() });
   } catch {
     // ignore broadcast errors
   }
@@ -196,6 +196,19 @@ let lastKnownServerRevision = 0;
 let lastSyncTimestampMs = 0;
 let inflightSyncPromise: Promise<Record<string, any> | null> | null = null;
 let stateCacheGeneration = 0;
+const syncControllers = new Set<AbortController>();
+export const getKnownServerRevision = () => lastKnownServerRevision;
+
+function cacheServerStore(store: Record<string, any>) {
+  for (const key of Object.values(STORAGE_KEYS)) {
+    const value = store[key];
+    const next = value === undefined || value === null ? null : JSON.stringify(stripPlaintextCredentialsForStorage(key, value));
+    if (engineStorage.getItem(key) === next) continue;
+    if (next === null) engineStorage.removeItem(key);
+    else engineStorage.setItem(key, next);
+    notifyStateUpdated(key, false);
+  }
+}
 
 export async function pushKeyToSharedServer<T>(
   key: string,
@@ -315,7 +328,10 @@ export async function syncAllSharedStateFromServer(
   }
 
   const generation = stateCacheGeneration;
-  inflightSyncPromise = (async () => {
+  const controller = new AbortController();
+  syncControllers.add(controller);
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  const task = (async () => {
     try {
       const url =
         !force && lastKnownServerRevision > 0
@@ -325,9 +341,12 @@ export async function syncAllSharedStateFromServer(
         method: 'GET',
         headers,
         cache: 'no-store',
+        signal: controller.signal,
       });
       if (generation !== stateCacheGeneration) return null;
       if (!res.ok) {
+        if ([401, 403].includes(res.status) && typeof window !== 'undefined')
+          window.dispatchEvent(new CustomEvent('syndik-session-invalid'));
         const failure = await readCommandResponse(res);
         throw new Error(failure.error || 'Chargement des données impossible.');
       }
@@ -361,23 +380,21 @@ export async function syncAllSharedStateFromServer(
         }
       }
 
-      for (const key of trackedKeys) {
-        const serverVal = serverStore[key];
-        if (serverVal !== undefined && serverVal !== null) {
-          const cleanVal = stripPlaintextCredentialsForStorage(key, serverVal);
-          engineStorage.setItem(key, JSON.stringify(cleanVal));
-        } else { engineStorage.removeItem(key); }
-      }
+      cacheServerStore(serverStore);
       return serverStore;
     } catch (error) {
       if (generation !== stateCacheGeneration) return null;
       throw error;
     } finally {
-      if (generation === stateCacheGeneration) inflightSyncPromise = null;
+      clearTimeout(timeout);
+      syncControllers.delete(controller);
     }
   })();
 
-  return inflightSyncPromise;
+  inflightSyncPromise = task;
+  const release = () => { if (inflightSyncPromise === task) inflightSyncPromise = null; };
+  void task.then(release, release);
+  return task;
 }
 
 export async function resetAllProductionData(): Promise<void> { throw new Error('Remise à zéro désactivée : utilisez la sauvegarde et restauration.'); }
@@ -3469,7 +3486,7 @@ const pendingOperations = new Map<string, string>();
 const ephemeralInvites = new Map<string, any>();
 const preparedOperations = new Map<string, unknown[]>();
 const inflightOperations = new Map<string, Promise<unknown>>();
-export function clearStateCache() { stateCacheGeneration++; inflightSyncPromise = null; clearBusinessCache(); pendingOperations.clear(); preparedOperations.clear(); inflightOperations.clear(); ephemeralInvites.clear(); lastKnownServerRevision = 0; lastSyncTimestampMs = 0; }
+export function clearStateCache() { stateCacheGeneration++; for (const controller of syncControllers) controller.abort(); syncControllers.clear(); inflightSyncPromise = null; clearBusinessCache(); pendingOperations.clear(); preparedOperations.clear(); inflightOperations.clear(); ephemeralInvites.clear(); lastKnownServerRevision = 0; lastSyncTimestampMs = 0; }
 export function remoteMutation<T = any>(operation: string, args: unknown[]): Promise<T> {
   args = [...args];
   while (args.length && args.at(-1) === undefined) args.pop();
@@ -3532,7 +3549,7 @@ async function performRemoteMutation<T>(operation: string, args: unknown[], requ
   if (data.store && (typeof data.revision !== 'number' || data.revision >= lastKnownServerRevision)) {
     if (typeof data.revision === 'number') lastKnownServerRevision = data.revision;
     lastSyncTimestampMs = Date.now();
-    for (const [key,value] of Object.entries(data.store)) if (key.startsWith('syndik_prod_')) engineStorage.setItem(key,JSON.stringify(value));
+    cacheServerStore(data.store);
   }
   for (const key of Object.values(STORAGE_KEYS)) notifyStateUpdated(key);
   notifyOperation({ operation });
