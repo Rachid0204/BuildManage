@@ -1,4 +1,5 @@
 import { normalizeBillingPeriodKey } from "../firebase/services";
+import { minimalVotingSnapshot } from './assemblyPrivacy';
 import { queueMail, mailIsConfigured } from "./mailer";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
@@ -1710,16 +1711,14 @@ async function meetingOperation(actor: Actor, operation: string, args: any[]) {
       check(typeof args[1] === "boolean", "Statut invalide.", 400);
       if (args[1] && !ag.votingSnapshot) {
         Object.assign(ag, roll(b, ag.attendees));
-        ag.votingSnapshot = JSON.parse(
-          JSON.stringify({
-            id: b.id,
-            syndicId: b.syndicId,
-            residents: b.residents.filter(
-              (r: any) => r.isOwner && !r.archivedAt,
-            ),
-            apartments: b.apartments.filter((a: any) => !a.archivedAt),
-          }),
-        );
+        ag.votingSnapshot = minimalVotingSnapshot({
+          id: b.id,
+          syndicId: b.syndicId,
+          residents: b.residents.filter(
+            (r: any) => r.isOwner && !r.archivedAt,
+          ),
+          apartments: b.apartments.filter((a: any) => !a.archivedAt),
+        });
         ag.status = "in_progress";
       }
       ag.isVotingOpen = args[1];
