@@ -1756,7 +1756,7 @@ async function startServer() {
           number: `${Math.floor(i / 4) + 1}0${(i % 4) + 1}`,
           floor: Math.floor(i / 4) + 1,
           area: 80,
-          tantiemes: Math.floor(1000 / count) + (i === 0 ? 1000 % count : 0),
+          tantiemes: Math.floor(1000 / count) + (i < 1000 % count ? 1 : 0),
           coproType: "apartment",
           ownerId: null,
           tenantId: null,
@@ -2572,4 +2572,3 @@ async function startServer() {
 }
 
 startServer();
-

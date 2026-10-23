@@ -1,4 +1,5 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { remoteMutation } from "../../firebase/services";
 import { getAuthenticatedRequestHeaders } from "../../utils/security";
 import { useI18n } from "../../hooks/useI18n";
@@ -36,6 +37,9 @@ const csv = (rows: any[]) => {
   );
 };
 export default function FinancialTools({ building }: { building: Building }) {
+  const queryClient = useQueryClient();
+  const detailsRef = useRef<HTMLDetailsElement>(null);
+  const openingRef = useRef<HTMLFieldSetElement>(null);
   const { showToast } = useToast();
   const { tr } = useI18n(),
     { userProfile } = useAuth(),
@@ -45,11 +49,16 @@ export default function FinancialTools({ building }: { building: Building }) {
     [busy, setBusy] = useState(false),
     [working, setWorking] = useState("0"),
     [reserve, setReserve] = useState("0"),
+    [openingReason, setOpeningReason] = useState(""),
     [reason, setReason] = useState(""),
     [period, setPeriod] = useState(new Date().toISOString().slice(0, 7)),
     [payment, setPayment] = useState(""),
     [lot, setLot] = useState(""),
     [arrears, setArrears] = useState("");
+  const openingRequired = managed && !(building.financials as any)?.openingBalancesRecordedAt;
+  useEffect(() => {
+    if (openingRequired && detailsRef.current) detailsRef.current.open = true;
+  }, [openingRequired]);
   const load = async () => {
     const r = await fetch(
       `/api/reports?buildingId=${encodeURIComponent(building.id)}`,
@@ -75,12 +84,25 @@ export default function FinancialTools({ building }: { building: Building }) {
       setBusy(false);
     }
   };
-  const op = (operation: string, args: any[]) =>
-    remoteMutation(operation, args);
+  const op = async (operation: string, args: any[]) => {
+    const result = await remoteMutation(operation, args);
+    await queryClient.invalidateQueries({ queryKey: ['syndics'] });
+    return result;
+  };
   const button =
     "border border-slate-300 rounded-lg px-3 py-2 text-sm disabled:opacity-50";
   return (
-    <details className="bg-white border rounded-xl p-4">
+    <section className="space-y-3">
+      {openingRequired && <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 space-y-2" role="note">
+        <p className="font-semibold text-amber-950">{tr('Avant le premier encaissement : confirmez les soldes initiaux', 'قبل أول تحصيل: أكد الأرصدة الافتتاحية')}</p>
+        <p className="text-sm text-amber-900">{tr('Indiquez les fonds courant et de réserve détenus au démarrage. Si les deux étaient nuls, confirmez 0 MAD. Cette étape est requise une seule fois pour valider les paiements.', 'أدخل رصيد الصندوق الجاري والاحتياطي عند بدء المحاسبة. إذا كانا صفراً، أكد 0 درهم. هذه الخطوة مطلوبة مرة واحدة للمصادقة على الأداءات.')}</p>
+        <button className={button} onClick={() => {
+          if (detailsRef.current) detailsRef.current.open = true;
+          openingRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+          openingRef.current?.querySelector('input')?.focus({ preventScroll: true });
+        }}>{tr('Configurer les soldes initiaux', 'إعداد الأرصدة الافتتاحية')}</button>
+      </div>}
+    <details ref={detailsRef} className="bg-white border rounded-xl p-4">
       <summary className="font-bold cursor-pointer">
         {tr("Relevés, corrections et clôture", "الكشوف والتصحيحات والإقفال")}
       </summary>
@@ -175,8 +197,8 @@ export default function FinancialTools({ building }: { building: Building }) {
                 onChange={(e) => setReason(e.target.value)}
               />
             </label>
-            {!(building.financials as any)?.openingBalancesRecordedAt && (
-              <fieldset className="border rounded p-3 flex flex-wrap items-end gap-3">
+            {openingRequired && (
+              <fieldset ref={openingRef} className="border rounded p-3 flex flex-wrap items-end gap-3">
                 <legend>
                   {tr(
                     "Confirmer les soldes initiaux (y compris zéro)",
@@ -203,9 +225,13 @@ export default function FinancialTools({ building }: { building: Building }) {
                     onChange={(e) => setReserve(e.target.value)}
                   />
                 </label>
+                <label className="w-full">
+                  {tr('Motif de confirmation des soldes', 'سبب تأكيد الأرصدة')}
+                  <input className="border rounded p-2 block w-full" value={openingReason} onChange={e => setOpeningReason(e.target.value)} />
+                </label>
                 <button
                   className={button}
-                  disabled={busy || !reason.trim()}
+                  disabled={busy || !openingReason.trim() || !working.trim() || !reserve.trim() || !Number.isFinite(Number(working)) || !Number.isFinite(Number(reserve))}
                   onClick={() =>
                     void run(() =>
                       op("setOpeningBalances", [
@@ -213,7 +239,7 @@ export default function FinancialTools({ building }: { building: Building }) {
                         {
                           working: Number(working),
                           reserve: Number(reserve),
-                          reason,
+                          reason: openingReason.trim(),
                         },
                       ]),
                     )
@@ -397,5 +423,6 @@ export default function FinancialTools({ building }: { building: Building }) {
         </p>
       </div>
     </details>
+    </section>
   );
 }

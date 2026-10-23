@@ -611,7 +611,7 @@ export const addBuilding = async (
     monthlyFees: apt.monthlyFees ?? coreBuilding.monthlySyndicFees,
     tantiemes:
       apt.tantiemes ??
-      (idx === 0 ? baseTantiemes + remainderTantiemes : baseTantiemes),
+      (baseTantiemes + (idx < remainderTantiemes ? 1 : 0)),
     coproType: apt.coproType || 'apartment',
     ownerId: null,
     tenantId: null,
