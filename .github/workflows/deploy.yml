@@ -43,6 +43,9 @@ jobs:
       - name: Verify HTTP identity and authorization boundaries
         run: npm run test:security
 
+      - name: Verify AI capabilities, payloads, deadlines and shared consumption quotas
+        run: npm run test:ai-protection
+
       - name: Verify legacy and new assembly snapshot privacy
         run: npm run test:assembly-privacy
 
