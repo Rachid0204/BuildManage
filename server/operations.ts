@@ -368,6 +368,8 @@ export async function runOperation(
     );
     const data = BuildingSchema.omit({ id: true }).parse({
         ...args[1],
+        reserveFundRate: args[1].reserveFundRate !== undefined ? args[1].reserveFundRate
+          : args[1].reserveFundPercentage !== undefined ? args[1].reserveFundPercentage : 5,
         syndicId: s.id,
       }),
       lots = z

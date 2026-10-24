@@ -741,6 +741,33 @@ test('lot and resident forms retain drafts on failures and persist complete reco
   expect((await disk()).syndik_prod_syndics_v1[0].buildings[0].residents.some((r: any) => r.email === 'new-resident@ui.invalid')).toBe(true);
 });
 
+test('building reserve rate accepts fractional percentages and persists the same rate used by payments', async ({ page }) => {
+  const token = await login(page, 0);
+  const originalRate = (await disk()).syndik_prod_syndics_v1[0].buildings[0].reserveFundRate;
+  try {
+    await page.goto(`${base}/buildings`);
+    await page.getByTitle("Modifier l'immeuble").first().click();
+    const dialog = page.getByRole('dialog');
+    const rate = dialog.locator('#bld-reserve-rate');
+    await expect(rate).toHaveAttribute('max', '100');
+    await expect(rate).toHaveAttribute('step', 'any');
+    const before = (await disk()).syndik_prod_syndics_v1[0].buildings[0].financials;
+    await rate.fill('7.5');
+    await dialog.locator('button[type=submit]').click();
+    await expect(dialog).toBeHidden();
+    const updated = (await disk()).syndik_prod_syndics_v1[0].buildings[0];
+    expect(updated.reserveFundRate).toBe(7.5);
+    expect(updated.reserveFundPercentage).toBeUndefined();
+    expect(updated.financials).toEqual(before);
+  } finally {
+    const restored = await page.request.post(`${base}/api/commands`, {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { operation: 'updateBuilding', args: ['b-ui', { reserveFundRate: originalRate }], operationId: crypto.randomUUID() },
+    });
+    expect(restored.status()).toBe(200);
+  }
+});
+
 test('maintenance validates required fields, preserves failed reports and saves the selected urgency', async ({ page }, testInfo) => {
   await login(page);
   await page.getByRole('button', { name: /Incidents.*Suivi/ }).first().click();

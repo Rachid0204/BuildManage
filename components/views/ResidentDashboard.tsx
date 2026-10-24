@@ -42,7 +42,7 @@ import type {
   Resident,
 } from '../../types';
 import { generateQuittancePDF } from '../../services/pdfService';
-import { splitChargeReserveAndOperating } from '../../utils/security';
+import { getRecordedReserveSplit } from '../../utils/security';
 import Loading from '../common/Loading';
 
 const CommunityChat = React.lazy(() => import('./CommunityChat'));
@@ -66,6 +66,10 @@ const ResidentDashboard: React.FC = () => {
       }),
     [language]
   );
+  const formatRecordedFund = (receipt: Quittance, fund: 'reserveFundAmount' | 'chargesCourantesAmount') => {
+    const split = getRecordedReserveSplit(receipt);
+    return split ? currencyFormatter.format(split[fund]) : tr('Non documenté', 'غير موثق');
+  };
 
   const [activeTab, setActiveTab] = useState<
     'overview' | 'voting' | 'maintenance' | 'chat' | 'providers' | 'marketplace'
@@ -1564,13 +1568,7 @@ const ResidentDashboard: React.FC = () => {
                   {selectedResidentQuittanceForPreview.periodCovered})
                 </span>
                 <span className="font-mono font-medium">
-                  {currencyFormatter.format(
-                    selectedResidentQuittanceForPreview.chargesCourantesAmount ??
-                      splitChargeReserveAndOperating(
-                        selectedResidentQuittanceForPreview.amount,
-                        activeBuilding?.reserveFundPercentage ?? 5
-                      ).chargesCourantesAmount
-                  )}
+                  {formatRecordedFund(selectedResidentQuittanceForPreview, 'chargesCourantesAmount')}
                 </span>
               </div>
               <div className="flex justify-between items-center text-emerald-800">
@@ -1581,13 +1579,7 @@ const ResidentDashboard: React.FC = () => {
                   )}
                 </span>
                 <span className="font-mono font-semibold">
-                  {currencyFormatter.format(
-                    selectedResidentQuittanceForPreview.reserveFundAmount ??
-                      splitChargeReserveAndOperating(
-                        selectedResidentQuittanceForPreview.amount,
-                        activeBuilding?.reserveFundPercentage ?? 5
-                      ).reserveFundAmount
-                  )}
+                  {formatRecordedFund(selectedResidentQuittanceForPreview, 'reserveFundAmount')}
                 </span>
               </div>
               <div className="pt-2 border-t border-slate-200 flex justify-between items-center font-bold text-slate-900 text-sm">

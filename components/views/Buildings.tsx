@@ -6,6 +6,7 @@ import Button from '../common/Button';
 import Modal from '../common/Modal';
 import { PlusIcon, PencilIcon, TrashIcon } from '../icons/IconComponents';
 import { useI18n } from '../../hooks/useI18n';
+import { getBuildingReserveRate } from '../../utils/security';
 
 export type BuildingFormPayload = Omit<
   Building,
@@ -67,7 +68,7 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
       setAddress(existingBuilding.address || '');
       setCity(existingBuilding.city || '');
       setMonthlyFees(String(existingBuilding.monthlySyndicFees ?? 250));
-      setReserveFundRate(String(existingBuilding.reserveFundRate ?? 5));
+      setReserveFundRate(String(getBuildingReserveRate(existingBuilding)));
       setBankName(existingBuilding.bankName || '');
       setBankRib(existingBuilding.bankRib || '');
       setManagerName(existingBuilding.managerName || '');
@@ -369,12 +370,14 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
               type="number"
               id="bld-reserve-rate"
               min={0}
-              max={50}
+              max={100}
+              step="any"
               value={reserveFundRate}
               onChange={(e) => setReserveFundRate(e.target.value)}
               placeholder="Ex: 5"
               className="block w-full px-3 py-2 border border-slate-300 rounded-md text-sm"
             />
+            {renderError('reserveFundRate')}
           </div>
         </div>
 
@@ -744,7 +747,7 @@ const Buildings: React.FC<{
                         {tr('Fonds Réserve', 'صندوق الاحتياط')}
                       </span>
                       <span className="font-mono font-bold text-teal-700">
-                        {building.reserveFundRate ?? 5}% ({tr('Loi 106-12', 'قانون 106-12')})
+                        {getBuildingReserveRate(building)}% ({tr('Loi 106-12', 'قانون 106-12')})
                       </span>
                     </div>
                   </div>

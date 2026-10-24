@@ -1,5 +1,6 @@
 import { normalFont,boldFont } from '../assets/pdfFonts';
 import { jsPDF } from "jspdf";
+import { getRecordedReserveSplit, getRecordedReserveTotal } from '../utils/security';
 import type {
   Invoice,
   Building,
@@ -95,7 +96,8 @@ export const generateQuittancePDF = (
   doc.setFillColor(15,118,110);doc.rect(0,0,210,34,'F');doc.setTextColor(255,255,255);doc.setFont('helvetica','bold');doc.setFontSize(18);doc.text(q.voidedAt?'QUITTANCE ANNULÉE':'QUITTANCE DE PAIEMENT',14,18);doc.setFontSize(10);doc.text(String(quittance.quittanceNumber),14,27);doc.setTextColor(30,41,59);doc.setFont('helvetica','normal');doc.setFontSize(10);let y=48;
   const write=(label:string,value:any)=>{const lines=doc.splitTextToSize(`${label} : ${value||'Non renseigné'}`,180);if(y+lines.length*6>265){doc.addPage();y=24;}doc.text(lines,14,y);y+=lines.length*6+5;};
   write('Syndic',syndic?.name||building.managerName);write('Immeuble',`${building.name} · ${building.address||''} · ${building.city||''}`);write('Résident',resident?.name||quittance.residentName);write('Lot',apartment?.number||quittance.apartmentNumber);write('Période couverte',quittance.periodCovered);write('Date du paiement',new Date(quittance.paymentDate).toLocaleDateString('fr-MA'));write('Mode de règlement',quittance.paymentMethod);write('Référence du règlement',quittance.referenceNumber||q.paymentId);write('Identifiant du reçu',quittance.id);
-  doc.setFont('helvetica','bold');write('Montant enregistré',currencyFormatter.format(quittance.amount));doc.setFont('helvetica','normal');write('Fonds courant',currencyFormatter.format(quittance.chargesCourantesAmount??quittance.amount));write('Fonds de réserve',currencyFormatter.format(quittance.reserveFundAmount??0));
+  const allocation = getRecordedReserveSplit(quittance);
+  doc.setFont('helvetica','bold');write('Montant enregistré',currencyFormatter.format(quittance.amount));doc.setFont('helvetica','normal');write('Fonds courant',allocation ? currencyFormatter.format(allocation.chargesCourantesAmount) : 'Non documenté');write('Fonds de réserve',allocation ? currencyFormatter.format(allocation.reserveFundAmount) : 'Non documenté');
   if(q.voidedAt){write('Annulation',new Date(q.voidedAt).toLocaleDateString('fr-MA'));write('Motif',q.voidReason);}else{y+=6;write('Signature du syndic','________________________________');}
   doc.setFontSize(8);doc.setTextColor(100,116,139);doc.text('Reçu établi à partir du règlement enregistré dans ImmoGest.',14,285);
   const fileName=`Quittance_${quittance.quittanceNumber}_Lot_${quittance.apartmentNumber.replace(/\s+/g,'_')}.pdf`;if(options.autoDownload!==false)doc.save(fileName);return{doc,fileName,outputBlobUri:()=>doc.output('bloburl')};
@@ -1746,7 +1748,6 @@ export const exportAnnualRepartitionPDF = (
   fiscalYear: number = new Date().getFullYear()
 ) => {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-  const reserveRate = building.reserveFundPercentage ?? building.reserveFundRate ?? 5;
 
   doc.setFillColor(15, 118, 110);
   doc.rect(0, 0, 210, 38, 'F');
@@ -1778,7 +1779,7 @@ export const exportAnnualRepartitionPDF = (
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9.5);
   doc.text(
-    `Syndic Gestionnaire : ${sanitizePdfText(syndic?.name || 'Cabinet Syndic')}   |   Taux Fonds de Réserve Loi 106-12 : ${reserveRate}%`,
+    `Syndic Gestionnaire : ${sanitizePdfText(syndic?.name || 'Cabinet Syndic')}   |   Réserve : allocations historiques documentées`,
     14,
     y
   );
@@ -1799,6 +1800,7 @@ export const exportAnnualRepartitionPDF = (
   let sumCalled = 0;
   let sumPaid = 0;
   let sumReserve = 0;
+  let reserveDocumented = true;
 
   for (const apt of building.apartments) {
     if (y > 265) {
@@ -1814,18 +1816,20 @@ export const exportAnnualRepartitionPDF = (
       (s, c) => s + (c.paidAmount ?? (c.status === 'paid' ? c.amount : 0)),
       0
     );
-    const reserveContrib = Math.round(paid * (reserveRate / 100) * 100) / 100;
+    const reserveContrib = getRecordedReserveTotal(quittances.filter(receipt =>
+      receipt.buildingId === building.id && (receipt.apartmentId ? receipt.apartmentId === apt.id : receipt.apartmentNumber === apt.number)), paid);
 
     sumCalled += called;
     sumPaid += paid;
-    sumReserve += reserveContrib;
+    if (reserveContrib === undefined) reserveDocumented = false;
+    else sumReserve = Math.round((sumReserve + reserveContrib) * 100) / 100;
 
     doc.text(String(apt.number), 17, y);
     doc.text(sanitizePdfText(owner?.name || 'Non assigné').slice(0, 26), 35, y);
     doc.text(`${apt.tantiemes || 100}/1000`, 92, y);
     doc.text(called.toFixed(2), 116, y);
     doc.text(paid.toFixed(2), 144, y);
-    doc.text(reserveContrib.toFixed(2), 168, y);
+    doc.text(reserveContrib === undefined ? 'Non documenté' : reserveContrib.toFixed(2), 168, y);
 
     doc.setDrawColor(226, 232, 240);
     doc.line(14, y + 2, 196, y + 2);
@@ -1839,7 +1843,7 @@ export const exportAnnualRepartitionPDF = (
   doc.text('TOTAL EXERCICE', 17, y + 1.5);
   doc.text(`${sumCalled.toFixed(2)} MAD`, 116, y + 1.5);
   doc.text(`${sumPaid.toFixed(2)} MAD`, 144, y + 1.5);
-  doc.text(`${sumReserve.toFixed(2)} MAD`, 168, y + 1.5);
+  doc.text(reserveDocumented ? `${sumReserve.toFixed(2)} MAD` : 'Non documenté', 168, y + 1.5);
 
   doc.setFontSize(8);
   doc.setFont('helvetica', 'normal');

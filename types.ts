@@ -151,6 +151,8 @@ export interface PaymentProof {
 }
 
 export interface Quittance {
+  /** Rate captured when the payment was posted; absent for undocumented/mixed legacy allocations. */
+  reserveRateApplied?: number;
   voidedAt?: string;
   voidReason?: string;
   paymentId?: string;
@@ -198,6 +200,9 @@ export interface Invoice {
 }
 
 export interface Transaction {
+  reserveRateApplied?: number;
+  paymentAllocations?: Array<{ chargeId: string; amount: number }>;
+  reversalOf?: string;
   paymentId?: string;
   sourceChargeId?: string;
   sourceInvoiceId?: string;
@@ -542,6 +547,7 @@ export interface Building {
   syndicId: string;
   monthlySyndicFees: number;
   totalTantiemes?: number;
+  /** Legacy read/create-input alias. New building writes use reserveFundRate only. */
   reserveFundPercentage?: number;
   reserveFundRate?: number;
   bankName?: string;

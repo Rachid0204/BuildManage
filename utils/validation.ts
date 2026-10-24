@@ -50,7 +50,7 @@ export const BuildingSchema = z.object({
   city: z.string().min(2, "City is required"),
   monthlySyndicFees: z.number().nonnegative(),
   totalTantiemes: z.number().optional().default(1000),
-  reserveFundRate: z.number().optional().default(5),
+  reserveFundRate: z.number().finite().min(0).max(100).optional().default(5),
   bankName: z.string().optional(),
   bankRib: z.string().optional(),
   managerName: z.string().optional(),

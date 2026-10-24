@@ -38,6 +38,8 @@ import {
 import {
   computeBuildingFundBalances,
   splitChargeReserveAndOperating,
+  getBuildingReserveRate,
+  getRecordedReserveSplit,
   allocateBudgetInCentimes,
 } from '../../utils/security';
 import Loading from '../common/Loading';
@@ -73,6 +75,10 @@ const MOROCCAN_BANKS = [
 
 const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
   const { tr, isAr } = useI18n();
+  const formatRecordedFund = (receipt: Quittance, fund: 'reserveFundAmount' | 'chargesCourantesAmount') => {
+    const split = getRecordedReserveSplit(receipt);
+    return split ? currencyFormatter.format(split[fund]) : tr('Non documenté', 'غير موثق');
+  };
   const { showToast } = useToast();
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<TabType>('transactions');
@@ -174,7 +180,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
   );
   const [quittanceAmount, setQuittanceAmount] = useState('');
   const [quittanceReserveRatio, setQuittanceReserveRatio] = useState(
-    building?.reserveFundPercentage ?? building?.reserveFundRate ?? 5
+    getBuildingReserveRate(building)
   );
   const [quittancePaymentMethod, setQuittancePaymentMethod] = useState<PaymentMethod>('virement');
   const [quittanceBankName, setQuittanceBankName] = useState(building.bankName || '');
@@ -301,7 +307,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
     setQuittanceResidentCin(res?.cin || 'AB123456');
     setQuittancePeriod(charge.period || 'Octobre 2026');
     setQuittanceAmount(String(charge.status === 'paid' ? (charge.paidAmount ?? charge.amount) : Math.max(0, charge.amount - (charge.paidAmount ?? 0))));
-    setQuittanceReserveRatio(building?.reserveFundPercentage ?? building?.reserveFundRate ?? 5);
+    setQuittanceReserveRatio(getBuildingReserveRate(building));
     setQuittancePaymentMethod((charge.paymentMethod as PaymentMethod) || 'virement');
     setQuittanceBankName(building.bankName || '');
     setQuittanceReference(`VIR-${charge.id.slice(-6).toUpperCase()}`);
@@ -335,7 +341,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
       new Date().toLocaleDateString(isAr ? 'ar-MA' : 'fr-FR', { month: 'long', year: 'numeric' })
     );
     setQuittanceAmount(String(amt));
-    setQuittanceReserveRatio(building.reserveFundPercentage ?? building.reserveFundRate ?? 5);
+    setQuittanceReserveRatio(getBuildingReserveRate(building));
     setQuittancePaymentMethod('virement');
     setQuittanceBankName(building.bankName || '');
     setQuittanceReference('');
@@ -530,13 +536,8 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
   }, [quittances]);
 
   const totalReserveFundAmount = useMemo(() => {
-    const fallbackRatio = (building.reserveFundPercentage ?? building.reserveFundRate ?? 5) / 100;
-    return quittances.reduce((sum, q) => {
-      const reserve =
-        q.reserveFundAmount !== undefined ? q.reserveFundAmount : Math.round(q.amount * fallbackRatio);
-      return sum + reserve;
-    }, 0);
-  }, [quittances, building.reserveFundPercentage, building.reserveFundRate]);
+    return quittances.reduce((sum, q) => sum + Math.round((getRecordedReserveSplit(q)?.reserveFundAmount ?? 0) * 100), 0) / 100;
+  }, [quittances]);
 
   // Prestataire quick-select handler
   const handleSelectPrestataire = (pId: string) => {
@@ -1461,7 +1462,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
               </div>
               <div className="bg-teal-950/40 p-2.5 rounded-lg border border-teal-600/30">
                 <span className="text-[10px] text-teal-200 font-semibold uppercase block">
-                  {tr('Fonds de Réserve (Loi 106-12)', 'صندوق الاحتياط (106-12)')}
+                  {tr('Réserve documentée (Quittances)', 'الاحتياطي الموثق (الوصولات)')}
                 </span>
                 <span className="text-lg font-bold font-mono text-emerald-300 mt-0.5 block">
                   {currencyFormatter.format(totalReserveFundAmount)}
@@ -1534,8 +1535,6 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                   {filteredQuittances.map((quit) => {
                     const apt = building.apartments.find((a) => a.id === quit.apartmentId);
                     const res = building.residents.find((r) => r.id === quit.residentId);
-                    const reserveAmt = quit.reserveFundAmount !== undefined ? quit.reserveFundAmount : splitChargeReserveAndOperating(quit.amount, building.reserveFundPercentage ?? building.reserveFundRate ?? 5).reserveFundAmount;
-                    const courantesAmt = quit.chargesCourantesAmount !== undefined ? quit.chargesCourantesAmount : (quit.amount - reserveAmt);
 
                     return (
                       <tr key={quit.id} className="hover:bg-slate-50/80 transition-colors">
@@ -1569,8 +1568,8 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                         </td>
                         <td className="px-4 py-3">
                           <div className="text-[11px] space-y-0.5 font-mono">
-                            <div className="text-slate-600">{tr('Courant:', 'الجاري:')} {currencyFormatter.format(courantesAmt)}</div>
-                            <div className="text-emerald-700 font-medium">{tr('Réserve (106-12):', 'الاحتياط:')} {currencyFormatter.format(reserveAmt)}</div>
+                            <div className="text-slate-600">{tr('Courant:', 'الجاري:')} {formatRecordedFund(quit, 'chargesCourantesAmount')}</div>
+                            <div className="text-emerald-700 font-medium">{tr('Réserve (106-12):', 'الاحتياط:')} {formatRecordedFund(quit, 'reserveFundAmount')}</div>
                           </div>
                         </td>
                         <td className="px-4 py-3 text-end whitespace-nowrap">
@@ -2909,25 +2908,13 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                 <div className="flex justify-between items-center text-slate-700">
                   <span>{tr('1. Charges générales ordinaires', '1. التكاليف العامة الجارية')} ({selectedQuittanceForPreview.periodCovered})</span>
                   <span className="font-mono font-medium">
-                    {currencyFormatter.format(
-                      selectedQuittanceForPreview.chargesCourantesAmount ??
-                        splitChargeReserveAndOperating(
-                          selectedQuittanceForPreview.amount,
-                          building?.reserveFundPercentage ?? building?.reserveFundRate ?? 5
-                        ).chargesCourantesAmount
-                    )}
+                    {formatRecordedFund(selectedQuittanceForPreview, 'chargesCourantesAmount')}
                   </span>
                 </div>
                 <div className="flex justify-between items-center text-emerald-800">
                   <span>{tr('2. Provision obligatoire Fonds de Réserve (Loi 106-12 Art. 18 bis)', '2. مساهمة صندوق الاحتياط الإلزامي (القانون 106-12)')}</span>
                   <span className="font-mono font-semibold">
-                    {currencyFormatter.format(
-                      selectedQuittanceForPreview.reserveFundAmount ??
-                        splitChargeReserveAndOperating(
-                          selectedQuittanceForPreview.amount,
-                          building?.reserveFundPercentage ?? building?.reserveFundRate ?? 5
-                        ).reserveFundAmount
-                    )}
+                    {formatRecordedFund(selectedQuittanceForPreview, 'reserveFundAmount')}
                   </span>
                 </div>
                 <div className="pt-2 border-t border-slate-200 flex justify-between items-center font-bold text-slate-900 text-sm">
