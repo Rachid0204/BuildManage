@@ -162,7 +162,7 @@ test.beforeAll(async () => {
                   tantiemes: 1000,
                 },
                 { id: 'email-guard-lot', buildingId: 'b-ui', number: 'EMAIL-GUARD',
-                  ownerId: null, tenantId: null, floor: 1, area: 0, tantiemes: 0, monthlyFees: 0 },
+                  ownerId: resident.id, tenantId: null, floor: 1, area: 0, tantiemes: 0, monthlyFees: 0 },
               ],
               financials: {
                 balance: 40,
