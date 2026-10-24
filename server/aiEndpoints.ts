@@ -143,6 +143,7 @@ export function registerAiEndpoints(api: { post: (route: string, handler: Reques
     const caller = await authenticate(req, state);
     signal.throwIfAborted();
     reject(caller, 'Authentification requise.', 401, 'AI_AUTHENTICATION_REQUIRED');
+    reject(caller.emailVerified !== false, 'Vérifiez votre adresse email avant le traitement IA.', 403, 'AI_EMAIL_VERIFICATION_REQUIRED');
     const body = req.body || {};
     if (kind === 'announcement') {
       reject(['syndic', 'admin'].includes(caller.role), 'Cette fonctionnalité est réservée au syndic ou administrateur.', 403, 'AI_FORBIDDEN');

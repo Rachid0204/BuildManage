@@ -297,4 +297,11 @@ test('unverified accounts and required password changes cannot consume AI resour
     await reset(); await change(state => Object.assign(state.syndik_prod_registered_users_v1[0].profile, updates));
     assert.equal((await announcement()).status, 403); assert.equal(calls.length, 0);
   }
+  await reset(); await change(state => {
+    const profile = state.syndik_prod_registered_users_v1.find((u: any) => u.uid === 'user-res-ai-resident').profile;
+    state.syndik_prod_registered_users_v1 = state.syndik_prod_registered_users_v1.filter((u: any) => u.uid !== profile.uid);
+    state.syndik_prod_resident_accounts_v1 = [{ residentId: 'ai-resident', email: profile.email,
+      buildingId: 'ai-building', syndicId: 'ai-cabinet', mustChangePassword: false, profile: { ...profile, emailVerified: false } }];
+  });
+  assert.equal((await proof()).status, 403); assert.equal(calls.length, 0);
 });
