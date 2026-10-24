@@ -8,6 +8,7 @@ import { PlusIcon, SparklesIcon } from '../icons/IconComponents';
 import { generateAnnouncementContent } from '../../services/geminiService';
 import { addAnnouncement } from '../../firebase/services';
 import { useI18n } from '../../hooks/useI18n';
+import { AI_LIMITS } from '../../utils/aiPolicy';
 
 interface AnnouncementsProps {
   building: Building;
@@ -54,7 +55,7 @@ const Announcements: React.FC<AnnouncementsProps> = ({ building }) => {
     setIsGenerating(true);
     setAiError(null);
     try {
-      const content = await generateAnnouncementContent(aiTopic);
+      const content = await generateAnnouncementContent(aiTopic, building.id);
       setNewContent(content);
       if (!newTitle.trim()) {
         setNewTitle(aiTopic.charAt(0).toUpperCase() + aiTopic.slice(1));
@@ -174,6 +175,7 @@ const Announcements: React.FC<AnnouncementsProps> = ({ building }) => {
               <input
                 type="text"
                 id="ai-topic"
+                maxLength={AI_LIMITS.topicCharacters}
                 value={aiTopic}
                 onChange={(e) => {
                   setAiTopic(e.target.value);
