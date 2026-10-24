@@ -1145,6 +1145,94 @@ test('server validation returns safe field details instead of an unexplained sav
   expect((await disk()).syndik_prod_syndics_v1[0].buildings[0].financials.transactions).toHaveLength(before);
 });
 
+test('session recovery: sign-in and account action routes stay reachable during an outage', async ({ page }) => {
+  await login(page, 0);
+  await page.route('**/api/auth/session', route => route.fulfill({ status: 503, json: { error: 'Synthetic session outage' } }));
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Connexion au serveur interrompue' })).toBeVisible();
+  await page.goto(`${base}/login`);
+  await expect(page.getByRole('heading', { name: 'Connexion à votre espace' })).toBeVisible();
+  await page.goto(`${base}/account-action?mode=reset&token=synthetic-link`);
+  await expect(page.getByRole('heading', { name: 'Nouveau mot de passe' })).toBeVisible();
+});
+
+test('session recovery: malformed stored sessions return to sign-in instead of retrying forever', async ({ page }) => {
+  await login(page, 0);
+  for (const raw of ['null', '[]', '{', '{"serverToken":null}', '{"serverToken":12}', '{"serverToken":"invalid-session","profile":{"role":"admin"}}']) {
+    await page.evaluate(raw => localStorage.setItem('syndik_auth_session_v1', raw), raw);
+    await page.goto(`${base}/login`);
+    await expect(page.getByRole('heading', { name: 'Connexion à votre espace' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Connexion au serveur interrompue' })).toHaveCount(0);
+    expect(await page.evaluate(() => localStorage.getItem('syndik_auth_session_v1'))).toBeNull();
+  }
+});
+
+test('session recovery: retry with no remaining saved session exits the interruption screen', async ({ page }) => {
+  await login(page, 0);
+  await page.route('**/api/auth/session', route => route.fulfill({ status: 503, json: { error: 'Synthetic session outage' } }));
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Connexion au serveur interrompue' })).toBeVisible();
+  await page.evaluate(() => localStorage.removeItem('syndik_auth_session_v1'));
+  await page.getByRole('button', { name: 'Réessayer la connexion', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Connexion au serveur interrompue' })).toHaveCount(0);
+  await page.goto(`${base}/login`);
+  await expect(page.getByRole('heading', { name: 'Connexion à votre espace' })).toBeVisible();
+});
+
+test('session recovery: fresh sign-in cancels a hung verification and ignores its late result', async ({ page }) => {
+  const token = await login(page, 0);
+  let hang = false, waiting = false;
+  let release!: () => void, finished!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const completed = new Promise<void>(resolve => { finished = resolve; });
+  await page.route('**/api/auth/session', async route => {
+    if (!hang) return route.fulfill({ status: 503, json: { error: 'Synthetic session outage' } });
+    waiting = true;
+    await gate;
+    try { await route.fulfill({ status: 200, json: { ok: true, profile: profiles[0], token } }); }
+    catch { /* The cancelled request is expected to reject a late response. */ }
+    finally { finished(); }
+  });
+  try {
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'Connexion au serveur interrompue' })).toBeVisible();
+    hang = true;
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await expect.poll(() => waiting).toBe(true);
+    await page.getByRole('button', { name: 'Se connecter à nouveau', exact: true }).click();
+    await expect(page).toHaveURL(`${base}/login`);
+    await expect(page.getByRole('heading', { name: 'Connexion à votre espace' })).toBeVisible();
+    expect(await page.evaluate(() => localStorage.getItem('syndik_auth_session_v1'))).toBeNull();
+    release(); await completed;
+    await expect(page.getByRole('heading', { name: 'Connexion à votre espace' })).toBeVisible();
+    expect(await page.evaluate(() => localStorage.getItem('syndik_auth_session_v1'))).toBeNull();
+    const existing = await apiCall(token, '/api/shared-state');
+    expect(existing.status).toBe(200); // Local recovery never deletes the account or revokes other sessions.
+  } finally { release(); }
+});
+
+test('session recovery: temporary verification failure retains the verified view and its open draft', async ({ page }) => {
+  await login(page, 0);
+  await page.getByRole('button', { name: /Ajouter.*opération/i }).first().click();
+  const dialog = page.getByRole('dialog');
+  const description = await field(page, /Libellé/), amount = await field(page, /Montant/);
+  await description.fill('Session recovery draft'); await amount.fill('37.45');
+  await page.evaluate(() => { (window as any).__sessionRecoveryDocument = 'same-document'; });
+  await page.route('**/api/auth/session', route => route.fulfill({ status: 503, json: { error: 'Synthetic session outage' } }));
+  await page.evaluate(() => window.dispatchEvent(new Event('syndik-session-invalid')));
+  await expect(page.getByRole('status').filter({ hasText: 'Vérification de session indisponible' })).toBeVisible();
+  await expect(dialog).toBeVisible();
+  await expect(description).toHaveValue('Session recovery draft'); await expect(amount).toHaveValue('37.45');
+  await page.unroute('**/api/auth/session');
+  const restored = page.waitForResponse(response => response.url().endsWith('/api/auth/session') && response.status() === 200);
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await restored;
+  await expect(page.getByRole('status').filter({ hasText: 'Vérification de session indisponible' })).toHaveCount(0);
+  await expect(dialog).toBeVisible(); await expect(description).toHaveValue('Session recovery draft');
+  await expect(amount).toHaveValue('37.45');
+  expect(await page.evaluate(() => (window as any).__sessionRecoveryDocument)).toBe('same-document');
+});
+
 test('temporary session failures preserve credentials and offer retry instead of silently logging out', async ({ page }) => {
   await login(page, 0);
   for (const failure of ['server', 'network'] as const) {

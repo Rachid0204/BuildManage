@@ -8,7 +8,7 @@ const directServerQuery = (query: { queryKey: readonly unknown[] }) =>
   ['financialReport', 'archivedBuildings'].includes(String(query.queryKey[0]));
 
 export default function LiveDataSync() {
-  const { userProfile, retrySession } = useAuth();
+  const { userProfile, retrySession, sessionError } = useAuth();
   const queryClient = useQueryClient();
   const { tr } = useI18n();
   const [status, setStatus] = useState<LiveStatus>('connecting');
@@ -68,9 +68,11 @@ export default function LiveDataSync() {
       document.removeEventListener('visibilitychange', resume);
     };
   }, [scope, queryClient, retrySession]);
-  if (!userProfile || status !== 'offline') return null;
+  if (!userProfile || (status !== 'offline' && !sessionError)) return null;
   return <div role="status" className="bg-amber-50 border-b border-amber-300 text-amber-950 px-4 py-2 flex flex-wrap items-center justify-between gap-2 text-sm">
-    <span>{tr('Connexion interrompue. Vos données restent affichées. Reconnexion automatique…', 'انقطع الاتصال. تبقى بياناتك معروضة وستتم إعادة الاتصال تلقائياً…')}</span>
-    <button className="underline font-semibold" onClick={() => reconnectRef.current()}>{tr('Réessayer maintenant', 'أعد المحاولة الآن')}</button>
+    <span>{sessionError
+      ? tr('Vérification de session indisponible. Vos données restent affichées. Reconnexion automatique…', 'التحقق من الجلسة غير متاح. تبقى بياناتك معروضة وستتم إعادة الاتصال تلقائياً…')
+      : tr('Connexion interrompue. Vos données restent affichées. Reconnexion automatique…', 'انقطع الاتصال. تبقى بياناتك معروضة وستتم إعادة الاتصال تلقائياً…')}</span>
+    <button className="underline font-semibold" onClick={() => sessionError ? void retrySession() : reconnectRef.current()}>{tr('Réessayer maintenant', 'أعد المحاولة الآن')}</button>
   </div>;
 }

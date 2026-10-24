@@ -68,7 +68,27 @@ try {
   await expect(page.getByText('Firebase browser cabinet', { exact: true }).first()).toBeVisible();
   const data = await page.evaluate(() => JSON.parse(localStorage.getItem('syndik_auth_session_v1')!));
   assert.equal(data.profile.emailVerified, true, 'Verified profile survives a page refresh');
+  await page.route('**/api/auth/session', route => route.fulfill({ status: 503, json: { error: 'Synthetic session outage' } }));
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Connexion au serveur interrompue' })).toBeVisible();
+  await page.getByRole('button', { name: 'Se connecter à nouveau', exact: true }).click();
+  await expect(page).toHaveURL(`${base}/login`);
+  await expect(page.getByRole('heading', { name: 'Connexion à votre espace' })).toBeVisible();
+  assert.equal(await page.evaluate(() => localStorage.getItem('syndik_auth_session_v1')), null);
+  await expect.poll(() => page.evaluate(async () => {
+    const modulePath = '/firebase/config.ts';
+    return (await import(modulePath)).auth.currentUser?.uid || null;
+  })).toBeNull();
+  await page.unroute('**/api/auth/session');
+  assert.equal((await fetch(`${base}/api/auth/session`, { headers: { Authorization: `Bearer ${data.serverToken}` } })).status, 200,
+    'Local session recovery does not revoke other signed-in sessions');
+  await page.getByPlaceholder('Ex: contact@moncabinet.ma ou CIN BK124578').fill('browser@example.test');
+  await page.locator('input[type=password]').fill('Browser-Password-42!');
+  await page.getByRole('button', { name: 'Se connecter', exact: true }).click();
+  await expect(page.getByText('Firebase browser cabinet', { exact: true }).first()).toBeVisible({ timeout: 30000 });
+  assert.equal((await page.evaluate(() => JSON.parse(localStorage.getItem('syndik_auth_session_v1')!))).profile.emailVerified, true);
   assert.deepEqual(failures, [], 'No browser runtime errors');
   console.log('Firebase browser registration, SDK sign-in, resend, persistence and verification passed.');
+  console.log('Firebase browser interruption recovery, local reset and fresh SDK sign-in passed.');
 } catch (error) { console.error(logs); throw error; }
 finally { await browser?.close(); child.kill('SIGTERM'); await exited; rmSync(directory, { recursive: true, force: true }); }

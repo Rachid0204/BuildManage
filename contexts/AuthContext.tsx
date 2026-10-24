@@ -43,6 +43,7 @@ interface AuthContextType {
   sessionError: boolean;
   sessionRetrying: boolean;
   retrySession: () => Promise<void>;
+  resetSession: () => void;
   signInWithGoogle: () => Promise<UserProfile>;
   loginWithGoogle: () => Promise<UserProfile>;
   login: (email: string, pass?: string) => Promise<UserProfile>;
@@ -215,6 +216,15 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const sessionRequestRef = useRef<Promise<'authenticated' | 'empty' | 'invalid' | 'unavailable'> | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
 
+  const cancelSessionRequest = useCallback(() => {
+    epochRef.current++;
+    requestIdRef.current++;
+    controllerRef.current?.abort();
+    controllerRef.current = null;
+    sessionRequestRef.current = null;
+    setSessionRetrying(false);
+  }, []);
+
   const persistSession = useCallback((
     profile: UserProfile | null,
     firebaseUser?: User | null,
@@ -254,6 +264,16 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setUser(firebaseUser || createVerifiedIdentityAdapter(profile, preservedServerToken || ''));
   }, [queryClient]);
 
+  const resetSession = useCallback(() => {
+    cancelSessionRequest();
+    persistSession(null);
+    setLoading(false);
+    localStorage.removeItem('syndik_selected_building_id');
+    window.dispatchEvent(new CustomEvent('syndik-user-logout'));
+    // This is a local recovery action, not an API logout/revocation of other devices.
+    void signOut(auth).catch(() => {});
+  }, [cancelSessionRequest, persistSession]);
+
   const exchangeFirebaseSession = useCallback(async (firebaseUser: User): Promise<UserProfile> => {
     const epoch = epochRef.current;
     const token = await firebaseUser.getIdToken();
@@ -282,7 +302,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         if (!raw) return 'empty';
         let cached: { serverToken?: string };
         try { cached = JSON.parse(raw); } catch { if (current()) persistSession(null); return 'invalid'; }
-        if (!cached.serverToken) { if (current()) persistSession(null); return 'invalid'; }
+        if (!cached || typeof cached !== 'object' || Array.isArray(cached) ||
+            typeof cached.serverToken !== 'string' || !cached.serverToken.trim()) {
+          if (current()) persistSession(null);
+          return 'invalid';
+        }
         const response = await fetch('/api/auth/session', { signal: controller.signal,
           cache: 'no-store', headers: { Authorization: `Bearer ${cached.serverToken}` } });
         if ([401, 403].includes(response.status)) {
@@ -322,15 +346,17 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, [persistSession]);
 
   const retrySession = useCallback(async () => {
+    const epoch = epochRef.current;
     const result = await restoreSession();
-    if (result === 'empty' && auth.currentUser) {
-      const epoch = epochRef.current;
+    if (result !== 'empty' || epoch !== epochRef.current) return;
+    if (auth.currentUser) {
+      const requestId = requestIdRef.current;
       setSessionRetrying(true);
       try { await exchangeFirebaseSession(auth.currentUser); }
       catch (error) { sessionRecoveryFailed(error, epoch); }
-      finally { setSessionRetrying(false); }
-    }
-  }, [restoreSession, exchangeFirebaseSession, sessionRecoveryFailed]);
+      finally { if (requestId === requestIdRef.current) setSessionRetrying(false); }
+    } else persistSession(null);
+  }, [restoreSession, exchangeFirebaseSession, sessionRecoveryFailed, persistSession]);
 
   useEffect(() => {
     let active = true, initialAuthHandled = false;
@@ -378,6 +404,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const login = async (email: string, pass?: string): Promise<UserProfile> => {
+    cancelSessionRequest();
     setLoading(true);
     try {
       const identifier = email.trim().toLowerCase();
@@ -495,6 +522,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         sessionError,
         sessionRetrying,
         retrySession,
+        resetSession,
         signInWithGoogle,
         loginWithGoogle: signInWithGoogle,
         login,
