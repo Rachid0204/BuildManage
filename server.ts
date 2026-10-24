@@ -9,6 +9,7 @@ import {
 import { hashPassword, verifyPassword } from "./server/passwords";
 import {
   runOperation,
+  generateScheduledMonthlyCharges,
   appendAudit,
   OperationError,
   buildingFor,
@@ -27,7 +28,6 @@ import {
   encrypt,
   decrypt,
 } from "./server/mailer";
-import { subscriptionCanWrite } from "./utils/subscriptionPolicy";
 import { savePrivateFile, readPrivateFile } from './server/uploads';
 import { DependencyError } from './server/dependencyErrors';
 import express from "express";
@@ -1327,7 +1327,7 @@ async function startServer() {
   const repository = createRepository(),
     sharedStore: ServerStore = sharedState;
   const wrap =
-    (handler: any) => async (req: express.Request, res: express.Response) => {
+    (handler: any, transactional = true) => async (req: express.Request, res: express.Response) => {
       const requestId = crypto.randomUUID();
       res.setHeader('X-Request-ID', requestId);
       const json = res.json.bind(res),
@@ -1336,7 +1336,7 @@ async function startServer() {
         format = "json",
         requestState: any;
       try {
-        await repository.transaction(async (state) => {
+        const handle = async (state?: any) => {
           res.locals.afterCommit = undefined;
           requestState = state;
           res.statusCode = 200;
@@ -1360,7 +1360,9 @@ async function startServer() {
             throw Object.assign(new Error(payload?.error || "Rejected"), {
               rejected: true,
             });
-        });
+        };
+        if (transactional) await repository.transaction(handle);
+        else await handle();
         if (res.statusCode < 400 && res.locals.afterCommit) {
           try { await res.locals.afterCommit(); }
           catch (error: any) {
@@ -1370,7 +1372,7 @@ async function startServer() {
             else { res.status(error.status || 503); payload = { error: error.message || 'Envoi impossible.', requestId }; }
           }
         }
-        if (payload && typeof payload === "object" && "revision" in payload)
+        if (requestState && payload && typeof payload === "object" && "revision" in payload)
           payload.revision = requestState.__revision;
         if (payload?.token)
           res.cookie("syndik_session", payload.token, {
@@ -2378,7 +2380,7 @@ async function startServer() {
       )
     );
   };
-  api.post("/api/jobs/monthly-charges", async (req, res) => {
+  app.post("/api/jobs/monthly-charges", wrap(async (req: express.Request, res: express.Response) => {
     if (!scheduler(req))
       return res.status(403).json({ error: "Ordonnanceur non autorisé." });
     const parts = new Intl.DateTimeFormat("en-CA", {
@@ -2387,40 +2389,8 @@ async function startServer() {
         month: "2-digit",
       }).formatToParts(new Date()),
       period = `${parts.find((p) => p.type === "year")!.value}-${parts.find((p) => p.type === "month")!.value}`;
-    let created = 0;
-    const skipped: any[] = [];
-    for (const s of sharedStore.syndik_prod_syndics_v1 || []) {
-      const owner = (sharedStore.syndik_prod_registered_users_v1 || []).find(
-        (u: any) => u.uid === s.createdBy,
-      );
-      if (
-        owner?.disabled ||
-        owner?.profile?.emailVerified === false ||
-        owner?.profile?.mustChangePassword
-      ) {
-        skipped.push({ syndicId: s.id, reason: "onboarding" });
-        continue;
-      }
-      if (!subscriptionCanWrite(s)) {
-        skipped.push({ syndicId: s.id, reason: "inactive" });
-        continue;
-      }
-      for (const b of s.buildings || []) {
-        if (b.archivedAt || !b.address?.trim() || !b.city?.trim()) {
-          skipped.push({ buildingId: b.id, reason: "setup" });
-          continue;
-        }
-        const result = await runOperation(
-          { uid: s.createdBy, role: "syndic", syndicId: s.id },
-          "generateMonthlyCharges",
-          [b.id, s.id, period],
-          `scheduled:${b.id}:${period}`,
-        );
-        created += result.length;
-      }
-    }
-    return res.json({ ok: true, period, created, skipped });
-  });
+    return res.json(await generateScheduledMonthlyCharges(repository, period, String(res.getHeader('X-Request-ID'))));
+  }, false));
   api.post("/api/jobs/outbox", async (req, res) => {
     if (!scheduler(req))
       return res.status(403).json({ error: "Ordonnanceur non autorisé." });

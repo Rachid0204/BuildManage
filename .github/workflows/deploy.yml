@@ -60,6 +60,9 @@ jobs:
       - name: Verify active building subscription capacity and restoration
         run: npm run test:subscription-capacity
 
+      - name: Verify isolated monthly billing and retry idempotency
+        run: npm run test:monthly-billing
+
       - name: Verify production operations and encrypted recovery
         run: npm run test:production && npm run test:recovery
 
