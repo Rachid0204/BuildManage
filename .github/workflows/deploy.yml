@@ -48,6 +48,9 @@ jobs:
       - name: Verify legacy and new assembly snapshot privacy
         run: npm run test:assembly-privacy
 
+      - name: Verify canonical and legacy opening balances
+        run: npm run test:opening-balances
+
       - name: Verify production operations and encrypted recovery
         run: npm run test:production && npm run test:recovery
 
