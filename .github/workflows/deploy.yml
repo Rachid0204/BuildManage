@@ -51,6 +51,9 @@ jobs:
       - name: Verify canonical and legacy opening balances
         run: npm run test:opening-balances
 
+      - name: Verify reserve-rate edits and historical payment allocations
+        run: npm run test:reserve-rate
+
       - name: Verify production operations and encrypted recovery
         run: npm run test:production && npm run test:recovery
 

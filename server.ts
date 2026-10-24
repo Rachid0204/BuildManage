@@ -50,6 +50,7 @@ import {
   hashPasswordSync,
   verifyPasswordSync,
   computeSessionSignature,
+  getBuildingReserveRate,
   isAlreadyHashedPassword,
 } from "./utils/security";
 
@@ -881,6 +882,10 @@ function filterStoreForCaller(store: ServerStore, caller: AuthCallerContext) {
           .filter(
             (b: any) => scope.isAdmin || scope.authorizedBuildingIds.has(b.id),
           )
+          .map((stored: any) => {
+            const { reserveFundPercentage: _legacyRate, ...canonical } = stored;
+            return { ...canonical, reserveFundRate: getBuildingReserveRate(stored) };
+          })
           .map((b: any) =>
             managed
               ? b
@@ -1777,7 +1782,6 @@ async function startServer() {
             address: String(initial.address || "").slice(0, 300),
             city: createdSyndic.city,
             monthlySyndicFees: initial.monthlyFees,
-            reserveFundPercentage: 5,
             reserveFundRate: 5,
             apartments,
             residents: [],

@@ -63,6 +63,8 @@ import {
   getAuthenticatedRequestHeaders,
   allocateBudgetInCentimes,
   splitChargeReserveAndOperating,
+  getBuildingReserveRate,
+  getRecordedReserveSplit,
   generateSecureRandomDigits,
 } from '../utils/security';
 
@@ -587,7 +589,9 @@ export const addBuilding = async (
   if (typeof window !== 'undefined') return remoteMutation('addBuilding', [syndicId, buildingData]);
 
   const { apartments, ...coreBuilding } = buildingData;
-  const validation = BuildingSchema.safeParse({ ...coreBuilding, syndicId });
+  const validation = BuildingSchema.safeParse({ ...coreBuilding, syndicId,
+    reserveFundRate: coreBuilding.reserveFundRate !== undefined ? coreBuilding.reserveFundRate
+      : coreBuilding.reserveFundPercentage !== undefined ? coreBuilding.reserveFundPercentage : 5 });
   if (!validation.success) {
     throw new Error('Invalid Building Data: ' + validation.error.message);
   }
@@ -642,8 +646,7 @@ export const addBuilding = async (
     city: coreBuilding.city,
     monthlySyndicFees: coreBuilding.monthlySyndicFees,
     totalTantiemes: 1000,
-    reserveFundPercentage: coreBuilding.reserveFundPercentage ?? coreBuilding.reserveFundRate ?? 5,
-    reserveFundRate: coreBuilding.reserveFundRate ?? coreBuilding.reserveFundPercentage ?? 5,
+    reserveFundRate: validation.data.reserveFundRate,
     bankName: coreBuilding.bankName,
     bankRib: coreBuilding.bankRib,
     managerName: coreBuilding.managerName,
@@ -682,6 +685,7 @@ export const updateBuilding = async (
   if (typeof window !== 'undefined') return remoteMutation('updateBuilding', [buildingId, updates]);
 
   const { syncApartmentFees, ...buildingUpdates } = updates;
+  BuildingSchema.partial().parse(buildingUpdates);
   if (isLocalEngineEnabled) {
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
     for (const syndic of syndics) {
@@ -691,7 +695,9 @@ export const updateBuilding = async (
         const updatedBuilding: Building = {
           ...bld,
           ...buildingUpdates,
+          reserveFundRate: buildingUpdates.reserveFundRate ?? getBuildingReserveRate(bld),
         };
+        delete updatedBuilding.reserveFundPercentage;
         if (syncApartmentFees && typeof buildingUpdates.monthlySyndicFees === 'number') {
           updatedBuilding.apartments = updatedBuilding.apartments.map((apt) => ({
             ...apt,
@@ -1922,17 +1928,37 @@ function centimes(amount: number): number {
 function paidAmount(charge: Charge): number { return charge.paidAmount ?? (charge.status === 'paid' ? charge.amount : 0); }
 function outstanding(charge: Charge): number { return Math.max(0, centimes(charge.amount) - centimes(paidAmount(charge))); }
 function postIncome(building: Building, amount: number, paymentId: string, details: Partial<Transaction>) {
-  const split = splitChargeReserveAndOperating(amount, building.reserveFundPercentage ?? building.reserveFundRate ?? 5);
+  const split = splitChargeReserveAndOperating(amount, getBuildingReserveRate(building));
   building.financials.transactions ||= [];
   for (const [fundType, value] of [['courant', split.chargesCourantesAmount], ['reserve', split.reserveFundAmount]] as const) {
     if (value === 0) continue;
-    building.financials.transactions.unshift({ ...details, id: `trx-${paymentId}-${fundType}`, paymentId,
+    building.financials.transactions.unshift({ ...details, reserveRateApplied: split.reservePercentageUsed,
+      id: `trx-${paymentId}-${fundType}`, paymentId,
       date: details.date || new Date().toISOString(), description: details.description || 'Encaissement',
       amount: value, type: 'income', category: 'fees', fundType });
   }
   building.financials.balance = Math.round(((building.financials.balance ?? 0) + split.chargesCourantesAmount) * 100) / 100;
   building.financials.reserveFundBalance = Math.round(((building.financials.reserveFundBalance ?? 0) + split.reserveFundAmount) * 100) / 100;
   return split;
+}
+
+function recordedIncomeSplit(rows: Transaction[], amount: number): ReturnType<typeof getRecordedReserveSplit> {
+  if (!rows.length || rows.some(row => !Number.isFinite(row.amount) || row.amount < 0)) return undefined;
+  const total = rows.reduce((sum, row) => sum + centimes(row.amount), 0);
+  if (total !== centimes(amount)) return undefined;
+  const reserve = rows.filter(row => row.fundType === 'reserve').reduce((sum, row) => sum + centimes(row.amount), 0);
+  const rates = new Set(rows.map(row => row.reserveRateApplied));
+  return { reserveFundAmount: reserve / 100, chargesCourantesAmount: (total - reserve) / 100,
+    reservePercentageUsed: rates.size === 1 ? rows[0].reserveRateApplied : undefined };
+}
+
+function recordedChargeSplit(building: Building, charge: Charge, amount: number) {
+  const journal = building.financials.transactions;
+  const reversed = new Set(journal.filter(row => row.reversalOf).map(row => row.reversalOf));
+  const rows = journal.filter(row => row.type === 'income' && !reversed.has(row.paymentId) &&
+    (row.sourceChargeId === charge.id || (row.paymentAllocations?.length === 1 &&
+      row.paymentAllocations[0].chargeId === charge.id)));
+  return recordedIncomeSplit(rows, amount);
 }
 export const createQuittance = async (
   input: Omit<Quittance, 'id' | 'quittanceNumber' | 'createdAt'> & { quittanceNumber?: string; addTransactionToLedger?: boolean }
@@ -1973,7 +1999,7 @@ export const createQuittance = async (
   const posted = building.financials.transactions.filter((t) => paymentId && t.paymentId === paymentId);
   if (posted.length && (posted.some((t) => t.sourceChargeId !== charge.id || t.type !== 'income') ||
     posted.reduce((sum, t) => sum + centimes(t.amount), 0) !== amount)) throw new Error('Référence de paiement déjà utilisée.');
-  let split = splitChargeReserveAndOperating(core.amount, building.reserveFundPercentage ?? building.reserveFundRate ?? 5);
+  let split: ReturnType<typeof getRecordedReserveSplit>;
   const invoices = getLocalItem<Invoice[]>(STORAGE_KEYS.INVOICES, []);
   if (addTransactionToLedger && !posted.length) {
     if (amount > outstanding(charge)) throw new Error('Le paiement dépasse le solde restant de la charge.');
@@ -1998,12 +2024,11 @@ export const createQuittance = async (
   } else if (!posted.length && amount > centimes(paidAmount(charge))) {
     throw new Error('Aucun paiement suffisant enregistré pour ce reçu.');
   }
-  if (posted.length) {
-    const reserve = posted.filter((t) => t.fundType === 'reserve').reduce((sum, t) => sum + centimes(t.amount), 0) / 100;
-    split = { reserveFundAmount: reserve, chargesCourantesAmount: core.amount - reserve, reservePercentageUsed: 0 };
-  }
-  const receipt: Quittance = { ...core, paymentId, reserveFundAmount: split.reserveFundAmount,
-    chargesCourantesAmount: split.chargesCourantesAmount, id: `quit-${paymentId || crypto.randomUUID()}`,
+  if (posted.length) split = recordedIncomeSplit(posted, core.amount);
+  else if (!addTransactionToLedger) split = recordedChargeSplit(building, charge, core.amount);
+  const receipt: Quittance = { ...core, paymentId, reserveRateApplied: split?.reservePercentageUsed,
+    reserveFundAmount: split?.reserveFundAmount,
+    chargesCourantesAmount: split?.chargesCourantesAmount, id: `quit-${paymentId || crypto.randomUUID()}`,
     quittanceNumber: core.quittanceNumber || `QUIT-${new Date().getFullYear()}-${String(receipts.length + 1).padStart(5, '0')}`,
     createdAt: new Date().toISOString() };
   setLocalItem(STORAGE_KEYS.QUITTANCES, [receipt, ...receipts]); return receipt;
@@ -2053,15 +2078,6 @@ export const generateQuittanceForCharge = async (
   const apt = targetBuilding?.apartments.find((a) => a.id === charge.apartmentId);
   const res = targetBuilding?.residents.find((r) => r.id === charge.residentId);
 
-  // Audit Item 16: Use the building's configured reserveFundPercentage / reserveFundRate (default 5%) instead of hardcoded 15%
-  const reserveRate =
-    targetBuilding?.reserveFundPercentage ?? targetBuilding?.reserveFundRate ?? 5;
-  const reserveShare = Math.round(paidAmount(charge) * (reserveRate / 100) * 100) / 100;
-  const courantesShare = Math.round((paidAmount(charge) - reserveShare) * 100) / 100;
-
-  // Audit Item 14: Generating a missing receipt for a paid charge MUST NOT post income again!
-  const shouldPostToLedger = charge.status !== 'paid';
-
   return createQuittance({
     chargeId: charge.id,
     buildingId: charge.buildingId,
@@ -2075,8 +2091,6 @@ export const generateQuittanceForCharge = async (
     apartmentNumber: apt?.number || 'Lot',
     tantiemes: apt?.tantiemes || charge.tantiemesApplied || 100,
     amount: paidAmount(charge),
-    chargesCourantesAmount: courantesShare,
-    reserveFundAmount: reserveShare,
     periodCovered:
       charge.period ||
       new Date(charge.dueDate).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }),
