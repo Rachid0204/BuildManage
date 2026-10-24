@@ -978,6 +978,32 @@ test('announcements, provider and assembly forms explain missing information and
   expect((await disk()).syndik_prod_ag_v1.some((a: any) => a.title === 'Form audit assembly')).toBe(true);
 });
 
+test('AI protection: announcement requests identify the selected building and quota errors preserve the draft', async ({ page }) => {
+  await login(page, 0);
+  await page.goto(`${base}/announcements`);
+  await page.getByRole('button', { name: /Nouvelle annonce|Créer.*annonce/i }).first().click();
+  const dialog = page.getByRole('dialog');
+  await dialog.locator('#title').fill('Keep this title');
+  await dialog.locator('#content').fill('Keep the manual announcement draft.');
+  await expect(dialog.locator('#ai-topic')).toHaveAttribute('maxlength', '2000');
+  await dialog.locator('#ai-topic').fill('Lift inspection');
+  let calls = 0;
+  await page.route('**/api/ai/announcement', async route => {
+    expect(route.request().postDataJSON()).toEqual({ topic: 'Lift inspection', buildingId: 'b-ui' }); calls++;
+    await route.fulfill(calls === 1 ? { status: 429, json: { ok: false, code: 'AI_RATE_LIMITED', error: 'Quota IA atteint.' } }
+      : { status: 200, json: { ok: true, content: 'Inspection prévue samedi.' } });
+  });
+  await dialog.getByRole('button', { name: 'Générer le texte', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toContainText('Quota IA atteint.');
+  await expect(dialog.locator('#title')).toHaveValue('Keep this title');
+  await expect(dialog.locator('#content')).toHaveValue('Keep the manual announcement draft.');
+  await dialog.getByRole('button', { name: 'Générer le texte', exact: true }).click();
+  await expect(dialog.locator('#content')).toHaveValue('Inspection prévue samedi.');
+  await expect(dialog.locator('#title')).toHaveValue('Keep this title');
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: 'Annuler', exact: true }).click();
+});
+
 test('expense form saves a positive input as one negative ledger entry', async ({ page }) => {
   await login(page, 0);
   await page.getByRole('button', { name: /Nouvelle.*Opération|Ajouter.*opération|Nouvelle écriture/i }).first().click();
