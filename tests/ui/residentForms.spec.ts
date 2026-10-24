@@ -1661,3 +1661,33 @@ test('subscription capacity: archive frees a slot, restore enforces the limit an
   await login(page, 3);
   await expect(page.getByText('Immeubles Gérés', { exact: true }).locator('..').getByText(String(expected), { exact: true })).toBeVisible();
 });
+
+test('Settings draft: real SSE updates preserve edits, hydrate clean fields and resume hydration after saving', async ({ page }) => {
+  const token = await login(page, 0);
+  const initial = await apiCommand(token, 'saveSyndic', [{ id: 's-ui', name: 'Syndic Al Manar', taxId: 'SETTINGS-BASE' }]);
+  expect(initial.status, JSON.stringify(initial.data)).toBe(200);
+  await page.goto(`${base}/settings`);
+  const name = page.locator('#companyName');
+  await expect(name).toHaveValue('Syndic Al Manar');
+  await name.fill('Syndic Al Manar Updated');
+  await page.evaluate(() => { (window as any).__settingsDraftDocument = 'original-settings-document'; });
+  const metadata = await apiCommand(token, 'updateBuilding', ['b-ui', { name: 'Settings live metadata change' }]);
+  expect(metadata.status, JSON.stringify(metadata.data)).toBe(200);
+  await expect(page.getByRole('banner').getByRole('heading', { name: 'Settings live metadata change', exact: true })).toBeVisible();
+  // Flush effects after the live context replaces the outer cabinet object.
+  await page.evaluate(() => new Promise<void>(done => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+  await expect(name).toHaveValue('Syndic Al Manar Updated');
+  const remote = await apiCommand(token, 'saveSyndic', [{ id: 's-ui', taxId: 'SETTINGS-REMOTE' }]);
+  expect(remote.status, JSON.stringify(remote.data)).toBe(200);
+  await expect(page.locator('#taxId')).toHaveValue('SETTINGS-REMOTE');
+  await expect(name).toHaveValue('Syndic Al Manar Updated');
+  await page.locator('button[type=submit]').click();
+  await expect.poll(async () => (await disk()).syndik_prod_syndics_v1[0].name).toBe('Syndic Al Manar Updated');
+  await expect(page.getByText('Modifications non enregistrées', { exact: true })).toHaveCount(0);
+  const saved = (await disk()).syndik_prod_syndics_v1[0];
+  expect(saved.taxId).toBe('SETTINGS-REMOTE');
+  expect(saved.buildings.find((b: any) => b.id === 'b-ui').name).toBe('Settings live metadata change');
+  expect((await apiCommand(token, 'saveSyndic', [{ id: 's-ui', name: 'Remote name after Settings save' }])).status).toBe(200);
+  await expect(name).toHaveValue('Remote name after Settings save');
+  expect(await page.evaluate(() => (window as any).__settingsDraftDocument)).toBe('original-settings-document');
+});

@@ -1,37 +1,38 @@
 import Form from '../common/Form';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useReducer, useRef } from 'react';
 import type { Syndic } from '../../types';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import { useI18n } from '../../hooks/useI18n';
 import { useToast } from '../common/Toast';
+import { SETTINGS_FIELDS, settingsValues, createSettingsDraft, settingsDraftReducer, type SettingsField } from './settingsDraft';
 
 interface SettingsProps {
   syndic: Syndic;
   onUpdate: (updatedSyndic: Syndic) => Promise<unknown> | void;
 }
 
-const Settings: React.FC<SettingsProps> = ({ syndic, onUpdate }) => {
+const SettingsForm: React.FC<SettingsProps> = ({ syndic, onUpdate }) => {
   const { t, tr } = useI18n();
   const { showToast } = useToast();
-  const [name, setName] = useState(syndic.name ?? '');
-  const [logoUrl, setLogoUrl] = useState(syndic.logoUrl ?? '');
-  const [ice, setIce] = useState(syndic.ice ?? '');
-  const [taxId, setTaxId] = useState(syndic.taxId ?? '');
-  const [rc, setRc] = useState(syndic.rc ?? '');
-  const [patente, setPatente] = useState(syndic.patente ?? '');
-
-  const [isLoading, setIsLoading] = useState(false);
+  const [draft, dispatch] = useReducer(settingsDraftReducer, syndic, createSettingsDraft);
+  const { name, logoUrl, ice, taxId, rc, patente } = draft.values;
+  const remote = settingsValues(syndic);
+  const isLoading = !!draft.pending;
+  const dirty = SETTINGS_FIELDS.some(field => draft.values[field] !== draft.remote[field]);
+  const mounted = useRef(true);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
-    setName(syndic.name ?? '');
-    setLogoUrl(syndic.logoUrl ?? '');
-    setIce(syndic.ice ?? '');
-    setTaxId(syndic.taxId ?? '');
-    setRc(syndic.rc ?? '');
-    setPatente(syndic.patente ?? '');
-  }, [syndic]);
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  // Only Settings scalars trigger hydration. Unrelated SSE object replacements do not.
+  useEffect(() => { dispatch({ type: 'remote', values: remote }); },
+    [remote.name, remote.logoUrl, remote.ice, remote.taxId, remote.rc, remote.patente]);
+  const edit = (field: SettingsField, value: string) => dispatch({ type: 'edit', field, value });
+  const labels = { name: t('settings.companyName'), logoUrl: t('settings.logoUrl'), ice: t('settings.ice'),
+    taxId: t('settings.taxId'), rc: t('settings.rc'), patente: t('settings.patente') };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -53,22 +54,21 @@ const Settings: React.FC<SettingsProps> = ({ syndic, onUpdate }) => {
       throw new Error(tr("L'identifiant Commun de l'Entreprise (ICE) doit comporter exactement 15 chiffres.", 'يجب أن يتكون التعريف الموحد للمقاولة (ICE) من 15 رقماً بالضبط.'));
     }
 
-    setIsLoading(true);
+    const submitted = { name: safeName, logoUrl: safeLogoUrl || (syndic.logoUrl ?? ''),
+      ice: safeIce, taxId: safeTaxId, rc: safeRc, patente: safePatente };
+    const updated = { ...syndic, ...submitted };
+    dispatch({ type: 'saveStarted', values: submitted });
     try {
-      await Promise.resolve(
-        onUpdate({
-          ...syndic,
-          name: safeName,
-          logoUrl: safeLogoUrl || (syndic.logoUrl ?? ''),
-          ice: safeIce,
-          taxId: safeTaxId,
-          rc: safeRc,
-          patente: safePatente,
-        })
-      );
+      const saved = await Promise.resolve(onUpdate(updated));
+      if (!mounted.current) return;
+      const accepted = saved && typeof saved === 'object' && (saved as Partial<Syndic>).id === syndic.id
+        ? { ...updated, ...(saved as Partial<Syndic>) } : updated;
+      dispatch({ type: 'saved', values: settingsValues(accepted) });
       setMessage({ type: 'success', text: t('settings.success') });
       showToast(t('settings.success'), 'success');
     } catch (err: unknown) {
+      if (!mounted.current) return;
+      dispatch({ type: 'saveFailed' });
       const errorText =
         err instanceof Error
           ? err.message
@@ -78,8 +78,6 @@ const Settings: React.FC<SettingsProps> = ({ syndic, onUpdate }) => {
             );
       setMessage({ type: 'error', text: errorText });
       showToast(errorText, 'error');
-    } finally {
-      setIsLoading(false);
     }
   };
 
@@ -101,6 +99,23 @@ const Settings: React.FC<SettingsProps> = ({ syndic, onUpdate }) => {
         </h2>
 
         <Form onSubmit={handleSubmit} className="space-y-6">
+          {dirty && <p className="text-sm text-amber-800">{tr('Modifications non enregistrées', 'تعديلات غير محفوظة')}</p>}
+          {draft.conflicts.length > 0 && (
+            <div role="status" aria-live="polite" className="rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-2 text-sm text-amber-950">
+              <p>{tr('Des champs modifiés localement ont aussi changé à distance. Votre saisie est conservée. Enregistrer appliquera votre saisie.', 'تغيّرت بعض الحقول التي عدلتها أيضاً عن بُعد. تم الاحتفاظ بتعديلاتك. سيطبّق الحفظ تعديلاتك.')}</p>
+              {draft.conflicts.map(field => <div key={field} className="flex flex-wrap items-center gap-2">
+                <span className="break-all">{labels[field]} : {draft.remote[field] || tr('(vide)', '(فارغ)')}</span>
+                <button type="button" className="underline font-semibold" onClick={() => dispatch({ type: 'useRemote', field })}
+                  aria-label={`${tr('Utiliser la valeur distante', 'استخدام القيمة المحفوظة')} — ${labels[field]}`}>
+                  {tr('Utiliser la valeur distante', 'استخدام القيمة المحفوظة')}
+                </button>
+                <button type="button" className="underline font-semibold" onClick={() => dispatch({ type: 'keepLocal', field })}
+                  aria-label={`${tr('Conserver ma version', 'الاحتفاظ بتعديلي')} — ${labels[field]}`}>
+                  {tr('Conserver ma version', 'الاحتفاظ بتعديلي')}
+                </button>
+              </div>)}
+            </div>
+          )}
           {message && (
             <div
               className={`p-3.5 rounded-lg text-xs font-semibold border ${
@@ -122,7 +137,7 @@ const Settings: React.FC<SettingsProps> = ({ syndic, onUpdate }) => {
                 type="text"
                 id="companyName"
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                onChange={(e) => edit('name', e.target.value)}
                 placeholder={t('settings.companyNamePlaceholder')}
                 className="block w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
               />
@@ -135,7 +150,7 @@ const Settings: React.FC<SettingsProps> = ({ syndic, onUpdate }) => {
                 type="text"
                 id="logoUrl"
                 value={logoUrl}
-                onChange={(e) => setLogoUrl(e.target.value)}
+                onChange={(e) => edit('logoUrl', e.target.value)}
                 placeholder={t('settings.logoUrlPlaceholder')}
                 className="block w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
               />
@@ -165,7 +180,7 @@ const Settings: React.FC<SettingsProps> = ({ syndic, onUpdate }) => {
                   id="ice"
                   maxLength={15}
                   value={ice}
-                  onChange={(e) => setIce(e.target.value)}
+                  onChange={(e) => edit('ice', e.target.value)}
                   placeholder="001234567000089 (15 chiffres)"
                   className="block w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-teal-500"
                 />
@@ -178,7 +193,7 @@ const Settings: React.FC<SettingsProps> = ({ syndic, onUpdate }) => {
                   type="text"
                   id="rc"
                   value={rc}
-                  onChange={(e) => setRc(e.target.value)}
+                  onChange={(e) => edit('rc', e.target.value)}
                   placeholder="Ex: 145890 - Casablanca"
                   className="block w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-teal-500"
                 />
@@ -191,7 +206,7 @@ const Settings: React.FC<SettingsProps> = ({ syndic, onUpdate }) => {
                   type="text"
                   id="taxId"
                   value={taxId}
-                  onChange={(e) => setTaxId(e.target.value)}
+                  onChange={(e) => edit('taxId', e.target.value)}
                   placeholder="Ex: 45891230"
                   className="block w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-teal-500"
                 />
@@ -204,7 +219,7 @@ const Settings: React.FC<SettingsProps> = ({ syndic, onUpdate }) => {
                   type="text"
                   id="patente"
                   value={patente}
-                  onChange={(e) => setPatente(e.target.value)}
+                  onChange={(e) => edit('patente', e.target.value)}
                   placeholder="Ex: 34291021"
                   className="block w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-teal-500"
                 />
@@ -223,4 +238,5 @@ const Settings: React.FC<SettingsProps> = ({ syndic, onUpdate }) => {
   );
 };
 
+const Settings: React.FC<SettingsProps> = props => <SettingsForm key={props.syndic.id} {...props} />;
 export default Settings;
