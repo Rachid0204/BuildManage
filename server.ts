@@ -1,6 +1,8 @@
 import { buildingReport } from "./server/reports";
 import { registerLiveUpdates } from "./server/realtime";
 import { projectAssemblyForRole } from './server/assemblyPrivacy';
+import { firebaseLinkedResidentIds } from './server/residentIdentity';
+import { installAiBodyParsers, registerAiEndpoints } from './server/aiEndpoints';
 import {
   createRepository,
   currentState,
@@ -45,7 +47,6 @@ import firebaseConfig from "./firebase-applet-config.json";
 import { applyResidentVote } from "./utils/agVoting";
 import type { AssembleeGenerale, Building } from "./types";
 import { fileURLToPath } from "url";
-import { GoogleGenAI } from "@google/genai";
 import {
   hashPasswordSync,
   verifyPasswordSync,
@@ -850,6 +851,7 @@ function getAuthorizedScopeForCaller(
 }
 
 function filterStoreForCaller(store: ServerStore, caller: AuthCallerContext) {
+  const linkedResidentIds = firebaseLinkedResidentIds(store);
   const scope = getAuthorizedScopeForCaller(store, caller),
     managed = ["admin", "syndic"].includes(caller.role),
     result: any = {};
@@ -884,7 +886,9 @@ function filterStoreForCaller(store: ServerStore, caller: AuthCallerContext) {
           )
           .map((stored: any) => {
             const { reserveFundPercentage: _legacyRate, ...canonical } = stored;
-            return { ...canonical, reserveFundRate: getBuildingReserveRate(stored) };
+            return { ...canonical, reserveFundRate: getBuildingReserveRate(stored),
+              residents: (stored.residents || []).map((resident: any) => ({ ...resident,
+                emailIdentityLinked: linkedResidentIds.has(resident.id) })) };
           })
           .map((b: any) =>
             managed
@@ -1310,6 +1314,7 @@ async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
+  installAiBodyParsers(app);
   app.use(express.json({ limit: "15mb" }));
 
   process.env.SYNDIK_SERVER_SECRET ||= SERVER_HMAC_SECRET;
@@ -1401,7 +1406,7 @@ async function startServer() {
                     received: issue.received === "undefined" ? "undefined" : undefined,
                   })))
                 : "Enregistrement impossible. Veuillez réessayer.",
-            code: error instanceof DependencyError ? error.code : error.name === 'ZodError' ? 'VALIDATION_ERROR' : error instanceof OperationError ? 'OPERATION_REJECTED' : 'INTERNAL_ERROR',
+            code: error instanceof DependencyError ? error.code : error.name === 'ZodError' ? 'VALIDATION_ERROR' : error instanceof OperationError ? error.code : 'INTERNAL_ERROR',
             requestId,
           };
           format = "json";
@@ -2419,113 +2424,7 @@ async function startServer() {
     res.status(403).json({ error: "La remise à zéro web est désactivée." }),
   );
 
-  // Audit Item 27: Server-side Gemini AI announcement generator (keeps API key on server)
-  api.post("/api/ai/announcement", async (req, res) => {
-    const caller = await extractAndVerifyCaller(req, sharedStore);
-    if (!caller) {
-      return res
-        .status(401)
-        .json({ ok: false, error: "Unauthorized: authentication required" });
-    }
-    const topic = String(req.body?.topic || "").trim();
-    if (!topic) {
-      return res.status(400).json({
-        ok: false,
-        error: "Veuillez fournir un sujet pour l’annonce.",
-      });
-    }
-
-    const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
-    if (!apiKey) {
-      return res.status(503).json({
-        ok: false,
-        error:
-          "Le service de rédaction IA n’est pas configuré sur le serveur (GEMINI_API_KEY manquante).",
-      });
-    }
-
-    try {
-      const ai = new GoogleGenAI({ apiKey });
-      const prompt = `Tu es un syndic de copropriété professionnel au Maroc (Loi 18-00). Rédige une annonce claire, polie et formelle en français pour les résidents de l'immeuble concernant le sujet suivant : "${topic}". L'annonce doit être prête à être affichée (sans texte d'introduction superflu).`;
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: prompt,
-      });
-      const text = response.text?.trim();
-      if (!text) {
-        return res.status(502).json({
-          ok: false,
-          error: "Le modèle IA n’a retourné aucun contenu.",
-        });
-      }
-      return res.json({ ok: true, content: text });
-    } catch (error: any) {
-      console.error("Error in /api/ai/announcement:", error);
-      return res.status(502).json({
-        ok: false,
-        error:
-          "Échec de génération de l’annonce par l’IA. Veuillez réessayer ou rédiger manuellement.",
-      });
-    }
-  });
-
-  // Phase 3: AI OCR / Verification for Moroccan bank transfer receipts (PaymentProof)
-  api.post("/api/ai/verify-proof", async (req, res) => {
-    const caller = await extractAndVerifyCaller(req, sharedStore);
-    if (!caller) {
-      return res.status(401).json({ ok: false, error: "Unauthorized" });
-    }
-    const { imageBase64, expectedAmount, expectedReference, expectedBank } =
-      req.body || {};
-    const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
-    if (!apiKey || !imageBase64 || typeof imageBase64 !== "string") {
-      return res.json({
-        ok: true,
-        verified: false,
-        confidence: 0,
-        extractedAmount: Number(expectedAmount) || undefined,
-        extractedReference: expectedReference || undefined,
-        extractedBank: expectedBank || undefined,
-        mode: "heuristic",
-      });
-    }
-
-    try {
-      const ai = new GoogleGenAI({ apiKey });
-      const match = imageBase64.match(/^data:([^;]+);base64,(.+)$/);
-      const mimeType = match ? match[1] : "image/jpeg";
-      const data = match ? match[2] : imageBase64;
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: [
-          {
-            inlineData: { mimeType, data },
-          },
-          {
-            text: `Analyse ce reçu de virement bancaire marocain. Extrais uniquement un objet JSON valide avec les clés: {"extractedAmount": number | null, "extractedReference": string | null, "extractedBank": string | null, "confidence": number}. Montant attendu: ${expectedAmount || "inconnu"} MAD.`,
-          },
-        ],
-      });
-      const rawText = (response.text || "").replace(/```json|```/g, "").trim();
-      const parsed = JSON.parse(rawText);
-      return res.json({
-        ok: true,
-        ...parsed,
-        verified: false,
-        mode: "gemini-ocr",
-      });
-    } catch {
-      return res.json({
-        ok: true,
-        verified: false,
-        confidence: 0,
-        extractedAmount: Number(expectedAmount) || undefined,
-        extractedReference: expectedReference || undefined,
-        extractedBank: expectedBank || undefined,
-        mode: "heuristic-fallback",
-      });
-    }
-  });
+  registerAiEndpoints({ post: (route, handler) => app.post(route, wrap(handler, false)) }, repository, extractAndVerifyCaller);
 
   if (!process.env.NODE_ENV || process.env.NODE_ENV === "development") {
     const { createServer: createViteServer } = await import("vite");

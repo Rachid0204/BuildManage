@@ -59,6 +59,9 @@ const ResidentModal: React.FC<ResidentModalProps> = ({
   const [apartmentId, setApartmentId] = useState<string>('');
   const [generateCredentials, setGenerateCredentials] = useState(true);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const emailIdentityLinked = existingResident?.emailIdentityLinked === true;
+  // A live identity link can arrive while the modal has an unsaved email draft.
+  const effectiveEmail = emailIdentityLinked ? existingResident.email : email;
 
   const residentMap = useMemo(
     () => new Map(residents.map((r) => [r.id, r.name])),
@@ -100,7 +103,7 @@ const ResidentModal: React.FC<ResidentModalProps> = ({
         'الاسم الكامل مطلوب (حرفان على الأقل)'
       );
     }
-    if (!/^\S+@\S+\.\S+$/.test(email.trim())) {
+    if (!/^\S+@\S+\.\S+$/.test(effectiveEmail.trim())) {
       newErrors.email = tr(
         'Une adresse email valide est obligatoire',
         'يرجى إدخال بريد إلكتروني صحيح'
@@ -121,7 +124,7 @@ const ResidentModal: React.FC<ResidentModalProps> = ({
     if (!validate()) return;
     const residentData = {
       name: name.trim(),
-      email: email.trim(),
+      email: effectiveEmail.trim(),
       phone: phone.trim(),
       cin: cin.trim() || undefined,
       isOwner,
@@ -211,13 +214,23 @@ const ResidentModal: React.FC<ResidentModalProps> = ({
               type="email"
               id="res-email"
               required
-              value={email}
+              disabled={emailIdentityLinked}
+              aria-describedby={emailIdentityLinked ? 'res-email-identity-help' : undefined}
+              value={effectiveEmail}
               onChange={(e) => setEmail(e.target.value)}
               placeholder={t('residents.modal.emailPlaceholder')}
-              className={`block w-full px-3 py-2 border rounded-md text-sm ${
+              className={`block w-full px-3 py-2 border rounded-md text-sm disabled:bg-slate-100 disabled:text-slate-500 ${
                 errors.email ? 'border-red-500' : 'border-slate-300'
               }`}
             />
+            {emailIdentityLinked && (
+              <p id="res-email-identity-help" className="text-xs text-slate-600 mt-1">
+                {tr(
+                  'Cet email de connexion est lié à Firebase et ne peut pas être modifié ici. Suivez la procédure sécurisée du compte avec vérification email.',
+                  'بريد تسجيل الدخول هذا مرتبط بـ Firebase ولا يمكن تعديله هنا. يلزم اتباع إجراءات أمان الحساب مع التحقق من البريد الإلكتروني.'
+                )}
+              </p>
+            )}
             {errors.email && (
               <p className="text-xs text-red-600 mt-1">{errors.email}</p>
             )}
@@ -710,7 +723,7 @@ const Residents: React.FC<{
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         onSave={handleSaveResident}
-        existingResident={selectedResident}
+        existingResident={building.residents.find((r) => r.id === selectedResident?.id) || selectedResident}
         apartments={building.apartments}
         residents={building.residents}
       />

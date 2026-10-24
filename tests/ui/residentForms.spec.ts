@@ -22,6 +22,13 @@ const resident = {
   apartmentId: "lot-ui",
   mustChangePassword: false,
 };
+// H6: a pending local invitation is not yet a Firebase login identity.
+const emailGuardResidents = ['linked', 'account-linked', 'pending', 'unregistered'].map((kind) => ({
+  id: `email-guard-${kind}`, name: `Email Guard ${kind}`, email: `${kind}@email-guard.invalid`,
+  phone: '0600000088', isOwner: false, hasAccount: kind !== 'unregistered',
+  syndicId: 's-ui', buildingId: 'b-ui',
+  invitationStatus: kind === 'pending' ? 'pending' : undefined,
+}));
 const profiles = [
   {
     uid: "owner-ui",
@@ -100,7 +107,17 @@ test.beforeAll(async () => {
         email: profile.email,
         profile,
         passwordHash: hashPasswordSync(password, profile.email),
-      })),
+      })).concat([{
+        uid: 'user-res-email-guard-linked', email: emailGuardResidents[0].email,
+        firebaseUid: 'firebase-email-guard-linked',
+        profile: { uid: 'user-res-email-guard-linked', role: 'resident', residentId: emailGuardResidents[0].id,
+          syndicId: 's-ui', buildingId: 'b-ui', email: emailGuardResidents[0].email },
+      }] as any),
+      syndik_prod_resident_accounts_v1: [{ residentId: emailGuardResidents[1].id,
+        email: emailGuardResidents[1].email, firebaseUid: 'firebase-email-guard-account',
+        syndicId: 's-ui', buildingId: 'b-ui' },
+        { residentId: emailGuardResidents[2].id, email: emailGuardResidents[2].email,
+          syndicId: 's-ui', buildingId: 'b-ui', passwordHash: hashPasswordSync(password, emailGuardResidents[2].email) }],
       syndik_prod_syndics_v1: [
         {
           id: "s-ui",
@@ -122,6 +139,7 @@ test.beforeAll(async () => {
               documents: [],
               residents: [
                 resident,
+                ...emailGuardResidents,
                 {
                   id: "peer-ui",
                   name: "Peer",
@@ -143,6 +161,8 @@ test.beforeAll(async () => {
                   area: 80,
                   tantiemes: 1000,
                 },
+                { id: 'email-guard-lot', buildingId: 'b-ui', number: 'EMAIL-GUARD',
+                  ownerId: resident.id, tenantId: null, floor: 1, area: 0, tantiemes: 0, monthlyFees: 0 },
               ],
               financials: {
                 balance: 40,
@@ -741,6 +761,99 @@ test('lot and resident forms retain drafts on failures and persist complete reco
   expect((await disk()).syndik_prod_syndics_v1[0].buildings[0].residents.some((r: any) => r.email === 'new-resident@ui.invalid')).toBe(true);
 });
 
+for (const language of ['fr', 'ar']) {
+  test(`Resident email guard: linked email is disabled with ${language} guidance while other profile fields save`, async ({ page }) => {
+    await login(page, 0, language);
+    await page.goto(`${base}/residents`);
+    const person = emailGuardResidents[0];
+    await page.getByRole('row').filter({ has: page.getByText(person.email, { exact: true }) }).getByTitle(language === 'fr' ? 'Modifier le résident' : 'تعديل الساكن').click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.locator('#res-email')).toBeDisabled();
+    await expect(dialog.locator('#res-email')).toHaveValue(person.email);
+    await expect(dialog.locator('#res-email')).toHaveAttribute('aria-describedby', 'res-email-identity-help');
+    await expect(dialog.locator('#res-email-identity-help')).toContainText(language === 'fr'
+      ? 'Cet email de connexion est lié à Firebase' : 'بريد تسجيل الدخول هذا مرتبط بـ Firebase');
+    await dialog.locator('#res-name').fill(`Email Guard Updated ${language}`);
+    await dialog.locator('#res-phone').fill(language === 'fr' ? '0600000071' : '0600000072');
+    await dialog.locator('#res-apartment').selectOption('email-guard-lot');
+    await dialog.locator('button[type=submit]').click();
+    await expect(dialog).toBeHidden();
+    const saved = (await disk()).syndik_prod_syndics_v1[0].buildings[0].residents.find((r: any) => r.id === person.id);
+    expect(saved).toMatchObject({ name: `Email Guard Updated ${language}`, email: person.email, apartmentId: 'email-guard-lot',
+      phone: language === 'fr' ? '0600000071' : '0600000072' });
+    expect(saved.emailIdentityLinked).toBeUndefined(); // Projection metadata must not become persisted identity truth.
+  });
+}
+
+test('Resident email guard: pending invitations and unregistered residents still allow email correction', async ({ page }) => {
+  await login(page, 0);
+  await page.goto(`${base}/residents`);
+  for (const person of emailGuardResidents.slice(2)) {
+    await page.getByRole('row').filter({ hasText: person.email }).getByTitle('Modifier le résident').click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.locator('#res-email')).toBeEnabled();
+    await expect(dialog.locator('#res-email-identity-help')).toHaveCount(0);
+    const corrected = `corrected-${person.id}@email-guard.invalid`;
+    await dialog.locator('#res-email').fill(corrected);
+    await dialog.locator('button[type=submit]').click();
+    await expect(dialog).toBeHidden();
+    const saved = (await disk()).syndik_prod_syndics_v1[0].buildings[0].residents.find((r: any) => r.id === person.id);
+    expect(saved.email).toBe(corrected);
+    expect(saved.hasAccount).toBe(person.hasAccount);
+  }
+});
+
+test('Resident email guard: API projects authoritative bindings and rejects direct linked mutations atomically', async ({ page }) => {
+  const token = await login(page, 0);
+  const response = await page.request.get(`${base}/api/shared-state`, { headers: { Authorization: `Bearer ${token}` } });
+  expect(response.status()).toBe(200);
+  const projected = (await response.json()).store.syndik_prod_syndics_v1[0].buildings[0].residents;
+  for (const [index, person] of emailGuardResidents.entries()) {
+    expect(projected.find((r: any) => r.id === person.id).emailIdentityLinked).toBe(index < 2);
+  }
+  for (const person of emailGuardResidents.slice(0, 2)) {
+    const before = await disk();
+    const stored = before.syndik_prod_syndics_v1[0].buildings[0].residents.find((r: any) => r.id === person.id);
+    const result = await apiCommand(token, 'updateResident', [{ ...stored, email: `forged-${person.id}@email-guard.invalid`,
+      name: 'Must roll back', hasAccount: false, emailIdentityLinked: false, firebaseUid: '' }]);
+    expect(result.status, JSON.stringify(result.data)).toBe(409);
+    expect(result.data).toMatchObject({ ok: false, code: 'FIREBASE_EMAIL_CHANGE_REQUIRES_VERIFICATION' });
+    expect(result.data.error).toContain('procédure de vérification email');
+    expect(result.data.requestId).toEqual(expect.any(String));
+    expect(await disk()).toEqual(before);
+    // Case-only normalization is not an identity change.
+    const unchanged = await apiCommand(token, 'updateResident', [{ ...stored, email: stored.email.toUpperCase() }]);
+    expect(unchanged.status, JSON.stringify(unchanged.data)).toBe(200);
+  }
+});
+
+test('Resident email guard: a live Firebase link locks an open email draft without erasing other edits', async ({ page }) => {
+  const token = await login(page, 0);
+  const created = await apiCommand(token, 'addResident', [{ name: 'Live Identity Resident', email: 'live-link@email-guard.invalid',
+    phone: '0600000090', isOwner: false, syndicId: 's-ui', buildingId: 'b-ui' }, false]);
+  expect(created.status, JSON.stringify(created.data)).toBe(200);
+  const person = created.data.result;
+  await page.goto(`${base}/residents`);
+  await page.getByRole('row').filter({ has: page.getByText(person.email, { exact: true }) }).getByTitle('Modifier le résident').click();
+  const dialog = page.getByRole('dialog');
+  await dialog.locator('#res-email').fill('unsaved-email@email-guard.invalid');
+  await dialog.locator('#res-phone').fill('0600000091');
+  // Simulate a concurrent identity-service commit, without calling production Firebase.
+  const bind = (state: any) => (state.syndik_prod_resident_accounts_v1 ??= []).push({ residentId: person.id,
+    email: person.email, firebaseUid: 'firebase-live-email-guard', syndicId: 's-ui', buildingId: 'b-ui' });
+  if (testRepository) await testRepository.transaction(async state => { bind(state); });
+  else { const state = await disk(); bind(state); writeFileSync(join(directory, 'shared-state.json'), JSON.stringify(state)); }
+  const wake = await apiCommand(token, 'updateBuilding', ['b-ui', { address: 'Live identity guard update' }]);
+  expect(wake.status, JSON.stringify(wake.data)).toBe(200);
+  await expect(dialog.locator('#res-email')).toBeDisabled();
+  await expect(dialog.locator('#res-email')).toHaveValue(person.email);
+  await expect(dialog.locator('#res-phone')).toHaveValue('0600000091');
+  await dialog.locator('button[type=submit]').click();
+  await expect(dialog).toBeHidden();
+  expect((await disk()).syndik_prod_syndics_v1[0].buildings[0].residents.find((r: any) => r.id === person.id))
+    .toMatchObject({ email: person.email, phone: '0600000091' });
+});
+
 test('building reserve rate accepts fractional percentages and persists the same rate used by payments', async ({ page }) => {
   const token = await login(page, 0);
   const originalRate = (await disk()).syndik_prod_syndics_v1[0].buildings[0].reserveFundRate;
@@ -863,6 +976,32 @@ test('announcements, provider and assembly forms explain missing information and
   await dialog.locator('button[type=submit]').click();
   await expect(dialog).toBeHidden();
   expect((await disk()).syndik_prod_ag_v1.some((a: any) => a.title === 'Form audit assembly')).toBe(true);
+});
+
+test('AI protection: announcement requests identify the selected building and quota errors preserve the draft', async ({ page }) => {
+  await login(page, 0);
+  await page.goto(`${base}/announcements`);
+  await page.getByRole('button', { name: /Nouvelle annonce|Créer.*annonce/i }).first().click();
+  const dialog = page.getByRole('dialog');
+  await dialog.locator('#title').fill('Keep this title');
+  await dialog.locator('#content').fill('Keep the manual announcement draft.');
+  await expect(dialog.locator('#ai-topic')).toHaveAttribute('maxlength', '2000');
+  await dialog.locator('#ai-topic').fill('Lift inspection');
+  let calls = 0;
+  await page.route('**/api/ai/announcement', async route => {
+    expect(route.request().postDataJSON()).toEqual({ topic: 'Lift inspection', buildingId: 'b-ui' }); calls++;
+    await route.fulfill(calls === 1 ? { status: 429, json: { ok: false, code: 'AI_RATE_LIMITED', error: 'Quota IA atteint.' } }
+      : { status: 200, json: { ok: true, content: 'Inspection prévue samedi.' } });
+  });
+  await dialog.getByRole('button', { name: 'Générer le texte', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toContainText('Quota IA atteint.');
+  await expect(dialog.locator('#title')).toHaveValue('Keep this title');
+  await expect(dialog.locator('#content')).toHaveValue('Keep the manual announcement draft.');
+  await dialog.getByRole('button', { name: 'Générer le texte', exact: true }).click();
+  await expect(dialog.locator('#content')).toHaveValue('Inspection prévue samedi.');
+  await expect(dialog.locator('#title')).toHaveValue('Keep this title');
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: 'Annuler', exact: true }).click();
 });
 
 test('expense form saves a positive input as one negative ledger entry', async ({ page }) => {
@@ -1660,4 +1799,34 @@ test('subscription capacity: archive frees a slot, restore enforces the limit an
   const expected = all.filter((s: any) => !s.archivedAt).reduce((sum: number, s: any) => sum + s.buildings.filter((b: any) => !b.archivedAt).length, 0);
   await login(page, 3);
   await expect(page.getByText('Immeubles Gérés', { exact: true }).locator('..').getByText(String(expected), { exact: true })).toBeVisible();
+});
+
+test('Settings draft: real SSE updates preserve edits, hydrate clean fields and resume hydration after saving', async ({ page }) => {
+  const token = await login(page, 0);
+  const initial = await apiCommand(token, 'saveSyndic', [{ id: 's-ui', name: 'Syndic Al Manar', taxId: 'SETTINGS-BASE' }]);
+  expect(initial.status, JSON.stringify(initial.data)).toBe(200);
+  await page.goto(`${base}/settings`);
+  const name = page.locator('#companyName');
+  await expect(name).toHaveValue('Syndic Al Manar');
+  await name.fill('Syndic Al Manar Updated');
+  await page.evaluate(() => { (window as any).__settingsDraftDocument = 'original-settings-document'; });
+  const metadata = await apiCommand(token, 'updateBuilding', ['b-ui', { name: 'Settings live metadata change' }]);
+  expect(metadata.status, JSON.stringify(metadata.data)).toBe(200);
+  await expect(page.getByRole('banner').getByRole('heading', { name: 'Settings live metadata change', exact: true })).toBeVisible();
+  // Flush effects after the live context replaces the outer cabinet object.
+  await page.evaluate(() => new Promise<void>(done => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+  await expect(name).toHaveValue('Syndic Al Manar Updated');
+  const remote = await apiCommand(token, 'saveSyndic', [{ id: 's-ui', taxId: 'SETTINGS-REMOTE' }]);
+  expect(remote.status, JSON.stringify(remote.data)).toBe(200);
+  await expect(page.locator('#taxId')).toHaveValue('SETTINGS-REMOTE');
+  await expect(name).toHaveValue('Syndic Al Manar Updated');
+  await page.locator('button[type=submit]').click();
+  await expect.poll(async () => (await disk()).syndik_prod_syndics_v1[0].name).toBe('Syndic Al Manar Updated');
+  await expect(page.getByText('Modifications non enregistrées', { exact: true })).toHaveCount(0);
+  const saved = (await disk()).syndik_prod_syndics_v1[0];
+  expect(saved.taxId).toBe('SETTINGS-REMOTE');
+  expect(saved.buildings.find((b: any) => b.id === 'b-ui').name).toBe('Settings live metadata change');
+  expect((await apiCommand(token, 'saveSyndic', [{ id: 's-ui', name: 'Remote name after Settings save' }])).status).toBe(200);
+  await expect(name).toHaveValue('Remote name after Settings save');
+  expect(await page.evaluate(() => (window as any).__settingsDraftDocument)).toBe('original-settings-document');
 });
