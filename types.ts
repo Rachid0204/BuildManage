@@ -200,6 +200,8 @@ export interface Invoice {
 }
 
 export interface Transaction {
+  /** Canonical receipts captured atomically with this confirmed payment; never renumber on recovery. */
+  receiptSnapshots?: Quittance[];
   reserveRateApplied?: number;
   paymentAllocations?: Array<{ chargeId: string; amount: number }>;
   reversalOf?: string;

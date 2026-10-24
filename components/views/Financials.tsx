@@ -1,5 +1,5 @@
 import FinancialTools from './FinancialTools';
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Building, Transaction, Charge, Syndic, Quittance, PaymentMethod } from '../../types';
 import Card from '../common/Card';
@@ -187,7 +187,6 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
   const [quittanceReference, setQuittanceReference] = useState('');
   const [quittancePaymentDate, setQuittancePaymentDate] = useState(new Date().toISOString().split('T')[0]);
   const [quittanceRemarks, setQuittanceRemarks] = useState('');
-  const [quittanceAddLedgerTrx, setQuittanceAddLedgerTrx] = useState(true);
   const [quittanceSearch, setQuittanceSearch] = useState('');
   const [quittanceFilterMethod, setQuittanceFilterMethod] = useState('all');
   const [directGeneratingChargeId, setDirectGeneratingChargeId] = useState<string | null>(null);
@@ -320,7 +319,6 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
         'مساهمة الملكية المشتركة - وصل إبراء الذمة (القانون 18-00 / 106-12)'
       )
     );
-    setQuittanceAddLedgerTrx(charge.status !== 'paid');
     setIsQuittanceModalOpen(true);
   };
 
@@ -352,9 +350,23 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
         'المساهمة الشهرية للملكية المشتركة - وصل إبراء الذمة'
       )
     );
-    setQuittanceAddLedgerTrx(true);
     setIsQuittanceModalOpen(true);
   };
+
+  const receiptCharges = charges.filter(charge => charge.apartmentId === quittanceApartmentId &&
+    charge.residentId === quittanceResidentId && Math.round((charge.amount - (charge.paidAmount ?? (charge.status === 'paid' ? charge.amount : 0))) * 100) > 0);
+  const receiptCharge = receiptCharges.find(charge => charge.id === quittanceChargeId);
+  const receiptRemaining = receiptCharge
+    ? Math.max(0, Math.round((receiptCharge.amount - (receiptCharge.paidAmount ?? 0)) * 100)) / 100 : 0;
+  const receiptSelection = receiptCharge || receiptCharges[0];
+  const receiptSelectionRemaining = receiptSelection
+    ? Math.max(0, Math.round((receiptSelection.amount - (receiptSelection.paidAmount ?? 0)) * 100)) / 100 : 0;
+  useEffect(() => {
+    if (!isQuittanceModalOpen) return;
+    setQuittanceChargeId(receiptSelection?.id || '');
+    setQuittancePeriod(receiptSelection?.period || '');
+    setQuittanceAmount(receiptSelection ? String(receiptSelectionRemaining) : '');
+  }, [isQuittanceModalOpen, receiptSelection?.id, receiptSelection?.period, receiptSelectionRemaining]);
 
   // Create Quittance Mutation
   const createQuittanceMutation = useMutation({
@@ -389,6 +401,8 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
         queryClient.invalidateQueries({ queryKey: ['quittances', building.id] });
         generateQuittancePDF(generated, building, syndic, apt, res);
       }
+    } catch (error: any) {
+      showToast(error.message, 'error');
     } finally {
       setDirectGeneratingChargeId(null);
     }
@@ -2466,6 +2480,9 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                   if (!Number.isFinite(numAmt) || numAmt <= 0) {
                     throw new Error(tr('Veuillez saisir un montant de cotisation valide.', 'يرجى إدخال مبلغ مساهمة صحيح.'));
                   }
+                  if (!receiptCharge || Math.round(numAmt * 100) > Math.round(receiptRemaining * 100)) {
+                    throw new Error(tr('Sélectionnez une charge et respectez son solde restant.', 'اختر مساهمة والتزم برصيدها المتبقي.'));
+                  }
                   if (!quittanceApartmentId) {
                     throw new Error(tr('Veuillez sélectionner un lot.', 'يرجى اختيار الشقة.'));
                   }
@@ -2500,7 +2517,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                     bankName: quittanceBankName,
                     referenceNumber: quittanceReference || undefined,
                     remarks: quittanceRemarks || undefined,
-                    addTransactionToLedger: quittanceAddLedgerTrx,
+                    addTransactionToLedger: true,
                   });
                 }}
         onClose={() => setIsQuittanceModalOpen(false)}
@@ -2516,7 +2533,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
               </Button>
               <Button
                 type="submit"
-                disabled={createQuittanceMutation.isPending}
+                disabled={createQuittanceMutation.isPending || !receiptCharge}
                 className="bg-teal-700 hover:bg-teal-800 text-white font-bold flex items-center gap-1.5"
               >
                 <QuittanceIcon />
@@ -2645,6 +2662,20 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
               </span>
             </h4>
 
+            <div>
+              <label htmlFor="quittance-charge" className="block text-xs font-semibold text-slate-700 mb-1">
+                {tr('Charge à régler', 'المساهمة المستحقة')}
+              </label>
+              <select id="quittance-charge" value={quittanceChargeId} onChange={event => setQuittanceChargeId(event.target.value)}
+                className="w-full px-3 py-1.5 border border-slate-300 rounded text-xs bg-white">
+                <option value="">{tr('Sélectionnez une charge...', 'اختر مساهمة...')}</option>
+                {receiptCharges.map(charge => <option key={charge.id} value={charge.id}>
+                  {charge.period} — {currencyFormatter.format(Math.max(0, charge.amount - (charge.paidAmount ?? 0)))}
+                </option>)}
+              </select>
+              <p className="text-xs text-slate-600 mt-1">{tr('Tout nouveau reçu confirme un paiement enregistré.', 'كل وصل جديد يؤكد دفعة مسجلة.')}</p>
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
@@ -2653,18 +2684,21 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                 <input
                   type="text"
                   value={quittancePeriod}
-                  onChange={(e) => setQuittancePeriod(e.target.value)}
+                  readOnly
                   placeholder={tr('Ex: Octobre 2026', 'مثال: أكتوبر 2026')}
                   className="w-full px-3 py-1.5 border border-slate-300 rounded text-xs bg-white"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                <label htmlFor="quittance-amount" className="block text-xs font-semibold text-slate-700 mb-1">
                   {tr('Montant Total Encaissé (MAD)', 'المبلغ الإجمالي المحصل (درهم)')} <span className="text-rose-500">*</span>
                 </label>
                 <input
                   type="number"
+                  id="quittance-amount"
+                  min="0.01"
+                  max={receiptRemaining}
                   step="0.01"
                   value={quittanceAmount}
                   onChange={(e) => setQuittanceAmount(e.target.value)}
@@ -2797,21 +2831,6 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                 />
               </div>
             </div>
-
-            <label className="flex items-center gap-2 pt-1 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={quittanceAddLedgerTrx}
-                onChange={(e) => setQuittanceAddLedgerTrx(e.target.checked)}
-                className="rounded text-teal-600 focus:ring-teal-500"
-              />
-              <span className="text-xs text-slate-700">
-                {tr(
-                  "Inscrire automatiquement l'écriture d'encaissement dans le journal comptable de la copropriété",
-                  'تسجيل عملية التحصيل تلقائياً في السجل المحاسبي للملكية المشتركة'
-                )}
-              </span>
-            </label>
           </div>
         </div>
       </Modal>

@@ -677,10 +677,12 @@ export async function runOperation(
     b = buildingFor(actor, str(args[0]?.buildingId));
     buildingId = b.id;
     canWrite(actor, b);
+    if (args[0].addTransactionToLedger !== undefined) z.boolean().parse(args[0].addTransactionToLedger);
+    if (args[0].paymentId !== undefined) z.string().trim().min(1).max(3000).parse(args[0].paymentId);
     args[0] = {
       ...args[0],
       syndicId: b.syndicId,
-      paymentId: args[0].paymentId || operationId,
+      paymentId: args[0].paymentId || (args[0].addTransactionToLedger === false ? undefined : operationId),
     };
   } else if (operation === "generateQuittanceForCharge") {
     const row = record(

@@ -768,6 +768,44 @@ test('building reserve rate accepts fractional percentages and persists the same
   }
 });
 
+test('receipt form cannot bypass posting and limits payment to the selected outstanding charge', async ({ page }) => {
+  const token = await login(page, 0);
+  const generated = await apiCommand(token, 'generateMonthlyCharges', ['b-ui', 's-ui', '2034-06', false]);
+  expect(generated.status, JSON.stringify(generated.data)).toBe(200);
+  const charge = generated.data.result.find((c: any) => c.residentId === 'r-ui');
+  expect(charge).toBeTruthy();
+  await page.reload();
+  await page.getByRole('button', { name: /Appels de Charges/ }).click();
+  await page.getByRole('button', { name: /Émettre une Quittance/ }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('checkbox', { name: /Inscrire automatiquement/ })).toHaveCount(0);
+  await dialog.getByLabel('Charge à régler').selectOption(charge.id);
+  const amount = dialog.getByLabel('Montant Total Encaissé (MAD)');
+  await expect(amount).toHaveAttribute('max', String(charge.amount));
+  await expect(dialog.getByText('Tout nouveau reçu confirme un paiement enregistré.')).toBeVisible();
+  await amount.fill('1');
+  const unrelated = await apiCommand(token, 'generateMonthlyCharges', ['b-ui', 's-ui', '2034-07', false]);
+  expect(unrelated.status, JSON.stringify(unrelated.data)).toBe(200);
+  await expect(dialog.getByLabel('Charge à régler')).toContainText('2034-07');
+  await expect(amount).toHaveValue('1');
+  const before = ((await disk()).syndik_prod_quittances_v1 || []).filter((q: any) => q.chargeId === charge.id);
+  await amount.fill(String(charge.amount + 1));
+  await dialog.locator('button[type=submit]').click();
+  expect(await amount.evaluate((element: HTMLInputElement) => element.validity.rangeOverflow)).toBe(true);
+  expect(((await disk()).syndik_prod_quittances_v1 || []).filter((q: any) => q.chargeId === charge.id)).toEqual(before);
+  await amount.fill(String(charge.amount));
+  await dialog.locator('button[type=submit]').click();
+  await expect(dialog).toBeHidden();
+  const receipts = ((await disk()).syndik_prod_quittances_v1 || []).filter((q: any) => q.chargeId === charge.id);
+  expect(receipts).toHaveLength(1);
+  const receipt = receipts[0];
+  const row = page.getByRole('row').filter({ hasText: '2034-06' }).filter({ hasText: 'Resident UI' }).first();
+  const download = page.waitForEvent('download');
+  await row.getByRole('button', { name: 'Quittance PDF' }).click();
+  expect((await download).suggestedFilename()).toContain(receipt.quittanceNumber);
+  expect(((await disk()).syndik_prod_quittances_v1 || []).filter((q: any) => q.chargeId === charge.id)).toEqual(receipts);
+});
+
 test('maintenance validates required fields, preserves failed reports and saves the selected urgency', async ({ page }, testInfo) => {
   await login(page);
   await page.getByRole('button', { name: /Incidents.*Suivi/ }).first().click();

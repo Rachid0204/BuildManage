@@ -138,21 +138,25 @@ await test('recovery of a missing old receipt uses its posted 5% amounts after a
 });
 await test('receipt recovery for mixed historical rates preserves 25 MAD reserve, not today’s 40 MAD', async () => {
   reset(); charge('mixed', 200);
-  await svc.createQuittance({ ...receiptInput('mixed'), amount: 100, paymentId: 'mixed-old' });
+  const old = await svc.createQuittance({ ...receiptInput('mixed'), amount: 100, paymentId: 'mixed-old' });
   await svc.updateBuilding('rate-b', { reserveFundRate: 20 });
-  await svc.createQuittance({ ...receiptInput('mixed'), amount: 100, paymentId: 'mixed-new' });
+  const newer = await svc.createQuittance({ ...receiptInput('mixed'), amount: 100, paymentId: 'mixed-new' });
   write(K.QUITTANCES, []);
-  const recovered = await svc.generateQuittanceForCharge('mixed');
-  assert.equal(recovered.reserveFundAmount, 25);
-  assert.equal(recovered.chargesCourantesAmount, 175);
-  assert.equal((recovered as any).reserveRateApplied, undefined, 'Mixed rates must not be labelled as one rate');
+  // C4 recovers the original receipt for each payment, rather than minting an aggregate receipt.
+  const recovered = await Promise.all([old, newer].map(receipt => svc.createQuittance({ ...receipt, addTransactionToLedger: false })));
+  assert.deepEqual(recovered, [old, newer]);
+  assert.equal(recovered.reduce((sum, receipt) => sum + receipt.reserveFundAmount!, 0), 25);
+  assert.equal(recovered.reduce((sum, receipt) => sum + receipt.chargesCourantesAmount!, 0), 175);
+  assert.deepEqual(recovered.map(receipt => receipt.reserveRateApplied), [5, 20]);
 });
 await test('legacy ledger rows without a rate snapshot retain their original known MAD allocation', async () => {
   reset(); charge('legacy-ledger');
-  await svc.createQuittance(receiptInput('legacy-ledger'));
+  const old = await svc.createQuittance(receiptInput('legacy-ledger'));
   const cabinets = read(K.SYNDICS);
-  for (const row of cabinets[0].buildings[0].financials.transactions) delete row.reserveRateApplied;
-  write(K.SYNDICS, cabinets); write(K.QUITTANCES, []);
+  for (const row of cabinets[0].buildings[0].financials.transactions) {
+    delete row.reserveRateApplied; delete row.receiptSnapshots;
+  }
+  write(K.SYNDICS, cabinets); write(K.QUITTANCES, [{ ...old, reserveRateApplied: undefined }]);
   await svc.updateBuilding('rate-b', { reserveFundRate: 20 });
   const recovered = await svc.generateQuittanceForCharge('legacy-ledger');
   assert.equal(recovered.reserveFundAmount, 5);
@@ -160,10 +164,12 @@ await test('legacy ledger rows without a rate snapshot retain their original kno
 });
 await test('undocumented historical receipts never borrow the current building rate', async () => {
   reset({ reserveFundRate: 20 }); const old = charge('unknown'); old.paidAmount = 100; old.status = 'paid'; write(K.CHARGES, [old]);
-  const receipt = await svc.generateQuittanceForCharge(old.id);
-  assert.equal(receipt.reserveFundAmount, undefined);
-  assert.equal(receipt.chargesCourantesAmount, undefined);
-  assert.equal((money as any).getRecordedReserveSplit(receipt), undefined);
+  const before = structuredClone(building().financials);
+  // C4 requires reconciliation before numbering an undocumented historical payment.
+  await assert.rejects(() => svc.generateQuittanceForCharge(old.id), /original introuvable/);
+  assert.deepEqual(building().financials, before);
+  assert.deepEqual(read(K.QUITTANCES), []);
+  assert.equal((money as any).getRecordedReserveSplit({ amount: 100 }), undefined);
 });
 await test('receipt display uses recorded MAD or its own applied rate; never a building rate', () => {
   const recorded = (money as any).getRecordedReserveSplit;
