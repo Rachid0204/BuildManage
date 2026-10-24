@@ -1,5 +1,6 @@
 import type { Response } from 'express';
 import { OperationError } from './operations';
+import { DependencyError } from './dependencyErrors';
 import { AI_LIMITS } from '../utils/aiPolicy';
 
 export function aiDeadlineMs(): number {
@@ -19,7 +20,7 @@ export async function withAiDeadline<T>(response: Response, run: (signal: AbortS
     return await Promise.race([run(controller.signal), stopped]);
   } catch (error) {
     if (controller.signal.aborted) throw controller.signal.reason;
-    if (error instanceof OperationError) throw error;
+    if (error instanceof OperationError || error instanceof DependencyError) throw error;
     throw new OperationError('Le service IA est temporairement indisponible.', 502, 'AI_UPSTREAM_FAILED');
   } finally {
     clearTimeout(timer); response.off('close', disconnect);

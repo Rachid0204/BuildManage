@@ -9,6 +9,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { hashPassword } from '../server/passwords';
 import { gzipSync } from 'node:zlib';
+import { EventEmitter } from 'node:events';
+import { registerAiEndpoints } from '../server/aiEndpoints';
+import { DependencyError } from '../server/dependencyErrors';
 
 const password = 'Synthetic-AI-Protection-42!';
 const png = Buffer.from('89504e470d0a1a0a00000000', 'hex');
@@ -304,4 +307,17 @@ test('unverified accounts and required password changes cannot consume AI resour
       buildingId: 'ai-building', syndicId: 'ai-cabinet', mustChangePassword: false, profile: { ...profile, emailVerified: false } }];
   });
   assert.equal((await proof()).status, 403); assert.equal(calls.length, 0);
+});
+
+test('unavailable quota storage fails closed with its database error before any provider call', async () => {
+  await reset(); let handler: any;
+  const failure = new DependencyError('database', 'unavailable', new Error('private SDK details'));
+  registerAiEndpoints({ post: (route, run) => { if (route === '/api/ai/announcement') handler = run; } },
+    { transaction: async () => { throw failure; } }, async () => { throw new Error('Authentication must not run without storage'); });
+  const response = Object.assign(new EventEmitter(), { destroyed: false });
+  await assert.rejects(handler({ body: { buildingId: 'ai-building', topic: 'Test' } }, response, () => {}), (error: any) => {
+    assert.equal(error.status, 503); assert.equal(error.code, 'DATABASE_UNAVAILABLE');
+    assert.doesNotMatch(error.message, /private SDK details/); return true;
+  });
+  assert.equal(calls.length, 0);
 });

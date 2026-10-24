@@ -79,5 +79,6 @@ return 408; error-path drains have a bounded lifetime.
 Errors contain `ok: false`, `code`, `error`, and `requestId`, with the same request
 ID in `X-Request-ID`. Quota rejection is 429 / `AI_RATE_LIMITED` and includes
 `Retry-After` in seconds. Subscription rejection is 402; unauthorized scopes are
-403/404. Cancellable provider connections use the existing Gemini model through
+403/404. An unavailable quota store returns 503 / `DATABASE_UNAVAILABLE` before
+any provider call. Cancellable provider connections use the existing Gemini model through
 its HTTP protocol; no model/key configuration changes or new dependency are needed.
