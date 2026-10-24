@@ -217,11 +217,10 @@ export function getAuthenticatedRequestHeaders(): Record<string, string> {
 }
 
 /**
- * Shared financial balance selector (Audit Item 15 & P1-2).
- * Derives workingBalance/operatingBalance and reserveBalance consistently without double-counting
- * reserve transactions on top of an already-incremented reserveFundBalance,
- * preserves legacy opening balances stored in financials.balance,
- * and NEVER invents a 20% reserve balance when reserve balance is legitimately 0.
+ * Fund totals = one opening balance + signed ledger movements, in integer centimes.
+ * Canonical openings (including zero) take precedence over the legacy working alias.
+ * Aggregate-only legacy records infer their opening from stored total minus ledger delta.
+ * This is a read-only projection: no stored totals, aliases or ledger entries are migrated.
  */
 export function computeBuildingFinancialBalances(building?: Building | null): {
   workingBalance: number;
@@ -232,52 +231,29 @@ export function computeBuildingFinancialBalances(building?: Building | null): {
     return { workingBalance: 0, operatingBalance: 0, reserveBalance: 0 };
   }
 
-  const transactions =
-    building.financials?.transactions || (building as any)?.transactions || [];
-  const openingWorking = Number(building.financials?.openingBalance ?? 0) || 0;
-  const openingReserve = Number(building.financials?.openingReserveBalance ?? 0) || 0;
-
-  if (transactions.length > 0) {
-    let txWorkingDelta = 0;
-    let txReserveDelta = 0;
-
-    for (const trx of transactions) {
-      const rawAmt = Number(trx.amount) || 0;
-      const signedAmt =
-        trx.type === 'expense'
-          ? -Math.abs(rawAmt)
-          : trx.type === 'income'
-          ? Math.abs(rawAmt)
-          : rawAmt;
-
-      if (trx.fundType === 'reserve') {
-        txReserveDelta += signedAmt;
-      } else {
-        txWorkingDelta += signedAmt;
-      }
-    }
-
-    const storedWorking = Number(building.financials?.balance ?? 0) || 0;
-    const storedReserve = Number(building.financials?.reserveFundBalance ?? 0) || 0;
-    const inferredLegacyOpeningWorking = Math.round((storedWorking - txWorkingDelta) * 100) / 100;
-    const inferredLegacyOpeningReserve = Math.round((storedReserve - txReserveDelta) * 100) / 100;
-
-    const effectiveOpeningWorking =
-      openingWorking !== 0 ? openingWorking : inferredLegacyOpeningWorking;
-    const effectiveOpeningReserve =
-      openingReserve !== 0 ? openingReserve : inferredLegacyOpeningReserve;
-
-    const working = Math.round((effectiveOpeningWorking + txWorkingDelta) * 100) / 100;
-    const reserve = Math.round((effectiveOpeningReserve + txReserveDelta) * 100) / 100;
-    return {
-      workingBalance: working,
-      operatingBalance: working,
-      reserveBalance: reserve,
-    };
+  const financials = building.financials;
+  const transactions = financials?.transactions || (building as any)?.transactions || [];
+  const toCentimes = (value: unknown): number | undefined => {
+    if (value === undefined || value === null || value === '') return undefined;
+    const amount = Number(value);
+    return Number.isFinite(amount) ? Math.round(amount * 100) : undefined;
+  };
+  let workingDelta = 0, reserveDelta = 0;
+  for (const transaction of transactions) {
+    const amount = toCentimes(transaction.amount) ?? 0;
+    const signed = transaction.type === 'expense' ? -Math.abs(amount)
+      : transaction.type === 'income' ? Math.abs(amount) : amount;
+    if (transaction.fundType === 'reserve') reserveDelta += signed;
+    else workingDelta += signed;
   }
 
-  const working = (building.financials?.balance ?? 0) + openingWorking;
-  const reserve = (building.financials?.reserveFundBalance ?? 0) + openingReserve;
+  const openingWorking = toCentimes(financials?.openingWorkingBalance)
+    ?? toCentimes(financials?.openingBalance)
+    ?? ((toCentimes(financials?.balance) ?? workingDelta) - workingDelta);
+  const openingReserve = toCentimes(financials?.openingReserveBalance)
+    ?? ((toCentimes(financials?.reserveFundBalance) ?? reserveDelta) - reserveDelta);
+  const working = (openingWorking + workingDelta) / 100 || 0;
+  const reserve = (openingReserve + reserveDelta) / 100 || 0;
   return {
     workingBalance: working,
     operatingBalance: working,

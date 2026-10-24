@@ -17,6 +17,7 @@ import { PLANS, subscriptionCanWrite } from "../utils/subscriptionPolicy";
 import { applyResidentVote, evaluateResolutionStatus } from "../utils/agVoting";
 import { hashPassword } from "./passwords";
 import { privateAttachments } from './attachments';
+import { computeBuildingFinancialBalances } from '../utils/security';
 export class OperationError extends Error {
   constructor(
     message: string,
@@ -1149,28 +1150,21 @@ function financialOperation(
       reserve = cents(input.reserve),
       reason = str(input.reason),
       transactions = b.financials?.transactions || [];
-    const delta = (fund: string) =>
-      transactions
-        .filter(
-          (t: any) =>
-            (t.fundType === "reserve" ? "reserve" : "courant") === fund,
-        )
-        .reduce(
-          (sum: number, t: any) =>
-            sum +
-            (t.type === "expense"
-              ? -Math.abs(cents(t.amount))
-              : cents(t.amount)),
-          0,
-        );
-    b.financials = {
+    // Keep the existing write-time validation; the shared selector also reads legacy data.
+    for (const transaction of transactions) cents(transaction.amount);
+    const financials = {
       ...(b.financials || {}),
       transactions,
-      balance: (working + delta("courant")) / 100,
-      reserveFundBalance: (reserve + delta("reserve")) / 100,
       openingWorkingBalance: working / 100,
       openingReserveBalance: reserve / 100,
       openingBalancesRecordedAt: new Date().toISOString(),
+    };
+    delete financials.openingBalance;
+    const balances = computeBuildingFinancialBalances({ ...b, financials });
+    b.financials = {
+      ...financials,
+      balance: balances.workingBalance,
+      reserveFundBalance: balances.reserveBalance,
     };
     appendAudit(state, actor, operation, b.id, {
       reason,

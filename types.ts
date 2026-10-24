@@ -557,8 +557,11 @@ export interface Building {
   financials: {
     balance: number;
     reserveFundBalance?: number;
+    openingWorkingBalance?: number;
+    /** Legacy working opening alias, read for compatibility but no longer written. */
     openingBalance?: number;
     openingReserveBalance?: number;
+    openingBalancesRecordedAt?: string;
     transactions: Transaction[];
   };
 }
