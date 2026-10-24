@@ -19,10 +19,12 @@ import { applyResidentVote, evaluateResolutionStatus } from "../utils/agVoting";
 import { hashPassword } from "./passwords";
 import { privateAttachments } from './attachments';
 import { computeBuildingFinancialBalances } from '../utils/security';
+import { firebaseLinkedResidentIds, LINKED_RESIDENT_EMAIL_CODE, LINKED_RESIDENT_EMAIL_MESSAGE } from './residentIdentity';
 export class OperationError extends Error {
   constructor(
     message: string,
     public status = 400,
+    public code = 'OPERATION_REJECTED',
   ) {
     super(message);
   }
@@ -592,6 +594,8 @@ export async function runOperation(
     if (operation === "updateResident") {
       const old = b.residents.find((x: any) => x.id === r.id);
       check(old, "Résident introuvable.", 404);
+      if (old.email.trim().toLowerCase() !== r.email && firebaseLinkedResidentIds(state).has(old.id))
+        throw new OperationError(LINKED_RESIDENT_EMAIL_MESSAGE, 409, LINKED_RESIDENT_EMAIL_CODE);
       if (old.hasAccount && old.email.toLowerCase() !== r.email)
         changedCredentials = { kind: "Resident", id: r.id! };
     } else delete r.id;

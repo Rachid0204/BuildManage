@@ -99,6 +99,14 @@ try {
     check(persisted().syndik_prod_registered_users_v1.find((a: any) => a.uid === profile.uid).firebaseUid === profile.uid, 'Binding was persisted');
     logins.set(profile.role, login.data);
   }
+  const linkedBefore = persisted();
+  const linkedResident = linkedBefore.syndik_prod_syndics_v1[0].buildings[0].residents[0];
+  const emailEdit = await api('/api/commands', { operation: 'updateResident', args: [{ ...linkedResident,
+    email: 'unsupported-email-edit@example.test', emailIdentityLinked: false, hasAccount: false }],
+    operationId: 'firebase-linked-email-edit-0001' }, logins.get('syndic').token);
+  check(emailEdit.status === 409 && emailEdit.data.code === 'FIREBASE_EMAIL_CHANGE_REQUIRES_VERIFICATION', 'H6: real Firebase-linked resident email edit returns structured conflict');
+  check(JSON.stringify(persisted()) === JSON.stringify(linkedBefore), 'H6: rejected email change leaves profiles, accounts and operation receipts unchanged');
+  check((await admin.getUser(profiles[1].uid)).email === profiles[1].email, 'H6: rejected edit does not change Firebase Authentication');
   check((await api('/api/auth/login', { identifier: profiles[0].email, password: 'Wrong-Password-42!' })).status === 401, 'Wrong password rejected after migration');
   const changed = await api('/api/auth/change-password', { newPassword: replacement }, logins.get('resident').token);
   check(changed.status === 200, `Firebase password change: ${JSON.stringify(changed)}`);

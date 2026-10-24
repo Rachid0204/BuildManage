@@ -1,6 +1,7 @@
 import { buildingReport } from "./server/reports";
 import { registerLiveUpdates } from "./server/realtime";
 import { projectAssemblyForRole } from './server/assemblyPrivacy';
+import { firebaseLinkedResidentIds } from './server/residentIdentity';
 import {
   createRepository,
   currentState,
@@ -850,6 +851,7 @@ function getAuthorizedScopeForCaller(
 }
 
 function filterStoreForCaller(store: ServerStore, caller: AuthCallerContext) {
+  const linkedResidentIds = firebaseLinkedResidentIds(store);
   const scope = getAuthorizedScopeForCaller(store, caller),
     managed = ["admin", "syndic"].includes(caller.role),
     result: any = {};
@@ -884,7 +886,9 @@ function filterStoreForCaller(store: ServerStore, caller: AuthCallerContext) {
           )
           .map((stored: any) => {
             const { reserveFundPercentage: _legacyRate, ...canonical } = stored;
-            return { ...canonical, reserveFundRate: getBuildingReserveRate(stored) };
+            return { ...canonical, reserveFundRate: getBuildingReserveRate(stored),
+              residents: (stored.residents || []).map((resident: any) => ({ ...resident,
+                emailIdentityLinked: linkedResidentIds.has(resident.id) })) };
           })
           .map((b: any) =>
             managed
@@ -1401,7 +1405,7 @@ async function startServer() {
                     received: issue.received === "undefined" ? "undefined" : undefined,
                   })))
                 : "Enregistrement impossible. Veuillez réessayer.",
-            code: error instanceof DependencyError ? error.code : error.name === 'ZodError' ? 'VALIDATION_ERROR' : error instanceof OperationError ? 'OPERATION_REJECTED' : 'INTERNAL_ERROR',
+            code: error instanceof DependencyError ? error.code : error.name === 'ZodError' ? 'VALIDATION_ERROR' : error instanceof OperationError ? error.code : 'INTERNAL_ERROR',
             requestId,
           };
           format = "json";

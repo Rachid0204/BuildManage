@@ -69,6 +69,8 @@ export interface CredentialAuditEntry {
 }
 
 export interface Resident {
+  /** Server-derived account binding; never accepted as identity authority on writes. */
+  readonly emailIdentityLinked?: boolean;
   id: string;
   name: string;
   email: string;
