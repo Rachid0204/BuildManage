@@ -166,6 +166,12 @@ await test('fractional invoice allocations conserve the exact recorded reserve c
   assert.deepEqual(building().financials, before);
 });
 
+await test('payment identities must be nonempty strings before any payment or number is created', async () => {
+  for (const paymentId of ['', '   ', 42, {}, ['fake'], null]) {
+    reset(); await denied(() => svc.createQuittance({ ...input(), paymentId: paymentId as any }));
+  }
+});
+
 reset();
 const directory = mkdtempSync(join(tmpdir(), 'buildmanage-quittance-integrity-'));
 const stateFile = join(directory, 'shared-state.json');
@@ -223,6 +229,17 @@ try {
     const before = structuredClone(disk().syndik_prod_quittances_v1);
     const response = await command(token, 'createQuittance', [{ ...input(50, 'fake-partial'), addTransactionToLedger: false }]);
     assert.equal(response.status, 400, JSON.stringify(response.data)); assert.deepEqual(disk().syndik_prod_quittances_v1, before);
+  });
+  await test('API rejects malformed explicit payment identities instead of replacing them with an operation ID', async () => {
+    const generated = await command(token, 'generateMonthlyCharges', ['receipt-b', 'receipt-s', '2036-10', false]);
+    assert.equal(generated.status, 200, JSON.stringify(generated.data));
+    const charge = generated.data.result[0];
+    for (const paymentId of ['', '   ', 42, {}, ['fake'], null]) {
+      const before = structuredClone(disk().syndik_prod_syndics_v1);
+      const response = await command(token, 'createQuittance', [{ ...input(), chargeId: charge.id, paymentId, periodCovered: charge.period }]);
+      assert.equal(response.status, 400, JSON.stringify(response.data));
+      assert.deepEqual(disk().syndik_prod_syndics_v1, before);
+    }
   });
   await test('reversed payments cannot be resurrected from a saved receipt identity', async () => {
     const reversed = await command(token, 'reversePayment', ['receipt-b', 'real-payment', 'Synthetic reversal']);

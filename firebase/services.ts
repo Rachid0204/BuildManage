@@ -1999,6 +1999,9 @@ export const createQuittance = async (
   if (input.addTransactionToLedger !== undefined && typeof input.addTransactionToLedger !== 'boolean') {
     throw new Error('Mode de comptabilisation invalide.');
   }
+  if (input.paymentId !== undefined && (typeof input.paymentId !== 'string' || !input.paymentId.trim() || input.paymentId.length > 3000)) {
+    throw new Error('Référence de paiement invalide.');
+  }
   const { addTransactionToLedger = true, ...core } = input;
   const amount = centimes(core.amount);
   if (amount <= 0) throw new Error('Montant du paiement invalide.');
