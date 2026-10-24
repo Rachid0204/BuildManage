@@ -1608,3 +1608,56 @@ test('building archive confirmation preserves records and the archive view resto
   await expect(page.getByRole('heading', { name: 'Archive simulation', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Restaurer Archive simulation' })).toBeVisible();
 });
+
+test('subscription capacity: archive frees a slot, restore enforces the limit and admin counts stay active-only', async ({ page }) => {
+  test.setTimeout(90_000);
+  const registered = await apiCall('', '/api/auth/register', {
+    email: 'capacity-ui@ui.invalid', password,
+    profile: { role: 'syndic', displayName: 'Capacity UI Manager' },
+    syndic: { name: 'Capacity UI cabinet', city: 'Casablanca' },
+  });
+  expect(registered.status, JSON.stringify(registered.data)).toBe(200);
+  const token = registered.data.token, cabinetId = registered.data.syndic.id;
+  const original: any[] = [];
+  for (let index = 0; index < 4; index++) {
+    const created = await apiCommand(token, 'addBuilding', [cabinetId, { name: `Capacity residence ${index}`,
+      address: 'Synthetic capacity address', city: 'Casablanca', monthlySyndicFees: 100 }]);
+    expect(created.status, JSON.stringify(created.data)).toBe(200); original.push(created.data.result);
+  }
+  await page.goto(base + '/welcome');
+  await page.evaluate(token => {
+    localStorage.setItem('syndik_auth_session_v1', JSON.stringify({ serverToken: token }));
+    localStorage.setItem('syndik_lang', 'fr');
+  }, token);
+  await page.goto(base + '/buildings');
+  await expect(page.getByText('Utilisation : 4 / 4 immeubles', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Ajouter.*immeuble/i }).first()).toBeDisabled();
+  expect((await apiCommand(token, 'deleteBuilding', [original[3].id])).status).toBe(200);
+  await expect(page.getByText('Utilisation : 3 / 4 immeubles', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: /Ajouter.*immeuble/i }).first().click();
+  const dialog = page.getByRole('dialog');
+  await dialog.locator('#bld-name').fill('Capacity replacement');
+  await dialog.locator('#bld-address').fill('Synthetic replacement address');
+  await dialog.locator('#bld-city').fill('Casablanca');
+  await dialog.locator('button[type=submit]').click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole('main').getByRole('heading', { name: 'Capacity replacement', exact: true })).toBeVisible();
+  await expect(page.getByText('Utilisation : 4 / 4 immeubles', { exact: true })).toBeVisible();
+  await page.locator('summary').filter({ hasText: 'Immeubles archivés' }).click();
+  await page.getByRole('button', { name: 'Restaurer Capacity residence 3', exact: true }).click();
+  await expect(page.getByRole('status').filter({ hasText: /Limite.*forfait.*atteinte/ })).toBeVisible();
+  expect((await disk()).syndik_prod_syndics_v1.find((s: any) => s.id === cabinetId).buildings.find((b: any) => b.id === original[3].id).archivedAt).toBeTruthy();
+  expect((await apiCommand(token, 'deleteBuilding', [original[2].id])).status).toBe(200);
+  await expect(page.getByText('Utilisation : 3 / 4 immeubles', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Restaurer Capacity residence 3', exact: true }).click();
+  await expect(page.getByRole('main').getByRole('heading', { name: 'Capacity residence 3', exact: true })).toBeVisible();
+  await expect(page.getByText('Utilisation : 4 / 4 immeubles', { exact: true })).toBeVisible();
+  const stored = (await disk()).syndik_prod_syndics_v1.find((s: any) => s.id === cabinetId);
+  expect(stored.buildings.filter((b: any) => !b.archivedAt)).toHaveLength(4);
+  expect(stored.buildings.filter((b: any) => b.archivedAt)).toHaveLength(1);
+  expect(stored.buildings.find((b: any) => b.id === original[3].id).financials).toEqual(original[3].financials);
+  const all = (await disk()).syndik_prod_syndics_v1;
+  const expected = all.filter((s: any) => !s.archivedAt).reduce((sum: number, s: any) => sum + s.buildings.filter((b: any) => !b.archivedAt).length, 0);
+  await login(page, 3);
+  await expect(page.getByText('Immeubles Gérés', { exact: true }).locator('..').getByText(String(expected), { exact: true })).toBeVisible();
+});

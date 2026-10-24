@@ -541,6 +541,7 @@ export interface MarketplaceItem {
 }
 
 export interface Building {
+  archivedAt?: string;
   id: string;
   name: string;
   address: string;

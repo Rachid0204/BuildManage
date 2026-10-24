@@ -57,6 +57,9 @@ jobs:
       - name: Verify canonical receipt identity and payment allocation limits
         run: npm run test:quittance-integrity
 
+      - name: Verify active building subscription capacity and restoration
+        run: npm run test:subscription-capacity
+
       - name: Verify production operations and encrypted recovery
         run: npm run test:production && npm run test:recovery
 

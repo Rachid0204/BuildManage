@@ -13,7 +13,7 @@ import {
   SyndicSchema,
   TransactionSchema,
 } from "../utils/validation";
-import { PLANS, subscriptionCanWrite } from "../utils/subscriptionPolicy";
+import { PLANS, subscriptionCanWrite, getBuildingCapacity } from "../utils/subscriptionPolicy";
 import { applyResidentVote, evaluateResolutionStatus } from "../utils/agVoting";
 import { hashPassword } from "./passwords";
 import { privateAttachments } from './attachments';
@@ -336,11 +336,14 @@ export async function runOperation(
       b = buildingFor(actor, id);
       const s = cabinetFor(actor, b.syndicId);
       check(
-        subscriptionCanWrite(s) &&
-          s.buildings.filter((x: any) => !x.archivedAt).length <
-            PLANS[s.subscriptionPlan as keyof typeof PLANS].buildings,
-        "Forfait insuffisant.",
+        subscriptionCanWrite(s),
+        "Abonnement expiré : renouvelez votre abonnement pour restaurer un immeuble.",
         402,
+      );
+      if (b.archivedAt) check(
+        getBuildingCapacity(s).canAdd,
+        "Limite du forfait atteinte. Archivez un immeuble actif ou changez de forfait avant cette restauration.",
+        409,
       );
       item = b;
     } else if (kind === "prestataires") {
@@ -362,7 +365,7 @@ export async function runOperation(
     const plan = PLANS[s.subscriptionPlan as keyof typeof PLANS];
     check(plan, "Forfait invalide.", 400);
     check(
-      s.buildings.filter((x: any) => !x.archivedAt).length < plan.buildings,
+      getBuildingCapacity(s).canAdd,
       "Limite du forfait atteinte.",
       409,
     );
