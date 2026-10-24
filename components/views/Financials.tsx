@@ -358,13 +358,15 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
   const receiptCharge = receiptCharges.find(charge => charge.id === quittanceChargeId);
   const receiptRemaining = receiptCharge
     ? Math.max(0, Math.round((receiptCharge.amount - (receiptCharge.paidAmount ?? 0)) * 100)) / 100 : 0;
+  const receiptSelection = receiptCharge || receiptCharges[0];
+  const receiptSelectionRemaining = receiptSelection
+    ? Math.max(0, Math.round((receiptSelection.amount - (receiptSelection.paidAmount ?? 0)) * 100)) / 100 : 0;
   useEffect(() => {
     if (!isQuittanceModalOpen) return;
-    const selected = receiptCharges.find(charge => charge.id === quittanceChargeId) || receiptCharges[0];
-    setQuittanceChargeId(selected?.id || '');
-    setQuittancePeriod(selected?.period || '');
-    setQuittanceAmount(selected ? String(Math.max(0, Math.round((selected.amount - (selected.paidAmount ?? 0)) * 100)) / 100) : '');
-  }, [isQuittanceModalOpen, quittanceApartmentId, quittanceResidentId, quittanceChargeId, charges]);
+    setQuittanceChargeId(receiptSelection?.id || '');
+    setQuittancePeriod(receiptSelection?.period || '');
+    setQuittanceAmount(receiptSelection ? String(receiptSelectionRemaining) : '');
+  }, [isQuittanceModalOpen, receiptSelection?.id, receiptSelection?.period, receiptSelectionRemaining]);
 
   // Create Quittance Mutation
   const createQuittanceMutation = useMutation({

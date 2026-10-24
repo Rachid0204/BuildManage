@@ -783,6 +783,11 @@ test('receipt form cannot bypass posting and limits payment to the selected outs
   const amount = dialog.getByLabel('Montant Total Encaissé (MAD)');
   await expect(amount).toHaveAttribute('max', String(charge.amount));
   await expect(dialog.getByText('Tout nouveau reçu confirme un paiement enregistré.')).toBeVisible();
+  await amount.fill('1');
+  const unrelated = await apiCommand(token, 'generateMonthlyCharges', ['b-ui', 's-ui', '2034-07', false]);
+  expect(unrelated.status, JSON.stringify(unrelated.data)).toBe(200);
+  await expect(dialog.getByLabel('Charge à régler')).toContainText('2034-07');
+  await expect(amount).toHaveValue('1');
   const before = ((await disk()).syndik_prod_quittances_v1 || []).filter((q: any) => q.chargeId === charge.id);
   await amount.fill(String(charge.amount + 1));
   await dialog.locator('button[type=submit]').click();
