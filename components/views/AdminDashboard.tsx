@@ -16,6 +16,7 @@ import {
   remoteMutation,
 } from '../../firebase/services';
 import { hashPasswordSync, generateSecureRandomDigits } from '../../utils/security';
+import { countActiveBuildings } from '../../utils/subscriptionPolicy';
 import type { Syndic, SubscriptionPlan, SubscriptionStatus, Apartment } from '../../types';
 import { BuildingsIcon, ResidentsIcon, FinancialsIcon, PlusIcon, TrashIcon } from '../icons/IconComponents';
 
@@ -94,7 +95,7 @@ const AdminDashboard: React.FC = () => {
     },
   });
 
-  const totalBuildings = syndics.reduce((acc, s) => acc + (s.buildings?.length || 0), 0);
+  const totalBuildings = syndics.reduce((acc, s) => acc + countActiveBuildings(s.buildings), 0);
   const totalResidents = syndics.reduce(
     (acc, s) =>
       acc + (s.buildings || []).reduce((bAcc, b) => bAcc + (b.residents?.length || 0), 0),
@@ -309,7 +310,7 @@ const AdminDashboard: React.FC = () => {
                       <div className="text-[11px] text-slate-400">RC : {s.rc || '458921'}</div>
                     </td>
                     <td className="px-4 py-3.5 text-center font-mono font-bold text-slate-800">
-                      {s.buildings?.length || 0}
+                      {countActiveBuildings(s.buildings)}
                     </td>
                     <td className="px-4 py-3.5 whitespace-nowrap">
                       <span
@@ -649,8 +650,8 @@ const AdminDashboard: React.FC = () => {
             <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-1">
               <div className="font-bold text-slate-800">
                 {tr(
-                  `Immeubles rattachés (${selectedSyndic.buildings?.length || 0}) :`,
-                  `العمارات التابعة (${selectedSyndic.buildings?.length || 0}) :`
+                  `Immeubles rattachés (${countActiveBuildings(selectedSyndic.buildings)}) :`,
+                  `العمارات التابعة (${countActiveBuildings(selectedSyndic.buildings)}) :`
                 )}
               </div>
               <fieldset className="border rounded-xl p-3 space-y-2"><legend>{tr('Encaisser l’abonnement plateforme','تسجيل دفع اشتراك المنصة')}</legend><label className="block">{tr('Nombre de mois','عدد الأشهر')}<input className="border rounded p-2 ms-2" type="number" min={1} max={12} value={subscriptionMonths} onChange={e=>setSubscriptionMonths(Number(e.target.value))}/></label><label className="block">{tr('Référence bancaire unique','مرجع بنكي فريد')}<input className="border rounded p-2 w-full" value={subscriptionReference} onChange={e=>setSubscriptionReference(e.target.value)}/></label><p>{PLAN_PRICES[editPlan]*subscriptionMonths} MAD</p><Button onClick={async()=>{try{if (!subscriptionReference.trim()) throw new Error(tr('La référence bancaire est obligatoire.', 'المرجع البنكي مطلوب.'));if (!Number.isInteger(subscriptionMonths) || subscriptionMonths < 1 || subscriptionMonths > 12) throw new Error(tr('Choisissez entre 1 et 12 mois.', 'اختر من شهر إلى 12 شهراً.'));await remoteMutation('recordSubscriptionPayment',[{syndicId:selectedSyndic.id,plan:editPlan,months:subscriptionMonths,reference:subscriptionReference.trim(),amount:PLAN_PRICES[editPlan]*subscriptionMonths}]);setSubscriptionMessage(tr('Abonnement prolongé et paiement enregistré.','تم تمديد الاشتراك وتسجيل الدفع.'));void queryClient.invalidateQueries({queryKey:['syndics']});}catch(e:any){setSubscriptionMessage(e.message);throw e;}}}>{tr('Enregistrer le paiement','تسجيل الدفع')}</Button><p role="status">{subscriptionMessage}</p></fieldset>

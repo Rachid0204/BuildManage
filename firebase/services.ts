@@ -67,6 +67,7 @@ import {
   getRecordedReserveSplit,
   generateSecureRandomDigits,
 } from '../utils/security';
+import { getBuildingCapacity } from '../utils/subscriptionPolicy';
 
 // Canonical persistence mode: local cache + authenticated shared server + Cloud Firestore mirror
 const isLocalEngineEnabled = true;
@@ -573,12 +574,6 @@ export const getBuildingsForSyndic = async (syndicId: string): Promise<Building[
   return targetSyndic?.buildings || [];
 };
 
-const PLAN_BUILDING_LIMITS: Record<Syndic['subscriptionPlan'], number> = {
-  starter: 4,
-  professional: 8,
-  enterprise: 9999,
-};
-
 export const addBuilding = async (
   syndicId: string,
   buildingData: Omit<
@@ -611,8 +606,8 @@ export const addBuilding = async (
       'Abonnement expiré. Veuillez renouveler votre abonnement pour ajouter un nouvel immeuble.'
     );
   }
-  const maxBuildings = PLAN_BUILDING_LIMITS[syndic.subscriptionPlan] ?? 10;
-  if ((syndic.buildings?.length || 0) >= maxBuildings) {
+  const { limit: maxBuildings, canAdd } = getBuildingCapacity(syndic);
+  if (!canAdd) {
     throw new Error(
       `Limite atteinte pour le forfait ${syndic.subscriptionPlan} (${maxBuildings} immeuble(s) max).`
     );

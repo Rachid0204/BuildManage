@@ -14,6 +14,7 @@ import {
 } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth, getHomeRouteForRole } from './contexts/AuthContext';
+import { getBuildingCapacity } from './utils/subscriptionPolicy';
 import { BuildingProvider, useBuilding } from './contexts/BuildingContext';
 import { useI18n } from './hooks/useI18n';
 import DashboardLayout from './components/layout/DashboardLayout';
@@ -908,15 +909,7 @@ const AppContent: React.FC = () => {
   ) => {
     if (!syndic) throw new Error(tr('Sélectionnez un cabinet avant de continuer.', 'حدد مكتباً قبل المتابعة.'));
 
-    const planLimits: Record<SubscriptionPlan, number> = {
-      starter: 4,
-      professional: 8,
-      enterprise: Infinity,
-    };
-    const currentBuildings = syndic.buildings.length;
-    const limit = planLimits[syndic.subscriptionPlan];
-
-    if (currentBuildings >= limit) throw new Error(tr('Limite du forfait atteinte. Changez de forfait pour ajouter un immeuble.', 'تم بلوغ حد الاشتراك. غيّر الاشتراك لإضافة عمارة.'));
+    if (!getBuildingCapacity(syndic).canAdd) throw new Error(tr('Limite du forfait atteinte. Changez de forfait pour ajouter un immeuble.', 'تم بلوغ حد الاشتراك. غيّر الاشتراك لإضافة عمارة.'));
 
     const generatedApartments: Omit<Apartment, 'id' | 'buildingId'>[] = [];
     const safeFloors = Math.max(1, floorsCount || 4);

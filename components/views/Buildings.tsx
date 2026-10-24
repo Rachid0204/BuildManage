@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import ArchiveBuildings from './ArchiveBuildings';
-import type { Building, Syndic, SubscriptionPlan } from '../../types';
+import type { Building, Syndic } from '../../types';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import Modal from '../common/Modal';
 import { PlusIcon, PencilIcon, TrashIcon } from '../icons/IconComponents';
 import { useI18n } from '../../hooks/useI18n';
 import { getBuildingReserveRate } from '../../utils/security';
+import { getBuildingCapacity } from '../../utils/subscriptionPolicy';
 
 export type BuildingFormPayload = Omit<
   Building,
@@ -483,13 +484,7 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
 
 const SubscriptionStatusCard: React.FC<{ syndic: Syndic }> = ({ syndic }) => {
   const { t, tr } = useI18n();
-  const planLimits: Record<SubscriptionPlan, number> = {
-    starter: 4,
-    professional: 8,
-    enterprise: Infinity,
-  };
-  const currentCount = syndic.buildings.length;
-  const maxCount = planLimits[syndic.subscriptionPlan];
+  const { active: currentCount, limit: maxCount } = getBuildingCapacity(syndic);
   const isUnlimited = maxCount === Infinity;
   const usagePercent = isUnlimited
     ? 0
@@ -584,13 +579,8 @@ const Buildings: React.FC<{
   const [editingBuilding, setEditingBuilding] = useState<Building | null>(null);
   const [deletingBuilding, setDeletingBuilding] = useState<Building | null>(null);
 
-  const planLimits: Record<SubscriptionPlan, number> = {
-    starter: 4,
-    professional: 8,
-    enterprise: Infinity,
-  };
-  const limitReached =
-    syndic.buildings.length >= planLimits[syndic.subscriptionPlan];
+  const activeBuildings = syndic.buildings.filter(building => !building.archivedAt);
+  const limitReached = !getBuildingCapacity(syndic).canAdd;
   const isExpired = new Date(syndic.subscriptionExpiry) < new Date();
   const canAdd = !limitReached && !isExpired;
 
@@ -691,9 +681,9 @@ const Buildings: React.FC<{
 
       <SubscriptionStatusCard syndic={syndic} />
 
-      {syndic.buildings.length > 0 ? (
+      {activeBuildings.length > 0 ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {syndic.buildings.map((building) => {
+          {activeBuildings.map((building) => {
             const occupiedLots = building.apartments.filter(
               (a) => a.ownerId || a.tenantId
             ).length;
