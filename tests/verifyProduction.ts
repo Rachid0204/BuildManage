@@ -303,8 +303,12 @@ async function runVerification() {
   );
 
   // Simulate missing receipt or re-download via generateQuittanceForCharge
+  const originalReceipts = await getQuittancesForBuilding(createdBld.id);
   localStorage.setItem(STORAGE_KEYS.QUITTANCES, JSON.stringify([]));
   const reissuedQuittance = await generateQuittanceForCharge(targetCharge.id, createdBld.id);
+  await reviewPaymentProof(proof100.id, 'approved');
+  await reviewPaymentProof(proofRemaining.id, 'approved');
+  const restoredReceipts = await getQuittancesForBuilding(createdBld.id);
   const bldAfterReissue = (await getSyndics())[0].buildings[0];
   const balanceAfterReissue = bldAfterReissue.financials.balance;
   const reserveAfterReissue = bldAfterReissue.financials.reserveFundBalance;
@@ -314,10 +318,13 @@ async function runVerification() {
     `Generating missing quittance for paid charge must never alter balance (expected 475/25, got ${balanceAfterReissue}/${reserveAfterReissue})`
   );
   assert(
-    reissuedQuittance.reserveFundAmount === 25 &&
-      reissuedQuittance.chargesCourantesAmount === 475,
-    `500 MAD charge in 5% reserve building must split into 25 MAD reserve and 475 MAD operating`
+    restoredReceipts.reduce((sum, receipt) => sum + receipt.reserveFundAmount!, 0) === 25 &&
+      restoredReceipts.reduce((sum, receipt) => sum + receipt.chargesCourantesAmount!, 0) === 475,
+    `Original payment receipts for the 500 MAD charge must retain 25 MAD reserve and 475 MAD operating`
   );
+  assertNode.deepEqual(restoredReceipts.map(q => q.quittanceNumber).sort(), originalReceipts.map(q => q.quittanceNumber).sort());
+  assert(originalReceipts.some(q => q.id === reissuedQuittance.id && q.quittanceNumber === reissuedQuittance.quittanceNumber),
+    'Charge download must return an original receipt, never a newly numbered aggregate');
   console.log('✅ [14/16] Read-only missing receipt generation & 5% reserve split passed.');
 
   // 7. Reserve Fund KPI Single-Counting, Zero Reserve & Legacy Opening Balance Preservation (Audit Item 15)

@@ -1942,29 +1942,63 @@ function postIncome(building: Building, amount: number, paymentId: string, detai
   return split;
 }
 
-function recordedIncomeSplit(rows: Transaction[], amount: number): ReturnType<typeof getRecordedReserveSplit> {
-  if (!rows.length || rows.some(row => !Number.isFinite(row.amount) || row.amount < 0)) return undefined;
-  const total = rows.reduce((sum, row) => sum + centimes(row.amount), 0);
-  if (total !== centimes(amount)) return undefined;
-  const reserve = rows.filter(row => row.fundType === 'reserve').reduce((sum, row) => sum + centimes(row.amount), 0);
-  const rates = new Set(rows.map(row => row.reserveRateApplied));
-  return { reserveFundAmount: reserve / 100, chargesCourantesAmount: (total - reserve) / 100,
-    reservePercentageUsed: rates.size === 1 ? rows[0].reserveRateApplied : undefined };
+function receiptScope(receipt: Quittance, building: Building, charge: Charge) {
+  return receipt.buildingId === building.id && receipt.syndicId === building.syndicId && receipt.chargeId === charge.id;
 }
 
-function recordedChargeSplit(building: Building, charge: Charge, amount: number) {
+function assertReceiptCapacity(receipts: Quittance[], building: Building, charge: Charge, additional = 0) {
+  const receipted = receipts.filter(q => !q.voidedAt && receiptScope(q, building, charge))
+    .reduce((sum, q) => sum + centimes(q.amount), 0);
   const journal = building.financials.transactions;
-  const reversed = new Set(journal.filter(row => row.reversalOf).map(row => row.reversalOf));
-  const rows = journal.filter(row => row.type === 'income' && !reversed.has(row.paymentId) &&
-    (row.sourceChargeId === charge.id || (row.paymentAllocations?.length === 1 &&
-      row.paymentAllocations[0].chargeId === charge.id)));
-  return recordedIncomeSplit(rows, amount);
+  const reversed = new Set(journal.map(row => row.reversalOf).filter(Boolean));
+  const payments = new Map<string, Transaction[]>();
+  for (const row of journal) if (row.type === 'income' && row.paymentId && !reversed.has(row.paymentId)) {
+    const rows = payments.get(row.paymentId) || []; rows.push(row); payments.set(row.paymentId, rows);
+  }
+  const verified = [...payments.values()].reduce((sum, rows) => sum + (allocationAmount(rows, charge.id) ?? 0), 0);
+  if (receipted + additional > Math.min(centimes(paidAmount(charge)), verified)) {
+    throw new Error('Montant déjà quittancé : rapprochez les reçus et les paiements enregistrés.');
+  }
 }
+
+function allocationAmount(rows: Transaction[], chargeId: string): number | undefined {
+  if (!rows.length || rows.some(row => row.type !== 'income' || !Number.isFinite(row.amount) || row.amount < 0)) return undefined;
+  const total = rows.reduce((sum, row) => sum + centimes(row.amount), 0);
+  if (rows.every(row => row.sourceChargeId === chargeId)) return total;
+  const allocations = rows[0].paymentAllocations;
+  if (!allocations || rows.some(row => JSON.stringify(row.paymentAllocations) !== JSON.stringify(allocations)) ||
+      new Set(allocations.map(a => a.chargeId)).size !== allocations.length ||
+      allocations.reduce((sum, a) => sum + centimes(a.amount), 0) !== total) return undefined;
+  const allocation = allocations.find(a => a.chargeId === chargeId);
+  return allocation ? centimes(allocation.amount) : undefined;
+}
+
+function numberedReceipt(core: Omit<Quittance, 'id' | 'quittanceNumber' | 'createdAt'>,
+  split: NonNullable<ReturnType<typeof getRecordedReserveSplit>>, receipts: Quittance[], syndics: Syndic[]): Quittance {
+  // Include the durable journal snapshots: deleting a receipt document must never free its number.
+  const prefix = `QUIT-${new Date().getFullYear()}-`;
+  const history = [...receipts, ...syndics.flatMap(s => (s.buildings || []).flatMap(b =>
+    (b.financials?.transactions || []).flatMap(row => row.receiptSnapshots || [])))];
+  const max = history.filter(q => q.syndicId === core.syndicId && typeof q.quittanceNumber === 'string' && q.quittanceNumber.startsWith(prefix))
+    .reduce((n, q) => {
+      const sequence = Number(q.quittanceNumber.slice(prefix.length));
+      return Number.isSafeInteger(sequence) && sequence >= 0 ? Math.max(n, sequence) : n;
+    }, 0);
+  if (!Number.isSafeInteger(max + 1)) throw new Error('Séquence de quittance invalide : rapprochement nécessaire.');
+  return { ...core, reserveRateApplied: split.reservePercentageUsed, reserveFundAmount: split.reserveFundAmount,
+    chargesCourantesAmount: split.chargesCourantesAmount,
+    id: `quit-${[core.buildingId, core.paymentId!, core.chargeId].map(encodeURIComponent).join(':')}`,
+    quittanceNumber: `${prefix}${String(max + 1).padStart(5, '0')}`, createdAt: new Date().toISOString() };
+}
+
 export const createQuittance = async (
   input: Omit<Quittance, 'id' | 'quittanceNumber' | 'createdAt'> & { quittanceNumber?: string; addTransactionToLedger?: boolean }
 ): Promise<Quittance> => {
   if (typeof window !== 'undefined') return remoteMutation('createQuittance', [input]);
 
+  if (input.addTransactionToLedger !== undefined && typeof input.addTransactionToLedger !== 'boolean') {
+    throw new Error('Mode de comptabilisation invalide.');
+  }
   const { addTransactionToLedger = true, ...core } = input;
   const amount = centimes(core.amount);
   if (amount <= 0) throw new Error('Montant du paiement invalide.');
@@ -1987,18 +2021,43 @@ export const createQuittance = async (
     `manual:${core.buildingId}:${charge.id}:${core.paymentMethod}:${core.referenceNumber.trim()}` : undefined)) : core.paymentId;
   if (addTransactionToLedger && !paymentId) throw new Error('Référence unique de paiement obligatoire.');
   if (paymentId && building.financials.transactions.some((t: any) => t.reversalOf === paymentId)) throw new Error("Paiement contrepassé : enregistrez un nouveau règlement.");
-  const existing = receipts.find((q) => !q.voidedAt && (paymentId ? q.paymentId === paymentId :
-    q.chargeId === charge.id && centimes(q.amount) === amount));
+  const scoped = receipts.filter(q => !q.voidedAt && receiptScope(q, building, charge));
+  const candidates = scoped.filter(q => paymentId ? q.paymentId === paymentId : centimes(q.amount) === amount);
+  if (candidates.length > 1) throw new Error('Plusieurs reçus historiques : sélectionnez le reçu original.');
+  const existing = candidates[0];
   if (existing) {
-    if (existing.buildingId !== core.buildingId || existing.syndicId !== core.syndicId || existing.residentId !== core.residentId ||
-      existing.chargeId !== charge.id || centimes(existing.amount) !== amount || existing.paymentMethod !== core.paymentMethod) {
+    if (existing.residentId !== core.residentId || centimes(existing.amount) !== amount || existing.paymentMethod !== core.paymentMethod) {
       throw new Error('Référence de paiement déjà utilisée avec des données différentes.');
+    }
+    if (existing.paymentId && building.financials.transactions.some(t => t.reversalOf === existing.paymentId)) {
+      throw new Error('Paiement contrepassé : reçu annulé.');
     }
     return existing;
   }
-  const posted = building.financials.transactions.filter((t) => paymentId && t.paymentId === paymentId);
-  if (posted.length && (posted.some((t) => t.sourceChargeId !== charge.id || t.type !== 'income') ||
-    posted.reduce((sum, t) => sum + centimes(t.amount), 0) !== amount)) throw new Error('Référence de paiement déjà utilisée.');
+  const posted = building.financials.transactions.filter(t => paymentId && t.paymentId === paymentId);
+  const snapshots = building.financials.transactions.filter(t => t.type === 'income' && (!paymentId || t.paymentId === paymentId))
+    .flatMap(t => t.receiptSnapshots || []).filter(q => receiptScope(q, building, charge) && centimes(q.amount) === amount);
+  const saved = [...new Map(snapshots.map(q => [q.id, q])).values()];
+  if (saved.length > 1) throw new Error('Sélectionnez la référence du paiement enregistré.');
+  const original = saved[0];
+  if (original) {
+    if (scoped.some(q => !q.paymentId) || receipts.some(q => q.id === original.id && q.voidedAt)) {
+      throw new Error('Reçu historique non lié ou annulé : rapprochement nécessaire.');
+    }
+    const rows = building.financials.transactions.filter(t => t.paymentId === original.paymentId);
+    if (original.voidedAt || original.residentId !== core.residentId || original.paymentMethod !== core.paymentMethod ||
+        building.financials.transactions.some(t => t.reversalOf === original.paymentId) || allocationAmount(rows, charge.id) !== amount) {
+      throw new Error('Paiement ou ventilation du reçu non valide.');
+    }
+    assertReceiptCapacity(receipts, building, charge, amount);
+    setLocalItem(STORAGE_KEYS.QUITTANCES, [original, ...receipts]);
+    return original;
+  }
+  if (!addTransactionToLedger || posted.length) {
+    throw new Error('Aucun paiement suffisant avec reçu canonique enregistré : rapprochement nécessaire.');
+  }
+  if (core.quittanceNumber) throw new Error('La numérotation des quittances est réservée au serveur.');
+  assertReceiptCapacity(receipts, building, charge);
   let split: ReturnType<typeof getRecordedReserveSplit>;
   const invoices = getLocalItem<Invoice[]>(STORAGE_KEYS.INVOICES, []);
   if (addTransactionToLedger && !posted.length) {
@@ -2020,18 +2079,16 @@ export const createQuittance = async (
     split = postIncome(building, core.amount, paymentId!, { sourceChargeId: charge.id, sourceInvoiceId: invoice?.id,
       date: core.paymentDate, paymentMethod: core.paymentMethod, reference: core.referenceNumber,
       description: `Paiement lot ${lot.number}`, documentType: 'quittance' });
-    setLocalItem(STORAGE_KEYS.CHARGES, charges); setLocalItem(STORAGE_KEYS.INVOICES, invoices); setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
-  } else if (!posted.length && amount > centimes(paidAmount(charge))) {
-    throw new Error('Aucun paiement suffisant enregistré pour ce reçu.');
   }
-  if (posted.length) split = recordedIncomeSplit(posted, core.amount);
-  else if (!addTransactionToLedger) split = recordedChargeSplit(building, charge, core.amount);
-  const receipt: Quittance = { ...core, paymentId, reserveRateApplied: split?.reservePercentageUsed,
-    reserveFundAmount: split?.reserveFundAmount,
-    chargesCourantesAmount: split?.chargesCourantesAmount, id: `quit-${paymentId || crypto.randomUUID()}`,
-    quittanceNumber: core.quittanceNumber || `QUIT-${new Date().getFullYear()}-${String(receipts.length + 1).padStart(5, '0')}`,
-    createdAt: new Date().toISOString() };
-  setLocalItem(STORAGE_KEYS.QUITTANCES, [receipt, ...receipts]); return receipt;
+  if (allocationAmount(building.financials.transactions.filter(t => t.paymentId === paymentId), charge.id) !== amount || !split) {
+    throw new Error('Encaissement non confirmé.');
+  }
+  assertReceiptCapacity(receipts, building, charge, amount);
+  const receipt = numberedReceipt({ ...core, paymentId }, split, receipts, syndics);
+  building.financials.transactions.find(t => t.paymentId === paymentId)!.receiptSnapshots = [receipt];
+  setLocalItem(STORAGE_KEYS.CHARGES, charges); setLocalItem(STORAGE_KEYS.INVOICES, invoices);
+  setLocalItem(STORAGE_KEYS.SYNDICS, syndics); setLocalItem(STORAGE_KEYS.QUITTANCES, [receipt, ...receipts]);
+  return receipt;
 };
 
 export const generateQuittanceForCharge = async (
@@ -2042,65 +2099,20 @@ export const generateQuittanceForCharge = async (
 ): Promise<Quittance> => {
   if (typeof window !== 'undefined') return remoteMutation('generateQuittanceForCharge', [chargeOrId, buildingIdOrPaymentMethod, referenceNumber, bankName]);
 
-  const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, mockCharges);
-  const charge: Charge | undefined =
-    typeof chargeOrId === 'string'
-      ? charges.find((c) => c.id === chargeOrId)
-      : chargeOrId;
-
-  if (!charge) {
-    throw new Error('Charge introuvable');
-  }
-
-  // Audit Item 14: If a quittance already exists for this charge, return it without modifying accounting
-  const quittances = getLocalItem<Quittance[]>(STORAGE_KEYS.QUITTANCES, mockQuittances);
-  const existing = quittances.find((q) => q.chargeId === charge.id && !q.voidedAt);
-  if (existing) {
-    return existing;
-  }
-
-  const paymentMethod =
-    typeof chargeOrId === 'string' ? 'virement' : buildingIdOrPaymentMethod || 'virement';
-
+  const chargeId = typeof chargeOrId === 'string' ? chargeOrId : chargeOrId.id;
+  const charge = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, mockCharges).find(c => c.id === chargeId);
+  if (!charge) throw new Error('Charge introuvable');
   const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
-  let targetBuilding: Building | undefined;
-  let targetSyndic: Syndic | undefined;
-
-  for (const s of syndics) {
-    const bld = s.buildings.find((b) => b.id === charge.buildingId);
-    if (bld) {
-      targetBuilding = bld;
-      targetSyndic = s;
-      break;
-    }
-  }
-
-  const apt = targetBuilding?.apartments.find((a) => a.id === charge.apartmentId);
-  const res = targetBuilding?.residents.find((r) => r.id === charge.residentId);
-
-  return createQuittance({
-    chargeId: charge.id,
-    buildingId: charge.buildingId,
-    buildingName: targetBuilding?.name || 'Résidence',
-    syndicId: charge.syndicId,
-    syndicName: targetSyndic?.name || 'Cabinet Syndic',
-    residentId: charge.residentId,
-    residentName: res?.name || 'Copropriétaire',
-    residentCin: res?.cin || '',
-    apartmentId: charge.apartmentId,
-    apartmentNumber: apt?.number || 'Lot',
-    tantiemes: apt?.tantiemes || charge.tantiemesApplied || 100,
-    amount: paidAmount(charge),
-    periodCovered:
-      charge.period ||
-      new Date(charge.dueDate).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }),
-    paymentDate: new Date().toISOString(),
-    paymentMethod,
-    referenceNumber: referenceNumber || `QUIT-${Date.now().toString().slice(-6)}`,
-    bankName: bankName || targetBuilding?.bankName || '',
-    remarks: 'Cotisation copropriété - Récépissé libératoire (Loi 18-00 / 106-12)',
-    addTransactionToLedger: false,
-  });
+  const building = syndics.find(s => s.id === charge.syndicId)?.buildings.find(b => b.id === charge.buildingId);
+  if (!building) throw new Error('Immeuble introuvable');
+  const receipts = getLocalItem<Quittance[]>(STORAGE_KEYS.QUITTANCES, mockQuittances);
+  const existing = receipts.find(q => !q.voidedAt && receiptScope(q, building, charge));
+  const saved = building.financials.transactions.filter(t => t.type === 'income' &&
+    !building.financials.transactions.some(reversal => reversal.reversalOf === t.paymentId))
+    .flatMap(t => t.receiptSnapshots || []).find(q => receiptScope(q, building, charge));
+  const original = existing || saved;
+  if (!original) throw new Error('Reçu original introuvable : rapprochez le paiement avant toute émission.');
+  return createQuittance({ ...original, addTransactionToLedger: false });
 };
 
 // ==========================================
@@ -2912,9 +2924,31 @@ export const recordPayment = async (invoice: Invoice, amount: number, method: st
   current.paidAmount = (centimes(current.paidAmount ?? 0) + cents) / 100;
   current.status = centimes(current.paidAmount) === centimes(current.totalAmount) ? 'paid' : 'unpaid';
   current.paymentIds = [...(current.paymentIds || []), paymentId];
-  postIncome(building, cents / 100, paymentId, { sourceInvoiceId: current.id, paymentMethod: method,
-    description: `Paiement facture ${current.invoiceNumber}`, invoiceNumber: current.invoiceNumber, paymentAllocations } as any);
-  setLocalItem(STORAGE_KEYS.INVOICES, invoices); setLocalItem(STORAGE_KEYS.CHARGES, charges); setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
+  const receipts = getLocalItem<Quittance[]>(STORAGE_KEYS.QUITTANCES, mockQuittances);
+  const split = postIncome(building, cents / 100, paymentId, { sourceInvoiceId: current.id, paymentMethod: method,
+    description: `Paiement facture ${current.invoiceNumber}`, invoiceNumber: current.invoiceNumber, paymentAllocations });
+  for (const allocation of paymentAllocations) {
+    assertReceiptCapacity(receipts, building, linked.find(c => c.id === allocation.chargeId)!, centimes(allocation.amount));
+  }
+  const reserves = allocateBudgetInCentimes(split.reserveFundAmount, paymentAllocations.map(a => ({ id: a.chargeId, tantiemes: centimes(a.amount) })));
+  const snapshots: Quittance[] = [];
+  for (const allocation of paymentAllocations) {
+    const charge = linked.find(c => c.id === allocation.chargeId)!;
+    const apartment = building.apartments.find(a => a.id === charge.apartmentId);
+    const resident = building.residents.find(r => r.id === charge.residentId);
+    if (!apartment || !resident) throw new Error('Lot ou résident non lié au paiement.');
+    const reserve = reserves.get(charge.id) || 0;
+    const receipt = numberedReceipt({ paymentId, chargeId: charge.id, syndicId: current.syndicId,
+      syndicName: syndics.find(s => s.id === current.syndicId)?.name || '', buildingId: building.id, buildingName: building.name,
+      residentId: resident.id, residentName: resident.name, apartmentId: apartment.id, apartmentNumber: apartment.number,
+      amount: allocation.amount, periodCovered: charge.period || '', paymentDate: new Date().toISOString(), paymentMethod: method,
+      referenceNumber: paymentReference }, { reserveFundAmount: reserve,
+      chargesCourantesAmount: (centimes(allocation.amount) - centimes(reserve)) / 100, reservePercentageUsed: split.reservePercentageUsed }, receipts, syndics);
+    receipts.unshift(receipt); snapshots.push(receipt);
+  }
+  building.financials.transactions.find(t => t.paymentId === paymentId)!.receiptSnapshots = snapshots;
+  setLocalItem(STORAGE_KEYS.INVOICES, invoices); setLocalItem(STORAGE_KEYS.CHARGES, charges);
+  setLocalItem(STORAGE_KEYS.SYNDICS, syndics); setLocalItem(STORAGE_KEYS.QUITTANCES, receipts);
   return true;
 };
 

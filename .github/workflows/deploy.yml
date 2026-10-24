@@ -54,6 +54,9 @@ jobs:
       - name: Verify reserve-rate edits and historical payment allocations
         run: npm run test:reserve-rate
 
+      - name: Verify canonical receipt identity and payment allocation limits
+        run: npm run test:quittance-integrity
+
       - name: Verify production operations and encrypted recovery
         run: npm run test:production && npm run test:recovery
 
