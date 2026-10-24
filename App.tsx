@@ -1,6 +1,7 @@
 import Form from './components/common/Form';
 import AccountAction from './components/views/AccountAction';
 import EmailVerificationGate from './components/views/EmailVerificationGate';
+import SessionRecovery from './components/SessionRecovery';
 import React, { Suspense, useEffect, useState } from 'react';
 import { AlertTriangle, Clock, AlertCircle, Info } from 'lucide-react';
 import {
@@ -711,7 +712,7 @@ const ProtectedRoute: React.FC<{
   children: React.ReactNode;
   roles?: UserRole[];
 }> = ({ children, roles }) => {
-  const { currentUser, userProfile, loading } = useAuth();
+  const { currentUser, userProfile, loading, sessionError } = useAuth();
   const location = useLocation();
 
   if (loading) return <Loading />;
@@ -719,6 +720,7 @@ const ProtectedRoute: React.FC<{
 
 
   if (!currentUser || !userProfile) {
+    if (sessionError) return <SessionRecovery />;
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
 
@@ -1255,8 +1257,7 @@ const LandingRouteWrapper: React.FC<{ onDone: () => void }> = ({ onDone }) => {
 
 const App: React.FC = () => {
   const [showLanding, setShowLanding] = React.useState(true);
-  const { currentUser, userProfile, loading, sessionError, sessionRetrying, retrySession } = useAuth();
-  const { tr } = useI18n();
+  const { currentUser, userProfile, loading, sessionError } = useAuth();
 
   useEffect(() => {
     if (!loading && currentUser) {
@@ -1265,16 +1266,6 @@ const App: React.FC = () => {
   }, [currentUser, loading]);
 
   if (loading) return <Loading />;
-
-  if (sessionError) return (
-    <div className="min-h-screen flex items-center justify-center p-6 bg-slate-50">
-      <div role="alert" className="max-w-md rounded-xl border border-amber-300 bg-white p-6 shadow-sm space-y-4">
-        <h1 className="text-lg font-bold">{tr('Connexion au serveur interrompue', 'انقطع الاتصال بالخادم')}</h1>
-        <p>{tr('Votre session est conservée. La reconnexion est automatique dès que le serveur est disponible.', 'تم الاحتفاظ بجلستك. ستتم إعادة الاتصال تلقائياً عند توفر الخادم.')}</p>
-        <Button disabled={sessionRetrying} onClick={() => void retrySession()}>{sessionRetrying ? tr('Reconnexion…', 'جارٍ إعادة الاتصال…') : tr('Réessayer la connexion', 'إعادة محاولة الاتصال')}</Button>
-      </div>
-    </div>
-  );
 
   return (
     <Router>
@@ -1290,7 +1281,7 @@ const App: React.FC = () => {
             <Route
               path="/login"
               element={
-                currentUser && userProfile ? (
+                currentUser && userProfile && !sessionError ? (
                   <Navigate to={getHomeRouteForRole(userProfile.role)} replace />
                 ) : (
                   <LoginScreen
@@ -1340,7 +1331,7 @@ const App: React.FC = () => {
             <Route
               path="/*"
               element={
-                showLanding && !currentUser ? (
+                showLanding && !currentUser && !sessionError ? (
                   <LandingRouteWrapper onDone={() => setShowLanding(false)} />
                 ) : (
                   <ProtectedRoute roles={['syndic']}>
