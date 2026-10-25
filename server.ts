@@ -1,3 +1,4 @@
+import { validateProductionEnvironment } from "./server/productionConfig";
 import { buildingReport } from "./server/reports";
 import { registerLiveUpdates } from "./server/realtime";
 import { projectAssemblyForRole } from './server/assemblyPrivacy';
@@ -68,7 +69,7 @@ const STATE_FILE = path.join(DATA_DIR, "shared-state.json");
 const HAS_CONFIGURED_SERVER_SECRET = (process.env.SYNDIK_SERVER_SECRET?.length || 0) >= 32;
 const SERVER_HMAC_SECRET = HAS_CONFIGURED_SERVER_SECRET
   ? process.env.SYNDIK_SERVER_SECRET!
-  : crypto.randomBytes(32).toString("hex");
+  : process.env.NODE_ENV === "production" ? "" : crypto.randomBytes(32).toString("hex");
 
 interface ServerStore {
   __revision?: number;
@@ -1316,6 +1317,7 @@ const ID_MERGE_KEYS: Record<string, string> = {
 };
 
 async function startServer() {
+  validateProductionEnvironment();
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
@@ -1326,9 +1328,6 @@ async function startServer() {
   if (process.env.SYNDIK_SERVER_SECRET.length < 32) {
     process.env.SYNDIK_SERVER_SECRET = SERVER_HMAC_SECRET;
   }
-  if (process.env.NODE_ENV === 'production' && !HAS_CONFIGURED_SERVER_SECRET)
-    console.warn(JSON.stringify({ event: 'configuration_warning', code: 'SESSION_SECRET_NOT_CONFIGURED',
-      message: 'Configure one stable SYNDIK_SERVER_SECRET of at least 32 characters across revisions and instances. The temporary key cannot preserve sessions or encrypted retries across restarts.' }));
   process.env.SYNDIK_UPLOAD_BUCKET ||=
     firebaseConfig.storageBucket || "immogest-7faaf.firebasestorage.app";
   process.env.PUBLIC_APP_URL ||= "https://immogest.cloud.run";
@@ -2510,4 +2509,7 @@ async function startServer() {
   });
 }
 
-startServer();
+startServer().catch(error => {
+  console.error(error instanceof Error ? error.message : "Server startup failed");
+  process.exitCode = 1;
+});

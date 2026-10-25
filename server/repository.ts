@@ -1,3 +1,4 @@
+import { validateProductionEnvironment } from "./productionConfig";
 import firebaseConfig from "../firebase-applet-config.json" with { type: "json" };
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isDeepStrictEqual } from "node:util";
@@ -314,6 +315,7 @@ export class FirestoreRepository implements StateRepository {
 }
 
 export function createRepository(): StateRepository {
+  validateProductionEnvironment();
   const mode =
     process.env.SYNDIK_STATE_BACKEND ||
     (process.env.NODE_ENV === "production" ? "firestore" : "file");
