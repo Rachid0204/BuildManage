@@ -1,3 +1,4 @@
+import { assertFreshOperationId, runLifecycle, LifecycleError } from './server/lifecycle';
 import { validateProductionEnvironment } from "./server/productionConfig";
 import { buildingReport } from "./server/reports";
 import { registerLiveUpdates } from "./server/realtime";
@@ -33,7 +34,7 @@ import {
   encrypt,
   decrypt,
 } from "./server/mailer";
-import { savePrivateFile, readPrivateFile } from './server/uploads';
+import { savePrivateFile, readPrivateFile, lifecycleStorage } from './server/uploads';
 import { DependencyError } from './server/dependencyErrors';
 import express from "express";
 
@@ -1445,7 +1446,7 @@ async function startServer() {
           payload = {
             ok: false,
             error:
-              error instanceof OperationError || error instanceof DependencyError
+              error instanceof OperationError || error instanceof DependencyError || error instanceof LifecycleError
                 ? error.message
                 : error.name === "ZodError" && Array.isArray(error.issues)
                 ? JSON.stringify(error.issues.map((issue: any) => ({
@@ -1458,7 +1459,7 @@ async function startServer() {
                     received: issue.received === "undefined" ? "undefined" : undefined,
                   })))
                 : "Enregistrement impossible. Veuillez réessayer.",
-            code: error instanceof DependencyError ? error.code : error.name === 'ZodError' ? 'VALIDATION_ERROR' : error instanceof OperationError ? error.code : 'INTERNAL_ERROR',
+            code: error instanceof DependencyError ? error.code : error.name === 'ZodError' ? 'VALIDATION_ERROR' : error instanceof OperationError || error instanceof LifecycleError ? error.code : 'INTERNAL_ERROR',
             requestId,
           };
           format = "json";
@@ -2224,6 +2225,7 @@ async function startServer() {
         .update(bytes)
         .digest("hex"),
       key = `private/${buildingId}/${fileId}`;
+    if(sharedStore.__files?.[fileId]?.lifecycle==='deleting')throw new OperationError('Fichier en cours de suppression. Réessayez dans un instant.',409);
     await savePrivateFile(UPLOADS_DIR, fileId, key, bytes, mime);
     (sharedStore.__files ??= {})[fileId] = {
       fileId,
@@ -2233,6 +2235,8 @@ async function startServer() {
       uploadedBy: caller.uid,
       name: String(req.body?.name || "document").slice(0, 200),
       sizeBytes: bytes.length,
+      createdAt: sharedStore.__files?.[fileId]?.createdAt || new Date().toISOString(),
+      lastUploadedAt: new Date().toISOString(),
     };
     return res.json({
       ok: true,
@@ -2309,6 +2313,7 @@ async function startServer() {
         return res.status(409).json({
           error: "Identifiant déjà utilisé pour une autre opération.",
         });
+      receipts[key].lastAccessAt = new Date().toISOString();
       if (receipts[key].identityMutationId) resumeQueuedIdentityMutation(sharedStore, receipts[key].identityMutationId);
       return res.json({
         ok: true,
@@ -2321,6 +2326,7 @@ async function startServer() {
         revision: sharedStore.__revision || 0,
       });
     }
+    assertFreshOperationId(sharedStore,operationId);
     const firebaseBefore = new Map(identityAccounts(sharedStore).filter(a => a.firebaseUid)
       .map(a => [accountUid(a), { firebaseUid: a.firebaseUid, email: a.email,
         accountsJson: JSON.stringify(identityAccounts(sharedStore).filter(x => accountUid(x) === accountUid(a))) }]));
@@ -2442,6 +2448,10 @@ async function startServer() {
       )
     );
   };
+  app.post("/api/jobs/lifecycle",wrap(async(req:express.Request,res:express.Response)=>{
+    if(!scheduler(req))return res.status(403).json({error:'Ordonnanceur non autorisé.'});
+    return res.json(await runLifecycle(repository,lifecycleStorage(UPLOADS_DIR)));
+  },false));
   app.post("/api/jobs/monthly-charges", wrap(async (req: express.Request, res: express.Response) => {
     if (!scheduler(req))
       return res.status(403).json({ error: "Ordonnanceur non autorisé." });

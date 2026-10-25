@@ -48,6 +48,9 @@ jobs:
       - name: Verify HTTP identity and authorization boundaries
         run: npm run test:security
 
+      - name: Verify bounded lifecycle and legacy encryption
+        run: npm run test:storage-lifecycle
+
       - name: Verify production startup contract
         run: npm run test:deployment-contract
 

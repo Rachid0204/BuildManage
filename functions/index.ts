@@ -45,7 +45,7 @@ export const generateMonthlyCharges = functions
         operation: "generateMonthlyCharges",
         operationId:
           data.operationId ||
-          `monthly:${data.buildingId}:${data.period || new Date().toISOString().slice(0, 7)}`,
+          `op:${new Date().setUTCHours(0,0,0,0)}:monthly:${data.buildingId}:${data.period || new Date().toISOString().slice(0, 7)}`,
         args: [data.buildingId, data.syndicId, data.period, data.options],
       },
       credential(context),
@@ -64,7 +64,7 @@ export const createInvoice = functions.https.onCall(async (data, context) => {
       operation: "createInvoiceForResident",
       operationId:
         data.operationId ||
-        `invoice:${data.buildingId}:${data.residentId}:${new Date().toISOString().slice(0, 10)}`,
+        `op:${new Date().setUTCHours(0,0,0,0)}:invoice:${data.buildingId}:${data.residentId}:${new Date().toISOString().slice(0, 10)}`,
       args: [data.residentId, data.buildingId, data.syndicId],
     },
     credential(context),
@@ -79,7 +79,7 @@ export const createUserForResident = functions.https.onCall(
         operation: "regenerateResidentCredentials",
         operationId:
           data.operationId ||
-          `invite:${data.residentId}:${new Date().toISOString().slice(0, 10)}`,
+          `op:${new Date().setUTCHours(0,0,0,0)}:invite:${data.residentId}:${new Date().toISOString().slice(0, 10)}`,
         args: [data.residentId],
       },
       credential(context),
@@ -127,3 +127,8 @@ export const onAnnouncementCreated = functions.firestore
   .onCreate(async () => null);
 
 export const onUserCreate = functions.auth.user().onCreate(async () => null);
+
+export const cleanupOperationalStorage = functions
+ .runWith({timeoutSeconds:540,secrets:["SYNDIK_SCHEDULER_SECRET"]})
+ .pubsub.schedule("every 60 minutes")
+ .onRun(async()=>backend("/api/jobs/lifecycle",{}));

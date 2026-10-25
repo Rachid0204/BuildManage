@@ -29,3 +29,24 @@ export async function readPrivateFile(directory: string, id: string, key: string
     return cloud() ? (await bucket().file(key).download())[0] : await readFile(path.join(directory, id));
   } catch (error) { throw dependencyFailure('storage', error); }
 }
+
+export function lifecycleStorage(directory:string):import('./lifecycle').LifecycleStorage {
+ return {
+  async list(cursor){
+   if(cloud()){
+    const [files,next]=await bucket().getFiles({prefix:'private/',maxResults:50,autoPaginate:false,...(cursor?{pageToken:cursor}:{})});
+    return {files:files.map(file=>({id:file.name.split('/').at(-1)!,key:file.name,createdAt:file.metadata.updated||file.metadata.timeCreated||'',generation:file.metadata.generation})),cursor:next?.pageToken};
+   }
+   const {readdir,stat}=await import('node:fs/promises');let names:string[];
+   try{names=await readdir(directory);}catch(error:any){if(error.code==='ENOENT')return {files:[]};throw error;}
+   const page=names.filter(name=>/^[a-f0-9]{64}$/.test(name)&&name>(cursor||'')).sort().slice(0,50),files=[];
+   for(const id of page){try{const meta=await stat(path.join(directory,id));files.push({id,key:`private/local/${id}`,createdAt:meta.mtime.toISOString(),generation:String(meta.mtimeMs)});}catch(error:any){if(error.code!=='ENOENT')throw error;}}
+   return {files,cursor:page.length===50?page.at(-1):undefined};
+  },
+  async remove(file){try{
+   if(cloud()){if(!file.generation)return false;await bucket().file(file.key).delete({ifGenerationMatch:file.generation});}
+   else{const {stat,unlink}=await import('node:fs/promises');const target=path.join(directory,file.id),meta=await stat(target);if(file.generation&&String(meta.mtimeMs)!==file.generation)return false;await unlink(target);}
+   return true;
+  }catch(error:any){if(error.code===404||error.code==='ENOENT')return true;if(error.code===412)return false;throw dependencyFailure('storage',error);}}
+ };
+}

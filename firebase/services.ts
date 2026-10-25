@@ -3605,7 +3605,7 @@ async function performRemoteMutation<T>(operation: string, args: unknown[], requ
   }
   requireSameIdentity();
   // Keep one identity and the same uploaded file URLs across an uncertain response.
-  const operationId = pendingOperations.get(requestKey) || crypto.randomUUID();
+  const operationId = pendingOperations.get(requestKey) || `op:${Date.now()}:${crypto.randomUUID()}`;
   pendingOperations.set(requestKey, operationId);
   const response = await fetch('/api/commands', { method: 'POST', headers: getAuthenticatedRequestHeaders(), body: JSON.stringify({ operation,args,operationId }) });
   const data = await readCommandResponse(response);
