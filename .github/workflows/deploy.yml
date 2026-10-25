@@ -79,6 +79,9 @@ jobs:
       - name: Verify Firestore persistence and client denial
         run: npm run test:emulator
 
+      - name: Verify durable Firebase intents, commit retries and interrupted credential recovery
+        run: npm run test:auth-concurrency
+
       - name: Compile Firebase Cloud Functions
         run: npm run build:functions
 

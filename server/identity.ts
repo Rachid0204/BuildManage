@@ -5,6 +5,7 @@ import { mailIsConfigured, queueMail } from "./mailer";
 import { OperationError, appendAudit } from "./operations";
 import { usesFirebaseAuth, identityAccounts, accountUid, prepareFirebaseRecovery,
   sendFirebaseReset, sendFirebaseVerification, firebaseAdminAuth } from './firebaseIdentity';
+import { queueFirebaseMutation } from './identityMutations';
 const digest = (token: string) =>
   createHash("sha256").update(token).digest("hex");
 export function createIdentityAction(
@@ -53,7 +54,8 @@ export function registerIdentityRoutes(api: any, authenticate: any) {
     state.__recoveryAttempts[key] = Date.now();
     if (firebase) {
       if (account) await prepareFirebaseRecovery(state, account);
-      if (account) res.locals.afterCommit = () => sendFirebaseReset(email);
+      if (account) queueFirebaseMutation(state, { kind: 'reset', target: accountUid(account),
+        firebaseUid: account.firebaseUid, email });
     } else if (account) createIdentityAction(state, email, 'reset');
     return res.json({
       ok: true,

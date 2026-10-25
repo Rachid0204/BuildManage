@@ -3,6 +3,8 @@ import { registerLiveUpdates } from "./server/realtime";
 import { projectAssemblyForRole } from './server/assemblyPrivacy';
 import { firebaseLinkedResidentIds } from './server/residentIdentity';
 import { installAiBodyParsers, registerAiEndpoints } from './server/aiEndpoints';
+import { identityTransaction, identityRequestFingerprint, assertIdentityReady, identityMutationActor,
+  queueFirebaseMutation, resumeIdentityMutations, pendingIdentityPlanId, resumeQueuedIdentityMutation } from './server/identityMutations';
 import {
   createRepository,
   currentState,
@@ -42,6 +44,7 @@ import {
   usesFirebaseAuth, firebaseAdminAuth, identityAccounts, accountUid,
   registerFirebaseAccount, firebasePasswordLogin, migrateLegacyLogin,
   bindFirebaseAccount, firebaseSessionUser, sendFirebaseVerification,
+  planFirebasePassword, executeFirebaseMutation,
 } from './server/firebaseIdentity';
 import firebaseConfig from "./firebase-applet-config.json";
 import { applyResidentVote } from "./utils/agVoting";
@@ -672,6 +675,7 @@ async function extractAndVerifyCaller(
   );
   if (accounts.some((u: any) => u.disabled)) return null;
   const account = accounts[0];
+  assertIdentityReady(store, identity.uid);
   if (
     account?.disabled ||
     (token.startsWith("syndik-srv1.") &&
@@ -688,6 +692,7 @@ async function extractAndVerifyCaller(
     (p) => p.role === identity!.role && p.email === identity!.email,
   );
   if (!current || invitationExpired(store, current)) return null;
+  identityMutationActor(current as AuthCallerContext);
   return {
     ...account?.profile,
     ...current,
@@ -1331,6 +1336,25 @@ async function startServer() {
     firebaseConfig.firestoreDatabaseId || "(default)";
   const repository = createRepository(),
     sharedStore: ServerStore = sharedState;
+  const finalizeIdentityResponse: Parameters<typeof identityTransaction>[4] = (response, results, state, intent) => {
+    const payload = response.payload;
+    const actor = intent.actorUid && lookupCandidateProfilesInStore(state, intent.actorUid)[0];
+    if (intent.actorUid && ((state.__sessionVersions?.[intent.actorUid] || 0) !== intent.actorVersion ||
+        !actor || actor.role !== intent.actorRole || actor.syndicId !== intent.actorSyndicId ||
+        identityAccounts(state).some(a => accountUid(a) === intent.actorUid && a.disabled))) {
+      response.status = 401; response.payload = { ok: false, error: 'Session expirée. Reconnectez-vous.' }; return;
+    }
+    const credential = [...results].reverse().find(r => r?.authTime !== undefined);
+    if (payload?.profile && credential) payload.profile.firebaseAuthTime = credential.authTime;
+    const verification = results.find(r => r?.verificationEmailSent !== undefined);
+    if (verification) payload.verificationEmailSent = verification.verificationEmailSent;
+    if (payload?.token && payload.profile) payload.token = issueServerSessionToken(payload.profile);
+    if (payload?.store && intent.actorUid) {
+      const actor = lookupCandidateProfilesInStore(state, intent.actorUid)[0];
+      payload.store = actor ? filterStoreForCaller(state, actor as AuthCallerContext) : {};
+    }
+    if (payload && 'revision' in payload) payload.revision = (state.__revision || 0) + 1;
+  };
   const wrap =
     (handler: any, transactional = true) => async (req: express.Request, res: express.Response) => {
       const requestId = crypto.randomUUID();
@@ -1339,7 +1363,8 @@ async function startServer() {
         send = res.send.bind(res);
       let payload: any,
         format = "json",
-        requestState: any;
+        requestState: any,
+        identityFinalized = false;
       try {
         const handle = async (state?: any) => {
           res.locals.afterCommit = undefined;
@@ -1366,7 +1391,35 @@ async function startServer() {
               rejected: true,
             });
         };
-        if (transactional) await repository.transaction(handle);
+        if (transactional && ['/api/auth/register', '/api/auth/login', '/api/auth/change-password',
+            '/api/auth/recovery/request', '/api/auth/logout', '/api/commands'].includes(req.path)) {
+          const response = await identityTransaction(repository,
+            identityRequestFingerprint(req.path, String(req.headers.authorization || req.headers.cookie || ''), req.body),
+            async state => { await handle(state); return { payload, status: res.statusCode, format }; },
+            executeFirebaseMutation, finalizeIdentityResponse, async (state, intent) => {
+              if (['/api/auth/register', '/api/auth/login', '/api/auth/recovery/request'].includes(req.path)) return;
+              const token = String(req.headers.authorization || '').replace(/^Bearer /, '');
+              let uid: string | undefined;
+              if (token.startsWith('syndik-srv1.')) uid = verifyServerSessionToken(token)?.uid;
+              else {
+                try {
+                  // Signature/expiry must still be valid. Revocation is the
+                  // pending intent's own effect, so it cannot veto its recovery.
+                  const decoded = await firebaseAdminAuth().verifyIdToken(token, false);
+                  uid = accountUid(identityAccounts(state).find(a => a.firebaseUid === decoded.uid) || {});
+                } catch {}
+              }
+              if (!uid || uid !== intent.actorUid || (state.__sessionVersions?.[uid] || 0) !== intent.actorVersion)
+                throw new OperationError('Session expirée. Reconnectez-vous.', 401);
+              const actor = lookupCandidateProfilesInStore(state, uid)[0];
+              if (!actor || actor.role !== intent.actorRole || actor.syndicId !== intent.actorSyndicId ||
+                  identityAccounts(state).some(a => accountUid(a) === uid && a.disabled))
+                throw new OperationError('Accès à cette modification interdit.', 403);
+            });
+          payload = response.payload; format = response.format; res.statusCode = response.status;
+          identityFinalized = Boolean(response.identityFinalized);
+        }
+        else if (transactional) await repository.transaction(handle);
         else await handle();
         if (res.statusCode < 400 && res.locals.afterCommit) {
           try { await res.locals.afterCommit(); }
@@ -1377,7 +1430,7 @@ async function startServer() {
             else { res.status(error.status || 503); payload = { error: error.message || 'Envoi impossible.', requestId }; }
           }
         }
-        if (requestState && payload && typeof payload === "object" && "revision" in payload)
+        if (!identityFinalized && requestState && payload && typeof payload === "object" && "revision" in payload)
           payload.revision = requestState.__revision;
         if (payload?.token)
           res.cookie("syndik_session", payload.token, {
@@ -1488,6 +1541,7 @@ async function startServer() {
       (u.email?.trim().toLowerCase() === identifier || u.cin?.trim().toLowerCase() === identifier ||
         u.profile?.cin?.trim().toLowerCase() === identifier));
     const uid = account ? accountUid(account) : '';
+    if (uid) assertIdentityReady(sharedStore, uid);
     const wasLinked = Boolean(account?.firebaseUid);
     let firebaseCredential: Awaited<ReturnType<typeof firebasePasswordLogin>> | undefined;
     if (account) {
@@ -1547,7 +1601,7 @@ async function startServer() {
         false,
     };
     if (firebaseCredential && account.profile) account.profile.emailVerified = firebaseCredential.user.emailVerified;
-    if (firebaseCredential && !wasLinked && !firebaseCredential.user.emailVerified)
+    if (firebaseCredential?.idToken && !wasLinked && !firebaseCredential.user.emailVerified)
       res.locals.afterCommit = () => sendFirebaseVerification(firebaseCredential.idToken);
     return res.json({ ok: true, profile, firebaseAuth: Boolean(firebaseCredential), token: issueServerSessionToken(profile) });
   });
@@ -1596,6 +1650,7 @@ async function startServer() {
     }
     let profile = candidates[0];
     const knownAccount = identityAccounts(sharedStore).find(a => profile && accountUid(a) === profile.uid);
+    if (knownAccount) assertIdentityReady(sharedStore, accountUid(knownAccount));
     if (knownAccount?.disabled) return res.status(403).json({ error: 'Compte désactivé.' });
     if (knownAccount && usesFirebaseAuth()) bindFirebaseAccount(sharedStore, knownAccount, await firebaseAdminAuth().getUser(decoded.uid));
     if (profile && invitationExpired(sharedStore, profile))
@@ -1731,7 +1786,7 @@ async function startServer() {
       });
     }
     const firebaseCredential = usesFirebaseAuth()
-      ? await ((req as any).firebaseRegistration ??= registerFirebaseAccount(emailNorm, rawPass)) : undefined;
+      ? await registerFirebaseAccount(emailNorm, rawPass) : undefined;
     const uid = firebaseCredential?.user.uid || `usr-${crypto.randomUUID()}`;
     if (identityAccounts(sharedStore).some(a => accountUid(a) === uid))
       return res.status(409).json({ error: 'Cette identité possède déjà un compte. Connectez-vous.' });
@@ -1807,7 +1862,7 @@ async function startServer() {
     cleanProfile.emailVerified = firebaseCredential ? firebaseCredential.user.emailVerified : process.env.NODE_ENV !== 'production';
     cleanProfile.firebaseAuthTime = firebaseCredential?.authTime;
     cleanProfile.firebaseUid = firebaseCredential?.user.uid;
-    if (firebaseCredential && !cleanProfile.emailVerified) {
+    if (firebaseCredential?.idToken && !cleanProfile.emailVerified) {
       res.locals.afterCommit = () => sendFirebaseVerification(firebaseCredential.idToken);
     } else if (!firebaseCredential && process.env.NODE_ENV === 'production') {
       if (!mailIsConfigured()) return res.status(503).json({ error: 'Configurez le service email avant inscription.' });
@@ -1842,6 +1897,7 @@ async function startServer() {
     if (
       !newPassword ||
       newPassword.length < 10 ||
+      newPassword.length > 200 ||
       isAlreadyHashedPassword(newPassword)
     ) {
       return res
@@ -1901,9 +1957,7 @@ async function startServer() {
     const boundAccount = identityAccounts(sharedStore).find(a => accountUid(a) === caller.uid && a.firebaseUid);
     let firebaseAuthTime = caller.firebaseAuthTime;
     if (boundAccount) {
-      await firebaseAdminAuth().updateUser(boundAccount.firebaseUid, { password: newPassword });
-      await firebaseAdminAuth().revokeRefreshTokens(boundAccount.firebaseUid);
-      firebaseAuthTime = (await firebasePasswordLogin(effectiveEmail, newPassword)).authTime;
+      planFirebasePassword(sharedStore, caller.uid, boundAccount.firebaseUid, effectiveEmail, newPassword, true);
     }
     const newPasswordHash = boundAccount ? undefined : hashPassword(newPassword);
 
@@ -2256,6 +2310,7 @@ async function startServer() {
         return res.status(409).json({
           error: "Identifiant déjà utilisé pour une autre opération.",
         });
+      if (receipts[key].identityMutationId) resumeQueuedIdentityMutation(sharedStore, receipts[key].identityMutationId);
       return res.json({
         ok: true,
         ...JSON.parse(
@@ -2268,17 +2323,18 @@ async function startServer() {
       });
     }
     const firebaseBefore = new Map(identityAccounts(sharedStore).filter(a => a.firebaseUid)
-      .map(a => [accountUid(a), { firebaseUid: a.firebaseUid, email: a.email }]));
+      .map(a => [accountUid(a), { firebaseUid: a.firebaseUid, email: a.email,
+        accountsJson: JSON.stringify(identityAccounts(sharedStore).filter(x => accountUid(x) === accountUid(a))) }]));
     const result = await runOperation(caller, operation, args, operationId);
     for (const [uid, before] of firebaseBefore) {
       const accounts = identityAccounts(sharedStore).filter(a => accountUid(a) === uid);
+      if (JSON.stringify(accounts) !== before.accountsJson) assertIdentityReady(sharedStore, uid);
       if (accounts.some(a => a.email?.toLowerCase() !== before.email?.toLowerCase()))
         throw new OperationError('L’adresse liée à Firebase doit être modifiée par une procédure de vérification email.', 409);
       const secret = result?.generatedPassword || result?.invitationCode || result?.invitationToken;
       if (accounts.some(a => a.passwordHash) && secret &&
           accounts.some(a => verifyPassword(secret, a.passwordHash, a.email))) {
-        await firebaseAdminAuth().updateUser(before.firebaseUid, { password: secret });
-        await firebaseAdminAuth().revokeRefreshTokens(before.firebaseUid);
+        planFirebasePassword(sharedStore, uid, before.firebaseUid, before.email, secret);
       }
       for (const a of accounts) { a.firebaseUid = before.firebaseUid; delete a.password; delete a.passwordHash; }
     }
@@ -2301,6 +2357,7 @@ async function startServer() {
     }
     receipts[key] = {
       fingerprint,
+      identityMutationId: pendingIdentityPlanId(),
       encryptedResponse: encrypt(responseJson),
       createdAt: new Date().toISOString(),
     };
@@ -2323,7 +2380,8 @@ async function startServer() {
   api.post("/api/auth/logout", async (req, res) => {
     const caller = await extractAndVerifyCaller(req, sharedStore);
     const firebaseAccount = caller && identityAccounts(sharedStore).find(a => accountUid(a) === caller.uid && a.firebaseUid);
-    if (firebaseAccount) await firebaseAdminAuth().revokeRefreshTokens(firebaseAccount.firebaseUid);
+    if (firebaseAccount) queueFirebaseMutation(sharedStore, { kind: 'revoke', target: caller.uid,
+      firebaseUid: firebaseAccount.firebaseUid, email: firebaseAccount.email });
     if (caller)
       (sharedStore.__sessionVersions ??= {})[caller.uid] =
         (sharedStore.__sessionVersions?.[caller.uid] || 0) + 1;
@@ -2399,6 +2457,7 @@ async function startServer() {
   api.post("/api/jobs/outbox", async (req, res) => {
     if (!scheduler(req))
       return res.status(403).json({ error: "Ordonnanceur non autorisé." });
+    res.locals.afterCommit = () => resumeIdentityMutations(repository, executeFirebaseMutation, finalizeIdentityResponse);
     return res.json({ ok: true });
   });
   api.post("/api/jobs/overdue", async (req, res) => {
