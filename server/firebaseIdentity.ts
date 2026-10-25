@@ -3,7 +3,8 @@ import type { UserRecord } from 'firebase-admin/auth';
 import { getAuth } from 'firebase-admin/auth';
 import config from '../firebase-applet-config.json' with { type: 'json' };
 import { OperationError } from './operations';
-import type { State } from './repository';
+import { assertOutsideTransaction, type State } from './repository';
+import { queueFirebaseMutation, plannedIdentityUid, type FirebaseMutation } from './identityMutations';
 
 // The legacy provider remains available for isolated regression tests and rollback.
 // A linked account ALWAYS uses Firebase, even during rollback: old hashes cannot
@@ -103,22 +104,73 @@ export async function registerFirebaseAccount(email: string, password: string) {
   // Retrying after a database failure can finish the same Firebase identity.
   // Existing identities are never overwritten: the submitted Firebase password
   // must authenticate before any application profile can be provisioned.
-  try { await request('signUp', { email, password, returnSecureToken: true }); }
-  catch (error) {
-    if (!(error instanceof FirebaseIdentityError) || error.firebaseCode !== 'EMAIL_EXISTS') throw error;
+  const existing = await userByEmail(email);
+  if (existing) return firebasePasswordLogin(email, password);
+  const uid = plannedIdentityUid();
+  // The application identity and intent commit together; authentication stays
+  // blocked until create/login/verification and finalization have completed.
+  const { currentState } = await import('./repository');
+  return planNewAccount(currentState(), uid, email, password, false, true);
+}
+
+function planNewAccount(state: State, uid: string, email: string, password?: string, emailVerified = false, verify = false) {
+  queueFirebaseMutation(state, { kind: 'create', target: uid, firebaseUid: uid, email, password, emailVerified });
+  if (password) queueFirebaseMutation(state, { kind: 'login', target: uid, firebaseUid: uid, email, password });
+  if (verify && !emailVerified) queueFirebaseMutation(state, { kind: 'verify', target: uid, firebaseUid: uid, email });
+  return { user: { uid, email, emailVerified, disabled: false } as UserRecord, idToken: '', authTime: Math.floor(Date.now() / 1000) };
+}
+
+export function planFirebasePassword(state: State, target: string, firebaseUid: string, email: string, password: string, login = false) {
+  queueFirebaseMutation(state, { kind: 'password', target, firebaseUid, email, password });
+  queueFirebaseMutation(state, { kind: 'revoke', target, firebaseUid, email });
+  if (login) queueFirebaseMutation(state, { kind: 'login', target, firebaseUid, email, password });
+}
+
+export async function executeFirebaseMutation(action: FirebaseMutation, results: any[]) {
+  assertOutsideTransaction();
+  const auth = firebaseAdminAuth();
+  if (action.kind === 'create') {
+    let user = await userByEmail(action.email);
+    if (!user) {
+      try { user = await auth.createUser({ uid: action.firebaseUid, email: action.email,
+        ...(action.password ? { password: action.password } : {}), emailVerified: action.emailVerified }); }
+      catch (error: any) {
+        if (!['auth/uid-already-exists', 'auth/email-already-exists'].includes(error.code)) throw error;
+        user = await userByEmail(action.email);
+      }
+    }
+    if (!user || user.uid !== action.firebaseUid || user.disabled || user.email?.toLowerCase() !== action.email.toLowerCase())
+      throw new FirebaseIdentityError('IDENTITY_COLLISION', 409);
+    return { uid: user.uid };
   }
-  return firebasePasswordLogin(email, password);
+  // Re-check the binding before every credential side effect. A stale intent
+  // must never overwrite a different Firebase identity that reused an email.
+  const user = await auth.getUser(action.firebaseUid);
+  if (user.email?.toLowerCase() !== action.email.toLowerCase() || user.disabled)
+    throw new FirebaseIdentityError('IDENTITY_MISMATCH', 409);
+  if (action.kind === 'password') { await auth.updateUser(action.firebaseUid, { password: action.password }); return null; }
+  if (action.kind === 'revoke') { await auth.revokeRefreshTokens(action.firebaseUid); return null; }
+  if (action.kind === 'login') {
+    const credential = await firebasePasswordLogin(action.email, action.password!);
+    if (credential.user.uid !== action.firebaseUid) throw new FirebaseIdentityError('IDENTITY_MISMATCH', 409);
+    return { authTime: credential.authTime, idToken: credential.idToken };
+  }
+  if (action.kind === 'verify') {
+    const idToken = [...results].reverse().find(r => r?.idToken)?.idToken;
+    if (!idToken) throw new FirebaseIdentityError('MISSING_VERIFICATION_SESSION');
+    try { await sendFirebaseVerification(idToken); return { verificationEmailSent: true }; }
+    catch { return { verificationEmailSent: false }; }
+  }
+  if (action.kind === 'reset') { await sendFirebaseReset(action.email); return null; }
 }
 
 export async function migrateLegacyLogin(state: State, account: any, password: string) {
   const email = account.email.trim().toLowerCase(), uid = accountUid(account);
   let user = await userByEmail(email);
   if (!user) {
-    try { user = await firebaseAdminAuth().createUser({ uid, email, password,
-      emailVerified: account.profile?.emailVerified === true }); }
-    catch (error: any) {
-      if (error.code !== 'auth/email-already-exists') throw new FirebaseIdentityError('MIGRATION_FAILED');
-    }
+    const credential = planNewAccount(state, uid, email, password, account.profile?.emailVerified === true, true);
+    bindFirebaseAccount(state, account, credential.user);
+    return credential;
   }
   // In particular, never reset an existing Google/Firebase user's password here.
   const credential = await firebasePasswordLogin(email, password);
@@ -130,12 +182,7 @@ export async function prepareFirebaseRecovery(state: State, account: any) {
   const email = account.email.trim().toLowerCase(), uid = accountUid(account);
   let user = await userByEmail(email);
   if (!user) {
-    try { user = await firebaseAdminAuth().createUser({ uid, email,
-      emailVerified: account.profile?.emailVerified === true }); }
-    catch (error: any) {
-      if (error.code !== 'auth/email-already-exists') throw new FirebaseIdentityError('MIGRATION_FAILED');
-      user = await userByEmail(email);
-    }
+    user = planNewAccount(state, uid, email, undefined, account.profile?.emailVerified === true).user;
   }
   if (!user || (!account.firebaseUid && user.uid !== uid && !user.emailVerified))
     throw new FirebaseIdentityError('UNVERIFIED_IDENTITY_COLLISION', 409);

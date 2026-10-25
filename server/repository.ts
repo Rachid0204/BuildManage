@@ -10,6 +10,9 @@ import { getFirestore } from "firebase-admin/firestore";
 import { dependencyFailure } from './dependencyErrors';
 export type State = Record<string, any>;
 const context = new AsyncLocalStorage<State>();
+export function assertOutsideTransaction() {
+  if (context.getStore()) throw new Error('External identity mutations are forbidden inside repository transactions');
+}
 export function currentState(): State {
   const state = context.getStore();
   if (!state) throw new Error("No database transaction");
