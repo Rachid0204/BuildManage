@@ -15,7 +15,9 @@ Implementation checkpoint; full verification is pending. Do not deploy or merge 
   discovery grace period. Active generation and legacy platform_state stay intact.
 - Uploads: a 7-day grace period, 50 candidates per pass, conservative references
   across all persisted business data, including archived finance/AG records.
-  Deletion claims commit before byte deletion and block new references. Failed
+  Claims and finalization are batched: at most three repository snapshots per
+  50-file page, rather than two per object. Deletion claims commit before byte
+  deletion and block new references. Failed
   removals remain retryable; GCS generation preconditions preserve replaced objects.
   Pending identity mutations conservatively defer file collection.
 - Encryption: new values use v1: followed by the existing AES-GCM payload. Legacy
@@ -47,3 +49,8 @@ Verification in progress: local gate passed; A6 source/compiled 17/17 each, A4
 11/11; Firestore integration/H3/H5 and C5 passed. An HTTP regression first exposed
 INTERNAL_ERROR instead of OPERATION_EXPIRED; error mapping now preserves the
 explicit 410 code and message. Emulator fixtures use isolated named databases.
+
+Additional fail-first evidence: the 50-file quota test observed 102 snapshots
+before batching, then passed with three. A replacement-object test exposed loss
+of the original pending generation; first-claim precedence now preserves the
+original deletion precondition, so a replaced object is retained.

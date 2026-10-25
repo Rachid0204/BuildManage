@@ -95,3 +95,18 @@ if(process.argv.includes('--firestore'))test('Firestore deletion claim prevents 
   assert.equal((await cleanupFiles(repo,{list:async()=>({files:[]}),remove:async()=>true},now)).deleted,1);
  }finally{await deleteApp(app);}
 });
+test('a full file page uses at most three repository snapshots, not two per object',async()=>{
+ const {cleanupFiles}=await load();await local(async repo=>{let transactions=0,deleted=0;const bounded={transaction:async<T>(run:(s:any)=>Promise<T>)=>{transactions++;return repo.transaction(run);}};
+ const files=Array.from({length:50},(_,i)=>({id:`file${i}`,key:`private/b/file${i}`,createdAt:old}));
+ const result=await cleanupFiles(bounded,{list:async()=>({files}),remove:async()=>{deleted++;return true;}},now);
+ assert.equal(result.deleted,50);assert.equal(deleted,50);assert.ok(transactions<=3,`Expected <=3 snapshots, got ${transactions}`);
+ });
+});
+test('pending deletion keeps its original generation when inventory contains a replacement',async()=>{
+ const {cleanupFiles}=await load();await local(async repo=>{
+ const file={id:'orphan',key:'private/b/orphan',createdAt:old,generation:'1'};
+ await cleanupFiles(repo,{list:async()=>({files:[file]}),remove:async()=>{throw new Error('interrupted');}},now);
+ let attempted='';await cleanupFiles(repo,{list:async()=>({files:[{...file,createdAt:new Date(now).toISOString(),generation:'2'}]}),remove:async candidate=>{attempted=candidate.generation!;return false;}},now);
+ assert.equal(attempted,'1');await repo.transaction(async s=>assert.equal(s.__files.orphan.lifecycle,undefined));
+ });
+});

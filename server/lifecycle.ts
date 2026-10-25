@@ -46,15 +46,31 @@ export function claimFileForDeletion(state:State,file:StoredFile,now=Date.now())
 }
 export async function cleanupFiles(repo:StateRepository,storage:LifecycleStorage,now=Date.now()){
  const snapshot=await repo.transaction(async s=>({cursor:s.__lifecycle?.fileCursor,pending:Object.values(s.__files||{}).filter((m:any)=>m.lifecycle==='deleting').slice(0,50).map((m:any)=>m.deletionCandidate as StoredFile)}));
- const page=await storage.list(snapshot.cursor),candidates=[...snapshot.pending,...page.files].filter(Boolean),seen=new Set<string>();let deleted=0,retained=0,failed=0;
- for(const file of candidates.slice(0,50)){
-  if(seen.has(file.id))continue;seen.add(file.id);
-  const claim=await repo.transaction(async s=>{if(file.key===`private/local/${file.id}`&&s.__files?.[file.id]?.key)file.key=s.__files[file.id].key;return claimFileForDeletion(s,file,now);});
+ const page=await storage.list(snapshot.cursor);
+ const unique=new Map<string,StoredFile>();
+ for(const file of [...snapshot.pending,...page.files])if(file&&!unique.has(file.id))unique.set(file.id,file);
+ const candidates=[...unique.values()].slice(0,50);
+ // Commit every claim in one snapshot. Each subsequent attachment transaction
+ // sees the fence before any external deletion can happen.
+ const claims=await repo.transaction(async s=>candidates.map(candidate=>{
+  const file={...candidate};
+  if(file.key===`private/local/${file.id}`&&s.__files?.[file.id]?.key)file.key=s.__files[file.id].key;
+  return {file,claim:claimFileForDeletion(s,file,now)};
+ }));
+ const completed:{file:StoredFile;claim:string;removed:boolean}[]=[];
+ let deleted=0,retained=0,failed=0;
+ for(const {file,claim} of claims){
   if(!claim){retained++;continue;}
-  try{const removed=await storage.remove(file);await repo.transaction(async s=>{const m=s.__files?.[file.id];if(m?.deletionClaim!==claim)return;if(removed)delete s.__files[file.id];else{delete m.lifecycle;delete m.deletionClaim;delete m.deletionCandidate;}});if(removed)deleted++;else retained++;}
-  catch{failed++;} // Keep claims durable across crashes and storage outages.
+  try{const removed=await storage.remove(file);completed.push({file,claim,removed});if(removed)deleted++;else retained++;}
+  catch{failed++;} // Failed claims survive for retry; no external calls in transactions.
  }
- if(!snapshot.pending.length)await repo.transaction(async s=>{(s.__lifecycle??={}).fileCursor=page.cursor||'';});
+ await repo.transaction(async s=>{
+  for(const {file,claim,removed} of completed){const m=s.__files?.[file.id];if(m?.deletionClaim!==claim)continue;
+   if(removed)delete s.__files[file.id];else{delete m.lifecycle;delete m.deletionClaim;delete m.deletionCandidate;}
+  }
+  // Retry pending deletions before advancing past an only partially processed page.
+  if(!snapshot.pending.length)(s.__lifecycle??={}).fileCursor=page.cursor||'';
+ });
  return {deleted,retained,failed};
 }
 export async function runLifecycle(repo:StateRepository,storage:LifecycleStorage,now=Date.now()){
