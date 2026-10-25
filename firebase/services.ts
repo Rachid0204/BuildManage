@@ -2,21 +2,7 @@ import { engineStorage, clearBusinessCache } from './cache';
 import { notifyOperation, readableError } from '../utils/formFeedback';
 import { getServerRuntime } from './serverRuntime';
 import { applyResidentVote, evaluateResolutionStatus } from '../utils/agVoting';
-import {
-  collection,
-  getDocs,
-  doc,
-  setDoc,
-  updateDoc,
-  deleteDoc,
-  addDoc,
-  query,
-  where,
-  orderBy,
-  runTransaction,
-} from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
-import { auth, db, functions, isMock, OperationType, handleFirestoreError } from './config';
+import { auth, isMock } from './config';
 import type {
   Syndic,
   Building,
@@ -494,6 +480,7 @@ async function syncSyndicToFirestoreIfAuthenticated(syndic: Syndic): Promise<voi
   };
 
   try {
+    const { setDoc, doc, db } = await import('./legacyClient');
     await setDoc(doc(db, SYNDICS_COL, payload.id), payload);
   } catch {
     // Keep UI flow uninterrupted
@@ -708,6 +695,7 @@ export const updateBuilding = async (
     throw new Error('Building not found');
   }
 
+  const { doc, db, updateDoc } = await import('./legacyClient');
   const docRef = doc(db, BUILDINGS_COL, buildingId);
   await updateDoc(docRef, buildingUpdates as any);
   return { id: buildingId, ...buildingUpdates };
@@ -732,6 +720,7 @@ export const deleteBuilding = async (buildingId: string) => {
     return true;
   }
 
+  const { deleteDoc, doc, db } = await import('./legacyClient');
   await deleteDoc(doc(db, BUILDINGS_COL, buildingId));
   return true;
 };
@@ -778,6 +767,7 @@ export const addApartment = async (apartmentData: Omit<Apartment, 'id'>) => {
     }
   }
 
+  const { addDoc, collection, db } = await import('./legacyClient');
   const docRef = await addDoc(collection(db, APARTMENTS_COL), apartmentData);
   return { id: docRef.id, ...apartmentData };
 };
@@ -836,6 +826,7 @@ export const addApartmentsBulk = async (
   const created: Apartment[] = [];
   for (const apt of apartmentsList) {
     const payload = { ...apt, buildingId };
+    const { addDoc, collection, db } = await import('./legacyClient');
     const docRef = await addDoc(collection(db, APARTMENTS_COL), payload);
     created.push({ id: docRef.id, ...payload });
   }
@@ -922,6 +913,7 @@ export const updateApartment = async (apartment: Apartment) => {
     }
   }
 
+  const { doc, db, updateDoc } = await import('./legacyClient');
   const docRef = doc(db, APARTMENTS_COL, apartment.id);
   await updateDoc(docRef, apartment as any);
   return apartment;
@@ -953,6 +945,7 @@ export const deleteApartment = async (apartmentId: string) => {
     return true;
   }
 
+  const { deleteDoc, doc, db } = await import('./legacyClient');
   await deleteDoc(doc(db, APARTMENTS_COL, apartmentId));
   return true;
 };
@@ -1144,6 +1137,7 @@ export const addResident = async (
     }
   }
 
+  const { addDoc, collection, db } = await import('./legacyClient');
   const docRef = await addDoc(collection(db, RESIDENTS_COL), cleanedData);
   return { id: docRef.id, ...cleanedData };
 };
@@ -1232,6 +1226,7 @@ export const updateResident = async (resident: Resident): Promise<Resident> => {
     }
   }
 
+  const { doc, db, updateDoc } = await import('./legacyClient');
   const docRef = doc(db, RESIDENTS_COL, cleanedResident.id);
   await updateDoc(docRef, cleanedResident as any);
   return cleanedResident;
@@ -1345,6 +1340,7 @@ export const deleteResident = async (residentId: string) => {
     return true;
   }
 
+  const { deleteDoc, doc, db } = await import('./legacyClient');
   await deleteDoc(doc(db, RESIDENTS_COL, residentId));
   return true;
 };
@@ -1359,6 +1355,7 @@ export const getChargesForBuilding = async (buildingId: string): Promise<Charge[
     return charges.filter((c) => c.buildingId === buildingId);
   }
 
+  const { query, collection, db, where, getDocs } = await import('./legacyClient');
   const q = query(collection(db, CHARGES_COL), where('buildingId', '==', buildingId));
   const snapshot = await getDocs(q);
   return snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Charge));
@@ -1370,6 +1367,7 @@ export const getChargesForResident = async (residentId: string): Promise<Charge[
     return charges.filter((c) => c.residentId === residentId);
   }
 
+  const { query, collection, db, where, getDocs } = await import('./legacyClient');
   const q = query(collection(db, CHARGES_COL), where('residentId', '==', residentId));
   const snapshot = await getDocs(q);
   return snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Charge));
@@ -1588,6 +1586,7 @@ export const generateMonthlyCharges = async (
     });
   }
 
+  const { httpsCallable, functions } = await import('./legacyClient');
   const generateChargesFn = httpsCallable(functions, 'generateMonthlyCharges');
   const res = await generateChargesFn({
     buildingId,
@@ -1614,6 +1613,7 @@ export const getPaymentProofsForBuilding = async (buildingId: string): Promise<P
     return proofs.filter((p) => p.buildingId === buildingId);
   }
 
+  const { query, collection, db, where, getDocs } = await import('./legacyClient');
   const q = query(collection(db, PROOFS_COL), where('buildingId', '==', buildingId));
   const snapshot = await getDocs(q);
   return snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as PaymentProof));
@@ -1625,6 +1625,7 @@ export const getPaymentProofsForResident = async (residentId: string): Promise<P
     return proofs.filter((p) => p.residentId === residentId);
   }
 
+  const { query, collection, db, where, getDocs } = await import('./legacyClient');
   const q = query(collection(db, PROOFS_COL), where('residentId', '==', residentId));
   const snapshot = await getDocs(q);
   return snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as PaymentProof));
@@ -1681,6 +1682,7 @@ export const submitPaymentProof = async (
     return newProof;
   }
 
+  const { addDoc, collection, db } = await import('./legacyClient');
   const docRef = await addDoc(collection(db, PROOFS_COL), newProof);
   return { id: docRef.id, ...newProof };
 };
@@ -1900,6 +1902,7 @@ export const getQuittancesForBuilding = async (buildingId: string): Promise<Quit
     return quittances.filter((q) => q.buildingId === buildingId && !q.voidedAt);
   }
 
+  const { query, collection, db, where, getDocs } = await import('./legacyClient');
   const q = query(collection(db, QUITTANCES_COL), where('buildingId', '==', buildingId));
   const snapshot = await getDocs(q);
   return snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Quittance));
@@ -1911,6 +1914,7 @@ export const getQuittancesForResident = async (residentId: string): Promise<Quit
     return quittances.filter((q) => q.residentId === residentId && !q.voidedAt);
   }
 
+  const { query, collection, db, where, getDocs } = await import('./legacyClient');
   const q = query(collection(db, QUITTANCES_COL), where('residentId', '==', residentId));
   const snapshot = await getDocs(q);
   return snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Quittance));
@@ -2126,6 +2130,7 @@ export const getAssembleesGeneralesForBuilding = async (
     return agList.filter((ag) => ag.buildingId === buildingId);
   }
 
+  const { query, collection, db, where, getDocs } = await import('./legacyClient');
   const q = query(collection(db, AG_COL), where('buildingId', '==', buildingId));
   const snapshot = await getDocs(q);
   return snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as AssembleeGenerale));
@@ -2148,6 +2153,7 @@ export const saveAssembleeGenerale = async (
     return ag;
   }
 
+  const { doc, db, setDoc } = await import('./legacyClient');
   const docRef = doc(db, AG_COL, ag.id);
   await setDoc(docRef, ag, { merge: true });
   return ag;
@@ -2243,6 +2249,7 @@ export const toggleAGVoting = async (agId: string, isOpen: boolean): Promise<Ass
     setLocalItem(STORAGE_KEYS.AG, agList);
     return ag;
   }
+  const { doc, db, updateDoc } = await import('./legacyClient');
   const docRef = doc(db, AG_COL, agId);
   await updateDoc(docRef, { isVotingOpen: isOpen });
   return {} as any;
@@ -2643,6 +2650,7 @@ export const savePrestataire = async (
     setLocalItem(STORAGE_KEYS.PRESTATAIRES, list);
     if (!isMock) {
       const cleanPrest = JSON.parse(JSON.stringify(finalPrestataire));
+      const { setDoc, doc, db } = await import('./legacyClient');
       void setDoc(doc(db, PRESTATAIRES_COL, finalPrestataire.id), cleanPrest, {
         merge: true,
       }).catch(() => {});
@@ -2653,6 +2661,7 @@ export const savePrestataire = async (
     };
   }
 
+  const { doc, db, setDoc } = await import('./legacyClient');
   const docRef = doc(db, PRESTATAIRES_COL, prestataire.id);
   await setDoc(docRef, prestataire, { merge: true });
   return prestataire;
@@ -2704,6 +2713,7 @@ export const regeneratePrestataireCredentials = async (
       setLocalItem(STORAGE_KEYS.PRESTATAIRES, list);
       if (!isMock) {
         const cleanPrest = JSON.parse(JSON.stringify(updated));
+        const { setDoc, doc, db } = await import('./legacyClient');
         void setDoc(doc(db, PRESTATAIRES_COL, updated.id), cleanPrest, { merge: true }).catch(
           () => {}
         );
@@ -2761,6 +2771,7 @@ export const deletePrestataire = async (prestataireId: string): Promise<boolean>
     return true;
   }
 
+  const { deleteDoc, doc, db } = await import('./legacyClient');
   await deleteDoc(doc(db, PRESTATAIRES_COL, prestataireId));
   return true;
 };
@@ -2839,6 +2850,7 @@ export const addTransaction = async (buildingId: string, transaction: Omit<Trans
     }
   }
 
+  const { addDoc, collection, db } = await import('./legacyClient');
   const docRef = await addDoc(collection(db, TRANSACTIONS_COL), { ...newTrx, buildingId });
   return { id: docRef.id, ...newTrx };
 };
@@ -2849,6 +2861,7 @@ export const getInvoicesForBuilding = async (buildingId: string): Promise<Invoic
     return invoices.filter((inv) => inv.buildingId === buildingId);
   }
 
+  const { query, collection, db, where, getDocs } = await import('./legacyClient');
   const q = query(collection(db, INVOICES_COL), where('buildingId', '==', buildingId));
   const snapshot = await getDocs(q);
   return snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Invoice));
@@ -3076,6 +3089,7 @@ export const getMaintenanceRequestsForBuilding = async (
       .map((m) => normalizeMaintenanceRequestApartment(m));
   }
 
+  const { query, collection, db, where, getDocs } = await import('./legacyClient');
   const q = query(collection(db, MAINTENANCE_COL), where('buildingId', '==', buildingId));
   const snapshot = await getDocs(q);
   return snapshot.docs.map((d) =>
@@ -3096,6 +3110,7 @@ export const getMaintenanceRequestsForResident = async (
       .map((m) => normalizeMaintenanceRequestApartment(m));
   }
 
+  const { query, collection, db, where, getDocs } = await import('./legacyClient');
   const q = query(collection(db, MAINTENANCE_COL), where('residentId', '==', residentId));
   const snapshot = await getDocs(q);
   return snapshot.docs.map((d) =>
@@ -3144,6 +3159,7 @@ export const addMaintenanceRequest = async (request: Omit<MaintenanceRequest, 'i
     return newReq;
   }
 
+  const { addDoc, collection, db } = await import('./legacyClient');
   const docRef = await addDoc(collection(db, MAINTENANCE_COL), newReq);
   return { id: docRef.id, ...newReq };
 };
@@ -3224,6 +3240,7 @@ export const updateMaintenanceRequest = async (
     return { id, ...updates };
   }
 
+  const { doc, db, updateDoc } = await import('./legacyClient');
   const docRef = doc(db, MAINTENANCE_COL, id);
   await updateDoc(docRef, updates);
   return { id, ...updates };
@@ -3341,6 +3358,7 @@ export const getUserNotifications = async (userId: string): Promise<Notification
     return list.filter((n) => n.userId === userId || n.userId === 'all');
   }
 
+  const { query, collection, db, where, orderBy, getDocs } = await import('./legacyClient');
   const q = query(
     collection(db, NOTIFICATIONS_COL),
     where('userId', '==', userId),
@@ -3359,6 +3377,7 @@ export const markNotificationAsRead = async (notificationId: string) => {
     setLocalItem(STORAGE_KEYS.NOTIFICATIONS, updated);
     return true;
   }
+  const { doc, db, updateDoc } = await import('./legacyClient');
   const docRef = doc(db, NOTIFICATIONS_COL, notificationId);
   await updateDoc(docRef, { read: true });
   return true;
@@ -3387,6 +3406,7 @@ export const getChatMessages = async (
     return buildingMsgs;
   }
 
+  const { query, collection, db, where, orderBy, getDocs } = await import('./legacyClient');
   const q = channelId
     ? query(
         collection(db, 'chat_messages'),
@@ -3421,6 +3441,7 @@ export const sendChatMessage = async (
     return newMsg;
   }
 
+  const { addDoc, collection, db } = await import('./legacyClient');
   const docRef = await addDoc(collection(db, 'chat_messages'), newMsg);
   return { id: docRef.id, ...newMsg };
 };
@@ -3461,6 +3482,7 @@ export const getMarketplaceItems = async (
     return list.filter((item) => item.buildingId === buildingId);
   }
 
+  const { query, collection, db, where, orderBy, getDocs } = await import('./legacyClient');
   const q = query(
     collection(db, 'marketplace_items'),
     where('buildingId', '==', buildingId),
@@ -3488,6 +3510,7 @@ export const addMarketplaceItem = async (
     return newItem;
   }
 
+  const { addDoc, collection, db } = await import('./legacyClient');
   const docRef = await addDoc(collection(db, 'marketplace_items'), newItem);
   return { id: docRef.id, ...newItem };
 };
@@ -3509,6 +3532,7 @@ export const updateMarketplaceItemStatus = async (
     return false;
   }
 
+  const { doc, db, updateDoc } = await import('./legacyClient');
   const docRef = doc(db, 'marketplace_items', itemId);
   await updateDoc(docRef, { status });
   return true;
@@ -3524,6 +3548,7 @@ export const deleteMarketplaceItem = async (itemId: string): Promise<boolean> =>
     return true;
   }
 
+  const { deleteDoc, doc, db } = await import('./legacyClient');
   await deleteDoc(doc(db, 'marketplace_items', itemId));
   return true;
 };
@@ -3580,7 +3605,7 @@ async function performRemoteMutation<T>(operation: string, args: unknown[], requ
   }
   requireSameIdentity();
   // Keep one identity and the same uploaded file URLs across an uncertain response.
-  const operationId = pendingOperations.get(requestKey) || crypto.randomUUID();
+  const operationId = pendingOperations.get(requestKey) || `op:${Date.now()}:${crypto.randomUUID()}`;
   pendingOperations.set(requestKey, operationId);
   const response = await fetch('/api/commands', { method: 'POST', headers: getAuthenticatedRequestHeaders(), body: JSON.stringify({ operation,args,operationId }) });
   const data = await readCommandResponse(response);

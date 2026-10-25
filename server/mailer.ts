@@ -13,13 +13,16 @@ const key = () =>
 export function encrypt(text: string) {
   const iv = randomBytes(12),
     cipher = createCipheriv("aes-256-gcm", key(), iv);
-  return [
+  return "v1:" + [
     iv.toString("base64"),
     cipher.update(text, "utf8", "base64") + cipher.final("base64"),
     cipher.getAuthTag().toString("base64"),
   ].join(".");
 }
 export function decrypt(value: string) {
+  if (/^v[^:]*:/.test(value) && !value.startsWith('v1:')) throw new Error('Unsupported encryption version');
+  if (value.startsWith('v1:')) value = value.slice(3);
+  if (value.split('.').length !== 3) throw new Error('Invalid encrypted value');
   const [iv, body, tag] = value.split("."),
     cipher = createDecipheriv("aes-256-gcm", key(), Buffer.from(iv, "base64"));
   cipher.setAuthTag(Buffer.from(tag, "base64"));

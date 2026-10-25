@@ -1,3 +1,5 @@
+import { assertFreshOperationId, runLifecycle, LifecycleError } from './server/lifecycle';
+import { validateProductionEnvironment } from "./server/productionConfig";
 import { buildingReport } from "./server/reports";
 import { registerLiveUpdates } from "./server/realtime";
 import { projectAssemblyForRole } from './server/assemblyPrivacy';
@@ -32,7 +34,7 @@ import {
   encrypt,
   decrypt,
 } from "./server/mailer";
-import { savePrivateFile, readPrivateFile } from './server/uploads';
+import { savePrivateFile, readPrivateFile, lifecycleStorage } from './server/uploads';
 import { DependencyError } from './server/dependencyErrors';
 import express from "express";
 
@@ -68,7 +70,7 @@ const STATE_FILE = path.join(DATA_DIR, "shared-state.json");
 const HAS_CONFIGURED_SERVER_SECRET = (process.env.SYNDIK_SERVER_SECRET?.length || 0) >= 32;
 const SERVER_HMAC_SECRET = HAS_CONFIGURED_SERVER_SECRET
   ? process.env.SYNDIK_SERVER_SECRET!
-  : crypto.randomBytes(32).toString("hex");
+  : process.env.NODE_ENV === "production" ? "" : crypto.randomBytes(32).toString("hex");
 
 interface ServerStore {
   __revision?: number;
@@ -1316,6 +1318,7 @@ const ID_MERGE_KEYS: Record<string, string> = {
 };
 
 async function startServer() {
+  validateProductionEnvironment();
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
@@ -1326,9 +1329,6 @@ async function startServer() {
   if (process.env.SYNDIK_SERVER_SECRET.length < 32) {
     process.env.SYNDIK_SERVER_SECRET = SERVER_HMAC_SECRET;
   }
-  if (process.env.NODE_ENV === 'production' && !HAS_CONFIGURED_SERVER_SECRET)
-    console.warn(JSON.stringify({ event: 'configuration_warning', code: 'SESSION_SECRET_NOT_CONFIGURED',
-      message: 'Configure one stable SYNDIK_SERVER_SECRET of at least 32 characters across revisions and instances. The temporary key cannot preserve sessions or encrypted retries across restarts.' }));
   process.env.SYNDIK_UPLOAD_BUCKET ||=
     firebaseConfig.storageBucket || "immogest-7faaf.firebasestorage.app";
   process.env.PUBLIC_APP_URL ||= "https://immogest.cloud.run";
@@ -1446,7 +1446,7 @@ async function startServer() {
           payload = {
             ok: false,
             error:
-              error instanceof OperationError || error instanceof DependencyError
+              error instanceof OperationError || error instanceof DependencyError || error instanceof LifecycleError
                 ? error.message
                 : error.name === "ZodError" && Array.isArray(error.issues)
                 ? JSON.stringify(error.issues.map((issue: any) => ({
@@ -1459,7 +1459,7 @@ async function startServer() {
                     received: issue.received === "undefined" ? "undefined" : undefined,
                   })))
                 : "Enregistrement impossible. Veuillez réessayer.",
-            code: error instanceof DependencyError ? error.code : error.name === 'ZodError' ? 'VALIDATION_ERROR' : error instanceof OperationError ? error.code : 'INTERNAL_ERROR',
+            code: error instanceof DependencyError ? error.code : error.name === 'ZodError' ? 'VALIDATION_ERROR' : error instanceof OperationError || error instanceof LifecycleError ? error.code : 'INTERNAL_ERROR',
             requestId,
           };
           format = "json";
@@ -2225,6 +2225,7 @@ async function startServer() {
         .update(bytes)
         .digest("hex"),
       key = `private/${buildingId}/${fileId}`;
+    if(sharedStore.__files?.[fileId]?.lifecycle==='deleting')throw new OperationError('Fichier en cours de suppression. Réessayez dans un instant.',409);
     await savePrivateFile(UPLOADS_DIR, fileId, key, bytes, mime);
     (sharedStore.__files ??= {})[fileId] = {
       fileId,
@@ -2234,6 +2235,8 @@ async function startServer() {
       uploadedBy: caller.uid,
       name: String(req.body?.name || "document").slice(0, 200),
       sizeBytes: bytes.length,
+      createdAt: sharedStore.__files?.[fileId]?.createdAt || new Date().toISOString(),
+      lastUploadedAt: new Date().toISOString(),
     };
     return res.json({
       ok: true,
@@ -2310,6 +2313,7 @@ async function startServer() {
         return res.status(409).json({
           error: "Identifiant déjà utilisé pour une autre opération.",
         });
+      receipts[key].lastAccessAt = new Date().toISOString();
       if (receipts[key].identityMutationId) resumeQueuedIdentityMutation(sharedStore, receipts[key].identityMutationId);
       return res.json({
         ok: true,
@@ -2322,6 +2326,7 @@ async function startServer() {
         revision: sharedStore.__revision || 0,
       });
     }
+    assertFreshOperationId(sharedStore,operationId);
     const firebaseBefore = new Map(identityAccounts(sharedStore).filter(a => a.firebaseUid)
       .map(a => [accountUid(a), { firebaseUid: a.firebaseUid, email: a.email,
         accountsJson: JSON.stringify(identityAccounts(sharedStore).filter(x => accountUid(x) === accountUid(a))) }]));
@@ -2443,6 +2448,10 @@ async function startServer() {
       )
     );
   };
+  app.post("/api/jobs/lifecycle",wrap(async(req:express.Request,res:express.Response)=>{
+    if(!scheduler(req))return res.status(403).json({error:'Ordonnanceur non autorisé.'});
+    return res.json(await runLifecycle(repository,lifecycleStorage(UPLOADS_DIR)));
+  },false));
   app.post("/api/jobs/monthly-charges", wrap(async (req: express.Request, res: express.Response) => {
     if (!scheduler(req))
       return res.status(403).json({ error: "Ordonnanceur non autorisé." });
@@ -2510,4 +2519,7 @@ async function startServer() {
   });
 }
 
-startServer();
+startServer().catch(error => {
+  console.error(error instanceof Error ? error.message : "Server startup failed");
+  process.exitCode = 1;
+});

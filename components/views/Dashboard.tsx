@@ -19,7 +19,7 @@ import {
   getMaintenanceRequestsForBuilding,
   getQuittancesForBuilding,
 } from '../../firebase/services';
-import { exportBuildingSummaryReportPDF } from '../../services/pdfService';
+import { exportBuildingSummaryReportPDF } from '../../services/pdfOnDemand';
 import { computeBuildingFundBalances } from '../../utils/security';
 import { useI18n } from '../../hooks/useI18n';
 import { useToast } from '../common/Toast';

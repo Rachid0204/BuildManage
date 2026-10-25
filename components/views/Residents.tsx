@@ -10,7 +10,7 @@ import {
   exportResidentsPDF,
   exportResidentsCSV,
   exportResidentCredentialsPDF,
-} from '../../services/pdfService';
+} from '../../services/pdfOnDemand';
 import { recordResidentCredentialShare } from '../../firebase/services';
 
 function formatAuditTimestamp(iso?: string, lang?: string): string {
@@ -432,8 +432,8 @@ const CredentialsModal: React.FC<CredentialsModalProps> = ({
     onShareRecorded?.(resident.id, 'copy');
   };
 
-  const handleDownloadPDF = () => {
-    exportResidentCredentialsPDF(resident, building, apartmentNumber);
+  const handleDownloadPDF = async () => {
+    if (!await exportResidentCredentialsPDF(resident, building, apartmentNumber)) return;
     onShareRecorded?.(resident.id, 'pdf');
   };
 

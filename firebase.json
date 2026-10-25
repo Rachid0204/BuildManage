@@ -21,7 +21,7 @@
       {
         "source": "/api/**",
         "run": {
-          "serviceId": "immogest-server",
+          "serviceId": "buildmanage",
           "region": "europe-west1"
         }
       },

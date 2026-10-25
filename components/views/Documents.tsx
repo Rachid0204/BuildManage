@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Eye, Download, FileText } from 'lucide-react';
 import type { Building, Document } from '../../types';
@@ -11,7 +11,7 @@ import { uploadDocument, deleteDocument } from '../../firebase/services';
 import {
   generateArchiveDocumentPDFBlobUrl,
   downloadArchiveDocumentPDF,
-} from '../../services/pdfService';
+} from '../../services/pdfOnDemand';
 import { useToast } from '../common/Toast';
 
 const Documents: React.FC<{
@@ -31,20 +31,26 @@ const Documents: React.FC<{
     (a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime()
   );
 
-  // Resolve an in-browser preview URL for the selected document
-  const resolvedPreviewUrl = useMemo(() => {
-    if (!previewDoc) return null;
-    if (
-      previewDoc.url &&
-      previewDoc.url !== '#' &&
-      (previewDoc.url.startsWith('/api/uploads/') ||
-        previewDoc.url.startsWith('data:') ||
-        previewDoc.url.startsWith('blob:') ||
-        previewDoc.url.startsWith('http'))
-    ) {
-      return previewDoc.url;
+  const [resolvedPreviewUrl, setResolvedPreviewUrl] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    let generatedUrl: string | null = null;
+    setResolvedPreviewUrl(null);
+    setPreviewLoading(false);
+    if (!previewDoc) return;
+    if (previewDoc.url && /^(\/api\/uploads\/|data:|blob:|https?:)/.test(previewDoc.url)) {
+      setResolvedPreviewUrl(previewDoc.url);
+      return;
     }
-    return generateArchiveDocumentPDFBlobUrl(previewDoc, building);
+    setPreviewLoading(true);
+    void generateArchiveDocumentPDFBlobUrl(previewDoc, building).then(url => {
+      if (cancelled) { if (url) URL.revokeObjectURL(url); return; }
+      generatedUrl = url;
+      setResolvedPreviewUrl(url);
+      setPreviewLoading(false);
+    });
+    return () => { cancelled = true; if (generatedUrl) URL.revokeObjectURL(generatedUrl); };
   }, [previewDoc, building]);
 
   const isImagePreview = useMemo(() => {
@@ -59,7 +65,7 @@ const Documents: React.FC<{
     );
   }, [previewDoc]);
 
-  const handleDownloadDoc = (docItem: Document) => {
+  const handleDownloadDoc = async (docItem: Document) => {
     if (
       docItem.url &&
       docItem.url !== '#' &&
@@ -75,7 +81,7 @@ const Documents: React.FC<{
       link.click();
       document.body.removeChild(link);
     } else {
-      downloadArchiveDocumentPDF(docItem, building);
+      if (!await downloadArchiveDocumentPDF(docItem, building)) return;
     }
     showToast(
       tr(
@@ -329,6 +335,8 @@ const Documents: React.FC<{
               </span>
             </div>
 
+            {previewLoading && <div role="status" className="h-[62vh] bg-slate-100 p-6">{tr('Préparation du document…', 'جاري إعداد المستند…')}</div>}
+            {!previewLoading && !resolvedPreviewUrl && <p role="alert">{tr('Aperçu indisponible. Fermez puis réessayez.', 'المعاينة غير متاحة. أغلق ثم حاول مجدداً.')}</p>}
             {/* Embedded In-Browser PDF / Image Viewer */}
             {resolvedPreviewUrl && (
               <div className="rounded-xl overflow-hidden border border-slate-300 bg-slate-900 shadow-inner">

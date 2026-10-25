@@ -1830,3 +1830,36 @@ test('Settings draft: real SSE updates preserve edits, hydrate clean fields and 
   await expect(name).toHaveValue('Remote name after Settings save');
   expect(await page.evaluate(() => (window as any).__settingsDraftDocument)).toBe('original-settings-document');
 });
+
+for (const [index, portal] of [[0, 'SyndicPortal'], [1, 'ResidentDashboard'], [3, 'AdminDashboard'], [4, 'PrestatairePortal']] as const) {
+  test(`A4: landing defers all portals and ${portal} loads only for its authorized role`, async ({ page }) => {
+    const requests: string[] = [];
+    page.on('request', request => { if(request.resourceType()==='script') requests.push(new URL(request.url()).pathname); });
+    await page.route('**/*', route => new URL(route.request().url()).origin === base ? route.continue() : route.abort());
+    await page.goto(`${base}/welcome`);
+    await expect(page.getByRole('heading', {level:1})).toBeVisible();
+    expect(requests.some(p=>/AdminDashboard-|ResidentDashboard-|SyndicPortal-|PrestatairePortal-|pdf-|pdfService-|html2canvas-/.test(p))).toBe(false);
+    await login(page,index);
+    expect(requests.some(p=>p.includes('/'+portal+'-'))).toBe(true);
+    for(const other of ['AdminDashboard','ResidentDashboard','SyndicPortal','PrestatairePortal'].filter(p=>p!==portal))
+      expect(requests.some(p=>p.includes('/'+other+'-'))).toBe(false);
+    expect(requests.some(p=>/\/pdf-|\/pdfService-|\/html2canvas-/.test(p))).toBe(false);
+  });
+}
+for(const width of [390, 1280]) test(`A4: PDF export loads on demand and downloads a real PDF at ${width}px`, async ({page})=>{
+  await page.setViewportSize({width,height:844});
+  const scripts:string[]=[];
+  page.on('request',r=>{if(r.resourceType()==='script')scripts.push(new URL(r.url()).pathname);});
+  await login(page,0);
+  await page.goto(`${base}/apartments`);
+  const button=page.getByRole('button',{name:'Exporter PDF',exact:true});
+  await expect(button).toBeEnabled();
+  expect(scripts.some(p=>/\/pdf-|\/pdfService-/.test(p))).toBe(false);
+  const download=page.waitForEvent('download');
+  await button.click();
+  const file=await download;
+  expect(file.suggestedFilename()).toMatch(/\.pdf$/);
+  const path=await file.path();
+  expect(readFileSync(path!).subarray(0,5).toString()).toBe('%PDF-');
+  expect(scripts.some(p=>/\/pdf-/.test(p))).toBe(true);
+});

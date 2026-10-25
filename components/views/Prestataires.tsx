@@ -18,7 +18,7 @@ import {
   regeneratePrestataireCredentials,
   recordPrestataireCredentialShare,
 } from '../../firebase/services';
-import { exportPrestataireCredentialsPDF } from '../../services/pdfService';
+import { exportPrestataireCredentialsPDF } from '../../services/pdfOnDemand';
 import { useAuth } from '../../contexts/AuthContext';
 import Loading from '../common/Loading';
 import ServiceProvidersDirectory from './ServiceProvidersDirectory';
@@ -88,8 +88,8 @@ const PrestataireCredentialsModal: React.FC<{
     onShareRecorded?.(prestataire.id, 'copy');
   };
 
-  const handleDownloadPDF = () => {
-    exportPrestataireCredentialsPDF(prestataire, building);
+  const handleDownloadPDF = async () => {
+    if (!await exportPrestataireCredentialsPDF(prestataire, building)) return;
     onShareRecorded?.(prestataire.id, 'pdf');
   };
 

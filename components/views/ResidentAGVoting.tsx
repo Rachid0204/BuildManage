@@ -6,7 +6,7 @@ import Button from '../common/Button';
 import Modal from '../common/Modal';
 import { AGIcon, DocumentsIcon } from '../icons/IconComponents';
 import { getAssembleesGeneralesForBuilding, castResidentAGVote } from '../../firebase/services';
-import { generatePvAgPDF } from '../../services/pdfService';
+import { generatePvAgPDF } from '../../services/pdfOnDemand';
 import Loading from '../common/Loading';
 import { useI18n } from '../../hooks/useI18n';
 

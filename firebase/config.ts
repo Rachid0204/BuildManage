@@ -1,12 +1,5 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import {
-  getFirestore,
-  doc,
-  getDocFromServer,
-} from 'firebase/firestore';
-import { getFunctions } from 'firebase/functions';
 import { getAuth, connectAuthEmulator } from 'firebase/auth';
-import { getStorage } from 'firebase/storage';
 import firebaseConfigJson from '../firebase-applet-config.json';
 
 // Keep this as a direct import.meta.env access so Vite replaces it in the browser.
@@ -51,8 +44,7 @@ const isBrowserRuntime = typeof window !== 'undefined' && typeof document !== 'u
 export const isMock =
   !isBrowserRuntime || readEnv('VITE_USE_MOCK_DATA', 'false') === 'true';
 
-const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
-export const db = getFirestore(app, FIRESTORE_DATABASE_ID);
+export const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 export const auth = getAuth(app);
 const authEmulatorUrl = readEnv('VITE_FIREBASE_AUTH_EMULATOR_URL', '');
 if (isBrowserRuntime && authEmulatorUrl && metaEnv.DEV &&
@@ -60,8 +52,6 @@ if (isBrowserRuntime && authEmulatorUrl && metaEnv.DEV &&
     ['localhost', '127.0.0.1'].includes(new URL(authEmulatorUrl).hostname)) {
   connectAuthEmulator(auth, authEmulatorUrl, { disableWarnings: true });
 }
-export const functions = getFunctions(app);
-export const storage = getStorage(app);
 
 export enum OperationType {
   CREATE = 'create',
@@ -118,19 +108,4 @@ export function handleFirestoreError(
   console.error('Firestore Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
 }
-
-async function testConnection() {
-  if (!isBrowserRuntime || isMock) return;
-  try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      error.message.includes('the client is offline')
-    ) {
-      console.error('Please check your Firebase configuration.');
-    }
-  }
-}
-void testConnection();
 

@@ -5,7 +5,7 @@ import Button from '../common/Button';
 import Modal from '../common/Modal';
 import { useI18n } from '../../hooks/useI18n';
 import { PlusIcon, PencilIcon, TrashIcon, DocumentsIcon } from '../icons/IconComponents';
-import { exportApartmentsPDF, exportApartmentsCSV } from '../../services/pdfService';
+import { exportApartmentsPDF, exportApartmentsCSV } from '../../services/pdfOnDemand';
 
 type ApartmentModalProps = {
   isOpen: boolean;

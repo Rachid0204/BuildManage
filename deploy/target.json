@@ -1,0 +1,7 @@
+{
+  "projectId": "immogest-7faaf",
+  "service": "buildmanage",
+  "region": "europe-west1",
+  "databaseId": "ai-studio-immogest-6d16b790-183d-49fd-9d4f-086d99dc2be3",
+  "publicAppUrl": "https://immogest.cloud.run"
+}

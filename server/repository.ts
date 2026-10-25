@@ -1,3 +1,5 @@
+import { assertFileLifecycle, GENERATION_RETENTION } from './lifecycle';
+import { validateProductionEnvironment } from "./productionConfig";
 import firebaseConfig from "../firebase-applet-config.json" with { type: "json" };
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isDeepStrictEqual } from "node:util";
@@ -6,7 +8,7 @@ import { mkdir, readFile, open, rename, rm } from "node:fs/promises";
 import { watch } from "node:fs";
 import path from "node:path";
 import { getApps, initializeApp } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
+import { getFirestore, FieldPath } from "firebase-admin/firestore";
 import { dependencyFailure } from './dependencyErrors';
 export type State = Record<string, any>;
 const context = new AsyncLocalStorage<State>();
@@ -34,10 +36,23 @@ export const sharedState = new Proxy({} as State, {
 });
 export interface StateRepository {
   transaction<T>(run: (state: State) => Promise<T>): Promise<T>;
+  cleanupGenerations?(now?: number): Promise<unknown>;
   watchRevision?(onRevision: (revision: number) => void, onError: (error: Error) => void): () => void;
 }
 export class FileRepository implements StateRepository {
   constructor(public directory: string) {}
+  async cleanupGenerations(now=Date.now()) {
+    return this.transaction(async () => {
+      const {readdir,stat}=await import('node:fs/promises');let deleted=0;
+      for(const name of await readdir(this.directory)) {
+        if(deleted>=100)break;
+        if(!/^shared-state\.json\.[a-f0-9-]{36}\.tmp$/.test(name))continue;
+        const file=path.join(this.directory,name), info=await stat(file);
+        if(info.mtimeMs<now-GENERATION_RETENTION){await rm(file);deleted++;}
+      }
+      return {deleted};
+    });
+  }
   watchRevision(onRevision: (revision: number) => void, onError: (error: Error) => void) {
     let closed = false, timer: ReturnType<typeof setTimeout> | undefined;
     const read = async () => {
@@ -84,6 +99,7 @@ export class FileRepository implements StateRepository {
       const revision = Number(state.__revision) || 0,
         before = JSON.stringify(state),
         result = await context.run(state, () => run(state));
+      assertFileLifecycle(state, JSON.parse(before));
       if (JSON.stringify(state) !== before) {
         state.__revision = revision + 1;
         const temporary = `${file}.${randomUUID()}.tmp`,
@@ -231,6 +247,25 @@ export class FirestoreRepository implements StateRepository {
   constructor(databaseId: string) {
     this.db = getFirestore(getApps()[0] || initializeApp(), databaseId);
   }
+  async cleanupGenerations(now=Date.now()) {
+    const control=this.db.doc('platform_internal/lifecycle_gc'),cursors=(await control.get()).data()||{};
+    let discovery=this.db.collectionGroup('records').orderBy(FieldPath.documentId()).select().limit(100);
+    if(cursors.discoveryCursor)discovery=discovery.startAfter(this.db.doc(cursors.discoveryCursor));
+    const discovered=await discovery.get();
+    const parents=new Map(discovered.docs.filter(d=>d.ref.path.startsWith('platform_generations/')).map(d=>[d.ref.parent.parent!.path,d.ref.parent.parent!]));
+    for(const parent of parents.values())await this.db.runTransaction(async tx=>{const marker=await tx.get(parent);if(!marker.exists)tx.create(parent,{createdAt:new Date(now).toISOString(),updatedAt:new Date(now).toISOString(),status:'legacy-discovered',complete:false});});
+    let query=this.db.collection('platform_generations').orderBy(FieldPath.documentId()).limit(10);
+    if(cursors.generationCursor)query=query.startAfter(cursors.generationCursor);
+    const candidates=await query.get();let deleted=0,reclaimed=0;
+    for(const candidate of candidates.docs){if(deleted>=100)break;
+      const claimed=await this.db.runTransaction(async tx=>{const active=await tx.get(this.db.doc('platform_internal/state_revision')),marker=await tx.get(candidate.ref),data=marker.data();if(!data||active.data()?.generation===candidate.id)return false;const age=Date.parse(data.updatedAt||data.createdAt);if(data.status!=='deleting'&&(!Number.isFinite(age)||age>now-GENERATION_RETENTION))return false;tx.update(candidate.ref,{status:'deleting'});return true;});
+      if(!claimed)continue;
+      const rows=await candidate.ref.collection('records').limit(100-deleted).get();
+      if(rows.empty){await candidate.ref.delete();reclaimed++;}else{const batch=this.db.batch();for(const row of rows.docs)batch.delete(row.ref);await batch.commit();deleted+=rows.size;}
+    }
+    await control.set({discoveryCursor:discovered.empty?'':discovered.docs.at(-1)!.ref.path,generationCursor:candidates.empty?'':candidates.docs.at(-1)!.id},{merge:true});
+    return {scanned:candidates.size,discovered:discovered.size,deleted,reclaimed};
+  }
   watchRevision(onRevision: (revision: number) => void, onError: (error: Error) => void) {
     return this.db.doc('platform_internal/state_revision').onSnapshot(
       snapshot => onRevision(Number(snapshot.data()?.revision) || 0), onError);
@@ -256,6 +291,7 @@ export class FirestoreRepository implements StateRepository {
           const state = decode(snapshot.docs.map(d => d.data()), revision);
           const before = JSON.stringify(state);
           const result = await context.run(state, () => run(state));
+          assertFileLifecycle(state, JSON.parse(before));
           if (before === JSON.stringify(state)) return result;
           const next = encode(state);
           let writes = 1, bytes = 0;
@@ -268,25 +304,27 @@ export class FirestoreRepository implements StateRepository {
           let generation: string | undefined;
           if (writes > 450 || bytes > 7 * 1024 * 1024) {
             generation = randomUUID();
-            let batch = this.db.batch(), count = 0, size = 0;
-            for (const [id, value] of next) {
-              const length = Buffer.byteLength(JSON.stringify(value));
-              if (count >= 400 || size + length > 6 * 1024 * 1024) {
-                await batch.commit();
-                batch = this.db.batch(); count = 0; size = 0;
-              }
-              batch.set(this.db.doc(`platform_generations/${generation}/records/${id}`), value);
-              count++; size += length;
-            }
-            if (count) await batch.commit();
-            await this.db.doc(`platform_generations/${generation}`).set({
-              complete: true, records: next.size, createdAt: new Date().toISOString(),
-            });
+            const parent=this.db.doc(`platform_generations/${generation}`);
+            await parent.create({createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),complete:false,status:'staging'});
+            let rows:[string,any][]=[],size=0;
+            const flush=async()=>{
+              if(!rows.length)return;const pending=rows;
+              await this.db.runTransaction(async tx=>{
+                const marker=await tx.get(parent);
+                if(!marker.exists||marker.data()?.status==='deleting')throw new RevisionChanged();
+                for(const [id,value] of pending)tx.set(parent.collection('records').doc(id),value);
+                tx.update(parent,{updatedAt:new Date().toISOString()});
+              });rows=[];size=0;
+            };
+            for(const [id,value] of next){const length=Buffer.byteLength(JSON.stringify(value));if(rows.length>=400||size+length>6*1024*1024)await flush();rows.push([id,value]);size+=length;}
+            await flush();
+            await this.db.runTransaction(async tx=>{const marker=await tx.get(parent);if(!marker.exists||marker.data()?.status==='deleting')throw new RevisionChanged();tx.update(parent,{complete:true,records:next.size,updatedAt:new Date().toISOString()});});
           }
           await this.db.runTransaction(async transaction => {
             const current = await transaction.get(ref);
             if ((Number(current.data()?.revision) || 0) !== revision ||
                 current.data()?.generation !== meta.data()?.generation) throw new RevisionChanged();
+            if(generation){const marker=await transaction.get(this.db.doc(`platform_generations/${generation}`));if(!marker.exists||!marker.data()?.complete||marker.data()?.status==='deleting')throw new RevisionChanged();}
             if (!generation) {
               for (const id of old.keys()) if (!next.has(id)) transaction.delete(this.db.doc(`${location}/${id}`));
               for (const [id, value] of next) if (!isDeepStrictEqual(old.get(id), value))
@@ -314,6 +352,7 @@ export class FirestoreRepository implements StateRepository {
 }
 
 export function createRepository(): StateRepository {
+  validateProductionEnvironment();
   const mode =
     process.env.SYNDIK_STATE_BACKEND ||
     (process.env.NODE_ENV === "production" ? "firestore" : "file");

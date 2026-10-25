@@ -41,7 +41,7 @@ import type {
   Building,
   Resident,
 } from '../../types';
-import { generateQuittancePDF } from '../../services/pdfService';
+import { generateQuittancePDF } from '../../services/pdfOnDemand';
 import { getRecordedReserveSplit } from '../../utils/security';
 import Loading from '../common/Loading';
 
@@ -831,7 +831,7 @@ const ResidentDashboard: React.FC = () => {
                                         (q) => q.chargeId === charge.id
                                       );
                                       if (matchingQuit) {
-                                        generateQuittancePDF(
+                                        await generateQuittancePDF(
                                           matchingQuit,
                                           activeBuilding!,
                                           activeSyndic,
@@ -846,7 +846,7 @@ const ResidentDashboard: React.FC = () => {
                                         queryClient.invalidateQueries({
                                           queryKey: ['quittances', currentResident?.id],
                                         });
-                                        generateQuittancePDF(
+                                        await generateQuittancePDF(
                                           generated,
                                           activeBuilding,
                                           activeSyndic,
