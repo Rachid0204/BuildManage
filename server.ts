@@ -1,4 +1,4 @@
-import { assertFreshOperationId, runLifecycle } from './server/lifecycle';
+import { assertFreshOperationId, runLifecycle, LifecycleError } from './server/lifecycle';
 import { validateProductionEnvironment } from "./server/productionConfig";
 import { buildingReport } from "./server/reports";
 import { registerLiveUpdates } from "./server/realtime";
@@ -1446,7 +1446,7 @@ async function startServer() {
           payload = {
             ok: false,
             error:
-              error instanceof OperationError || error instanceof DependencyError
+              error instanceof OperationError || error instanceof DependencyError || error instanceof LifecycleError
                 ? error.message
                 : error.name === "ZodError" && Array.isArray(error.issues)
                 ? JSON.stringify(error.issues.map((issue: any) => ({
@@ -1459,7 +1459,7 @@ async function startServer() {
                     received: issue.received === "undefined" ? "undefined" : undefined,
                   })))
                 : "Enregistrement impossible. Veuillez réessayer.",
-            code: error instanceof DependencyError ? error.code : error.name === 'ZodError' ? 'VALIDATION_ERROR' : error instanceof OperationError ? error.code : 'INTERNAL_ERROR',
+            code: error instanceof DependencyError ? error.code : error.name === 'ZodError' ? 'VALIDATION_ERROR' : error instanceof OperationError || error instanceof LifecycleError ? error.code : 'INTERNAL_ERROR',
             requestId,
           };
           format = "json";

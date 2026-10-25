@@ -26,7 +26,7 @@ test('local cleanup removes only abandoned snapshot temporaries',async()=>{await
 if(process.argv.includes('--firestore'))test('Firestore GC protects active/fresh trees and incrementally prunes abandoned/legacy trees',async()=>{
  assert.ok(process.env.FIRESTORE_EMULATOR_HOST?.startsWith('127.0.0.1:'));
  const {initializeApp,deleteApp}=await import('firebase-admin/app'),{getFirestore}=await import('firebase-admin/firestore'),{FirestoreRepository}=await import('../server/repository');
- const app=initializeApp({projectId:'demo-buildmanage'}),db=getFirestore(app),repo=new FirestoreRepository('(default)');
+ const app=initializeApp({projectId:'demo-buildmanage'}),db=getFirestore(app,'a5-lifecycle-test'),repo=new FirestoreRepository('a5-lifecycle-test');
  try{assert.equal(typeof repo.cleanupGenerations,'function');await db.recursiveDelete(db.collection('platform_generations'));await db.doc('platform_internal/lifecycle_gc').delete();await db.doc('platform_internal/state_revision').set({revision:1,generation:'active'});
  for(const [id,date] of [['active',old],['abandoned',old],['fresh',new Date(now).toISOString()]]){await db.doc(`platform_generations/${id}`).set({createdAt:date,updatedAt:date,complete:id==='active'});const batch=db.batch();for(let i=0;i<120;i++)batch.set(db.doc(`platform_generations/${id}/records/${i}`),{test:true});await batch.commit();}
  await db.doc('platform_generations/legacy/records/record').set({test:true});await repo.cleanupGenerations(now);
@@ -35,5 +35,63 @@ if(process.argv.includes('--firestore'))test('Firestore GC protects active/fresh
  assert.equal((await db.collection('platform_generations/abandoned/records').get()).size,0);assert.ok((await db.doc('platform_generations/legacy').get()).exists);assert.ok((await db.doc('platform_generations/legacy/records/record').get()).exists);
  for(let i=0;i<8;i++)await repo.cleanupGenerations(now+2*DAY);
  assert.equal((await db.collection('platform_generations/legacy/records').get()).size,0);assert.equal((await db.collection('platform_generations/active/records').get()).size,120);
+ }finally{await deleteApp(app);}
+});
+test('HTTP scheduler authorization, physical orphan cleanup and expired retry rejection',async()=>{
+ const {spawn}=await import('node:child_process'),{createServer}=await import('node:net'),{mkdir,readFile}=await import('node:fs/promises'),{hashPasswordSync}=await import('../utils/security');
+ await local(async(repo,dir)=>{
+  const orphan='a'.repeat(64),proof='b'.repeat(64),scheduler=randomBytes(32).toString('hex');
+  await mkdir(path.join(dir,'uploads'));
+  for(const id of [orphan,proof]){const file=path.join(dir,'uploads',id);await writeFile(file,'content');await utimes(file,new Date(old),new Date(old));}
+  const recentId='recent-command-123456', operation='noop',args:unknown[]=[],fingerprint=createHash('sha256').update(JSON.stringify({operation,args})).digest('hex');
+  await repo.transaction(async s=>{
+   s.syndik_prod_registered_users_v1=[{uid:'admin',email:'admin@lifecycle.invalid',passwordHash:hashPasswordSync('SafePassword123!','admin@lifecycle.invalid'),profile:{uid:'admin',email:'admin@lifecycle.invalid',role:'admin',emailVerified:true}}];
+   s.__lifecycle={legacyAcceptedUntil:0};s.__files={[proof]:{key:`private/b/${proof}`,createdAt:old}};s.charges=[{receiptUrl:`/api/uploads/${proof}`}];
+   s.__operations={expired:{createdAt:old},['admin:'+recentId]:{fingerprint,createdAt:old,lastAccessAt:new Date(now).toISOString(),responseJson:JSON.stringify({result:'canonical'})}};
+  });
+  const port=await new Promise<number>(resolve=>{const socket=createServer();socket.listen(0,'127.0.0.1',()=>{const p=(socket.address() as any).port;socket.close(()=>resolve(p));});});
+  const child=spawn(process.execPath,['--import','./tests/helpers/networkGuard.mjs','--import','tsx','server.ts'],{env:{...process.env,NODE_ENV:'test',SYNDIK_AUTH_PROVIDER:'legacy',SYNDIK_STATE_BACKEND:'file',SYNDIK_UPLOAD_BACKEND:'file',SYNDIK_DATA_DIR:dir,SYNDIK_SCHEDULER_SECRET:scheduler,PORT:String(port)},stdio:['ignore','pipe','pipe']});
+  let logs='';child.stderr.on('data',chunk=>{logs+=chunk;});const timer=setTimeout(()=>child.kill('SIGKILL'),30000);
+  try{
+   await new Promise<void>((resolve,reject)=>{child.stdout.on('data',chunk=>{if(String(chunk).includes('Server running'))resolve();});child.on('error',reject);child.on('exit',code=>reject(new Error(`Server exited ${code}: ${logs}`)));});
+   const post=async(route:string,body:unknown,headers:Record<string,string>={})=>{const response=await fetch(`http://127.0.0.1:${port}${route}`,{method:'POST',headers:{'Content-Type':'application/json',...headers},body:JSON.stringify(body)});return {status:response.status,data:await response.json()};};
+   assert.equal((await post('/api/jobs/lifecycle',{})).status,403);
+   assert.equal((await post('/api/jobs/lifecycle',{}, {'X-Syndik-Scheduler':'wrong'})).status,403);
+   const login=await post('/api/auth/login',{identifier:'admin@lifecycle.invalid',password:'SafePassword123!'});assert.equal(login.status,200);
+   const auth={Authorization:`Bearer ${login.data.token}`};assert.equal((await post('/api/jobs/lifecycle',{},auth)).status,403);
+   const result=await post('/api/jobs/lifecycle',{}, {'X-Syndik-Scheduler':scheduler});assert.equal(result.status,200);assert.equal(result.data.files.deleted,1);
+   await assert.rejects(access(path.join(dir,'uploads',orphan)));await access(path.join(dir,'uploads',proof));
+   const retried=await post('/api/commands',{operation,args,operationId:recentId},auth);assert.equal(retried.status,200);assert.equal(retried.data.result,'canonical');
+   const expired=await post('/api/commands',{operation,args,operationId:`op:${now-20*DAY}:old-command-123456`},auth);
+   assert.equal(expired.status,410);assert.equal(expired.data.code,'OPERATION_EXPIRED');assert.match(expired.data.error,/expir/);
+   const final=JSON.parse(await readFile(path.join(dir,'shared-state.json'),'utf8'));assert.equal(final.__operations.expired,undefined);assert.ok(final.__operations['admin:'+recentId]);
+  }finally{clearTimeout(timer);const closed=new Promise(resolve=>child.once('close',resolve));child.kill();await closed;}
+ });
+});
+if(process.argv.includes('--firestore'))test('paused staging writer retries instead of activating a generation claimed by GC',async()=>{
+ const {initializeApp,deleteApp}=await import('firebase-admin/app'),{getFirestore}=await import('firebase-admin/firestore'),{FirestoreRepository}=await import('../server/repository');
+ const app=initializeApp({projectId:'demo-buildmanage'}),db=getFirestore(app,'a5-staging-race'),repo=new FirestoreRepository('a5-staging-race');
+ const original=db.runTransaction.bind(db);let intercepted=false,staged='',attempts=0;
+ try{
+  await db.recursiveDelete(db.collection('platform_generations'));await db.recursiveDelete(db.collection('platform_state'));await db.recursiveDelete(db.collection('platform_internal'));
+  (db as any).runTransaction=async(...args:any[])=>{
+   if(!intercepted){intercepted=true;staged=(await db.collection('platform_generations').get()).docs[0].id;await repo.cleanupGenerations(Date.now()+2*DAY);}
+   return (original as any)(...args);
+  };
+  await repo.transaction(async s=>{attempts++;s.items=Array.from({length:650},(_,i)=>({id:String(i),value:i}));});
+  assert.ok(attempts>=2);assert.notEqual((await db.doc('platform_internal/state_revision').get()).data()?.generation,staged);
+  assert.equal((await db.doc(`platform_generations/${staged}`).get()).exists,false);
+  await repo.transaction(async s=>assert.equal(s.items.length,650));
+ }finally{(db as any).runTransaction=original;await deleteApp(app);}
+});
+if(process.argv.includes('--firestore'))test('Firestore deletion claim prevents new proof references and resumes after failure',async()=>{
+ const {initializeApp,deleteApp}=await import('firebase-admin/app'),{getFirestore}=await import('firebase-admin/firestore'),{FirestoreRepository}=await import('../server/repository'),{cleanupFiles}=await load();
+ const app=initializeApp({projectId:'demo-buildmanage'}),db=getFirestore(app,'a5-file-race'),repo=new FirestoreRepository('a5-file-race');
+ try{
+  await db.recursiveDelete(db.collection('platform_generations'));await db.recursiveDelete(db.collection('platform_state'));await db.recursiveDelete(db.collection('platform_internal'));
+  const file={id:'orphan',key:'private/b/orphan',createdAt:old};
+  await cleanupFiles(repo,{list:async()=>({files:[file]}),remove:async()=>{await assert.rejects(repo.transaction(async s=>{s.charges=[{receiptUrl:'/api/uploads/orphan'}];}),/Fichier/);throw new Error('interrupted');}},now);
+  await repo.transaction(async s=>assert.equal(s.__files.orphan.lifecycle,'deleting'));
+  assert.equal((await cleanupFiles(repo,{list:async()=>({files:[]}),remove:async()=>true},now)).deleted,1);
  }finally{await deleteApp(app);}
 });

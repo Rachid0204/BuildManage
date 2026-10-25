@@ -19,8 +19,10 @@ Implementation checkpoint; full verification is pending. Do not deploy or merge 
   removals remain retryable; GCS generation preconditions preserve replaced objects.
   Pending identity mutations conservatively defer file collection.
 - Encryption: new values use v1: followed by the existing AES-GCM payload. Legacy
-  unprefixed ciphertext still decrypts using the unchanged server key. Unknown
-  versions fail closed. This introduces format versioning, not automatic rotation.
+  unprefixed ciphertext still decrypts using the unchanged server key. Version v1
+  identifies that existing derived key; future versions require an explicit key
+  mapping while retaining v1 for old records. Unknown versions fail closed. No
+  key rotation is performed.
 - A scheduler-secret-protected endpoint and hourly scheduled Function drive work.
   A distributed 10-minute lease and hourly start limit prevent repeated invocation
   spikes. Cloud Function deployment is required to activate the schedule.
@@ -32,3 +34,16 @@ use directory reads; production GCS inventories are paginated. Audit logs, ledge
 receipts, legal archives and durable identity audit intents are not TTL-deleted.
 
 Recovered fail-first run against approved A6: 12 tests, 1 passed, 11 failed.
+
+Rollout: deploy A5 to all active backend writers before enabling the scheduled
+cleanup Function. Older revisions do not implement deletion-claim fencing. Keep
+old revisions out of traffic while collection is enabled. The existing Firestore
+platform_state fallback is deliberately retained for compatibility. Rejected proof
+files remain protected while a proof, ledger or audit record still references them.
+Retention windows define eligibility; bounded passes may take longer to drain a
+backlog. Failed deletion claims are retained for retry and returned as counters.
+
+Verification in progress: local gate passed; A6 source/compiled 17/17 each, A4
+11/11; Firestore integration/H3/H5 and C5 passed. An HTTP regression first exposed
+INTERNAL_ERROR instead of OPERATION_EXPIRED; error mapping now preserves the
+explicit 410 code and message. Emulator fixtures use isolated named databases.

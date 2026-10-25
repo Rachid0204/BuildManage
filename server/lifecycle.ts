@@ -1,10 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import type { State, StateRepository } from './repository';
+export class LifecycleError extends Error {
+ constructor(message:string, public readonly status=409, public readonly code='FILE_LIFECYCLE_CONFLICT'){super(message);}
+}
 export const DAY=86400000, OPERATION_RETENTION=14*DAY, FILE_RETENTION=7*DAY, GENERATION_RETENTION=DAY;
 const instant=(value:unknown)=>typeof value==='number'?value:Date.parse(String(value));
 export function assertFreshOperationId(state:State,id:string,now=Date.now()) {
  const stamp=/^op:(\d{13}):[a-zA-Z0-9:_-]+$/.exec(id);
- const reject=(message:string)=>{throw Object.assign(new Error(message),{status:410,code:'OPERATION_EXPIRED'});};
+ const reject=(message:string)=>{throw new LifecycleError(message,410,'OPERATION_EXPIRED');};
  if(stamp){if(+stamp[1]<now-OPERATION_RETENTION || +stamp[1]>now+300000)reject('Demande expirée. Vérifiez son résultat avant de créer une nouvelle opération.');}
  else if(now>=(state.__lifecycle?.legacyAcceptedUntil??Infinity))reject('Actualisez l’application avant de créer une nouvelle demande. Vérifiez les anciennes opérations.');
 }
@@ -25,10 +28,10 @@ export function fileIsReferenced(state:State,file:{id:string;key:string}){const 
 export function assertFileLifecycle(state:State,before:State){
  const text=referenceText(state),previous=referenceText(before);
  for(const match of text.matchAll(/\/api\/uploads\/([A-Za-z0-9_-]+)/g)){const meta=state.__files?.[match[1]];
-  if(meta?.lifecycle==='deleting'||(!meta&&!previous.includes(match[0])))throw Object.assign(new Error('Fichier expiré ou en cours de suppression. Téléversez-le à nouveau.'),{status:409});
+  if(meta?.lifecycle==='deleting'||(!meta&&!previous.includes(match[0])))throw new LifecycleError('Fichier expiré ou en cours de suppression. Téléversez-le à nouveau.');
  }
  for(const [id,meta] of Object.entries(state.__files||{}) as [string,any][])
-  if(meta.lifecycle==='deleting'&&fileIsReferenced(state,{id,key:meta.key}))throw Object.assign(new Error('Fichier encore référencé.'),{status:409});
+  if(meta.lifecycle==='deleting'&&fileIsReferenced(state,{id,key:meta.key}))throw new LifecycleError('Fichier encore référencé.');
 }
 export type StoredFile={id:string;key:string;createdAt:string;generation?:string};
 export interface LifecycleStorage{list(cursor?:string):Promise<{files:StoredFile[];cursor?:string}>;remove(file:StoredFile):Promise<boolean>;}
