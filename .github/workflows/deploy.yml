@@ -96,6 +96,9 @@ jobs:
           VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
           VITE_FIRESTORE_DATABASE_ID: ${{ secrets.VITE_FIRESTORE_DATABASE_ID }}
 
+      - name: Enforce mobile bundle budgets and lazy-loading boundaries
+        run: npm run test:bundle
+
       - name: Install Chromium for form regression tests
         run: npx playwright install --with-deps chromium --only-shell
 

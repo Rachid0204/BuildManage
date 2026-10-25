@@ -34,7 +34,7 @@ import {
   generateMiseEnDemeurePDF,
   generateTransactionVoucherPDF,
   exportAnnualRepartitionPDF,
-} from '../../services/pdfService';
+} from '../../services/pdfOnDemand';
 import {
   computeBuildingFundBalances,
   splitChargeReserveAndOperating,

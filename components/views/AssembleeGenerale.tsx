@@ -15,7 +15,7 @@ import {
   toggleAGVoting,
   generateChargesFromAGResolution,
 } from '../../firebase/services';
-import { generatePvAgPDF } from '../../services/pdfService';
+import { generatePvAgPDF } from '../../services/pdfOnDemand';
 import Loading from '../common/Loading';
 import { useToast } from '../common/Toast';
 
