@@ -18,7 +18,7 @@ export function pruneOperationReceipts(state:State,now=Date.now(),limit=100) {
  for(const key of batch){const r=receipts[key],last=instant(r.lastAccessAt||r.createdAt),intent=r.identityMutationId&&state.__firebaseMutations_v1?.[r.identityMutationId];
   if(r.identityMutationId&&(!intent||intent.status!=='finalized'))continue;
   if(r.status==='pending'||r.status==='running'||r.leaseUntil>now)continue;
-  if(now<meta.legacyAcceptedUntil&&!/:op:\d{13}:/.test(key))continue;
+  if(now<meta.legacyAcceptedUntil)continue;
   if(Number.isFinite(last)&&last<now-OPERATION_RETENTION){delete receipts[key];removed++;}
  }
  meta.operationCursor=batch.length?batch.at(-1):'';return removed;
