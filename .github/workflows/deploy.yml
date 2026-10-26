@@ -110,6 +110,9 @@ jobs:
       - name: Verify compiled production startup contract
         run: npm run test:deployment-contract:built
 
+      - name: Verify compiled HTTP startup on default and custom ports
+        run: npm run test:startup
+
       - name: Enforce mobile bundle budgets and lazy-loading boundaries
         run: npm run test:bundle
 
@@ -134,3 +137,15 @@ jobs:
             dist-server/
           retention-days: 7
 
+
+  production-container-smoke:
+    name: Isolated production Docker HTTP smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build runtime-only image and verify both ports without external network
+        run: npm run test:container
