@@ -1,3 +1,4 @@
+import type { SetOpeningBalancesCommand } from '../shared/domain/commands';
 import { normalizeBillingPeriodKey } from "../firebase/services";
 import { minimalVotingSnapshot } from './assemblyPrivacy';
 import { queueMail, mailIsConfigured } from "./mailer";
@@ -18,7 +19,8 @@ import { PLANS, subscriptionCanWrite, getBuildingCapacity } from "../utils/subsc
 import { applyResidentVote, evaluateResolutionStatus } from "../utils/agVoting";
 import { hashPassword } from "./passwords";
 import { privateAttachments } from './attachments';
-import { computeBuildingFinancialBalances } from '../utils/security';
+import { computeBuildingFinancialBalances } from '../shared/domain/balances';
+import { canonicalQuorum, presentVotingWeight } from '../shared/domain/voting';
 import { firebaseLinkedResidentIds, LINKED_RESIDENT_EMAIL_CODE, LINKED_RESIDENT_EMAIL_MESSAGE } from './residentIdentity';
 export class OperationError extends Error {
   constructor(
@@ -1246,7 +1248,7 @@ function financialOperation(
       reason,
       working: working / 100,
       reserve: reserve / 100,
-    });
+    } satisfies Omit<SetOpeningBalancesCommand, "buildingId">);
     return b.financials;
   }
   if (
@@ -1598,10 +1600,8 @@ function roll(building: any, previous: any[] = []) {
       ...(old?.proxyHolderName ? { proxyHolderName: old.proxyHolderName } : {}),
     };
   });
-  const presentTantiemes = attendees
-      .filter((a: any) => ["present", "represented"].includes(a.status))
-      .reduce((sum: number, a: any) => sum + a.tantiemes, 0),
-    quorumRequired = Math.floor(totalTantiemes / 2) + 1;
+  const presentTantiemes = presentVotingWeight(attendees),
+    quorumRequired = canonicalQuorum(totalTantiemes);
   return {
     attendees,
     totalTantiemes,
@@ -1838,3 +1838,4 @@ async function meetingOperation(actor: Actor, operation: string, args: any[]) {
   appendAudit(state, actor, operation, b.id);
   return ag;
 }
+

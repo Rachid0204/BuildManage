@@ -36,6 +36,9 @@ jobs:
       - name: Lint Firestore security rules
         run: npm run lint
 
+      - name: Verify shared domain kernel parity and purity
+        run: npm run test:domain-kernel
+
       - name: Run business logic & security regression checks
         run: npm run test:verify
 
@@ -149,3 +152,4 @@ jobs:
           node-version: '22'
       - name: Build runtime-only image and verify both ports without external network
         run: npm run test:container
+
