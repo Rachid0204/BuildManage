@@ -1,3 +1,6 @@
+import type { AddBuildingCommand, CreateQuittanceCommand, PostIncomeCommand, ToggleAGVotingCommand } from '../shared/domain/commands';
+import { allocateBudgetInCentimes, splitChargeReserveAndOperating, getBuildingReserveRate, getRecordedReserveSplit, centimes } from '../shared/domain/money';
+import { legacyQuorum } from '../shared/domain/voting';
 import { engineStorage, clearBusinessCache } from './cache';
 import { notifyOperation, readableError } from '../utils/formFeedback';
 import { getServerRuntime } from './serverRuntime';
@@ -47,13 +50,9 @@ import {
   hashPasswordSync,
   isAlreadyHashedPassword,
   getAuthenticatedRequestHeaders,
-  allocateBudgetInCentimes,
-  splitChargeReserveAndOperating,
-  getBuildingReserveRate,
-  getRecordedReserveSplit,
   generateSecureRandomDigits,
 } from '../utils/security';
-import { getBuildingCapacity } from '../utils/subscriptionPolicy';
+import { getBuildingCapacity } from '../shared/domain/subscription';
 
 // Canonical persistence mode: local cache + authenticated shared server + Cloud Firestore mirror
 const isLocalEngineEnabled = true;
@@ -563,10 +562,7 @@ export const getBuildingsForSyndic = async (syndicId: string): Promise<Building[
 
 export const addBuilding = async (
   syndicId: string,
-  buildingData: Omit<
-    Building,
-    'id' | 'residents' | 'apartments' | 'announcements' | 'documents' | 'financials' | 'syndicId'
-  > & { apartments?: Omit<Apartment, 'id' | 'buildingId'>[] }
+  buildingData: AddBuildingCommand['building']
 ) => {
   if (typeof window !== 'undefined') return remoteMutation('addBuilding', [syndicId, buildingData]);
 
@@ -1920,13 +1916,9 @@ export const getQuittancesForResident = async (residentId: string): Promise<Quit
   return snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Quittance));
 };
 
-function centimes(amount: number): number {
-  if (!Number.isFinite(amount) || amount < 0 || !Number.isSafeInteger(Math.round(amount * 100))) throw new Error('Montant invalide.');
-  return Math.round(amount * 100);
-}
 function paidAmount(charge: Charge): number { return charge.paidAmount ?? (charge.status === 'paid' ? charge.amount : 0); }
 function outstanding(charge: Charge): number { return Math.max(0, centimes(charge.amount) - centimes(paidAmount(charge))); }
-function postIncome(building: Building, amount: number, paymentId: string, details: Partial<Transaction>) {
+function postIncome(building: Building, amount: number, paymentId: string, details: PostIncomeCommand['details']) {
   const split = splitChargeReserveAndOperating(amount, getBuildingReserveRate(building));
   building.financials.transactions ||= [];
   for (const [fundType, value] of [['courant', split.chargesCourantesAmount], ['reserve', split.reserveFundAmount]] as const) {
@@ -1991,7 +1983,7 @@ function numberedReceipt(core: Omit<Quittance, 'id' | 'quittanceNumber' | 'creat
 }
 
 export const createQuittance = async (
-  input: Omit<Quittance, 'id' | 'quittanceNumber' | 'createdAt'> & { quittanceNumber?: string; addTransactionToLedger?: boolean }
+  input: CreateQuittanceCommand
 ): Promise<Quittance> => {
   if (typeof window !== 'undefined') return remoteMutation('createQuittance', [input]);
 
@@ -2167,7 +2159,7 @@ export const createAssembleeGenerale = async (
   const ag: AssembleeGenerale = {
     ...agInput,
     id: agInput.id || `ag-${crypto.randomUUID()}`,
-    quorumRequired: agInput.quorumRequired ?? Math.ceil((agInput.totalTantiemes || 1000) / 2),
+    quorumRequired: agInput.quorumRequired ?? legacyQuorum(agInput.totalTantiemes || 1000),
     isVotingOpen:
       agInput.isVotingOpen ??
       (agInput.status !== 'completed' && agInput.status !== 'closed'),
@@ -2238,7 +2230,7 @@ export const castResidentAGVote = async (
 
 };
 
-export const toggleAGVoting = async (agId: string, isOpen: boolean): Promise<AssembleeGenerale> => {
+export const toggleAGVoting = async (agId: ToggleAGVotingCommand['agId'], isOpen: ToggleAGVotingCommand['isOpen']): Promise<AssembleeGenerale> => {
   if (typeof window !== 'undefined') return remoteMutation('toggleAGVoting', [agId, isOpen]);
 
   if (isLocalEngineEnabled) {
@@ -3649,3 +3641,4 @@ async function readCommandResponse(response: Response): Promise<any> {
     throw new Error('Le serveur est temporairement indisponible. Réessayez dans un instant.');
   }
 }
+
