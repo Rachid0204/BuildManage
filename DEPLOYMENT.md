@@ -14,10 +14,10 @@ is needed only for `npm run test:emulator`.
 | `NODE_ENV=production` | Backend | Enforces durable Firestore and required configuration |
 | `SYNDIK_SERVER_SECRET` | Backend secret store | At least 32 random characters, stable across instances; session HMAC and encrypted outbox |
 | `PUBLIC_APP_URL` | Backend | Exact public HTTPS origin, used for recovery links |
-| `FIRESTORE_DATABASE_ID` | Backend | Existing named database or `(default)`; explicitly match the intended project |
+| `FIRESTORE_DATABASE_ID` | Backend | Exact named database in `deploy/target.json`; production rejects `(default)` |
 | `GOOGLE_CLOUD_PROJECT` | Backend and migration job | Explicit staging/production project |
 | `SYNDIK_UPLOAD_BUCKET` | Backend | Private Cloud Storage bucket for uploads |
-| `SYNDIK_AUTH_PROVIDER` | Backend | `firebase` (production default); `legacy` is retained for test/rollback only |
+| `SYNDIK_AUTH_PROVIDER` | Backend | Explicitly `firebase` in production; `legacy` is for nonproduction tests only |
 | `FIREBASE_API_KEY` | Backend | Optional Firebase Web API key override; defaults to the checked-in Firebase app configuration |
 | `SENDGRID_API_KEY` | Backend secret store | Optional legacy/general-purpose transactional email credential; unnecessary for Firebase account emails |
 | `SENDGRID_FROM_EMAIL` | Backend | Optional verified sender for SendGrid only |
@@ -37,12 +37,33 @@ existing sessions and unsent encrypted outbox bodies depend on it.
 
 Bind `SYNDIK_SCHEDULER_SECRET` to the scheduled Functions with `firebase functions:secrets:set SYNDIK_SCHEDULER_SECRET`; the source declares that secret for each job. Set the nonsecret backend origin in the Functions environment.
 
-The file adapter is for development and synthetic tests. Production defaults to
-Firestore; a file override on Cloud Run does not provide durable application data.
+The file adapter is for development and synthetic tests. Production requires explicit
+`SYNDIK_STATE_BACKEND=firestore` and `SYNDIK_UPLOAD_BACKEND=gcs`; no fallback is allowed.
 `/api/health` is a liveness probe; `/api/ready` also reads the configured database.
 Provision a minimum of one instance if required for acceptable cold-start latency.
 The supplied Dockerfile builds the frontend and compiled backend; it does not
 include developer credentials or local data.
+
+## Cloud Run startup and container verification
+
+The canonical service is `buildmanage` in `europe-west1`, project `immogest-7faaf`.
+Use [the production contract](docs/deployment-contract.md) and
+[the runtime manifest](deploy/runtime.env.example) for the complete required settings.
+A port timeout can mean the process exited before listening. Inspect the first
+application error for `PRODUCTION_CONFIG_INVALID`; increasing the timeout will
+not fix missing configuration. The server already binds `0.0.0.0` and honors `PORT`.
+
+Keep existing stable secrets and Secret Manager bindings. GitHub build secrets and
+frontend `VITE_*` variables do not configure Cloud Run runtime settings. Do not
+regenerate the server encryption/session secret to fix a startup failure.
+Use the Dockerfile command `node dist-server/server.js`; remove obsolete overrides.
+`/api/health` confirms HTTP liveness; `/api/ready` checks database readiness.
+
+After `npm ci && npm run build`, run `npm run test:startup` for compiled health and
+frontend HTTP checks on ports 3000 and 31847. `npm run test:container` builds and
+starts the actual runtime-only Docker image on both ports with networking disabled.
+Both use disposable random secrets and no credentials. These tests do not establish
+production IAM, database readiness, bucket access or email delivery. CI runs both.
 
 ## Firebase account email setup
 
@@ -115,7 +136,9 @@ verified compatible snapshot with traffic stopped, or deploy a forward fix.
 
 Large writes stage a complete Firestore generation and atomically switch one
 revision pointer. A failed attempt can leave an unreferenced staging generation.
-Monitor storage growth. Cleanup must run with traffic stopped: record the active
+For A5 scheduled cleanup, follow [the lifecycle rollout contract](docs/storage-lifecycle.md):
+all active writers must support deletion claims before enabling the collector.
+For manual cleanup, stop traffic and record the active
 `platform_internal/state_revision.generation`, preserve it, and recursively delete
 only old unreferenced generations after a verified backup. Do not delete a live or
 recent generation while a transaction could still be staging it.
