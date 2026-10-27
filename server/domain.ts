@@ -1,3 +1,4 @@
+/** @deprecated Legacy parity oracle only. Production dispatch uses server/domain/command.service.ts. */
 import { currentState } from "./repository";
 import { hashPassword } from "./passwords";
 import { configureServerRuntime } from "../firebase/serverRuntime";
@@ -81,3 +82,4 @@ export async function executeMutation(
     services[operation as keyof typeof services] as (...args: any[]) => unknown
   )(...args);
 }
+
