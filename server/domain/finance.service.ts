@@ -1,3 +1,4 @@
+import { billingPayer, assertBudgetConserved, requireBudgetPayer } from './billingAllocation';
 import { randomUUID } from 'node:crypto';
 import type { CreateQuittanceCommand,PostIncomeCommand } from '../../shared/domain/commands';
 import { allocateBudgetInCentimes,centimes,getBuildingReserveRate,getRecordedReserveSplit,splitChargeReserveAndOperating } from '../../shared/domain/money';
@@ -63,27 +64,35 @@ const generateMonthlyCharges = async (buildingId: string, syndicId: string, peri
     const dueDate = new Date(Date.UTC(billingYear, billingMonth - 1, 5))
         .toISOString()
         .split('T')[0];
-    const totalTantiemes = building.totalTantiemes || 1000;
+    const totalTantiemes = building.totalTantiemes ?? 1000;
     const budgetToSplit = opts.totalBudgetToSplit ?? opts.totalMonthlyBudget;
-    const useTantiemesBudget = typeof budgetToSplit === 'number' && budgetToSplit > 0 && opts.useTantiemes !== false;
+    if (budgetToSplit !== undefined) centimes(budgetToSplit);
+    const useTantiemesBudget = budgetToSplit !== undefined && opts.useTantiemes !== false;
+    const targets = building.apartments.filter((a: any) => !a.archivedAt)
+        .map(apt => ({ apt, residentId: useTantiemesBudget ? billingPayer(building, apt) :
+            apt.ownerId || apt.tenantId || building.residents.find(r => r.apartmentId === apt.id)?.id }));
+    if (useTantiemesBudget)
+        targets.forEach(({ apt, residentId }) => requireBudgetPayer(apt, residentId));
     // Precompute centime-exact allocations across all apartments in the building (Audit Item 16)
     const centimeAllocationMap = useTantiemesBudget
-        ? allocateBudgetInCentimes(budgetToSplit!, building.apartments.filter((a: any) => !a.archivedAt).map((a) => ({ id: a.id, tantiemes: a.tantiemes ?? 100 })), totalTantiemes)
+        ? allocateBudgetInCentimes(budgetToSplit!, targets.map(({ apt }) => ({ id: apt.id, tantiemes: apt.tantiemes ?? 100 })), totalTantiemes)
         : null;
     const newCharges: Charge[] = [];
     let skippedCount = 0;
-    building.apartments.filter((a: any) => !a.archivedAt).forEach((apt) => {
-        const residentId = apt.ownerId ||
-            apt.tenantId ||
-            building.residents.find((r) => r.apartmentId === apt.id)?.id;
+    targets.forEach(({ apt, residentId }) => {
         if (!residentId)
             return;
         // Audit Item 12: Stable period uniqueness check per (buildingId, apartmentId, normalizedPeriod, chargeType)
-        const alreadyBilled = charges.some((existing) => existing.buildingId === buildingId &&
+        const alreadyBilled = charges.find((existing) => existing.buildingId === buildingId &&
             existing.apartmentId === apt.id &&
             normalizeBillingPeriodKey(existing.period || '') === normalizedPeriodKey &&
             (existing.chargeType || 'courante') === resolvedChargeType);
         if (alreadyBilled) {
+            if (centimeAllocationMap) {
+                if (alreadyBilled.syndicId !== syndicId ||
+                    centimes(alreadyBilled.amount) !== centimes(centimeAllocationMap.get(apt.id)!))
+                    throw new Error('Charge existante incompatible avec le budget. Rapprochement nécessaire.');
+            }
             skippedCount += 1;
             return;
         }
@@ -112,6 +121,12 @@ const generateMonthlyCharges = async (buildingId: string, syndicId: string, peri
         };
         newCharges.push(newCharge);
     });
+    if (centimeAllocationMap) assertBudgetConserved([
+        ...charges.filter(c => c.buildingId === buildingId && c.syndicId === syndicId &&
+            normalizeBillingPeriodKey(c.period || '') === normalizedPeriodKey &&
+            (c.chargeType || 'courante') === resolvedChargeType),
+        ...newCharges,
+    ].map(c => c.amount), budgetToSplit!);
     if (newCharges.length > 0) {
         const updated = [...newCharges, ...charges];
         setLocalItem(STORAGE_KEYS.CHARGES, updated);
