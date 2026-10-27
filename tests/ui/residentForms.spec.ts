@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import type { Resident } from "../../types";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
@@ -14,6 +15,8 @@ const root = resolve(import.meta.dirname, "../..");
 const password = "Synthetic-Resident-Forms-42!";
 const resident = {
   id: "r-ui",
+  buildingId: "b-ui",
+  syndicId: "s-ui",
   name: "Resident UI",
   email: "resident@ui.invalid",
   phone: "0600000000",
@@ -21,7 +24,7 @@ const resident = {
   hasAccount: true,
   apartmentId: "lot-ui",
   mustChangePassword: false,
-};
+} satisfies Resident;
 // H6: a pending local invitation is not yet a Firebase login identity.
 const emailGuardResidents = ['linked', 'account-linked', 'pending', 'unregistered'].map((kind) => ({
   id: `email-guard-${kind}`, name: `Email Guard ${kind}`, email: `${kind}@email-guard.invalid`,
@@ -775,15 +778,41 @@ for (const language of ['fr', 'ar']) {
       ? 'Cet email de connexion est lié à Firebase' : 'بريد تسجيل الدخول هذا مرتبط بـ Firebase');
     await dialog.locator('#res-name').fill(`Email Guard Updated ${language}`);
     await dialog.locator('#res-phone').fill(language === 'fr' ? '0600000071' : '0600000072');
-    await dialog.locator('#res-apartment').selectOption('email-guard-lot');
+    const before = (await disk()).syndik_prod_syndics_v1[0].buildings[0];
+    const original = before.residents.find((r: any) => r.id === person.id);
+    await expect(dialog.locator('#res-apartment')).toBeDisabled();
+    for (const radio of await dialog.locator('input[type=radio]').all()) await expect(radio).toBeDisabled();
     await dialog.locator('button[type=submit]').click();
     await expect(dialog).toBeHidden();
     const saved = (await disk()).syndik_prod_syndics_v1[0].buildings[0].residents.find((r: any) => r.id === person.id);
-    expect(saved).toMatchObject({ name: `Email Guard Updated ${language}`, email: person.email, apartmentId: 'email-guard-lot',
+    expect(saved).toMatchObject({ name: `Email Guard Updated ${language}`, email: person.email, isOwner: original.isOwner,
       phone: language === 'fr' ? '0600000071' : '0600000072' });
+    expect(saved.apartmentId).toBe(original.apartmentId);
+    expect((await disk()).syndik_prod_syndics_v1[0].buildings[0].apartments).toEqual(before.apartments);
     expect(saved.emailIdentityLinked).toBeUndefined(); // Projection metadata must not become persisted identity truth.
   });
 }
+
+test('multi-lot owner contact edits preserve every lot association', async ({ page }) => {
+  await login(page, 0);
+  await page.goto(`${base}/residents`);
+  const before = (await disk()).syndik_prod_syndics_v1[0].buildings[0];
+  expect(before.apartments.filter((a: any) => a.ownerId === resident.id)).toHaveLength(2);
+  await page.getByRole('row').filter({ has: page.getByText(resident.email, { exact: true }) })
+    .getByTitle('Modifier le résident').click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.locator('#res-apartment')).toBeDisabled();
+  await dialog.locator('#res-phone').fill('0600000066');
+  const saveResponse = page.waitForResponse(response => response.url().endsWith('/api/commands') &&
+    response.request().method() === 'POST' && response.request().postDataJSON()?.operation === 'updateResident');
+  await dialog.locator('button[type=submit]').click();
+  const response = await saveResponse;
+  expect(response.status(), await response.text()).toBe(200);
+  await expect(dialog).toBeHidden();
+  const after = (await disk()).syndik_prod_syndics_v1[0].buildings[0];
+  expect(after.residents.find((r: any) => r.id === resident.id).phone).toBe('0600000066');
+  expect(after.apartments).toEqual(before.apartments);
+});
 
 test('Resident email guard: pending invitations and unregistered residents still allow email correction', async ({ page }) => {
   await login(page, 0);
@@ -1863,3 +1892,4 @@ for(const width of [390, 1280]) test(`A4: PDF export loads on demand and downloa
   expect(readFileSync(path!).subarray(0,5).toString()).toBe('%PDF-');
   expect(scripts.some(p=>/\/pdf-/.test(p))).toBe(true);
 });
+

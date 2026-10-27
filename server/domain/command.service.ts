@@ -465,6 +465,30 @@ async function runOperation(
     row.item.archivedAt = new Date().toISOString();
     appendAudit(transactionState, actor, operation, row.b.id);
     return true;
+  } else if (operation === "assignApartmentOwner") {
+    const input = object(args[0]);
+    b = buildingFor(actor, str(input.buildingId));
+    canWrite(actor, b);
+    const apt = b.apartments.find((a: any) => a.id === input.apartmentId && !a.archivedAt);
+    check(apt, "Lot introuvable.", 404);
+    check(Object.prototype.hasOwnProperty.call(input, "expectedOwnerId") &&
+      (apt.ownerId || null) === input.expectedOwnerId,
+      "Le propriétaire a changé. Actualisez le lot avant le transfert.", 409);
+    const reason = str(input.reason).trim();
+    check(reason.length >= 3 && reason.length <= 1000, "Motif du transfert requis.", 400);
+    const next = input.residentId === null ? null : b.residents.find((r: any) =>
+      r.id === input.residentId && r.isOwner && !r.archivedAt && r.buildingId === b.id && r.syndicId === b.syndicId);
+    check(input.residentId === null || next, "Propriétaire non lié.", 400);
+    const previousOwnerId = apt.ownerId || null;
+    apt.ownerId = next?.id || null;
+    const previous = b.residents.find((r: any) => r.id === previousOwnerId);
+    if (previous && previous.apartmentId === apt.id && previousOwnerId !== apt.ownerId)
+      previous.apartmentId = b.apartments.find((a: any) => !a.archivedAt && a.ownerId === previous.id)?.id;
+    if (next && !next.apartmentId) next.apartmentId = apt.id;
+    appendAudit(transactionState, actor, operation, b.id, {
+      apartmentId: apt.id, previousOwnerId, ownerId: apt.ownerId, reason, operationId,
+    });
+    return apt;
   } else if (operation === "addResident" || operation === "updateResident") {
     const r = ResidentSchema.parse(args[0]);
     b = buildingFor(actor, r.buildingId);
@@ -473,7 +497,7 @@ async function runOperation(
     r.syndicId = b.syndicId;
     r.email = r.email.toLowerCase();
     for (const field of secretFields) delete r[field];
-    if (r.apartmentId)
+    if (operation === "addResident" && r.apartmentId)
       check(
         b.apartments.some((a: any) => a.id === r.apartmentId && !a.archivedAt),
         "Lot non lié.",
@@ -482,11 +506,20 @@ async function runOperation(
     if (operation === "updateResident") {
       const old = b.residents.find((x: any) => x.id === r.id);
       check(old, "Résident introuvable.", 404);
+      check(r.isOwner === old.isOwner &&
+        (r.apartmentId === undefined || (r.apartmentId || undefined) === old.apartmentId),
+        "Utilisez une affectation explicite du lot pour modifier les associations.", 409);
+      r.apartmentId = old.apartmentId;
       if (old.email.trim().toLowerCase() !== r.email && firebaseLinkedResidentIds(state).has(old.id))
         throw new OperationError(LINKED_RESIDENT_EMAIL_MESSAGE, 409, LINKED_RESIDENT_EMAIL_CODE);
       if (old.hasAccount && old.email.toLowerCase() !== r.email)
         changedCredentials = { kind: "Resident", id: r.id! };
-    } else delete r.id;
+    } else {
+      const apt = b.apartments.find((a: any) => a.id === r.apartmentId);
+      check(!apt || !(r.isOwner ? apt.ownerId : apt.tenantId),
+        "Lot déjà occupé. Utilisez une affectation explicite du lot.", 409);
+      delete r.id;
+    }
     check(
       emailAvailable(r.email, "residentId", r.id),
       "Email déjà lié à un compte.",
@@ -1101,3 +1134,4 @@ const {createCabinet,subscriptionPayment,restoreArchived,archiveBuilding}=create
 const {recomputeMeeting,meetingOperation}=createAssemblyCommands(transactionState,dependencies);
 return {runOperation, cabinetFor, buildingFor, canWrite, appendAudit, actorIdentity, recomputeMeeting};
 }
+

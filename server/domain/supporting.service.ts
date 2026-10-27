@@ -83,7 +83,13 @@ const addResident = async (residentData: Omit<Resident, 'id'>, generateCredentia
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, []);
     for (const syndic of syndics) {
         const bld = syndic.buildings.find((b) => b.id === cleanedData.buildingId);
-        if (bld) {
+        if (bld && syndic.id === cleanedData.syndicId) {
+            if (cleanedData.apartmentId) {
+                const apt = bld.apartments.find(a => a.id === cleanedData.apartmentId && !(a as any).archivedAt);
+                if (!apt) throw new Error('Lot non lié.');
+                if (cleanedData.isOwner ? apt.ownerId : apt.tenantId)
+                    throw new Error('Lot déjà occupé. Utilisez une affectation explicite du lot.');
+            }
             const nowIso = new Date().toISOString();
             const inviteExpiresAt = new Date(Date.now() + 7 * 86400000).toISOString();
             const inviteToken = generateCredentials
@@ -226,38 +232,21 @@ const updateResident = async (resident: Resident): Promise<Resident> => {
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, []);
     for (const syndic of syndics) {
         const bld = syndic.buildings.find((b) => b.id === cleanedResident.buildingId);
-        if (bld) {
+        if (bld && syndic.id === cleanedResident.syndicId) {
             const idx = bld.residents.findIndex((r) => r.id === cleanedResident.id);
             if (idx >= 0) {
                 const prevResident = bld.residents[idx];
+                if (cleanedResident.isOwner !== prevResident.isOwner ||
+                    (resident.apartmentId !== undefined && (cleanedResident.apartmentId || undefined) !== prevResident.apartmentId))
+                    throw new Error('Utilisez une affectation explicite du lot pour modifier les associations.');
+                // Apartment ownerId/tenantId associations are authoritative and nonexclusive.
                 const mergedResident: Resident = {
                     ...prevResident,
                     ...cleanedResident,
+                    apartmentId: prevResident.apartmentId,
+                    isOwner: prevResident.isOwner,
                 };
                 bld.residents[idx] = mergedResident;
-                bld.apartments.forEach((apt) => {
-                    if (apt.id !== mergedResident.apartmentId) {
-                        if (apt.ownerId === mergedResident.id)
-                            apt.ownerId = null;
-                        if (apt.tenantId === mergedResident.id)
-                            apt.tenantId = null;
-                    }
-                });
-                if (mergedResident.apartmentId) {
-                    const targetApt = bld.apartments.find((a) => a.id === mergedResident.apartmentId);
-                    if (targetApt) {
-                        if (mergedResident.isOwner) {
-                            targetApt.ownerId = mergedResident.id;
-                            if (targetApt.tenantId === mergedResident.id)
-                                targetApt.tenantId = null;
-                        }
-                        else {
-                            targetApt.tenantId = mergedResident.id;
-                            if (targetApt.ownerId === mergedResident.id)
-                                targetApt.ownerId = null;
-                        }
-                    }
-                }
                 if (mergedResident.hasAccount && ephemeralPassword) {
                     saveResidentCredentialAccount(mergedResident, ephemeralPassword);
                 }
@@ -933,3 +922,4 @@ const deleteMarketplaceItem = async (itemId: string): Promise<boolean> => {
 };
 return {saveSyndic, addResident, saveResidentCredentialAccount, updateResident, regenerateResidentCredentials, recordResidentCredentialShare, deleteResident, savePrestataire, generateTempPassword, savePrestataireCredentialAccount, regeneratePrestataireCredentials, recordPrestataireCredentialShare, deletePrestataire, addPrestataireReview, addMaintenanceRequest, normalizeMaintenanceRequestApartment, updateMaintenanceRequest, addAnnouncement, deleteDocument, markNotificationAsRead, sendChatMessage, toggleChatMessageLike, addMarketplaceItem, updateMarketplaceItemStatus, deleteMarketplaceItem};
 }
+

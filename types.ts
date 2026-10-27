@@ -76,6 +76,7 @@ export interface Resident {
   email: string;
   phone: string;
   cin?: string;
+  /** Nonexclusive primary/display lot. Apartment.ownerId/tenantId define associations. */
   apartmentId?: string;
   isOwner: boolean;
   buildingId: string;
@@ -599,4 +600,5 @@ export interface Syndic {
   email?: string;
   buildings: Building[];
 }
+
 
