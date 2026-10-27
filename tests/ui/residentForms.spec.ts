@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import type { Resident } from "../../types";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
@@ -14,6 +15,8 @@ const root = resolve(import.meta.dirname, "../..");
 const password = "Synthetic-Resident-Forms-42!";
 const resident = {
   id: "r-ui",
+  buildingId: "b-ui",
+  syndicId: "s-ui",
   name: "Resident UI",
   email: "resident@ui.invalid",
   phone: "0600000000",
@@ -21,7 +24,7 @@ const resident = {
   hasAccount: true,
   apartmentId: "lot-ui",
   mustChangePassword: false,
-};
+} satisfies Resident;
 // H6: a pending local invitation is not yet a Firebase login identity.
 const emailGuardResidents = ['linked', 'account-linked', 'pending', 'unregistered'].map((kind) => ({
   id: `email-guard-${kind}`, name: `Email Guard ${kind}`, email: `${kind}@email-guard.invalid`,
@@ -800,7 +803,11 @@ test('multi-lot owner contact edits preserve every lot association', async ({ pa
   const dialog = page.getByRole('dialog');
   await expect(dialog.locator('#res-apartment')).toBeDisabled();
   await dialog.locator('#res-phone').fill('0600000066');
+  const saveResponse = page.waitForResponse(response => response.url().endsWith('/api/commands') &&
+    response.request().method() === 'POST' && response.request().postDataJSON()?.operation === 'updateResident');
   await dialog.locator('button[type=submit]').click();
+  const response = await saveResponse;
+  expect(response.status(), await response.text()).toBe(200);
   await expect(dialog).toBeHidden();
   const after = (await disk()).syndik_prod_syndics_v1[0].buildings[0];
   expect(after.residents.find((r: any) => r.id === resident.id).phone).toBe('0600000066');
