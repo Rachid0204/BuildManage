@@ -109,3 +109,105 @@ await test('repository rolls back a failed multi-step financial mutation',async(
   });
  }finally{await rm(dir,{recursive:true,force:true});}
 });
+
+
+// Security invariants intentionally do not compare against the vulnerable legacy oracle.
+async function paidReversalFixture() {
+  const state = fixture();
+  await createCommandService(state).runOperation(actor, 'createQuittance', [receipt], 'c1-payment');
+  return state;
+}
+
+for (const legacyReceipt of [false, true]) {
+  await test(`reversal isolates cabinets and buildings (${legacyReceipt ? 'legacy charge matching' : 'identical payment references'})`, async () => {
+    const state = await paidReversalFixture();
+    const originalReceipt = state.syndik_prod_quittances_v1[0];
+    if (legacyReceipt) delete originalReceipt.paymentId;
+    const foreignCabinet = structuredClone(state.syndik_prod_syndics_v1[0]);
+    foreignCabinet.id = 'cab-b';
+    foreignCabinet.createdBy = 'owner-b';
+    foreignCabinet.buildings[0].id = 'building-b';
+    foreignCabinet.buildings[0].syndicId = 'cab-b';
+    for (const lot of foreignCabinet.buildings[0].apartments) lot.buildingId = 'building-b';
+    for (const resident of foreignCabinet.buildings[0].residents) {
+      resident.syndicId = 'cab-b'; resident.buildingId = 'building-b';
+    }
+    state.syndik_prod_syndics_v1.push(foreignCabinet);
+    const foreignCharge = { ...structuredClone(state.syndik_prod_charges_v1[0]),
+      id: 'charge-b', syndicId: 'cab-b', buildingId: 'building-b' };
+    state.syndik_prod_charges_v1.push(foreignCharge);
+    for (const transaction of foreignCabinet.buildings[0].financials.transactions) {
+      transaction.sourceChargeId = foreignCharge.id;
+      transaction.receiptSnapshots = transaction.receiptSnapshots?.map((q: any) => ({
+        ...q, id: 'receipt-b', syndicId: 'cab-b', buildingId: 'building-b', chargeId: 'charge-b',
+      }));
+    }
+    const foreignReceipt = { ...structuredClone(originalReceipt), id: 'receipt-b',
+      syndicId: 'cab-b', buildingId: 'building-b', chargeId: 'charge-b' };
+    // Legacy collisions exercise both parts of the scope guard independently.
+    const collisionReceipts = [
+      { ...structuredClone(originalReceipt), id: 'foreign-cabinet-collision', syndicId: 'cab-b' },
+      { ...structuredClone(originalReceipt), id: 'foreign-building-collision', buildingId: 'building-b' },
+      { ...structuredClone(originalReceipt), id: 'missing-cabinet', syndicId: undefined },
+      { ...structuredClone(originalReceipt), id: 'missing-building', buildingId: undefined },
+    ];
+    state.syndik_prod_quittances_v1.push(foreignReceipt, ...collisionReceipts);
+    const untouched = structuredClone({ foreignCabinet, foreignCharge, foreignReceipt, collisionReceipts });
+    await createCommandService(state).runOperation(actor, 'reversePayment',
+      ['building', receipt.paymentId, 'Correction'], 'c1-reversal');
+    assert.deepStrictEqual({
+      foreignCabinet: state.syndik_prod_syndics_v1.find((s: any) => s.id === 'cab-b'),
+      foreignCharge: state.syndik_prod_charges_v1.find((c: any) => c.id === 'charge-b'),
+      foreignReceipt: state.syndik_prod_quittances_v1.find((q: any) => q.id === 'receipt-b'),
+      collisionReceipts: state.syndik_prod_quittances_v1.filter((q: any) => collisionReceipts.some(c => c.id === q.id)),
+    }, untouched);
+    assert.ok(originalReceipt.voidedAt);
+    assert.equal(state.syndik_prod_charges_v1[0].paidAmount, 0);
+    const financials = state.syndik_prod_syndics_v1[0].buildings[0].financials;
+    assert.equal(financials.balance, 0);
+    assert.equal(financials.reserveFundBalance, 0);
+    assert.equal(financials.transactions.filter((t: any) => t.reversalOf === receipt.paymentId).length, 2);
+  });
+}
+
+for (const field of ['syndicId', 'buildingId']) {
+  for (const recordType of ['charge', 'invoice']) {
+    await test(`reversal rejects an allocated ${recordType} with a foreign ${field} before mutation`, async () => {
+      const state = fixture();
+      const service = createCommandService(state);
+      const invoice = await service.runOperation(actor, 'createInvoiceForResident',
+        ['resident', 'building', 'cab'], 'c1-invoice');
+      await service.runOperation(actor, 'recordPayment', [invoice, 135, 'virement', 'payment'], 'c1-pay');
+      const row = recordType === 'charge' ? state.syndik_prod_charges_v1[0] : state.syndik_prod_invoices_v1[0];
+      row[field] = 'foreign';
+      const before = structuredClone(state);
+      await assert.rejects(service.runOperation(actor, 'reversePayment',
+        ['building', 'payment', 'Correction'], 'c1-reject'), { status: 409 });
+      assert.deepStrictEqual(state, before);
+    });
+  }
+}
+
+await test('reversal rejects an invoice that does not own the allocated charge', async () => {
+  const state = fixture();
+  const service = createCommandService(state);
+  const invoice = await service.runOperation(actor, 'createInvoiceForResident',
+    ['resident', 'building', 'cab'], 'c1-invoice');
+  await service.runOperation(actor, 'recordPayment', [invoice, 135, 'virement', 'payment'], 'c1-pay');
+  state.syndik_prod_invoices_v1[0].chargeIds = ['unrelated-charge'];
+  const before = structuredClone(state);
+  await assert.rejects(service.runOperation(actor, 'reversePayment',
+    ['building', 'payment', 'Correction'], 'c1-reject'), { status: 409 });
+  assert.deepStrictEqual(state, before);
+});
+
+await test('reversal rejects duplicate allocations before changing a charge twice', async () => {
+  const state = await paidReversalFixture();
+  for (const entry of state.syndik_prod_syndics_v1[0].buildings[0].financials.transactions) {
+    entry.paymentAllocations = [{ chargeId: 'charge', amount: 67.5 }, { chargeId: 'charge', amount: 67.5 }];
+  }
+  const before = structuredClone(state);
+  await assert.rejects(createCommandService(state).runOperation(actor, 'reversePayment',
+    ['building', 'payment', 'Correction'], 'c1-reject'), { status: 409 });
+  assert.deepStrictEqual(state, before);
+});

@@ -884,39 +884,51 @@ function financialOperation(
           ? [{ chargeId: source.sourceChargeId, amount: total / 100 }]
           : undefined);
     check(
-      allocations,
+      Array.isArray(allocations) && allocations.length > 0,
       "Ancien paiement sans ventilation : rapprochement nécessaire.",
       409,
     );
     check(
-      allocations.reduce((sum: number, a: any) => sum + cents(a.amount), 0) ===
-        total,
+      new Set(allocations.map((a: any) => a.chargeId)).size === allocations.length &&
+        allocations.every((a: any) => cents(a.amount) > 0) &&
+        allocations.reduce((sum: number, a: any) => sum + cents(a.amount), 0) === total,
       "Ventilation incohérente.",
       409,
     );
-    for (const allocation of allocations) {
+    const inScope = (row: any) => row.syndicId === b.syndicId && row.buildingId === b.id;
+    // Resolve and validate every relationship before changing financial records.
+    const allocatedCharges = allocations.map((allocation: any) => {
       const charge = (transactionState.syndik_prod_charges_v1 || []).find(
-        (c: any) => c.id === allocation.chargeId && c.buildingId === b.id,
+        (c: any) => c.id === allocation.chargeId && inScope(c),
       );
       check(
         charge && cents(charge.paidAmount || 0) >= cents(allocation.amount),
         "Solde de charge incohérent.",
         409,
       );
-      charge.paidAmount =
-        (cents(charge.paidAmount) - cents(allocation.amount)) / 100;
-      charge.status = "unpaid";
-      delete charge.paidAt;
-    }
+      return { charge, amount: cents(allocation.amount) };
+    });
+    let invoice: any;
     if (source.sourceInvoiceId) {
-      const invoice = (transactionState.syndik_prod_invoices_v1 || []).find(
-        (i: any) => i.id === source.sourceInvoiceId && i.buildingId === b.id,
+      invoice = (transactionState.syndik_prod_invoices_v1 || []).find(
+        (i: any) => i.id === source.sourceInvoiceId && inScope(i),
       );
       check(
-        invoice && cents(invoice.paidAmount || 0) >= total,
+        invoice && cents(invoice.paidAmount || 0) >= total &&
+          allocatedCharges.every(({ charge }: any) =>
+            invoice.chargeIds?.includes(charge.id) &&
+            invoice.residentId === charge.residentId &&
+            (!charge.invoiceId || charge.invoiceId === invoice.id)),
         "Solde facture incohérent.",
         409,
       );
+    }
+    for (const { charge, amount } of allocatedCharges) {
+      charge.paidAmount = (cents(charge.paidAmount) - amount) / 100;
+      charge.status = "unpaid";
+      delete charge.paidAt;
+    }
+    if (invoice) {
       invoice.paidAmount = (cents(invoice.paidAmount) - total) / 100;
       invoice.status = "unpaid";
     }
@@ -937,9 +949,10 @@ function financialOperation(
     }
     for (const receipt of transactionState.syndik_prod_quittances_v1 || [])
       if (
-        receipt.paymentId === paymentId ||
+        inScope(receipt) &&
+        (receipt.paymentId === paymentId ||
         (!receipt.paymentId &&
-          allocations.some((a: any) => a.chargeId === receipt.chargeId))
+          allocations.some((a: any) => a.chargeId === receipt.chargeId)))
       ) {
         receipt.voidedAt = new Date().toISOString();
         receipt.voidReason = reason;
@@ -954,3 +967,4 @@ function financialOperation(
 }
 return {financialOperation};
 }
+
