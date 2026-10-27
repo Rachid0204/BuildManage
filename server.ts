@@ -1369,6 +1369,7 @@ async function startServer() {
         const handle = async (state?: any) => {
           res.locals.afterCommit = undefined;
           requestState = state;
+          res.locals.transactionState = state;
           res.statusCode = 200;
           res.json = ((value: any) => {
             payload = value;
@@ -2330,7 +2331,7 @@ async function startServer() {
     const firebaseBefore = new Map(identityAccounts(sharedStore).filter(a => a.firebaseUid)
       .map(a => [accountUid(a), { firebaseUid: a.firebaseUid, email: a.email,
         accountsJson: JSON.stringify(identityAccounts(sharedStore).filter(x => accountUid(x) === accountUid(a))) }]));
-    const result = await runOperation(caller, operation, args, operationId);
+    const result = await runOperation(caller, operation, args, operationId, res.locals.transactionState);
     for (const [uid, before] of firebaseBefore) {
       const accounts = identityAccounts(sharedStore).filter(a => accountUid(a) === uid);
       if (JSON.stringify(accounts) !== before.accountsJson) assertIdentityReady(sharedStore, uid);
@@ -2523,3 +2524,4 @@ startServer().catch(error => {
   console.error(error instanceof Error ? error.message : "Server startup failed");
   process.exitCode = 1;
 });
+

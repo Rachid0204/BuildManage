@@ -36,6 +36,9 @@ jobs:
       - name: Lint Firestore security rules
         run: npm run lint
 
+      - name: Verify backend domain service parity and isolation
+        run: npm run test:backend-domain
+
       - name: Verify shared domain kernel parity and purity
         run: npm run test:domain-kernel
 
