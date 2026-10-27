@@ -1,4 +1,5 @@
-import { allocateBudgetInCentimes } from '../../shared/domain/money';
+import { billingPayer, assertBudgetConserved, requireBudgetPayer } from './billingAllocation';
+import { allocateBudgetInCentimes, centimes } from '../../shared/domain/money';
 import type {
 AssembleeGenerale,
 Building,
@@ -34,7 +35,8 @@ const generateChargesFromAGResolution = async (agId: string, resolutionId: strin
     if (res.status !== 'approved') {
         throw new Error('Seules les résolutions adoptées peuvent générer des appels de fonds.');
     }
-    const budgetMad = Number(res.budgetAmount) || 0;
+    const budgetMad = res.budgetAmount ?? 0;
+    centimes(budgetMad);
     if (budgetMad <= 0) {
         throw new Error('Aucun budget (MAD) n’est associé à cette résolution.');
     }
@@ -42,7 +44,7 @@ const generateChargesFromAGResolution = async (agId: string, resolutionId: strin
     let targetBuilding: Building | undefined;
     let targetSyndicId = ag.syndicId;
     for (const s of syndics) {
-        const bld = s.buildings.find((b) => b.id === ag.buildingId);
+        const bld = s.id === ag.syndicId ? s.buildings.find((b) => b.id === ag.buildingId) : undefined;
         if (bld) {
             targetBuilding = bld;
             targetSyndicId = s.id;
@@ -52,33 +54,37 @@ const generateChargesFromAGResolution = async (agId: string, resolutionId: strin
     if (!targetBuilding || targetBuilding.apartments.length === 0) {
         throw new Error('Aucun lot configuré dans cet immeuble pour répartir le budget voté.');
     }
-    const lots = targetBuilding.apartments.filter((a: any) => !a.archivedAt).map((a) => ({
+    const targets = targetBuilding.apartments.filter((a: any) => !a.archivedAt)
+        .map(apt => ({ apt, residentId: billingPayer(targetBuilding!, apt) }));
+    targets.forEach(({ apt, residentId }) => requireBudgetPayer(apt, residentId));
+    const lots = targets.map(({ apt: a }) => ({
         id: a.id,
-        tantiemes: a.tantiemes || 100,
+        tantiemes: a.tantiemes ?? 100,
     }));
-    const allocations = allocateBudgetInCentimes(budgetMad, lots, targetBuilding.totalTantiemes || 1000);
+    const allocations = allocateBudgetInCentimes(budgetMad, lots, targetBuilding.totalTantiemes ?? 1000);
     const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, []);
     const nowIso = new Date().toISOString();
     const dueDate = new Date(Date.now() + 30 * 86400000).toISOString();
     const createdCharges: Charge[] = [];
     let totalAllocatedMad = 0;
-    for (const apt of targetBuilding.apartments.filter((a: any) => !a.archivedAt)) {
-        const shareMad = allocations.get(apt.id) || 0;
+    for (const { apt, residentId } of targets) {
+        const shareMad = allocations.get(apt.id)!;
         if (shareMad <= 0)
             continue;
-        const residentId = apt.ownerId ||
-            apt.tenantId ||
-            targetBuilding.residents.find((r) => r.apartmentId === apt.id)?.id ||
-            `owner-${apt.id}`;
         const deterministicId = `chg-ag-${ag.id}-${res.id}-${apt.id}`;
-        if (charges.some((c) => c.id === deterministicId))
+        const existing = charges.find((c) => c.id === deterministicId);
+        if (existing) {
+            if (existing.syndicId !== targetSyndicId || existing.buildingId !== targetBuilding.id ||
+                centimes(existing.amount) !== centimes(shareMad))
+                throw new Error('Charge existante incompatible avec le budget. Rapprochement nécessaire.');
             continue;
+        }
         const newCharge: Charge = {
             id: deterministicId,
             syndicId: targetSyndicId,
             buildingId: targetBuilding.id,
             apartmentId: apt.id,
-            residentId,
+            residentId: residentId!,
             amount: shareMad,
             paidAmount: 0,
             dueDate,
@@ -86,13 +92,16 @@ const generateChargesFromAGResolution = async (agId: string, resolutionId: strin
             period: `AG ${new Date(ag.date).getFullYear()} - Rés. #${res.number}`,
             description: `Appel de fonds AG (${ag.title}) — Résolution #${res.number}: ${res.title}`,
             chargeType: 'exceptionnelle_travaux',
-            tantiemesApplied: apt.tantiemes || 100,
+            tantiemesApplied: apt.tantiemes ?? 100,
             createdAt: nowIso,
         };
         charges.unshift(newCharge);
         createdCharges.push(newCharge);
         totalAllocatedMad = Math.round((totalAllocatedMad + shareMad) * 100) / 100;
     }
+    assertBudgetConserved(charges.filter(c => c.buildingId === targetBuilding!.id &&
+        c.syndicId === targetSyndicId && c.id.startsWith(`chg-ag-${ag.id}-${res.id}-`))
+        .map(c => c.amount), budgetMad);
     setLocalItem(STORAGE_KEYS.CHARGES, charges);
     res.chargesGeneratedAt = nowIso;
     res.generatedChargesCount = createdCharges.length;
@@ -392,3 +401,4 @@ async function meetingOperation(actor: Actor, operation: string, args: any[]) {
 }
 return {roll, recomputeMeeting, meetingOperation};
 }
+

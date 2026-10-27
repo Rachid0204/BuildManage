@@ -9,18 +9,20 @@ export function allocateBudgetInCentimes(
   totalTantiemesOverride?: number
 ): Map<string, number> {
   const result = new Map<string, number>();
-  if (lots.length === 0 || totalBudgetMad <= 0) {
-    for (const lot of lots) result.set(lot.id, 0);
-    return result;
-  }
-
-  const sumShares = lots.reduce((acc, l) => acc + Math.max(0, l.tantiemes || 0), 0);
-  const denominator = sumShares > 0 ? sumShares : (totalTantiemesOverride || 1000);
-  const totalBudgetCentimes = Math.round(totalBudgetMad * 100);
+  const totalBudgetCentimes = centimes(totalBudgetMad);
+  if (totalTantiemesOverride !== undefined &&
+      (!Number.isFinite(totalTantiemesOverride) || totalTantiemesOverride < 0))
+    throw new Error('Tantièmes invalides.');
+  if (lots.some(lot => !Number.isFinite(lot.tantiemes) || lot.tantiemes < 0) ||
+      new Set(lots.map(lot => lot.id)).size !== lots.length)
+    throw new Error('Lots ou tantièmes invalides.');
+  const denominator = lots.reduce((sum, lot) => sum + lot.tantiemes, 0);
+  if (!Number.isFinite(denominator) || denominator <= 0)
+    throw new Error('La somme des tantièmes doit être strictement positive.');
 
   const floors = lots.map((lot, idx) => {
-    const share = Math.max(0, lot.tantiemes || 0);
-    const exactCentimes = (totalBudgetCentimes * share) / denominator;
+    const share = lot.tantiemes;
+    const exactCentimes = totalBudgetCentimes * (share / denominator);
     const floored = Math.floor(exactCentimes);
     const remainder = exactCentimes - floored;
     return { id: lot.id, idx, floored, remainder };
@@ -29,7 +31,7 @@ export function allocateBudgetInCentimes(
   const allocatedCentimes = floors.reduce((acc, f) => acc + f.floored, 0);
   let leftoverCentimes = totalBudgetCentimes - allocatedCentimes;
 
-  const sortedByRemainder = [...floors].sort((a, b) => {
+  const sortedByRemainder = floors.filter(item => lots[item.idx].tantiemes > 0).sort((a, b) => {
     if (Math.abs(b.remainder - a.remainder) > 1e-9) {
       return b.remainder - a.remainder;
     }
@@ -41,10 +43,15 @@ export function allocateBudgetInCentimes(
     leftoverCentimes -= 1;
   }
 
+  if (leftoverCentimes !== 0 ||
+      floors.reduce((sum, item) => sum + item.floored, 0) !== totalBudgetCentimes)
+    throw new Error('La répartition ne conserve pas le budget en centimes.');
   for (const item of floors) {
     result.set(item.id, item.floored / 100);
   }
 
+  if ([...result.values()].reduce((sum, value) => sum + centimes(value), 0) !== totalBudgetCentimes)
+    throw new Error('La répartition ne conserve pas le budget en centimes.');
   return result;
 }
 
@@ -117,3 +124,4 @@ export function centimes(amount: number): number {
   if (!Number.isFinite(amount) || amount < 0 || !Number.isSafeInteger(Math.round(amount * 100))) throw new Error('Montant invalide.');
   return Math.round(amount * 100);
 }
+
