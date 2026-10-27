@@ -211,3 +211,90 @@ await test('reversal rejects duplicate allocations before changing a charge twic
     ['building', 'payment', 'Correction'], 'c1-reject'), { status: 409 });
   assert.deepStrictEqual(state, before);
 });
+
+function ownershipFixture() {
+  const state = fixture();
+  const b = state.syndik_prod_syndics_v1[0].buildings[0];
+  b.apartments.push({ ...b.apartments[0], id: 'second-lot', number: '2' });
+  b.residents.push({ ...b.residents[0], id: 'new-owner', apartmentId: undefined, name: 'New owner', email: 'new@example.test' });
+  return { state, b };
+}
+
+await test('resident profile edits preserve multiple owned lots and frozen financial/voting history', async () => {
+  const { state, b } = ownershipFixture();
+  const service = createCommandService(state);
+  await service.runOperation(actor, 'toggleAGVoting', ['meeting', true], 'c2-freeze');
+  const apartments = structuredClone(b.apartments);
+  const charges = structuredClone(state.syndik_prod_charges_v1);
+  const assemblies = structuredClone(state.syndik_prod_ag_v1);
+  await service.runOperation(actor, 'updateResident', [{ ...b.residents[0], name: 'Updated name', phone: '0612345678' }], 'c2-operation');
+  const updated = state.syndik_prod_syndics_v1[0].buildings[0];
+  assert.equal(updated.residents[0].phone, '0612345678');
+  assert.deepStrictEqual(updated.apartments, apartments);
+  assert.deepStrictEqual(state.syndik_prod_charges_v1, charges);
+  assert.deepStrictEqual(state.syndik_prod_ag_v1, assemblies);
+  const { apartmentId, ...withoutPrimary } = updated.residents[0];
+  await service.runOperation(actor, 'updateResident', [{ ...withoutPrimary, phone: '0699999999' }], 'c2-operation');
+  assert.equal(state.syndik_prod_syndics_v1[0].buildings[0].residents[0].apartmentId, apartmentId);
+  assert.deepStrictEqual(state.syndik_prod_syndics_v1[0].buildings[0].apartments, apartments);
+});
+
+await test('resident creation cannot silently replace an occupied owner or tenant', async () => {
+  for (const isOwner of [true, false]) {
+    const { state, b } = ownershipFixture();
+    if (!isOwner) b.apartments[0].tenantId = 'existing-tenant';
+    const before = structuredClone(state);
+    await assert.rejects(createCommandService(state).runOperation(actor, 'addResident', [{
+      ...b.residents[1], id: undefined, apartmentId: 'lot', isOwner,
+    }, true], 'c2-operation'), /Lot déjà occupé/);
+    assert.deepStrictEqual(state, before);
+  }
+});
+
+await test('resident update cannot assign, clear, or change ownership role', async () => {
+  for (const change of [{ apartmentId: 'lot' }, { isOwner: false }]) {
+    const { state, b } = ownershipFixture();
+    const before = structuredClone(state);
+    await assert.rejects(createCommandService(state).runOperation(actor, 'updateResident', [{ ...b.residents[1], ...change }], 'c2-operation'), /affectation explicite/);
+    assert.deepStrictEqual(state, before);
+  }
+  const { state, b } = ownershipFixture();
+  await assert.rejects(createCommandService(state).runOperation(actor, 'updateResident', [{ ...b.residents[0], apartmentId: '' }], 'c2-operation'), /affectation explicite/);
+});
+
+await test('explicit ownership transfer preserves other lots, charges and frozen assembly snapshots', async () => {
+  const { state, b } = ownershipFixture();
+  const service = createCommandService(state);
+  await service.runOperation(actor, 'toggleAGVoting', ['meeting', true], 'c2-freeze');
+  const charges = structuredClone(state.syndik_prod_charges_v1);
+  const assemblies = structuredClone(state.syndik_prod_ag_v1);
+  await service.runOperation(actor, 'assignApartmentOwner', [{ buildingId: 'building', apartmentId: 'lot', residentId: 'new-owner', expectedOwnerId: 'resident', reason: 'Sale completed' }], 'c2-operation');
+  assert.equal(b.apartments[0].ownerId, 'new-owner');
+  assert.equal(b.apartments[1].ownerId, 'resident');
+  assert.equal(b.residents[0].apartmentId, 'second-lot');
+  assert.equal(b.residents[1].apartmentId, 'lot');
+  assert.deepStrictEqual(state.syndik_prod_charges_v1, charges);
+  assert.deepStrictEqual(state.syndik_prod_ag_v1, assemblies);
+});
+
+await test('ownership assignment rejects stale, unscoped, archived and unauthorized requests', async () => {
+  for (const scenario of ['stale', 'foreign', 'archived', 'unauthorized', 'missing-expectation']) {
+    const { state, b } = ownershipFixture();
+    const input: any = { buildingId: 'building', apartmentId: 'lot', residentId: 'new-owner', expectedOwnerId: 'resident', reason: 'Sale completed' };
+    if (scenario === 'stale') input.expectedOwnerId = null;
+    if (scenario === 'foreign') b.residents[1].syndicId = 'other-cab';
+    if (scenario === 'archived') b.residents[1].archivedAt = fixed;
+    if (scenario === 'missing-expectation') delete input.expectedOwnerId;
+    const before = structuredClone(state);
+    await assert.rejects(createCommandService(state).runOperation(scenario === 'unauthorized' ? { ...actor, uid: 'stranger', role: 'resident' } : actor, 'assignApartmentOwner', [input], 'c2-operation'));
+    assert.deepStrictEqual(state, before);
+  }
+});
+
+await test('explicit assignment adds another lot without moving existing ownership', async () => {
+  const { state, b } = ownershipFixture();
+  b.apartments[1].ownerId = null;
+  await createCommandService(state).runOperation(actor, 'assignApartmentOwner', [{ buildingId: 'building', apartmentId: 'second-lot', residentId: 'resident', expectedOwnerId: null, reason: 'Additional lot acquired' }], 'c2-operation');
+  assert.ok(b.apartments.every((a: any) => a.ownerId === 'resident'));
+  assert.equal(b.residents[0].apartmentId, 'lot');
+});

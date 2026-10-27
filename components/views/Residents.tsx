@@ -131,7 +131,7 @@ const ResidentModal: React.FC<ResidentModalProps> = ({
       apartmentId: apartmentId || undefined,
     };
     if (existingResident) {
-      await onSave({ ...existingResident, ...residentData });
+      await onSave({ ...existingResident, name: residentData.name, email: residentData.email, phone: residentData.phone, cin: residentData.cin });
     } else {
       await onSave(residentData, generateCredentials);
     }
@@ -276,6 +276,7 @@ const ResidentModal: React.FC<ResidentModalProps> = ({
                 type="radio"
                 value="owner"
                 checked={isOwner}
+                disabled={!!existingResident}
                 onChange={() => setIsOwner(true)}
                 className="h-4 w-4 text-teal-600 border-slate-300 focus:ring-teal-500"
               />
@@ -294,6 +295,7 @@ const ResidentModal: React.FC<ResidentModalProps> = ({
                 type="radio"
                 value="tenant"
                 checked={!isOwner}
+                disabled={!!existingResident}
                 onChange={() => setIsOwner(false)}
                 className="h-4 w-4 text-sky-600 border-slate-300 focus:ring-sky-500"
               />
@@ -314,6 +316,7 @@ const ResidentModal: React.FC<ResidentModalProps> = ({
           </label>
           <select
             id="res-apartment"
+            disabled={!!existingResident}
             value={apartmentId}
             onChange={(e) => setApartmentId(e.target.value)}
             className="block w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
@@ -330,7 +333,7 @@ const ResidentModal: React.FC<ResidentModalProps> = ({
                 ? `${isOwner ? tr('Propriétaire', 'المالك') : tr('Locataire', 'المكتري')} ${tr('actuel', 'الحالي')} : ${currentHolderName}`
                 : tr('Libre', 'شاغرة');
               return (
-                <option key={apt.id} value={apt.id}>
+                <option key={apt.id} value={apt.id} disabled={!!currentHolderId && currentHolderId !== existingResident?.id}>
                   {tr('Lot', 'شقة')} {apt.number} ({tr('Étage', 'طابق')} {apt.floor} · {apt.area}m²) — {statusText}
                 </option>
               );
@@ -338,8 +341,8 @@ const ResidentModal: React.FC<ResidentModalProps> = ({
           </select>
           <p className="text-[11px] text-slate-500 mt-1">
             {tr(
-              "L'assignation met automatiquement à jour le propriétaire ou locataire sur la fiche du lot choisi.",
-              'يؤدي التعيين إلى تحديث اسم المالك أو المكتري تلقائياً في بطاقة الشقة المختارة.'
+              "Les coordonnées ne modifient pas les lots associés. Gérez les affectations depuis la fiche du lot.",
+              'تعديل بيانات الاتصال لا يغير الوحدات المرتبطة. يمكن إدارة التعيينات من بطاقة الوحدة.'
             )}
           </p>
         </div>
@@ -1093,3 +1096,4 @@ const Residents: React.FC<{
 };
 
 export default Residents;
+
