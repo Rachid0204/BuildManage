@@ -61,4 +61,3 @@ export function normalizeBillingPeriodKey(periodStr: string): string {
 
   return cleaned;
 }
-

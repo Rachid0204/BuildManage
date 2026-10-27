@@ -1838,4 +1838,3 @@ async function meetingOperation(actor: Actor, operation: string, args: any[]) {
   appendAudit(state, actor, operation, b.id);
   return ag;
 }
-

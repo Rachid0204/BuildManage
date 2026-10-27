@@ -1023,7 +1023,7 @@ async function runOperation(
       if (!oldJournalIds.has(entry.id)) assertPeriod(updated, entry.date);
   }
   if (changedCredentials) {
-    result = await dispatch(actor, 
+    result = await dispatch(actor,
       `regenerate${changedCredentials.kind}Credentials`,
       [changedCredentials.id],
     );

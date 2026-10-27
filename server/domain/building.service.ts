@@ -488,7 +488,7 @@ function restoreArchived(actor: Actor,args:any[]) { const operation='restoreArch
     delete item.archivedAt;
     appendAudit(transactionState, actor, operation, b.id, { kind, id });
     return item;
-  
+
 }
 function archiveBuilding(actor: Actor,b:any) { b.archivedAt=new Date().toISOString(); appendAudit(transactionState,actor,'deleteBuilding',b.id); return true; }
 return {createCabinet, subscriptionPayment, restoreArchived, archiveBuilding};
