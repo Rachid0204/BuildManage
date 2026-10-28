@@ -1,3 +1,4 @@
+import BillingFailures from './BillingFailures';
 import FinancialTools from './FinancialTools';
 import React, { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -662,6 +663,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
   return (
     <div className="space-y-6">
       <FinancialTools key={building.id} building={building} />
+      <BillingFailures key={`billing-${building.id}`} building={building} />
       {/* Top Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-2 border-b border-slate-200">
         <div>
