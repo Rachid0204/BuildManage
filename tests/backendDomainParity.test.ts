@@ -300,6 +300,124 @@ await test('explicit assignment adds another lot without moving existing ownersh
 });
 
 
+for (const source of ['csv', 'proof']) {
+  async function postBankDate(state: any, date: string, options: any = {}) {
+    const service = createCommandService(state);
+    if (source === 'csv') return service.runOperation(actor, 'reconcileBankStatementCSV', ['building', [
+      { date, label: 'LOT 1', amount: 135, reference: 'H1-BANK' },
+    ], options], 'h1-csv');
+    const proof = await service.runOperation(actor, 'submitPaymentProof', [{ ...receipt,
+      bankTransactionDate: date, bankName: 'Bank', referenceNumber: 'H1-BANK',
+    }], 'h1-submit');
+    return service.runOperation(actor, 'reviewPaymentProof', [proof.id, 'approved', undefined, options], 'h1-approve');
+  }
+  await test(`${source}: actual September bank date survives later submission and posting`, async () => {
+    const state = fixture();
+    await postBankDate(state, '2026-09-20');
+    const q = state.syndik_prod_quittances_v1[0];
+    assert.equal(q.bankTransactionDate, '2026-09-20');
+    assert.equal(q.paymentDate, '2026-09-20');
+    assert.equal(q.postingDate, '2026-09-20');
+    assert.ok(q.submissionDate);
+    assert.notEqual(q.submissionDate, q.bankTransactionDate);
+    for (const t of state.syndik_prod_syndics_v1[0].buildings[0].financials.transactions) {
+      assert.equal(t.bankTransactionDate, q.bankTransactionDate);
+      assert.equal(t.date, q.postingDate);
+      assert.equal(t.postingDate, q.postingDate);
+      assert.equal(t.submissionDate, q.submissionDate);
+    }
+  });
+  await test(`${source}: closed bank period rejects silent posting, accepts audited adjustment`, async () => {
+    for (const options of [{}, { postingDate: '2026-10-27' }, { postingDate: '2026-09-25', priorPeriodAdjustmentReason: 'Late statement' }]) {
+      const state = fixture();
+      state.__closedPeriods = { 'building:2026-09': { closedAt: fixed } };
+      await assert.rejects(postBankDate(state, '2026-09-20', options), /clôturée|Ajustement explicite/);
+      assert.equal(state.syndik_prod_quittances_v1?.length || 0, 0);
+      assert.equal(state.syndik_prod_charges_v1[0].paidAmount, 0);
+      assert.equal(state.syndik_prod_syndics_v1[0].buildings[0].financials.transactions.length, 0);
+    }
+    const state = fixture();
+    state.__closedPeriods = { 'building:2026-09': { closedAt: fixed } };
+    await postBankDate(state, '2026-09-20', { postingDate: '2026-10-27', priorPeriodAdjustmentReason: 'Late September statement received' });
+    const q = state.syndik_prod_quittances_v1[0];
+    assert.equal(q.bankTransactionDate, '2026-09-20');
+    assert.equal(q.postingDate, '2026-10-27');
+    assert.equal(q.paymentDate, '2026-09-20');
+    assert.equal(state.syndik_prod_audit_v1.filter((a: any) => a.operation === 'priorPeriodPaymentAdjustment').length, 1);
+    assert.equal(state.syndik_prod_audit_v1.find((a: any) => a.operation === 'priorPeriodPaymentAdjustment').detail.reason, 'Late September statement received');
+  });
+  await test(`${source}: malformed or impossible bank dates fail without posting`, async () => {
+    for (const date of ['2026-02-30', '31/04/2026', '20 September 2026', '', '2026-09-20T25:00:00Z']) {
+      const state = fixture();
+      await assert.rejects(postBankDate(state, date), /Date bancaire invalide/);
+      assert.equal(state.syndik_prod_charges_v1[0].paidAmount, 0);
+    }
+  });
+}
+await test('CSV preview exposes bank and posting dates without writing payment records', async () => {
+  const state = fixture();
+  const before = structuredClone(state);
+  const preview = await createCommandService(state).runOperation(actor, 'reconcileBankStatementCSV', ['building', [
+    { date: '20/09/2026', label: 'LOT 1', amount: 135 },
+  ], { preview: true }], 'h1-preview');
+  assert.equal(preview.preview[0].bankTransactionDate, '2026-09-20');
+  assert.equal(preview.preview[0].postingDate, '2026-09-20');
+  assert.deepEqual(state, before);
+});
+
+await test('an open historical bank period is usable even when the current month is closed', async () => {
+  const state = fixture();
+  state.__closedPeriods = { [`building:${new Date().toISOString().slice(0, 7)}`]: { closedAt: fixed } };
+  await createCommandService(state).runOperation(actor, 'reconcileBankStatementCSV', ['building', [
+    { date: '2025-09-20', label: 'LOT 1', amount: 135, reference: 'H1-OPEN-HISTORY' },
+  ]], 'h1-open-history');
+  assert.equal(state.syndik_prod_quittances_v1[0].postingDate, '2025-09-20');
+});
+
+await test('legacy proofs retain unknown bank date and use their submission date for accounting', async () => {
+  const state = fixture();
+  state.syndik_prod_proofs_v1 = [{ ...receipt, id: 'legacy-proof', status: 'pending', submissionDate: '2026-09-20T10:00:00.000Z' }];
+  await createCommandService(state).runOperation(actor, 'reviewPaymentProof', ['legacy-proof', 'approved'], 'h1-legacy');
+  const q = state.syndik_prod_quittances_v1[0];
+  assert.equal(q.bankTransactionDate, undefined);
+  assert.equal(q.postingDate, '2026-09-20');
+  assert.equal(q.submissionDate, '2026-09-20T10:00:00.000Z');
+});
+
+await test('CSV date validation is atomic across all rows and canonical dates deduplicate retries', async () => {
+  const state = fixture();
+  const service = createCommandService(state);
+  const before = structuredClone(state);
+  await assert.rejects(service.runOperation(actor, 'reconcileBankStatementCSV', ['building', [
+    { date: '20/09/2026', label: 'LOT 1', amount: 135 },
+    { date: '2026-02-30', label: 'LOT 2', amount: 135 },
+  ]], 'h1-invalid-batch'), /Date bancaire invalide/);
+  assert.deepEqual(state, before);
+  await service.runOperation(actor, 'reconcileBankStatementCSV', ['building', [
+    { date: '20/09/2026', label: 'LOT 1', amount: 135 },
+  ]], 'h1-import');
+  const payments = structuredClone(state.syndik_prod_quittances_v1);
+  await service.runOperation(actor, 'reconcileBankStatementCSV', ['building', [
+    { date: '2026-09-20', label: 'LOT 1', amount: 135 },
+  ]], 'h1-reimport');
+  assert.deepEqual(state.syndik_prod_quittances_v1, payments);
+});
+
+await test('proof receipt recovery preserves dates after its accounting period closes', async () => {
+  const state = fixture();
+  state.syndik_prod_proofs_v1 = [{ ...receipt, id: 'historical-proof', status: 'pending',
+    bankTransactionDate: '2026-09-20', submissionDate: '2026-10-27T10:00:00.000Z' }];
+  const service = createCommandService(state);
+  await service.runOperation(actor, 'reviewPaymentProof', ['historical-proof', 'approved'], 'h1-original');
+  const original = structuredClone(state.syndik_prod_quittances_v1[0]);
+  const ledger = structuredClone(state.syndik_prod_syndics_v1[0].buildings[0].financials);
+  state.syndik_prod_quittances_v1 = [];
+  state.__closedPeriods = { 'building:2026-09': { closedAt: fixed } };
+  await service.runOperation(actor, 'reviewPaymentProof', ['historical-proof', 'approved'], 'h1-recovery');
+  assert.deepEqual(state.syndik_prod_quittances_v1[0], original);
+  assert.deepEqual(state.syndik_prod_syndics_v1[0].buildings[0].financials, ledger);
+});
+
 await test('assembly budget lifecycle issues charges, invoices and notifications atomically and idempotently', async () => {
   const state = fixture();
   state.syndik_prod_charges_v1 = [];

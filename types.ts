@@ -128,7 +128,18 @@ export interface Charge {
   createdAt: string;
 }
 
-export interface PaymentProof {
+export interface PaymentDates {
+  bankTransactionDate?: string;
+  submissionDate?: string;
+  postingDate?: string;
+  priorPeriodAdjustmentReason?: string;
+}
+export interface PaymentPostingOptions {
+  postingDate?: string;
+  priorPeriodAdjustmentReason?: string;
+}
+
+export interface PaymentProof extends PaymentDates {
   id: string;
   chargeId: string;
   buildingId: string;
@@ -153,7 +164,7 @@ export interface PaymentProof {
   matchedChargeAmount?: number;
 }
 
-export interface Quittance {
+export interface Quittance extends PaymentDates {
   /** Rate captured when the payment was posted; absent for undocumented/mixed legacy allocations. */
   reserveRateApplied?: number;
   voidedAt?: string;
@@ -202,7 +213,7 @@ export interface Invoice {
   pdfUrl?: string | null;
 }
 
-export interface Transaction {
+export interface Transaction extends PaymentDates {
   /** Canonical receipts captured atomically with this confirmed payment; never renumber on recovery. */
   receiptSnapshots?: Quittance[];
   reserveRateApplied?: number;
