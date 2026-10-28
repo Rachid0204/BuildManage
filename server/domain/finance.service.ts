@@ -1,3 +1,6 @@
+import { paymentDates } from './paymentDates';
+import { bankDate } from '../../shared/domain/paymentDates';
+import type { PaymentPostingOptions } from '../../types';
 import { billingPayer, assertBudgetConserved, requireBudgetPayer } from './billingAllocation';
 import { randomUUID } from 'node:crypto';
 import type { CreateQuittanceCommand,PostIncomeCommand } from '../../shared/domain/commands';
@@ -143,6 +146,7 @@ function paidAmount(charge: Charge): number { return charge.paidAmount ?? (charg
 
 const submitPaymentProof = async (proofData: Omit<PaymentProof, 'id' | 'submissionDate' | 'status'>): Promise<PaymentProof> => {
 
+    if (proofData.bankTransactionDate !== undefined) proofData.bankTransactionDate = bankDate(proofData.bankTransactionDate);
     if (!proofData.amount || proofData.amount <= 0) {
         throw new Error('Le montant du justificatif doit être supérieur à 0 MAD.');
     }
@@ -174,12 +178,12 @@ const submitPaymentProof = async (proofData: Omit<PaymentProof, 'id' | 'submissi
     }
     const newProof: PaymentProof = {
         id: `prf-${crypto.randomUUID()}`,
-        submissionDate: new Date().toISOString(),
         status: 'pending',
         matchScore,
         matchStatus,
         matchedChargeAmount,
         ...proofData,
+        submissionDate: new Date().toISOString(),
     };
     const proofs = getLocalItem<PaymentProof[]>(STORAGE_KEYS.PROOFS, []);
     proofs.unshift(newProof);
@@ -224,7 +228,7 @@ const approvePaymentProofsBatch = async (buildingId: string, proofIds?: string[]
     return { approvedCount, totalAmountMad, quittances };
 };
 
-const reviewPaymentProof = async (proofId: string, decision: 'approved' | 'rejected' | 'approve' | 'reject', rejectionReason?: string): Promise<{
+const reviewPaymentProof = async (proofId: string, decision: 'approved' | 'rejected' | 'approve' | 'reject', rejectionReason?: string, options: PaymentPostingOptions = {}): Promise<{
     proof: PaymentProof;
     quittance?: Quittance;
     success: boolean;
@@ -259,14 +263,26 @@ const reviewPaymentProof = async (proofId: string, decision: 'approved' | 'rejec
         if (!apartment || (proof.apartmentId && proof.apartmentId !== apartment.id) || proof.apartmentNumber !== apartment.number) {
             throw new Error('Lot non lié au justificatif.');
         }
-        quittance = await createQuittance({ paymentId: `proof:${proof.id}`, chargeId: charge.id,
-            buildingId: building.id, buildingName: building.name, syndicId: syndic.id, syndicName: syndic.name,
-            residentId: proof.residentId, residentName: building.residents.find((r) => r.id === proof.residentId)?.name || proof.residentName,
-            apartmentId: apartment.id, apartmentNumber: apartment.number, amount: proof.amount,
-            paymentDate: proof.submissionDate, paymentMethod: proof.paymentMethod, periodCovered: charge.period || '',
-            bankName: proof.bankName, referenceNumber: proof.referenceNumber, addTransactionToLedger: true });
+        const recorded = proof.status === 'approved'
+            ? building.financials.transactions.flatMap(t => t.receiptSnapshots || [])
+                .find(q => q.paymentId === `proof:${proof.id}` && q.chargeId === charge.id &&
+                    q.buildingId === building.id && q.syndicId === syndic.id)
+            : undefined;
+        if (recorded) {
+            // Receipt recovery does not post again, including after its period closes.
+            quittance = await createQuittance({ ...recorded, addTransactionToLedger: false });
+        } else {
+            const dates = paymentDates(context, building.id, proof.bankTransactionDate ?? (proof as PaymentProof & { date?: string }).date, proof.submissionDate, options);
+            quittance = await createQuittance({ ...dates, paymentId: `proof:${proof.id}`, chargeId: charge.id,
+                buildingId: building.id, buildingName: building.name, syndicId: syndic.id, syndicName: syndic.name,
+                residentId: proof.residentId, residentName: building.residents.find((r) => r.id === proof.residentId)?.name || proof.residentName,
+                apartmentId: apartment.id, apartmentNumber: apartment.number, amount: proof.amount,
+                paymentDate: dates.bankTransactionDate ?? proof.submissionDate, paymentMethod: proof.paymentMethod, periodCovered: charge.period || '',
+                bankName: proof.bankName, referenceNumber: proof.referenceNumber, addTransactionToLedger: true });
+        }
     }
     // Validation/posting must finish before the proof becomes approved.
+    if (quittance) { proof.bankTransactionDate = quittance.bankTransactionDate; proof.postingDate = quittance.postingDate; proof.priorPeriodAdjustmentReason = quittance.priorPeriodAdjustmentReason; }
     proof.status = approved ? 'approved' : 'rejected';
     proof.reviewedAt = new Date().toISOString();
     if (!approved)
@@ -350,6 +366,10 @@ const createQuittance = async (input: CreateQuittanceCommand): Promise<Quittance
     }
     if (core.quittanceNumber)
         throw new Error('La numérotation des quittances est réservée au serveur.');
+    if (core.bankTransactionDate !== undefined || core.postingDate !== undefined) {
+        Object.assign(core, paymentDates(context, building.id, core.bankTransactionDate,
+            core.submissionDate ?? new Date().toISOString(), core));
+    }
     assertReceiptCapacity(receipts, building, charge);
     let split: ReturnType<typeof getRecordedReserveSplit>;
     const invoices = getLocalItem<Invoice[]>(STORAGE_KEYS.INVOICES, []);
@@ -375,7 +395,9 @@ const createQuittance = async (input: CreateQuittanceCommand): Promise<Quittance
             charge.invoiceId = invoice.id;
         }
         split = postIncome(building, core.amount, paymentId!, { sourceChargeId: charge.id, sourceInvoiceId: invoice?.id,
-            date: core.paymentDate, paymentMethod: core.paymentMethod, reference: core.referenceNumber,
+            date: core.postingDate ?? core.paymentDate,
+            ...(core.postingDate ? { bankTransactionDate: core.bankTransactionDate, postingDate: core.postingDate,
+                submissionDate: core.submissionDate, priorPeriodAdjustmentReason: core.priorPeriodAdjustmentReason } : {}), paymentMethod: core.paymentMethod, reference: core.referenceNumber,
             description: `Paiement lot ${lot.number}`, documentType: 'quittance' });
     }
     if (allocationAmount(building.financials.transactions.filter(t => t.paymentId === paymentId), charge.id) !== amount || !split) {
@@ -384,6 +406,13 @@ const createQuittance = async (input: CreateQuittanceCommand): Promise<Quittance
     assertReceiptCapacity(receipts, building, charge, amount);
     const receipt = numberedReceipt({ ...core, paymentId }, split, receipts, syndics);
     building.financials.transactions.find(t => t.paymentId === paymentId)!.receiptSnapshots = [receipt];
+    if (core.priorPeriodAdjustmentReason) {
+        (context.state.syndik_prod_audit_v1 ??= []).push({ id: crypto.randomUUID(),
+            actorUid: context.actor.uid, actorRole: context.actor.role, syndicId: core.syndicId,
+            buildingId: core.buildingId, operation: 'priorPeriodPaymentAdjustment', createdAt: new Date().toISOString(),
+            detail: { paymentId, bankTransactionDate: core.bankTransactionDate, postingDate: core.postingDate,
+                reason: core.priorPeriodAdjustmentReason } });
+    }
     setLocalItem(STORAGE_KEYS.CHARGES, charges);
     setLocalItem(STORAGE_KEYS.INVOICES, invoices);
     setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
@@ -464,7 +493,8 @@ function numberedReceipt(core: Omit<Quittance, 'id' | 'quittanceNumber' | 'creat
         quittanceNumber: `${prefix}${String(max + 1).padStart(5, '0')}`, createdAt: new Date().toISOString() };
 }
 
-const reconcileBankStatementCSV = async (buildingId: string, rows: BankStatementCSVRow[]): Promise<{
+const reconcileBankStatementCSV = async (buildingId: string, rows: BankStatementCSVRow[], options: PaymentPostingOptions & { preview?: boolean } = {}): Promise<{
+    preview: Array<{ bankTransactionDate?: string; postingDate?: string; amount: number; label: string }>;
     matchedCount: number;
     unmatchedCount: number;
     totalReconciledMad: number;
@@ -485,6 +515,12 @@ const reconcileBankStatementCSV = async (buildingId: string, rows: BankStatement
     if (!targetBuilding) {
         throw new Error('Immeuble introuvable pour le rapprochement bancaire.');
     }
+    const submittedAt = new Date().toISOString();
+    // Validate every target date before creating any proof or ledger entry.
+    const datedRows = rows.map(row => ({ row, dates: paymentDates(context, buildingId, bankDate(row.date), submittedAt, options) }));
+    const preview = datedRows.map(({ row, dates }) => ({ bankTransactionDate: dates.bankTransactionDate,
+        postingDate: dates.postingDate, amount: row.amount, label: row.label }));
+    if (options.preview) return { preview, matchedCount: 0, unmatchedCount: 0, totalReconciledMad: 0, quittances: [] };
     const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, []).filter((c) => c.buildingId === buildingId && c.status !== 'paid');
     const existingProofs = getLocalItem<PaymentProof[]>(STORAGE_KEYS.PROOFS, []).filter((p) => p.buildingId === buildingId);
     const seenBankEventKeys = new Set<string>(existingProofs
@@ -494,7 +530,7 @@ const reconcileBankStatementCSV = async (buildingId: string, rows: BankStatement
     let unmatchedCount = 0;
     let totalReconciledMad = 0;
     const generatedQuittances: Quittance[] = [];
-    for (const row of rows) {
+    for (const { row, dates } of datedRows) {
         const rawAmt = Number(row.amount);
         // Reject non-positive (debit/zero/NaN) rows — never Math.abs() a bank debit into an income receipt
         if (!Number.isFinite(rawAmt) || rawAmt <= 0) {
@@ -510,7 +546,7 @@ const reconcileBankStatementCSV = async (buildingId: string, rows: BankStatement
         const cleanRef = (row.reference || '').trim().toUpperCase();
         const bankEventKey = cleanRef
             ? cleanRef
-            : `CSV-${buildingId}-${(row.date || '').trim()}-${cleanAmt.toFixed(2)}-${upperLabel.replace(/[^A-Z0-9]/g, '_').slice(0, 48)}`;
+            : `CSV-${buildingId}-${dates.bankTransactionDate}-${cleanAmt.toFixed(2)}-${upperLabel.replace(/[^A-Z0-9]/g, '_').slice(0, 48)}`;
         // Bank-event idempotency: never reconcile the same bank row twice across repeated imports or within the same file
         if (seenBankEventKeys.has(bankEventKey)) {
             unmatchedCount += 1;
@@ -533,6 +569,7 @@ const reconcileBankStatementCSV = async (buildingId: string, rows: BankStatement
             const apt = targetBuilding.apartments.find((a) => a.id === matchedCharge.apartmentId);
             const res = targetBuilding.residents.find((r) => r.id === matchedCharge.residentId);
             const submitted = await submitPaymentProof({
+                bankTransactionDate: dates.bankTransactionDate,
                 chargeId: matchedCharge.id,
                 buildingId,
                 syndicId: targetSyndic?.id,
@@ -546,7 +583,7 @@ const reconcileBankStatementCSV = async (buildingId: string, rows: BankStatement
                 referenceNumber: bankEventKey,
                 receiptNote: `Rapprochement CSV bancaire : ${row.label}`,
             });
-            const approved = await reviewPaymentProof(submitted.id, 'approved');
+            const approved = await reviewPaymentProof(submitted.id, 'approved', undefined, options);
             if (approved.quittance)
                 generatedQuittances.push(approved.quittance);
             matchedCharge.status = 'paid';
@@ -558,6 +595,7 @@ const reconcileBankStatementCSV = async (buildingId: string, rows: BankStatement
         }
     }
     return {
+        preview,
         matchedCount,
         unmatchedCount,
         totalReconciledMad,
@@ -982,4 +1020,5 @@ function financialOperation(
 }
 return {financialOperation};
 }
+
 

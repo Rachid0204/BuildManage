@@ -1,3 +1,4 @@
+import type { PaymentPostingOptions } from '../types';
 import type { AddBuildingCommand, CreateQuittanceCommand, PostIncomeCommand, ToggleAGVotingCommand } from '../shared/domain/commands';
 import { allocateBudgetInCentimes, splitChargeReserveAndOperating, getBuildingReserveRate, getRecordedReserveSplit, centimes } from '../shared/domain/money';
 import { legacyQuorum } from '../shared/domain/voting';
@@ -1729,14 +1730,16 @@ export interface BankStatementCSVRow {
 
 export const reconcileBankStatementCSV = async (
   buildingId: string,
-  rows: BankStatementCSVRow[]
+  rows: BankStatementCSVRow[],
+  options: PaymentPostingOptions & { preview?: boolean } = {}
 ): Promise<{
+  preview?: Array<{ bankTransactionDate?: string; postingDate?: string; amount: number; label: string }>;
   matchedCount: number;
   unmatchedCount: number;
   totalReconciledMad: number;
   quittances: Quittance[];
 }> => {
-  if (typeof window !== 'undefined') return remoteMutation('reconcileBankStatementCSV', [buildingId, rows]);
+  if (typeof window !== 'undefined') return remoteMutation('reconcileBankStatementCSV', [buildingId, rows, options]);
 
   const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, mockSyndics);
   let targetBuilding: Building | undefined;
@@ -1844,10 +1847,11 @@ export const reconcileBankStatementCSV = async (
 export const reviewPaymentProof = async (
   proofId: string,
   decision: 'approved' | 'rejected' | 'approve' | 'reject',
-  rejectionReason?: string
+  rejectionReason?: string,
+  options: PaymentPostingOptions = {}
 ): Promise<{ proof: PaymentProof; quittance?: Quittance; success: boolean }> => {
   const canonicalDecision = decision === 'approve' ? 'approved' : decision === 'reject' ? 'rejected' : decision;
-  if (typeof window !== 'undefined') return remoteMutation('reviewPaymentProof', [proofId, canonicalDecision, rejectionReason]);
+  if (typeof window !== 'undefined') return remoteMutation('reviewPaymentProof', [proofId, canonicalDecision, rejectionReason, options]);
 
   if (!['approved', 'approve', 'rejected', 'reject'].includes(decision)) throw new Error('Décision invalide.');
   const approved = decision === 'approved' || decision === 'approve';
@@ -3641,4 +3645,5 @@ async function readCommandResponse(response: Response): Promise<any> {
     throw new Error('Le serveur est temporairement indisponible. Réessayez dans un instant.');
   }
 }
+
 

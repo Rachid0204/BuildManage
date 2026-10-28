@@ -44,6 +44,7 @@ export default function ResidentPaymentModal({
   const receiptInput = useRef<HTMLInputElement>(null);
   const receiptPicker = useRef<HTMLButtonElement>(null);
   const [bankName, setBankName] = useState("Attijariwafa Bank");
+  const [bankTransactionDate, setBankTransactionDate] = useState("");
   const [reference, setReference] = useState("");
   const [method, setMethod] = useState<PaymentMethod>("virement");
   const [note, setNote] = useState("");
@@ -83,6 +84,7 @@ export default function ResidentPaymentModal({
         paymentMethod: method,
         bankName,
         referenceNumber: reference.trim(),
+        bankTransactionDate: bankTransactionDate || undefined,
         receiptNote: note.trim(),
         receiptUrl,
       });
@@ -102,6 +104,7 @@ export default function ResidentPaymentModal({
   useEffect(() => {
     if (!isOpen) return;
     setReference("");
+    setBankTransactionDate("");
     setNote("");
     setReceipt(null);
     setReceiptError(null);
@@ -279,6 +282,11 @@ export default function ResidentPaymentModal({
             </select>
           </div>
           <div>
+            <label htmlFor={`${formId}-bank-date`}>{tr('Date réelle du virement (si connue)', 'تاريخ التحويل الفعلي (إن كان معروفاً)')}</label>
+            <input id={`${formId}-bank-date`} type="date" value={bankTransactionDate}
+              onChange={e => setBankTransactionDate(e.target.value)} className="w-full border rounded p-2" />
+          </div>
+          <div>
             <label
               htmlFor={`${formId}-reference`}
               className="block text-xs font-semibold mb-1"
@@ -397,3 +405,4 @@ export default function ResidentPaymentModal({
     </Modal>
   );
 }
+
