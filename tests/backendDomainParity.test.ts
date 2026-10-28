@@ -417,3 +417,54 @@ await test('proof receipt recovery preserves dates after its accounting period c
   assert.deepEqual(state.syndik_prod_quittances_v1[0], original);
   assert.deepEqual(state.syndik_prod_syndics_v1[0].buildings[0].financials, ledger);
 });
+
+await test('assembly budget lifecycle issues charges, invoices and notifications atomically and idempotently', async () => {
+  const state = fixture();
+  state.syndik_prod_charges_v1 = [];
+  const service = createCommandService(state);
+  const ag = await service.runOperation(actor, 'createAssembleeGenerale', [{
+    buildingId: 'building', title: 'Roof works', date: '2026-10-27', time: '18:30', location: 'Hall', type: 'AGE',
+    resolutions: [{ title: 'Roof repair', description: 'Approve works', majorityType: 'simple', generatesCharges: true, budgetAmount: 1000.01 }],
+  }], 'h2-create');
+  const id = ag.id, resolutionId = ag.resolutions[0].id;
+  await service.runOperation(actor, 'updateAGAttendee', [id, 'resident', 'present'], 'h2-present');
+  await service.runOperation(actor, 'toggleAGVoting', [id, true], 'h2-open');
+  await service.runOperation(actor, 'recordAGVote', [id, resolutionId, 'for', undefined,
+    { residentId: 'resident', apartmentId: 'lot' }], 'h2-vote');
+  const voted = state.syndik_prod_ag_v1.find((a: any) => a.id === id);
+  assert.equal(voted.resolutions[0].status, 'approved');
+  await assert.rejects(service.runOperation(actor, 'generateChargesFromAGResolution', [id, resolutionId], 'h2-too-early'), /Clôturez/);
+  await service.runOperation(actor, 'saveAssembleeGenerale', [{ ...structuredClone(voted), status: 'completed' }], 'h2-close');
+  await service.runOperation(actor, 'generateChargesFromAGResolution', [id, resolutionId], 'h2-issue');
+  assert.equal(state.syndik_prod_charges_v1.length, 1);
+  const charge = state.syndik_prod_charges_v1[0];
+  const invoice = state.syndik_prod_invoices_v1[0];
+  assert.equal(charge.amount, 1000.01);
+  assert.equal(charge.invoiceId, invoice.id);
+  assert.deepEqual(invoice.chargeIds, [charge.id]);
+  assert.equal(invoice.totalAmount, 1000.01);
+  assert.equal(invoice.residentId, 'resident');
+  assert.equal(state.syndik_prod_notifications_v1.length, 1);
+  assert.equal(state.syndik_prod_notifications_v1[0].userId, 'user-res-resident');
+  const before = structuredClone([state.syndik_prod_charges_v1, state.syndik_prod_invoices_v1, state.syndik_prod_notifications_v1]);
+  await service.runOperation(actor, 'generateChargesFromAGResolution', [id, resolutionId], 'h2-retry');
+  assert.deepEqual([state.syndik_prod_charges_v1, state.syndik_prod_invoices_v1, state.syndik_prod_notifications_v1], before);
+});
+
+await test('funding resolutions require a positive budget before voting and funding terms freeze on opening', async () => {
+  for (const budgetAmount of [undefined, 0]) {
+    const state = fixture();
+    const service = createCommandService(state);
+    const ag = await service.runOperation(actor, 'createAssembleeGenerale', [{ buildingId: 'building', title: 'Funding',
+      resolutions: [{ title: 'Works', majorityType: 'simple', generatesCharges: true, budgetAmount }] }], 'h2-draft');
+    await assert.rejects(service.runOperation(actor, 'toggleAGVoting', [ag.id, true], 'h2-invalid-open'), /budget positif/);
+    assert.equal(ag.votingSnapshot, undefined);
+    const saved = await service.runOperation(actor, 'saveAssembleeGenerale', [{ ...ag,
+      resolutions: ag.resolutions.map((r: any) => ({ ...r, budgetAmount: 100 })) }], 'h2-budget');
+    await service.runOperation(actor, 'toggleAGVoting', [ag.id, true], 'h2-valid-open');
+    await assert.rejects(service.runOperation(actor, 'saveAssembleeGenerale', [{ ...saved,
+      resolutions: saved.resolutions.map((r: any) => ({ ...r, budgetAmount: 200 })) }], 'h2-frozen-budget'), /figées/);
+    await assert.rejects(service.runOperation(actor, 'saveAssembleeGenerale', [{ ...saved,
+      resolutions: saved.resolutions.map((r: any) => ({ ...r, generatesCharges: false })) }], 'h2-frozen-type'), /figées/);
+  }
+});
