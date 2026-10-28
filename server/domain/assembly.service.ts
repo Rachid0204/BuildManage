@@ -29,6 +29,8 @@ const generateChargesFromAGResolution = async (agId: string, resolutionId: strin
     const ag = agList.find((item) => item.id === agId);
     if (!ag)
         throw new Error('Assemblée Générale introuvable');
+    if (!['completed', 'closed'].includes(ag.status))
+        throw new Error('Clôturez le vote avant de générer les charges.');
     const res = ag.resolutions.find((r) => r.id === resolutionId);
     if (!res)
         throw new Error('Résolution introuvable');
@@ -103,8 +105,9 @@ const generateChargesFromAGResolution = async (agId: string, resolutionId: strin
         c.syndicId === targetSyndicId && c.id.startsWith(`chg-ag-${ag.id}-${res.id}-`))
         .map(c => c.amount), budgetMad);
     setLocalItem(STORAGE_KEYS.CHARGES, charges);
-    res.chargesGeneratedAt = nowIso;
-    res.generatedChargesCount = createdCharges.length;
+    res.chargesGeneratedAt ??= nowIso;
+    res.generatedChargesCount = charges.filter(c => c.syndicId === targetSyndicId &&
+        c.buildingId === targetBuilding!.id && c.id.startsWith(`chg-ag-${ag.id}-${res.id}-`)).length;
     setLocalItem(STORAGE_KEYS.AG, agList);
     return { createdCharges, totalAllocatedMad };
 };
@@ -123,7 +126,7 @@ import type { Actor } from './errors';
 export function createAssemblyCommands(transactionState: State, dependencies: CommandDependencies) {
 const state=transactionState;
 const check: CommandDependencies['check'] = dependencies.check;
-const {object, str, cents, appendAudit, assertPeriod, cabinetFor, buildingFor, canWrite, record, actorIdentity, dispatch, emailAvailable, pick}=dependencies;
+const {issueChargeInvoices, object, str, cents, appendAudit, assertPeriod, cabinetFor, buildingFor, canWrite, record, actorIdentity, dispatch, emailAvailable, pick}=dependencies;
 function roll(building: any, previous: any[] = []) {
   const lots = building.apartments.filter((a: any) => !a.archivedAt);
   check(
@@ -237,6 +240,7 @@ async function meetingOperation(actor: Actor, operation: string, args: any[]) {
             r.description,
             r.majorityType,
             r.budgetAmount,
+            r.generatesCharges,
           ]),
           old.resolutions.map((r: any) => [
             r.id,
@@ -244,6 +248,7 @@ async function meetingOperation(actor: Actor, operation: string, args: any[]) {
             r.description,
             r.majorityType,
             r.budgetAmount,
+            r.generatesCharges,
           ]),
         ),
         "Résolutions figées après ouverture.",
@@ -288,6 +293,7 @@ async function meetingOperation(actor: Actor, operation: string, args: any[]) {
               "unanimite",
             ])
             .parse(r.majorityType),
+          ...(r.generatesCharges !== undefined ? { generatesCharges: z.boolean().parse(r.generatesCharges) } : {}),
           budgetAmount:
             r.budgetAmount === undefined
               ? undefined
@@ -323,12 +329,15 @@ async function meetingOperation(actor: Actor, operation: string, args: any[]) {
     b = row.b;
     if (operation === "generateChargesFromAGResolution") {
       check(
-        ag.status === "completed",
+        ["completed", "closed"].includes(ag.status),
         "Clôturez le vote avant de générer les charges.",
         409,
       );
       assertPeriod(b, new Date().toISOString());
       const result = await dispatch(actor, operation, args, {cabinetId:b.syndicId,buildingId:b.id});
+      const charges = (transactionState.syndik_prod_charges_v1 || []).filter((c: any) =>
+        c.syndicId === b.syndicId && c.buildingId === b.id && c.id.startsWith(`chg-ag-${ag.id}-${str(args[1])}-`));
+      await issueChargeInvoices(actor, b, charges);
       appendAudit(transactionState, actor, operation, b.id);
       return result;
     }
@@ -340,6 +349,12 @@ async function meetingOperation(actor: Actor, operation: string, args: any[]) {
     if (operation === "toggleAGVoting") {
       check(typeof args[1] === "boolean", "Statut invalide.", 400);
       ToggleAGVotingSchema.parse({agId:args[0],isOpen:args[1]});
+      if (args[1]) {
+        check(ag.resolutions.every((r: any) =>
+          !(r.generatesCharges === true || r.budgetAmount !== undefined) ||
+          (Number.isFinite(r.budgetAmount) && cents(r.budgetAmount) > 0)),
+          "Définissez un budget positif pour chaque résolution générant des charges avant ouverture du vote.", 400);
+      }
       if (args[1] && !ag.votingSnapshot) {
         Object.assign(ag, roll(b, ag.attendees));
         ag.votingSnapshot = minimalVotingSnapshot({
@@ -401,4 +416,5 @@ async function meetingOperation(actor: Actor, operation: string, args: any[]) {
 }
 return {roll, recomputeMeeting, meetingOperation};
 }
+
 

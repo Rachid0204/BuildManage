@@ -24,6 +24,26 @@ interface AssembleeGeneraleProps {
   syndic?: Syndic;
 }
 
+function ResolutionBudgetEditor({ resolution, onSave }: {
+  resolution: AGResolution; onSave: (enabled: boolean, budget?: number) => Promise<void>;
+}) {
+  const { tr } = useI18n();
+  const { showToast } = useToast();
+  const [enabled, setEnabled] = useState(resolution.generatesCharges === true || resolution.budgetAmount !== undefined);
+  const [budget, setBudget] = useState(String(resolution.budgetAmount ?? ''));
+  const [saving, setSaving] = useState(false);
+  return <div className="text-xs space-y-2 border rounded p-2">
+    <label><input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} /> {tr('Génère des charges exceptionnelles', 'يُصدر رسوماً استثنائية')}</label>
+    {enabled && <label>{tr('Budget voté (MAD)', 'الميزانية للتصويت (درهم)')}<input type="number" min="0.01" step="0.01" value={budget} onChange={e => setBudget(e.target.value)} className="border rounded p-1 mx-2" /></label>}
+    <Button disabled={saving || (enabled && (!Number.isFinite(Number(budget)) || Number(budget) <= 0))} onClick={async () => {
+      setSaving(true);
+      try { await onSave(enabled, enabled ? Number(budget) : undefined); }
+      catch (error: any) { showToast(error.message, 'error'); }
+      finally { setSaving(false); }
+    }}>{tr('Enregistrer le budget avant vote', 'حفظ الميزانية قبل التصويت')}</Button>
+  </div>;
+}
+
 const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syndic }) => {
   const { tr, isAr } = useI18n();
   const { showToast } = useToast();
@@ -38,6 +58,9 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
   const [agendaInput, setAgendaInput] = useState(
     "1. Approbation du rapport moral et financier\n2. Quitus de gestion au Syndic\n3. Vote du budget prévisionnel de l'exercice\n4. Constitution du Fonds de réserve pour travaux (Loi 106-12)\n5. Travaux d'étanchéité de la toiture-terrasse"
   );
+
+  const [newBudgets, setNewBudgets] = useState<Record<number, string>>({});
+  const [issuingResolution, setIssuingResolution] = useState<string | null>(null);
 
   // In-session vote casting state
   const [isRecordVoteModalOpen, setIsRecordVoteModalOpen] = useState(false);
@@ -166,6 +189,9 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
       .map((s) => s.trim())
       .filter(Boolean);
 
+    for (const budget of Object.values(newBudgets))
+      if (!Number.isFinite(Number(budget)) || Number(budget) <= 0)
+        throw new Error(tr('Définissez un budget positif pour chaque appel de fonds.', 'حدد ميزانية موجبة لكل طلب مساهمة.'));
     const initialResolutions: AGResolution[] = parsedAgenda.map((item, idx) => ({
       id: `res-${Date.now()}-${idx}`,
       number: idx + 1,
@@ -175,6 +201,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
         `مداولة وتصويت الجمعية العامة حول: ${item}`
       ),
       majorityType: idx === 0 || idx === 1 ? 'simple' : idx === 4 ? 'absolute' : 'simple',
+      ...(newBudgets[idx] !== undefined ? { generatesCharges: true, budgetAmount: Number(newBudgets[idx]) } : {}),
       votesFor: 0,
       votesAgainst: 0,
       votesAbstain: 0,
@@ -323,7 +350,9 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
             <div className="flex flex-wrap items-center gap-2 shrink-0">
               <button
                 onClick={() => toggleVotingMutation.mutate(!(activeAG.isVotingOpen !== false))}
-                disabled={toggleVotingMutation.isPending}
+                disabled={toggleVotingMutation.isPending ||
+                  (!activeAG.isVotingOpen && activeAG.resolutions.some(r =>
+                    (r.generatesCharges || r.budgetAmount !== undefined) && (!Number.isFinite(r.budgetAmount) || (r.budgetAmount ?? 0) <= 0)))}
                 className={`text-xs px-3 py-1.5 rounded-lg font-bold transition-all shadow-xs ${
                   activeAG.isVotingOpen !== false
                     ? 'bg-amber-400 hover:bg-amber-500 text-slate-900'
@@ -616,6 +645,14 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                         </span>
                       </div>
 
+                      {!activeAG.votingSnapshot && activeAG.status === 'planned' && <ResolutionBudgetEditor
+                        key={`${res.id}-${res.budgetAmount}-${res.generatesCharges}`} resolution={res}
+                        onSave={async (enabled, budget) => {
+                          await saveAssembleeGenerale({ ...activeAG, resolutions: activeAG.resolutions.map(r =>
+                            r.id === res.id ? { ...r, generatesCharges: enabled, budgetAmount: budget } : r) });
+                          await queryClient.invalidateQueries({ queryKey: ['ag', building.id] });
+                        }} />}
+                      {res.budgetAmount !== undefined && <p className="text-xs">{tr('Budget voté', 'الميزانية المصوت عليها')}: {res.budgetAmount} MAD</p>}
                       {/* Vote tally bar weighted by tantièmes */}
                       <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 space-y-1.5">
                         <div className="flex flex-wrap justify-between items-center text-xs font-mono">
@@ -657,25 +694,14 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                         </div>
 
                         <div className="flex flex-wrap items-center gap-2">
-                          {res.status === 'approved' && (
+                          {res.status === 'approved' && (res.generatesCharges || (res.budgetAmount ?? 0) > 0) && (
                             <Button
                               variant="secondary"
+                              disabled={!['completed', 'closed'].includes(activeAG.status) || !res.budgetAmount || !!res.chargesGeneratedAt || issuingResolution !== null}
+                              title={!['completed', 'closed'].includes(activeAG.status) ? tr('Clôturez l’assemblée avant émission.', 'أغلق الجمعية قبل الإصدار.') : undefined}
                               onClick={async () => {
+                                setIssuingResolution(res.id);
                                 try {
-                                  if (!res.budgetAmount || res.budgetAmount <= 0) {
-                                    const rawBudget = prompt(
-                                      tr(
-                                        'Montant total du budget voté à répartir aux tantièmes (MAD) :',
-                                        'إجمالي الميزانية المصوت عليها لتوزيعها حسب الحصص (درهم):'
-                                      ),
-                                      '25000'
-                                    );
-                                    const parsed = Number(rawBudget);
-                                    if (rawBudget === null) return;
-                                    if (!Number.isFinite(parsed) || parsed <= 0) throw new Error(tr('Le budget doit être un montant supérieur à zéro.', 'يجب أن تكون الميزانية مبلغاً أكبر من صفر.'));
-                                    res.budgetAmount = parsed;
-                                    await saveAssembleeGenerale(activeAG);
-                                  }
                                   const out = await generateChargesFromAGResolution(
                                     activeAG.id,
                                     res.id
@@ -686,6 +712,8 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                                   await queryClient.invalidateQueries({
                                     queryKey: ['ag', building.id],
                                   });
+                                  await queryClient.invalidateQueries({ queryKey: ['invoices', building.id] });
+                                  await queryClient.invalidateQueries({ queryKey: ['notifications'] });
                                   showToast(
                                     tr(
                                       `${out.createdCharges.length} appels de fonds générés (${out.totalAllocatedMad} MAD répartis aux tantièmes).`,
@@ -699,7 +727,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                                       tr('Erreur lors de la répartition', 'خطأ أثناء التوزيع'),
                                     'error'
                                   );
-                                }
+                                } finally { setIssuingResolution(null); }
                               }}
                               className="text-xs border-teal-300 text-teal-800 hover:bg-teal-50 font-semibold px-3 py-1.5"
                             >
@@ -824,10 +852,16 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
             <textarea
               rows={5}
               value={agendaInput}
-              onChange={(e) => setAgendaInput(e.target.value)}
+              onChange={(e) => { setAgendaInput(e.target.value); setNewBudgets({}); }}
               className="w-full px-3 py-2 border border-slate-300 rounded text-xs font-mono"
             />
           </div>
+          {agendaInput.split('\n').map(line => line.trim()).filter(Boolean).map((line, index) => <div key={index} className="border rounded p-2 text-xs space-y-1">
+            <label><input type="checkbox" checked={newBudgets[index] !== undefined} onChange={e => setNewBudgets(old => {
+              const next = { ...old }; if (e.target.checked) next[index] = ''; else delete next[index]; return next;
+            })} /> {line} — {tr('Appel de fonds', 'طلب مساهمة')}</label>
+            {newBudgets[index] !== undefined && <label>{tr('Budget (MAD)', 'الميزانية (درهم)')}<input type="number" min="0.01" step="0.01" value={newBudgets[index]} onChange={e => setNewBudgets(old => ({ ...old, [index]: e.target.value }))} className="border rounded p-1 mx-2" /></label>}
+          </div>)}
         </div>
       </Modal>
 
@@ -1061,3 +1095,4 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
 };
 
 export default AssembleeGeneraleView;
+

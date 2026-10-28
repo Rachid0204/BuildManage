@@ -2,6 +2,7 @@ import type { State } from '../repository';
 import type { Actor } from './errors';
 /** Explicit capabilities supplied by the transaction-scoped command coordinator. */
 export interface CommandDependencies {
+ issueChargeInvoices(actor: Actor, building: any, charges: any[]): Promise<void>;
  check(condition: unknown, message: string, status?: number): asserts condition;
  object(value: any): Record<string, any>;
  str(value: any, max?: number): string;
@@ -20,3 +21,4 @@ export interface CommandDependencies {
  links(building: any,apartment: any): void;
  emailAvailable(email: string, field?: string, id?: string): void;
 }
+

@@ -349,6 +349,8 @@ export interface AGResolution {
     | 'absolue_25'
     | 'trois_quarts_26'
     | 'unanimite';
+  /** Requires a positive budget before voting opens. */
+  generatesCharges?: boolean;
   budgetAmount?: number;
   chargesGeneratedAt?: string;
   generatedChargesCount?: number;
@@ -600,5 +602,6 @@ export interface Syndic {
   email?: string;
   buildings: Building[];
 }
+
 
 

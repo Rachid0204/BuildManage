@@ -1063,12 +1063,9 @@ async function runOperation(
     revoke(changedCredentials.id);
   }
   if (operation === "generateMonthlyCharges" && Array.isArray(result))
-    for (const id of new Set(
-      result.filter((c: any) => c.amount > 0).map((c: any) => c.residentId),
-    ))
-      await dispatch(actor, "createInvoiceForResident", [id, b.id, b.syndicId], {cabinetId:b.syndicId,buildingId:b.id});
+    await issueChargeInvoices(actor, b, result);
   for (const invoice of transactionState.syndik_prod_invoices_v1 || [])
-    if (!oldInvoices.has(invoice.id))
+    if (operation !== "generateMonthlyCharges" && !oldInvoices.has(invoice.id))
       notice(
         invoice.residentId,
         b,
@@ -1102,6 +1099,17 @@ async function runOperation(
   appendAudit(transactionState, actor, operation, buildingId, { operationId });
   return result;
 }
+async function issueChargeInvoices(actor: Actor, b: any, charges: any[]) {
+  const before = new Set((transactionState.syndik_prod_invoices_v1 || []).map((i: any) => i.id));
+  for (const residentId of new Set(charges.filter(c => c.amount > 0 && !c.invoiceId &&
+      c.syndicId === b.syndicId && c.buildingId === b.id && (c.paidAmount || 0) < c.amount).map(c => c.residentId))) {
+    await dispatch(actor, "createInvoiceForResident", [residentId, b.id, b.syndicId], { cabinetId: b.syndicId, buildingId: b.id });
+  }
+  for (const invoice of transactionState.syndik_prod_invoices_v1 || [])
+    if (!before.has(invoice.id)) notice(invoice.residentId, b, "Nouvel avis de charges",
+      `${invoice.invoiceNumber} : ${invoice.totalAmount} MAD`, "invoice");
+}
+
 function emailAvailable(email: string, field?: string, id?: string) {
   const state = transactionState;
   return [
@@ -1128,10 +1136,11 @@ function disableAccount(id: string, field: string) {
   revoke(id);
 }
 
-const dependencies: CommandDependencies = {check, object, str, cents, appendAudit, assertPeriod, cabinetFor, buildingFor, canWrite, record, actorIdentity, dispatch, emailAvailable, manager, nested, links, pick};
+const dependencies: CommandDependencies = {issueChargeInvoices, check, object, str, cents, appendAudit, assertPeriod, cabinetFor, buildingFor, canWrite, record, actorIdentity, dispatch, emailAvailable, manager, nested, links, pick};
 const {financialOperation}=createFinanceCommands(transactionState,dependencies);
 const {createCabinet,subscriptionPayment,restoreArchived,archiveBuilding}=createBuildingCommands(transactionState,dependencies);
 const {recomputeMeeting,meetingOperation}=createAssemblyCommands(transactionState,dependencies);
 return {runOperation, cabinetFor, buildingFor, canWrite, appendAudit, actorIdentity, recomputeMeeting};
 }
+
 
