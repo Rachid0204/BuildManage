@@ -1,3 +1,9 @@
+import { scheduledMonthlyCharges } from '../functions/index';
+import express from 'express';
+import { monthlyBillingJob } from '../server/monthlyBillingJob';
+import { DependencyError } from '../server/dependencyErrors';
+import { generateScheduledMonthlyCharges, classifyBillingFailure, OperationError } from '../server/operations';
+import { retryMonthlyBilling } from '../functions/monthlyBilling';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -121,7 +127,11 @@ try {
       assert.ok(after.syndik_prod_audit_v1.some((a: any) => a.detail?.operationId === `scheduled:${id}:${month}`));
     }
     assert.equal(charges(after, 'B').length, 0); assert.equal(invoices(after, 'B').length, 0);
+    const saved = after.__billingRuns.find((r: any) => r.id === result.data.id);
+    assert.equal(saved.status, 'completed'); assert.ok(saved.startedAt);
+    assert.deepEqual(saved.results, result.data.results);
     const failed = result.data.results.find((r: any) => r.buildingId === 'B');
+    assert.equal(failed.retryable, false); assert.equal(failed.attempts, 1);
     assert.equal(failed.status, 'failed'); assert.equal(failed.httpStatus, 409); assert.match(failed.reason, /Période comptable clôturée/);
     for (let i = 0; i < 3; i++) assert.deepEqual(after.syndik_prod_syndics_v1[0].buildings[i].financials, before.syndik_prod_syndics_v1[0].buildings[i].financials);
   });
@@ -141,7 +151,7 @@ try {
     const retried = await snapshot();
     for (const key of ['syndik_prod_charges_v1', 'syndik_prod_invoices_v1', 'syndik_prod_notifications_v1']) assert.deepEqual(retried[key], all[key]);
   });
-  await test(`${backend}: an invoice failure after charge generation rolls back that building alone`, async () => {
+  await test(`${backend}: a missing payer is a non-retryable configuration failure isolated to that building`, async () => {
     await reset(state => { state.__closedPeriods = {}; state.syndik_prod_syndics_v1[0].buildings[1].residents = []; });
     const result = await job(first);
     summary(result, { total: 3, succeeded: 2, skipped: 0, failed: 1, created: 2 });
@@ -150,6 +160,8 @@ try {
     assert.equal(after.syndik_prod_notifications_v1.filter((n: any) => n.buildingId === 'B').length, 0);
     for (const id of ['A', 'C']) assert.equal(charges(after, id).length, 1);
     assert.equal(result.data.results.find((r: any) => r.buildingId === 'B').status, 'failed');
+    assert.equal(result.data.results.find((r: any) => r.buildingId === 'B').retryable, false);
+    assert.equal(result.data.results.find((r: any) => r.buildingId === 'B').attempts, 1);
   });
   await test(`${backend}: invalid building shares do not stop the remaining buildings`, async () => {
     await reset(state => { state.__closedPeriods = {}; state.syndik_prod_syndics_v1[0].buildings[1].apartments[0].tantiemes = -1; });
@@ -192,6 +204,113 @@ try {
     summary(result, { total: 0, succeeded: 0, skipped: 0, failed: 0, created: 0 });
     assert.equal(result.data.ok, true);
   });
+  await test(`${backend}: transient partial failure returns HTTP 503, persists summary, and targeted retry preserves successful buildings`, async () => {
+    await reset(state => { state.__closedPeriods = {}; });
+    let failures = 0;
+    const faulty: StateRepository = { transaction: run => repository.transaction(async state => {
+      const before = charges(state, 'B').length;
+      const result = await run(state);
+      if (!before && charges(state, 'B').length && failures++ < 3)
+        throw new DependencyError('database', 'unavailable', new Error('synthetic outage'));
+      return result;
+    }) };
+    const http = express(); http.use(express.json());
+    http.post('/api/jobs/monthly-charges', monthlyBillingJob(faulty, req => req.headers['x-syndik-scheduler'] === secret));
+    const listener = http.listen(0, '127.0.0.1'); await once(listener, 'listening');
+    const origin = `http://127.0.0.1:${(listener.address() as any).port}`;
+    try {
+      const result = await job(origin);
+      assert.equal(result.status, 503); assert.equal(result.data.failed, 1);
+      const failed = result.data.results.find((r: any) => r.buildingId === 'B');
+      assert.equal(failed.retryable, true); assert.equal(failed.attempts, 3);
+      assert.equal(failed.code, 'DATABASE_UNAVAILABLE');
+      const before = await snapshot();
+      assert.deepEqual(before.__billingRuns.find((r: any) => r.id === result.data.id).results, result.data.results);
+      const retried = await call(origin, '/api/jobs/monthly-charges', { period: month, retryRunId: result.data.id }, { 'X-Syndik-Scheduler': secret });
+      assert.equal(retried.status, 200); assert.equal(retried.data.total, 1); assert.equal(retried.data.succeeded, 1);
+      const after = await snapshot();
+      for (const id of ['A', 'C']) { assert.deepEqual(charges(after, id), charges(before, id)); assert.deepEqual(invoices(after, id), invoices(before, id)); }
+      assert.equal(after.syndik_prod_charges_v1.length, 3); assert.equal(after.syndik_prod_invoices_v1.length, 3);
+      assert.equal(after.syndik_prod_notifications_v1.length, 3);
+    } finally { await new Promise<void>(resolve => listener.close(() => resolve())); }
+  });
+  await test(`${backend}: manager sees scoped failures and can retry only a failed building`, async () => {
+    await reset(); const originalRun = await job(first);
+    const login = await call(first, '/api/auth/login', { identifier: profiles[0].email, password });
+    const headers = { Authorization: `Bearer ${login.data.token}` };
+    const list = await fetch(first + '/api/billing-runs?syndicId=s-monthly&buildingId=B', { headers });
+    assert.equal(list.status, 200);
+    const data = await list.json() as any;
+    assert.equal(data.runs.length, 1); assert.equal(data.runs[0].results.length, 1);
+    assert.equal((await fetch(first + '/api/billing-runs?syndicId=foreign&buildingId=B', { headers })).status, 403);
+    assert.equal((await call(first, '/api/billing-runs/retry', { runId: originalRun.data.id, syndicId: 'foreign', buildingId: 'B' }, headers)).status, 403);
+    assert.equal((await call(first, '/api/billing-runs/retry', { runId: originalRun.data.id, syndicId: 's-monthly', buildingId: 'A' }, headers)).status, 404);
+    await repository.transaction(async state => { state.__closedPeriods = {}; });
+    const before = await snapshot();
+    const retried = await call(first, '/api/billing-runs/retry', { runId: originalRun.data.id, syndicId: 's-monthly', buildingId: 'B' }, headers);
+    assert.equal(retried.status, 200); assert.equal(retried.data.total, 1); assert.equal(retried.data.created, 1);
+    const after = await snapshot();
+    for (const id of ['A', 'C']) { assert.deepEqual(charges(after, id), charges(before, id)); assert.deepEqual(invoices(after, id), invoices(before, id)); }
+    const resolved = await fetch(first + '/api/billing-runs?syndicId=s-monthly&buildingId=B', { headers }).then(r => r.json()) as any;
+    assert.equal(resolved.runs[0].resolved, true);
+  });
+  await test(`${backend}: transient recovery uses exponential backoff and commits once`, async () => {
+    await reset(state => { state.__closedPeriods = {}; });
+    let failures = 0;
+    const delays: number[] = [];
+    const faulty: StateRepository = { transaction: run => repository.transaction(async state => {
+      const before = charges(state, 'B').length;
+      const result = await run(state);
+      if (!before && charges(state, 'B').length && failures++ < 2)
+        throw new DependencyError('database', 'unavailable', null);
+      return result;
+    }) };
+    const result = await generateScheduledMonthlyCharges(faulty, month, 'retry-backoff-test', { wait: async ms => { delays.push(ms); } });
+    assert.equal(result.ok, true); assert.deepEqual(delays, [1000, 2000]);
+    assert.equal(result.results.find(r => r.buildingId === 'B')?.attempts, 3);
+    const after = await snapshot();
+    assert.equal(after.syndik_prod_charges_v1.length, 3); assert.equal(after.syndik_prod_invoices_v1.length, 3);
+    assert.equal(after.syndik_prod_notifications_v1.length, 3);
+  });
+  await test('retry classification and function backoff are bounded', async () => {
+    assert.equal(classifyBillingFailure(new OperationError('Missing payer', 400)).retryable, false);
+    assert.equal(classifyBillingFailure(new DependencyError('database', 'access', null)).retryable, false);
+    assert.equal(classifyBillingFailure(new Error('unexpected')).retryable, true);
+    const delays: number[] = [], requests: any[] = [];
+    await assert.rejects(retryMonthlyBilling(async runId => {
+      requests.push(runId); throw { details: { retryable: true, runId: 'previous-run' } };
+    }, () => {}, async ms => { delays.push(ms); }));
+    assert.deepEqual(requests, [undefined, 'previous-run', 'previous-run']);
+    assert.deepEqual(delays, [5000, 10000]);
+    let attempts = 0;
+    await assert.rejects(retryMonthlyBilling(async () => { attempts++; throw { details: { retryable: false } }; }, () => {}));
+    assert.equal(attempts, 1);
+  });
+  await test('scheduled function inspects partial-failure bodies and pins the month across targeted retries', async () => {
+    const originalFetch = globalThis.fetch, originalOrigin = process.env.SYNDIK_BACKEND_URL;
+    process.env.SYNDIK_BACKEND_URL = 'https://billing.invalid';
+    const requests: any[] = [];
+    try {
+      globalThis.fetch = (async (_url: any, init: any) => {
+        requests.push(JSON.parse(init.body));
+        return new Response(JSON.stringify(requests.length === 1
+          ? { id: 'failed-run', ok: false, results: [{ status: 'failed', retryable: true }] }
+          : { ok: true, results: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }) as typeof fetch;
+      await scheduledMonthlyCharges.run({ timestamp: '2026-09-20T10:00:00.000Z' }, {} as any);
+      assert.deepEqual(requests, [{ period: '2026-09' }, { period: '2026-09', retryRunId: 'failed-run' }]);
+      requests.length = 0;
+      globalThis.fetch = (async (_url: any, init: any) => {
+        requests.push(JSON.parse(init.body));
+        return new Response(JSON.stringify({ ok: false, results: [{ status: 'failed', retryable: false }] }), { status: 200 });
+      }) as typeof fetch;
+      await scheduledMonthlyCharges.run({ timestamp: '2026-09-20T10:00:00.000Z' }, {} as any);
+      assert.equal(requests.length, 1, 'configuration failures must not be retried automatically');
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalOrigin === undefined) delete process.env.SYNDIK_BACKEND_URL; else process.env.SYNDIK_BACKEND_URL = originalOrigin;
+    }
+  });
   if (backend === 'file') await test('file: scheduler authentication happens before reading an unavailable repository', async () => {
     const path = join(directory, 'shared-state.json'), previous = readFileSync(path);
     try {
@@ -206,3 +325,4 @@ try {
   if (app) await deleteApp(app);
   rmSync(directory, { recursive: true, force: true });
 }
+

@@ -1,3 +1,4 @@
+import { retryMonthlyBilling } from './monthlyBilling';
 import * as functions from "firebase-functions/v1";
 async function backend(route: string, body: unknown, authorization?: string) {
   const origin = process.env.SYNDIK_BACKEND_URL;
@@ -8,10 +9,11 @@ async function backend(route: string, body: unknown, authorization?: string) {
     throw new functions.https.HttpsError(
       "failed-precondition",
       "Configure an HTTPS SYNDIK_BACKEND_URL.",
+      { retryable: false },
     );
   const response = await fetch(new URL(route, origin), {
     method: "POST",
-    signal: AbortSignal.timeout(300000),
+    signal: AbortSignal.timeout(route === '/api/jobs/monthly-charges' ? 120000 : 300000),
     headers: {
       "Content-Type": "application/json",
       ...(authorization
@@ -21,10 +23,17 @@ async function backend(route: string, body: unknown, authorization?: string) {
     body: JSON.stringify(body),
   });
   const data = await response.json();
+  if (route === '/api/jobs/monthly-charges' && data.ok === false) {
+    functions.logger.error('Monthly billing has failed buildings', data);
+    if (response.ok && Array.isArray(data.results) && data.results.some((r: any) => r.status === 'failed') &&
+        data.results.every((r: any) => r.status !== 'failed' || r.retryable === false)) return data;
+    throw new functions.https.HttpsError('unavailable', 'Monthly billing requires retry.', { retryable: response.ok || response.status >= 500 || response.status === 429, runId: data.id });
+  }
   if (!response.ok)
     throw new functions.https.HttpsError(
       "failed-precondition",
       data.error || "Backend operation rejected",
+      { retryable: response.status >= 500 || response.status === 429 },
     );
   return data;
 }
@@ -56,7 +65,13 @@ export const scheduledMonthlyCharges = functions
   .runWith({ timeoutSeconds: 540, secrets: ["SYNDIK_SCHEDULER_SECRET"] })
   .pubsub.schedule("0 0 1 * *")
   .timeZone("Africa/Casablanca")
-  .onRun(async () => backend("/api/jobs/monthly-charges", {}));
+  .onRun(async context => {
+    const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Casablanca', year: 'numeric', month: '2-digit' })
+      .formatToParts(new Date(context.timestamp));
+    const period = `${parts.find(p => p.type === 'year')!.value}-${parts.find(p => p.type === 'month')!.value}`;
+    return retryMonthlyBilling(retryRunId => backend('/api/jobs/monthly-charges', { period, retryRunId }),
+      error => functions.logger.error('Monthly billing scheduler attempt failed', error));
+  });
 export const createInvoice = functions.https.onCall(async (data, context) => {
   const r = await backend(
     "/api/commands",
@@ -132,3 +147,4 @@ export const cleanupOperationalStorage = functions
  .runWith({timeoutSeconds:540,secrets:["SYNDIK_SCHEDULER_SECRET"]})
  .pubsub.schedule("every 60 minutes")
  .onRun(async()=>backend("/api/jobs/lifecycle",{}));
+

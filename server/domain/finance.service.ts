@@ -1,3 +1,4 @@
+import { OperationError } from './errors';
 import { paymentDates } from './paymentDates';
 import { bankDate } from '../../shared/domain/paymentDates';
 import type { PaymentPostingOptions } from '../../types';
@@ -665,7 +666,7 @@ const createInvoiceForResident = async (residentId: string, buildingId: string, 
 
     const building = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, []).find((s) => s.id === syndicId)?.buildings.find((b) => b.id === buildingId);
     if (!building?.residents.some((r) => r.id === residentId))
-        throw new Error('Copropriétaire hors de cet immeuble.');
+        throw new OperationError('Copropriétaire hors de cet immeuble.', 400, 'BILLING_PAYER_INVALID');
     const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, []);
     const invoices = getLocalItem<Invoice[]>(STORAGE_KEYS.INVOICES, []);
     const eligible = charges.filter((c) => c.syndicId === syndicId && c.buildingId === buildingId &&
@@ -675,7 +676,7 @@ const createInvoiceForResident = async (residentId: string, buildingId: string, 
             i.status !== 'paid' && i.status !== 'cancelled');
         if (existing)
             return existing;
-        throw new Error('Aucune nouvelle charge impayée à facturer.');
+        throw new OperationError('Aucune nouvelle charge impayée à facturer.', 409, 'NO_BILLABLE_CHARGES');
     }
     const invoice: Invoice = { id: `inv-${crypto.randomUUID()}`, syndicId, buildingId, residentId,
         invoiceNumber: `FAC-${new Date().getFullYear()}-${String(invoices.length + 1).padStart(4, '0')}`,

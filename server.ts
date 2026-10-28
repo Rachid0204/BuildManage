@@ -1,3 +1,6 @@
+import { monthlyBillingJob } from './server/monthlyBillingJob';
+import { z } from 'zod';
+import { authorizeBillingBuilding, monthlyBillingHttpStatus } from './server/operations';
 import { assertFreshOperationId, runLifecycle, LifecycleError } from './server/lifecycle';
 import { validateProductionEnvironment } from "./server/productionConfig";
 import { buildingReport } from "./server/reports";
@@ -2453,16 +2456,34 @@ async function startServer() {
     if(!scheduler(req))return res.status(403).json({error:'Ordonnanceur non autorisé.'});
     return res.json(await runLifecycle(repository,lifecycleStorage(UPLOADS_DIR)));
   },false));
-  app.post("/api/jobs/monthly-charges", wrap(async (req: express.Request, res: express.Response) => {
-    if (!scheduler(req))
-      return res.status(403).json({ error: "Ordonnanceur non autorisé." });
-    const parts = new Intl.DateTimeFormat("en-CA", {
-        timeZone: "Africa/Casablanca",
-        year: "numeric",
-        month: "2-digit",
-      }).formatToParts(new Date()),
-      period = `${parts.find((p) => p.type === "year")!.value}-${parts.find((p) => p.type === "month")!.value}`;
-    return res.json(await generateScheduledMonthlyCharges(repository, period, String(res.getHeader('X-Request-ID'))));
+  app.post("/api/jobs/monthly-charges", wrap(monthlyBillingJob(repository, scheduler), false));
+  api.get('/api/billing-runs', async (req, res) => {
+    const caller = await extractAndVerifyCaller(req, sharedStore);
+    if (!caller) throw new OperationError('Authentification requise.', 401);
+    const syndicId = String(req.query.syndicId || ''), buildingId = String(req.query.buildingId || '');
+    authorizeBillingBuilding(sharedStore, caller, syndicId, buildingId);
+    const runs = (sharedStore.__billingRuns || []).filter((r: any) => r.results.some((x: any) =>
+      x.syndicId === syndicId && x.buildingId === buildingId && x.status === 'failed'));
+    return res.json({ runs: runs.slice(-50).reverse().map((r: any) => ({ id: r.id, period: r.period,
+      startedAt: r.startedAt, status: r.status,
+      resolved: (sharedStore.__billingRuns || []).some((later: any) => later.period === r.period && later.startedAt >= r.startedAt && later.id !== r.id &&
+        later.results.some((x: any) => x.syndicId === syndicId && x.buildingId === buildingId &&
+          (x.status === 'succeeded' || (x.status === 'skipped' && x.reason === 'already_billed')))),
+      results: r.results.filter((x: any) => x.syndicId === syndicId && x.buildingId === buildingId) })) });
+  });
+  app.post('/api/billing-runs/retry', wrap(async (req: express.Request, res: express.Response) => {
+    const { syndicId, buildingId, runId } = z.object({ syndicId: z.string().min(1), buildingId: z.string().min(1), runId: z.string().uuid() }).parse(req.body);
+    const input = await repository.transaction(async state => {
+      const caller = await extractAndVerifyCaller(req, state);
+      if (!caller) throw new OperationError('Authentification requise.', 401);
+      authorizeBillingBuilding(state, caller, syndicId, buildingId);
+      const run = (state.__billingRuns || []).find((r: any) => r.id === runId);
+      if (!run) throw new OperationError('Exécution introuvable.', 404);
+      return { caller, period: run.period };
+    });
+    const result = await generateScheduledMonthlyCharges(repository, input.period, String(res.getHeader('X-Request-ID')),
+      { target: { syndicId, buildingId, runId, actor: input.caller } });
+    return res.status(monthlyBillingHttpStatus(result)).json(result);
   }, false));
   api.post("/api/jobs/outbox", async (req, res) => {
     if (!scheduler(req))
@@ -2524,4 +2545,5 @@ startServer().catch(error => {
   console.error(error instanceof Error ? error.message : "Server startup failed");
   process.exitCode = 1;
 });
+
 
