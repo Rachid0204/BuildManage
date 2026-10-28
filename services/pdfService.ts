@@ -95,7 +95,7 @@ export const generateQuittancePDF = (
   const doc=new jsPDF(),q=quittance as any;
   doc.setFillColor(15,118,110);doc.rect(0,0,210,34,'F');doc.setTextColor(255,255,255);doc.setFont('helvetica','bold');doc.setFontSize(18);doc.text(q.voidedAt?'QUITTANCE ANNULÉE':'QUITTANCE DE PAIEMENT',14,18);doc.setFontSize(10);doc.text(String(quittance.quittanceNumber),14,27);doc.setTextColor(30,41,59);doc.setFont('helvetica','normal');doc.setFontSize(10);let y=48;
   const write=(label:string,value:any)=>{const lines=doc.splitTextToSize(`${label} : ${value||'Non renseigné'}`,180);if(y+lines.length*6>265){doc.addPage();y=24;}doc.text(lines,14,y);y+=lines.length*6+5;};
-  write('Syndic',syndic?.name||building.managerName);write('Immeuble',`${building.name} · ${building.address||''} · ${building.city||''}`);write('Résident',resident?.name||quittance.residentName);write('Lot',apartment?.number||quittance.apartmentNumber);write('Période couverte',quittance.periodCovered);write('Date du paiement',new Date(quittance.paymentDate).toLocaleDateString('fr-MA'));write('Mode de règlement',quittance.paymentMethod);write('Référence du règlement',quittance.referenceNumber||q.paymentId);write('Identifiant du reçu',quittance.id);
+  write('Syndic',syndic?.name||building.managerName);write('Immeuble',`${building.name} · ${building.address||''} · ${building.city||''}`);write('Résident',resident?.name||quittance.residentName);write('Lot',apartment?.number||quittance.apartmentNumber);write('Période couverte',quittance.periodCovered);write('Date du paiement',new Date(quittance.paymentDate).toLocaleDateString('fr-MA'));write('Date bancaire',quittance.bankTransactionDate || 'Non renseignée');write('Date de comptabilisation',quittance.postingDate || quittance.paymentDate);write('Date de soumission',quittance.submissionDate || 'Non renseignée');write('Mode de règlement',quittance.paymentMethod);write('Référence du règlement',quittance.referenceNumber||q.paymentId);write('Identifiant du reçu',quittance.id);
   const allocation = getRecordedReserveSplit(quittance);
   doc.setFont('helvetica','bold');write('Montant enregistré',currencyFormatter.format(quittance.amount));doc.setFont('helvetica','normal');write('Fonds courant',allocation ? currencyFormatter.format(allocation.chargesCourantesAmount) : 'Non documenté');write('Fonds de réserve',allocation ? currencyFormatter.format(allocation.reserveFundAmount) : 'Non documenté');
   if(q.voidedAt){write('Annulation',new Date(q.voidedAt).toLocaleDateString('fr-MA'));write('Motif',q.voidReason);}else{y+=6;write('Signature du syndic','________________________________');}
@@ -1956,3 +1956,4 @@ export const exportMiseEnDemeurePDF = (
 
   doc.save(`Mise_En_Demeure_Lot_${apartment?.number || resident.id}.pdf`);
 };
+

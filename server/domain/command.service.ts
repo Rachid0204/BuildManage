@@ -640,13 +640,14 @@ async function runOperation(
     args[0] = {
       ...pick(proof, [
         "amount",
-        "date",
+        "bankTransactionDate",
         "receiptUrl",
         "referenceNumber",
         "bankName",
         "paymentMethod",
         "receiptNote",
       ]),
+      bankTransactionDate: proof.bankTransactionDate ?? proof.date,
       chargeId: charge.id,
       buildingId: b.id,
       syndicId: b.syndicId,
@@ -1014,10 +1015,10 @@ async function runOperation(
       "generateMonthlyCharges",
     ].includes(operation)
   )
-    assertPeriod(
+    if (!["reviewPaymentProof", "approvePaymentProofsBatch", "reconcileBankStatementCSV"].includes(operation)) assertPeriod(
       b,
       operation === "createQuittance"
-        ? args[0].paymentDate
+        ? (args[0].postingDate ?? args[0].paymentDate)
         : operation === "addTransaction"
           ? args[1].date
           : new Date().toISOString(),
@@ -1038,8 +1039,9 @@ async function runOperation(
   try {
     result = await dispatch(actor, operation, args, {cabinetId:b?.syndicId,buildingId:b?.id});
   } catch (e: any) {
-    throw new OperationError(e.message, 400);
+    throw new OperationError(e.message, e instanceof OperationError ? e.status : 400);
   }
+  if (operation === "reconcileBankStatementCSV" && args[2]?.preview === true) return result;
   if (
     b &&
     [
@@ -1134,4 +1136,5 @@ const {createCabinet,subscriptionPayment,restoreArchived,archiveBuilding}=create
 const {recomputeMeeting,meetingOperation}=createAssemblyCommands(transactionState,dependencies);
 return {runOperation, cabinetFor, buildingFor, canWrite, appendAudit, actorIdentity, recomputeMeeting};
 }
+
 

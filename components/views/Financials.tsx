@@ -266,9 +266,16 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
     },
   });
 
+  const [bankPostingDate, setBankPostingDate] = useState('');
+  const [bankAdjustmentReason, setBankAdjustmentReason] = useState('');
+  const bankPostingOptions = {
+    postingDate: bankPostingDate || undefined,
+    priorPeriodAdjustmentReason: bankAdjustmentReason || undefined,
+  };
+
   const reviewProofMutation = useMutation({
     mutationFn: (data: { proofId: string; decision: 'approve' | 'reject'; reason?: string }) =>
-      reviewPaymentProof(data.proofId, data.decision, data.reason),
+      reviewPaymentProof(data.proofId, data.decision, data.reason, bankPostingOptions),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['proofs', building.id] });
       queryClient.invalidateQueries({ queryKey: ['charges', building.id] });
@@ -1264,14 +1271,18 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                           const cols = line.split(/[;,]/).map((c) => c.trim().replace(/^"|"$/g, ''));
                           const numCol = cols.find((c) => /^-?\d+([.,]\d+)?$/.test(c.replace(/\s/g, '')));
                           return {
-                            date: cols[0] || new Date().toISOString(),
+                            date: cols[0] || '',
                             label: cols[1] || line,
                             amount: numCol ? parseFloat(numCol.replace(',', '.')) : 0,
                             reference: cols[2] || undefined,
                           };
                         })
                         .filter((r) => r.amount > 0);
-                      const res = await reconcileBankStatementCSV(building.id, parsedRows);
+                      const preview = await reconcileBankStatementCSV(building.id, parsedRows, { ...bankPostingOptions, preview: true });
+                      const dates = (preview.preview || []).map(row =>
+                        `${row.amount} MAD — ${tr('Date bancaire', 'تاريخ البنك')}: ${row.bankTransactionDate} — ${tr('Comptabilisation', 'تاريخ القيد')}: ${row.postingDate}`);
+                      if (!window.confirm([tr('Confirmer le rapprochement', 'تأكيد المطابقة'), ...dates].join('\n'))) return;
+                      const res = await reconcileBankStatementCSV(building.id, parsedRows, bankPostingOptions);
                       await queryClient.invalidateQueries({ queryKey: ['charges', building.id] });
                       await queryClient.invalidateQueries({ queryKey: ['proofs', building.id] });
                       await queryClient.invalidateQueries({ queryKey: ['quittances', building.id] });
@@ -1323,6 +1334,12 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
             </div>
           </div>
 
+          <details className="p-4 border-b border-slate-200">
+            <summary>{tr('Ajustement explicite de période comptable (optionnel)', 'تعديل صريح للفترة المحاسبية (اختياري)')}</summary>
+            <p className="text-xs text-slate-600 my-2">{tr('Par défaut, la date bancaire est utilisée. Pour une période clôturée, choisissez une date ouverte et justifiez l’ajustement. Ces valeurs s’appliquent aux validations individuelles et au CSV.', 'يُستخدم تاريخ البنك افتراضياً. للفترة المغلقة اختر تاريخاً في فترة مفتوحة مع ذكر السبب. تنطبق القيم على الموافقات الفردية وملف CSV.')}</p>
+            <label>{tr('Date de comptabilisation', 'تاريخ القيد')}<input type="date" value={bankPostingDate} onChange={e => setBankPostingDate(e.target.value)} className="border rounded p-2 mx-2" /></label>
+            <label>{tr('Motif de l’ajustement', 'سبب التعديل')}<input value={bankAdjustmentReason} maxLength={1000} onChange={e => setBankAdjustmentReason(e.target.value)} className="border rounded p-2 mx-2" /></label>
+          </details>
           <div className="divide-y divide-slate-100">
             {paymentProofs.map((proof) => (
               <div key={proof.id} className="p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -1357,7 +1374,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                       {tr('Réf Virement :', 'مرجع التحويل:')} <strong className="font-mono">{proof.referenceNumber}</strong>
                     </span>
                     <span>
-                      {tr('Date :', 'التاريخ:')} {new Date(proof.submissionDate).toLocaleDateString(isAr ? 'ar-MA' : 'fr-MA')}
+                      {tr('Soumis le :', 'تاريخ الإرسال:')} {new Date(proof.submissionDate).toLocaleDateString(isAr ? 'ar-MA' : 'fr-MA')} · {tr('Date bancaire :', 'تاريخ البنك:')} {proof.bankTransactionDate || '—'} · {tr('Comptabilisation :', 'تاريخ القيد:')} {proof.postingDate || bankPostingDate || proof.bankTransactionDate || proof.submissionDate.slice(0, 10)}
                     </span>
                   </div>
 
@@ -1577,7 +1594,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                         <td className="px-4 py-3">
                           <span className="font-medium text-slate-800">{quit.periodCovered}</span>
                           <span className="text-[11px] text-slate-400 block font-mono">
-                            {tr('Payé le', 'أُدي في')} {new Date(quit.paymentDate).toLocaleDateString(isAr ? 'ar-MA' : 'fr-MA')}
+                            {tr('Date bancaire', 'تاريخ البنك')}: {quit.bankTransactionDate || '—'} · {tr('Comptabilisation', 'تاريخ القيد')}: {new Date(quit.postingDate || quit.paymentDate).toLocaleDateString(isAr ? 'ar-MA' : 'fr-MA')}
                           </span>
                         </td>
                         <td className="px-4 py-3">
@@ -2975,3 +2992,4 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
 };
 
 export default FinancialsView;
+
