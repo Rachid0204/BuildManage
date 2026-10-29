@@ -8,7 +8,6 @@ import { join, resolve } from 'node:path';
 import { createServer } from 'node:net';
 import { allocateBudgetInCentimes, centimes } from '../shared/domain/money';
 import { createCommandService } from '../server/domain/command.service';
-import { FileRepository } from '../server/repository';
 import { hashPasswordSync } from '../utils/security';
 
 const month = new Date().toISOString().slice(0, 7);
@@ -304,7 +303,11 @@ test('public scheduler endpoint commits successful buildings when one period is 
   try {
     const state: any = fixture();
     const cabinet = state.syndik_prod_syndics_v1[0];
-    cabinet.buildings.push(building('building-c', 'cab-a', 'resident-c'));
+    const buildingB = state.syndik_prod_syndics_v1[1].buildings[0];
+    buildingB.syndicId = 'cab-a';
+    buildingB.residents[0].syndicId = 'cab-a';
+    cabinet.buildings.push(buildingB, building('building-c', 'cab-a', 'resident-c'));
+    state.syndik_prod_syndics_v1.pop();
     cabinet.buildings.forEach((row: any) => {
       row.monthlySyndicFees = 135.25;
       row.totalTantiemes = 1000;
@@ -317,9 +320,6 @@ test('public scheduler endpoint commits successful buildings when one period is 
       row.financials = { balance: 0, reserveFundBalance: 0, transactions: [],
         openingWorkingBalance: 0, openingReserveBalance: 0, openingBalancesRecordedAt: '2026-01-01T00:00:00.000Z' };
     });
-    state.syndik_prod_syndics_v1[0].buildings[1].id = 'building-b';
-    state.syndik_prod_syndics_v1[0].buildings[1].apartments[0].buildingId = 'building-b';
-    state.syndik_prod_syndics_v1[0].buildings[1].residents[0].buildingId = 'building-b';
     state.__closedPeriods = { ['building-b:' + month]: { reason: 'closed for A4 test', actorUid: 'owner-a' } };
     await writeFixture(directory, state);
     const server = await startHttpServer(directory);
