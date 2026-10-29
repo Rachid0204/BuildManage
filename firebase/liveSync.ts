@@ -1,3 +1,5 @@
+import { z } from 'zod';
+const EventRevision = z.object({ revision: z.number().finite() });
 import { getAuthenticatedRequestHeaders } from '../utils/security';
 import { getKnownServerRevision, syncAllSharedStateFromServer } from './services';
 
@@ -60,8 +62,9 @@ export function startLiveSync(onStatus: (status: LiveStatus) => void, onUnauthor
             buffer = buffer.slice(end + 2);
             const data = frame.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trim()).join('\n');
             if (data) {
-              const value = JSON.parse(data);
-              if (Number.isFinite(value.revision)) {
+              const decoded = EventRevision.safeParse(JSON.parse(data) as unknown);
+              if (decoded.success) {
+                const value = decoded.data;
                 attempt = 0;
                 if (value.revision > getKnownServerRevision()) refresh();
               }
@@ -100,3 +103,4 @@ export function startLiveSync(onStatus: (status: LiveStatus) => void, onUnauthor
   void connect();
   return { stop, refresh, reconnect };
 }
+

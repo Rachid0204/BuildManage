@@ -1,3 +1,4 @@
+import type { CommandName, CommandArgs } from '../../shared/api/commands';
 import React, { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { remoteMutation } from "../../firebase/services";
@@ -87,7 +88,7 @@ export default function FinancialTools({ building }: { building: Building }) {
       setBusy(false);
     }
   };
-  const op = async (operation: string, args: any[]) => {
+  const op = async <K extends CommandName,>(operation: K, args: CommandArgs<K>) => {
     const result = await remoteMutation(operation, args);
     await queryClient.invalidateQueries({ queryKey: ['syndics'] });
     return result;
@@ -378,13 +379,15 @@ export default function FinancialTools({ building }: { building: Building }) {
                 disabled={busy || !lot || Number(arrears) <= 0}
                 onClick={() =>
                   void run(() => {
-                    const a = building.apartments.find((a) => a.id === lot)!;
+                    const a = building.apartments.find((a) => a.id === lot);
+                    const residentId = a?.ownerId || a?.tenantId;
+                    if (!residentId) throw new Error(tr('Affectez un résident à ce lot.', 'يرجى ربط ساكن بهذا العقار.'));
                     return op("importOpeningArrears", [
                       building.id,
                       [
                         {
                           apartmentId: lot,
-                          residentId: a.ownerId || a.tenantId,
+                          residentId,
                           period,
                           amount: Number(arrears),
                           description:
@@ -429,3 +432,4 @@ export default function FinancialTools({ building }: { building: Building }) {
     </section>
   );
 }
+

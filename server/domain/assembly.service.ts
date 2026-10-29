@@ -1,127 +1,168 @@
-import { billingPayer, assertBudgetConserved, requireBudgetPayer } from './billingAllocation';
 import { allocateBudgetInCentimes, centimes } from '../../shared/domain/money';
-import type {
-AssembleeGenerale,
-Building,
-Charge,
-Syndic
-} from '../../types';
-import { applyResidentVote,evaluateResolutionStatus } from '../../utils/agVoting';
-import type { BackendMethods,DomainContext } from './context';
+import type { AssembleeGenerale, Building, Charge, Syndic } from '../../types';
+import {
+  applyResidentVote,
+  evaluateResolutionStatus,
+} from '../../utils/agVoting';
+import {
+  assertBudgetConserved,
+  billingPayer,
+  requireBudgetPayer,
+} from './billingAllocation';
+import type { DomainContext } from './context';
 import { assertContext } from './context';
 import { ToggleAGVotingSchema } from './contracts';
 import { STORAGE_KEYS } from './records';
 import { transactionRecords } from './state';
-export function createAssemblyService(context: DomainContext, peers: BackendMethods) {
-assertContext(context);
-const {read: getLocalItem, write: setLocalItem, write} = transactionRecords(context.state);
+export function createAssemblyService(context: DomainContext) {
+  assertContext(context);
+  const {
+    read: getLocalItem,
+    write: setLocalItem,
+    write,
+  } = transactionRecords(context.state);
 
-/**
- * Phase 4.1: Generates prorated calls for funds (Appels de fonds Loi 18-00 Art. 24 / 37)
- * across all building lots using exact centime allocation when an AG resolution with a budget is adopted.
- */
-const generateChargesFromAGResolution = async (agId: string, resolutionId: string): Promise<{
+  /**
+   * Phase 4.1: Generates prorated calls for funds (Appels de fonds Loi 18-00 Art. 24 / 37)
+   * across all building lots using exact centime allocation when an AG resolution with a budget is adopted.
+   */
+  const generateChargesFromAGResolution = async (
+    agId: string,
+    resolutionId: string,
+  ): Promise<{
     createdCharges: Charge[];
     totalAllocatedMad: number;
-}> => {
-
+  }> => {
     const agList = getLocalItem<AssembleeGenerale[]>(STORAGE_KEYS.AG, []);
     const ag = agList.find((item) => item.id === agId);
-    if (!ag)
-        throw new Error('Assemblée Générale introuvable');
+    if (!ag) throw new Error('Assemblée Générale introuvable');
     if (!['completed', 'closed'].includes(ag.status))
-        throw new Error('Clôturez le vote avant de générer les charges.');
+      throw new Error('Clôturez le vote avant de générer les charges.');
     const res = ag.resolutions.find((r) => r.id === resolutionId);
-    if (!res)
-        throw new Error('Résolution introuvable');
+    if (!res) throw new Error('Résolution introuvable');
     if (res.status !== 'approved') {
-        throw new Error('Seules les résolutions adoptées peuvent générer des appels de fonds.');
+      throw new Error(
+        'Seules les résolutions adoptées peuvent générer des appels de fonds.',
+      );
     }
     const budgetMad = res.budgetAmount ?? 0;
     centimes(budgetMad);
     if (budgetMad <= 0) {
-        throw new Error('Aucun budget (MAD) n’est associé à cette résolution.');
+      throw new Error('Aucun budget (MAD) n’est associé à cette résolution.');
     }
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, []);
     let targetBuilding: Building | undefined;
     let targetSyndicId = ag.syndicId;
     for (const s of syndics) {
-        const bld = s.id === ag.syndicId ? s.buildings.find((b) => b.id === ag.buildingId) : undefined;
-        if (bld) {
-            targetBuilding = bld;
-            targetSyndicId = s.id;
-            break;
-        }
+      const bld =
+        s.id === ag.syndicId
+          ? s.buildings.find((b) => b.id === ag.buildingId)
+          : undefined;
+      if (bld) {
+        targetBuilding = bld;
+        targetSyndicId = s.id;
+        break;
+      }
     }
     if (!targetBuilding || targetBuilding.apartments.length === 0) {
-        throw new Error('Aucun lot configuré dans cet immeuble pour répartir le budget voté.');
+      throw new Error(
+        'Aucun lot configuré dans cet immeuble pour répartir le budget voté.',
+      );
     }
-    const targets = targetBuilding.apartments.filter((a: any) => !a.archivedAt)
-        .map(apt => ({ apt, residentId: billingPayer(targetBuilding!, apt) }));
-    targets.forEach(({ apt, residentId }) => requireBudgetPayer(apt, residentId));
+    const targets = targetBuilding.apartments
+      .filter((a: any) => !a.archivedAt)
+      .map((apt) => ({ apt, residentId: billingPayer(targetBuilding!, apt) }));
+    targets.forEach(({ apt, residentId }) =>
+      requireBudgetPayer(apt, residentId),
+    );
     const lots = targets.map(({ apt: a }) => ({
-        id: a.id,
-        tantiemes: a.tantiemes ?? 100,
+      id: a.id,
+      tantiemes: a.tantiemes ?? 100,
     }));
-    const allocations = allocateBudgetInCentimes(budgetMad, lots, targetBuilding.totalTantiemes ?? 1000);
+    const allocations = allocateBudgetInCentimes(
+      budgetMad,
+      lots,
+      targetBuilding.totalTantiemes ?? 1000,
+    );
     const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, []);
     const nowIso = new Date().toISOString();
     const dueDate = new Date(Date.now() + 30 * 86400000).toISOString();
     const createdCharges: Charge[] = [];
     let totalAllocatedMad = 0;
     for (const { apt, residentId } of targets) {
-        const shareMad = allocations.get(apt.id)!;
-        if (shareMad <= 0)
-            continue;
-        const deterministicId = `chg-ag-${ag.id}-${res.id}-${apt.id}`;
-        const existing = charges.find((c) => c.id === deterministicId);
-        if (existing) {
-            if (existing.syndicId !== targetSyndicId || existing.buildingId !== targetBuilding.id ||
-                centimes(existing.amount) !== centimes(shareMad))
-                throw new Error('Charge existante incompatible avec le budget. Rapprochement nécessaire.');
-            continue;
-        }
-        const newCharge: Charge = {
-            id: deterministicId,
-            syndicId: targetSyndicId,
-            buildingId: targetBuilding.id,
-            apartmentId: apt.id,
-            residentId: residentId!,
-            amount: shareMad,
-            paidAmount: 0,
-            dueDate,
-            status: 'unpaid',
-            period: `AG ${new Date(ag.date).getFullYear()} - Rés. #${res.number}`,
-            description: `Appel de fonds AG (${ag.title}) — Résolution #${res.number}: ${res.title}`,
-            chargeType: 'exceptionnelle_travaux',
-            tantiemesApplied: apt.tantiemes ?? 100,
-            createdAt: nowIso,
-        };
-        charges.unshift(newCharge);
-        createdCharges.push(newCharge);
-        totalAllocatedMad = Math.round((totalAllocatedMad + shareMad) * 100) / 100;
+      const shareMad = allocations.get(apt.id)!;
+      if (shareMad <= 0) continue;
+      const deterministicId = `chg-ag-${ag.id}-${res.id}-${apt.id}`;
+      const existing = charges.find((c) => c.id === deterministicId);
+      if (existing) {
+        if (
+          existing.syndicId !== targetSyndicId ||
+          existing.buildingId !== targetBuilding.id ||
+          centimes(existing.amount) !== centimes(shareMad)
+        )
+          throw new Error(
+            'Charge existante incompatible avec le budget. Rapprochement nécessaire.',
+          );
+        continue;
+      }
+      const newCharge: Charge = {
+        id: deterministicId,
+        syndicId: targetSyndicId,
+        buildingId: targetBuilding.id,
+        apartmentId: apt.id,
+        residentId: residentId!,
+        amount: shareMad,
+        paidAmount: 0,
+        dueDate,
+        status: 'unpaid',
+        period: `AG ${new Date(ag.date).getFullYear()} - Rés. #${res.number}`,
+        description: `Appel de fonds AG (${ag.title}) — Résolution #${res.number}: ${res.title}`,
+        chargeType: 'exceptionnelle_travaux',
+        tantiemesApplied: apt.tantiemes ?? 100,
+        createdAt: nowIso,
+      };
+      charges.unshift(newCharge);
+      createdCharges.push(newCharge);
+      totalAllocatedMad =
+        Math.round((totalAllocatedMad + shareMad) * 100) / 100;
     }
-    assertBudgetConserved(charges.filter(c => c.buildingId === targetBuilding!.id &&
-        c.syndicId === targetSyndicId && c.id.startsWith(`chg-ag-${ag.id}-${res.id}-`))
-        .map(c => c.amount), budgetMad);
+    assertBudgetConserved(
+      charges
+        .filter(
+          (c) =>
+            c.buildingId === targetBuilding!.id &&
+            c.syndicId === targetSyndicId &&
+            c.id.startsWith(`chg-ag-${ag.id}-${res.id}-`),
+        )
+        .map((c) => c.amount),
+      budgetMad,
+    );
     setLocalItem(STORAGE_KEYS.CHARGES, charges);
     res.chargesGeneratedAt ??= nowIso;
-    res.generatedChargesCount = charges.filter(c => c.syndicId === targetSyndicId &&
-        c.buildingId === targetBuilding!.id && c.id.startsWith(`chg-ag-${ag.id}-${res.id}-`)).length;
+    res.generatedChargesCount = charges.filter(
+      (c) =>
+        c.syndicId === targetSyndicId &&
+        c.buildingId === targetBuilding!.id &&
+        c.id.startsWith(`chg-ag-${ag.id}-${res.id}-`),
+    ).length;
     setLocalItem(STORAGE_KEYS.AG, agList);
     return { createdCharges, totalAllocatedMad };
-};
-return {generateChargesFromAGResolution};
+  };
+  return { generateChargesFromAGResolution };
 }
 
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
-import { canonicalQuorum,presentVotingWeight } from '../../shared/domain/voting';
+import {
+  canonicalQuorum,
+  presentVotingWeight,
+} from '../../shared/domain/voting';
 import { minimalVotingSnapshot } from '../assemblyPrivacy';
 import type { State } from '../repository';
 import type { CommandDependencies } from './dependencies';
 import type { Actor } from './errors';
+
 
 export function createAssemblyCommands(transactionState: State, dependencies: CommandDependencies) {
 const state=transactionState;
@@ -416,5 +457,6 @@ async function meetingOperation(actor: Actor, operation: string, args: any[]) {
 }
 return {roll, recomputeMeeting, meetingOperation};
 }
+
 
 

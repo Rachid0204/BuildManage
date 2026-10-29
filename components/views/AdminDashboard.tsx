@@ -11,8 +11,6 @@ import {
   getSyndics,
   saveSyndic,
   addBuilding,
-  STORAGE_KEYS,
-  pushKeyToSharedServer,
   remoteMutation,
 } from '../../firebase/services';
 import { hashPasswordSync, generateSecureRandomDigits } from '../../utils/security';
@@ -79,7 +77,7 @@ const AdminDashboard: React.FC = () => {
   const createSyndicMutation = useMutation({
     mutationFn: async () => {
       if (newPassword.length < 10) throw new Error(tr('Mot de passe : 10 caractères minimum.', 'كلمة المرور: عشرة أحرف على الأقل.'));
-      return remoteMutation<Syndic>('adminCreateCabinet', [{name:newCabinetName.trim(),email:newEmail.trim(),managerName:newManagerName.trim(),password:newPassword,phone:newPhone.trim(),city:newCity.trim(),plan:newPlan,initialBuilding:newBuildingName.trim()?{name:newBuildingName.trim(),address:newBuildingAddress.trim(),apartmentsCount:Number(newApartmentsCount),monthlyFees:Number(newMonthlyFees)}:undefined}]);
+      return remoteMutation('adminCreateCabinet', [{name:newCabinetName.trim(),email:newEmail.trim(),managerName:newManagerName.trim(),password:newPassword,phone:newPhone.trim(),city:newCity.trim(),plan:newPlan,initialBuilding:newBuildingName.trim()?{name:newBuildingName.trim(),address:newBuildingAddress.trim(),apartmentsCount:Number(newApartmentsCount),monthlyFees:Number(newMonthlyFees)}:undefined}]);
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['syndics'] });
@@ -675,3 +673,4 @@ const AdminDashboard: React.FC = () => {
 };
 
 export default AdminDashboard;
+

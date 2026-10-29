@@ -51,7 +51,7 @@ try {
       if (ids.length === 1) throw new TypeError('connection interrupted');
       return json({ ok: true, result: { id: 'maintenance-result' } });
     }) as typeof fetch;
-    const input = [{ buildingId: 'building', photoUrl: 'data:image/png;base64,SYNTHETICBLOB', password: 'never-store-password', token: 'never-store-token' }];
+    const input: [Omit<import('../types').MaintenanceRequest, 'id' | 'createdAt'> & {password: string; token: string}] = [{ residentId: 'resident', title: 'Report', description: 'Fixture report', category: 'other', status: 'pending', priority: 'high', buildingId: 'building', photoUrl: 'data:image/png;base64,SYNTHETICBLOB', password: 'never-store-password', token: 'never-store-token' }];
     await assert.rejects(remoteMutation('addMaintenanceRequest', input), /interrupted/);
     const saved = [...memory.values()].join('');
     for (const secret of ['never-store-password', 'never-store-token', 'SYNTHETICBLOB', 'synthetic-token-not-for-storage']) assert.ok(!saved.includes(secret));
@@ -68,9 +68,9 @@ try {
         if (outcome === 'unavailable') throw new Error('offline');
         return outcome === 'expired' ? json({ error: 'expired' }, 410) : json({ ok: true, status: 'pending' });
       }) as typeof fetch;
-      await assert.rejects(remoteMutation('addAnnouncement', ['building', { title: 'A' }]));
+      await assert.rejects(remoteMutation('addAnnouncement', ['building', { title: 'A', content: 'Fixture content' }]));
       const saved = [...memory.values()]; clearStateCache();
-      await assert.rejects(remoteMutation('addAnnouncement', ['building', { title: 'A' }]));
+      await assert.rejects(remoteMutation('addAnnouncement', ['building', { title: 'A', content: 'Fixture content' }]));
       assert.equal(posts, 1); assert.deepEqual([...memory.values()], saved);
     }
   });
@@ -80,21 +80,21 @@ try {
       if (url === '/api/commands') { posts++; throw new Error('interrupted'); }
       return json({ ok: true, status: 'not_found' });
     }) as typeof fetch;
-    await assert.rejects(remoteMutation('addAnnouncement', ['building', { title: 'A' }]));
+    await assert.rejects(remoteMutation('addAnnouncement', ['building', { title: 'A', content: 'Fixture content' }]));
     clearStateCache();
-    await assert.rejects(remoteMutation('addAnnouncement', ['building', { title: 'B' }]), /différente/);
+    await assert.rejects(remoteMutation('addAnnouncement', ['building', { title: 'B', content: 'Fixture content' }]), /différente/);
     assert.equal(posts, 1);
   });
   await test('pending metadata is identity scoped and unavailable storage fails before dispatch', async () => {
     reset(); let posts = 0, checks = 0;
     globalThis.fetch = (async url => { if (url === '/api/operations/status') checks++; else posts++; throw new Error('interrupted'); }) as typeof fetch;
-    await assert.rejects(remoteMutation('addAnnouncement', ['building', { title: 'A' }]));
+    await assert.rejects(remoteMutation('addAnnouncement', ['building', { title: 'A', content: 'Fixture content' }]));
     clearStateCache(); session('other-owner');
-    await assert.rejects(remoteMutation('addAnnouncement', ['building', { title: 'A' }]));
+    await assert.rejects(remoteMutation('addAnnouncement', ['building', { title: 'A', content: 'Fixture content' }]));
     assert.equal(checks, 0); assert.equal(posts, 2); assert.equal(memory.size, 2);
     clearStateCache(); session('storage-denied');
     const original = storage.setItem; storage.setItem = () => { throw new Error('storage unavailable'); };
-    try { await assert.rejects(remoteMutation('addAnnouncement', ['building', { title: 'A' }]), /storage unavailable/); }
+    try { await assert.rejects(remoteMutation('addAnnouncement', ['building', { title: 'A', content: 'Fixture content' }]), /storage unavailable/); }
     finally { storage.setItem = original; }
     assert.equal(posts, 2);
   });
@@ -122,3 +122,4 @@ try {
   clearStateCache(); setActiveAuthContext(null, null); globalThis.fetch = originalFetch;
   Reflect.deleteProperty(globalThis, 'window'); Reflect.deleteProperty(globalThis, 'localStorage');
 }
+

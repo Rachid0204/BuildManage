@@ -6,7 +6,7 @@ Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: {
   removeItem: (key: string) => values.delete(key), clear: () => values.clear(),
   key: (i: number) => [...values.keys()][i] ?? null, get length() { return values.size; },
 } });
-const svc = await import('../firebase/services');
+const svc = await import('./fixtures/legacy/services');
 const K = svc.STORAGE_KEYS;
 const read = <T>(key: string): T => JSON.parse(values.get(key)!);
 const write = (key: string, value: unknown) => values.set(key, JSON.stringify(value));
@@ -100,3 +100,4 @@ const proofBalance = JSON.stringify(building().financials); write(K.QUITTANCES, 
 await svc.reviewPaymentProof(remaining.id, 'approved'); assert.equal(JSON.stringify(building().financials), proofBalance);
 assert.equal(charges()[0].paidAmount, 100);
 console.log('PASS: manual and proof payments update the linked invoice; proof receipt recovery never posts twice.');
+

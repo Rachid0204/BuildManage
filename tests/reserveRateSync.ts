@@ -14,7 +14,7 @@ Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: {
   setItem: (key: string, value: string) => values.set(key, String(value)),
   removeItem: (key: string) => values.delete(key),
 } });
-const svc = await import('../firebase/services');
+const svc = await import('./fixtures/legacy/services');
 const K = svc.STORAGE_KEYS;
 const read = (key: string): any => JSON.parse(values.get(key) || '[]');
 const write = (key: string, value: unknown) => values.set(key, JSON.stringify(value));
@@ -280,3 +280,4 @@ try {
     }
   });
 } finally { clearTimeout(timeout); child.kill(); await exited; rmSync(directory, { recursive: true, force: true }); }
+

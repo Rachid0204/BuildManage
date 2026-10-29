@@ -1,5 +1,5 @@
 import type { SetOpeningBalancesCommand } from '../../../shared/domain/commands';
-import { normalizeBillingPeriodKey } from "../../../firebase/services";
+import { normalizeBillingPeriodKey } from "../legacy/services";
 import { minimalVotingSnapshot } from '../../../server/assemblyPrivacy';
 import { queueMail, mailIsConfigured } from "../../../server/mailer";
 import { randomUUID } from "node:crypto";
@@ -7,7 +7,7 @@ import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { currentState, type State, type StateRepository } from "../../../server/repository";
 import { DependencyError } from '../../../server/dependencyErrors';
-import { executeMutation } from "../../../server/domain";
+import { executeMutation } from "../legacy/domain";
 import {
   ApartmentSchema,
   BuildingSchema,
@@ -586,7 +586,7 @@ export async function runOperation(
     canWrite(actor, b);
     r.syndicId = b.syndicId;
     r.email = r.email.toLowerCase();
-    for (const field of secretFields) delete r[field];
+    for (const field of secretFields) Reflect.deleteProperty(r, field);
     if (r.apartmentId)
       check(
         b.apartments.some((a: any) => a.id === r.apartmentId && !a.archivedAt),
@@ -1838,3 +1838,4 @@ async function meetingOperation(actor: Actor, operation: string, args: any[]) {
   appendAudit(state, actor, operation, b.id);
   return ag;
 }
+

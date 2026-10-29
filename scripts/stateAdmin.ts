@@ -7,7 +7,7 @@ import {
 } from "node:crypto";
 import { createRepository, type State } from "../server/repository";
 import { protectLegacyPassword } from "../server/passwords";
-import { normalizeBillingPeriodKey } from "../firebase/services";
+import { normalizeBillingPeriodKey } from "../shared/domain/billingPeriod";
 const args = process.argv.slice(2),
   mode = args[0],
   option = (name: string) => args[args.indexOf(name) + 1],
@@ -196,3 +196,4 @@ if (mode === "export") {
   throw new Error(
     "Choose export, import or audit. Import is a dry run unless --apply is present.",
   );
+

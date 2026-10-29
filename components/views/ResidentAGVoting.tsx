@@ -92,7 +92,7 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
 
   const handleStartVote = (resolution: AGResolution) => {
     const existingVote = resolution.voters?.find((v) => v.residentId === currentResident?.id);
-    setVoteChoice(existingVote ? existingVote.vote : 'for');
+    setVoteChoice(existingVote ? existingVote.choice || existingVote.vote || 'abstain' : 'for');
     setVoteComment(existingVote?.comment || '');
     setEditingResolutionId(resolution.id);
   };
@@ -429,7 +429,7 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
                         </span>
                       </div>
                       <p className="text-[11px] text-teal-800/80 font-mono">
-                        {tr('Validé le', 'تم التأكيد في')} {new Date(myVote.castAt).toLocaleString(isAr ? 'ar-MA' : 'fr-MA')} · {tr('Pondération :', 'الوزن:')} {myVote.tantiemes}/1000
+                        {tr('Validé le', 'تم التأكيد في')} {(myVote.castAt || myVote.votedAt) ? new Date((myVote.castAt || myVote.votedAt)!).toLocaleString(isAr ? 'ar-MA' : 'fr-MA') : '—'} · {tr('Pondération :', 'الوزن:')} {myVote.tantiemes}/1000
                       </p>
                       {myVote.comment && (
                         <p className="text-xs text-slate-700 italic bg-white p-2 rounded border border-teal-100 mt-1">
@@ -656,7 +656,7 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
                         </span>
                       </td>
                       <td className="px-3 py-2 text-slate-500 font-mono text-[11px]">
-                        {new Date(v.castAt).toLocaleString(isAr ? 'ar-MA' : 'fr-MA')}
+                        {(v.castAt || v.votedAt) ? new Date((v.castAt || v.votedAt)!).toLocaleString(isAr ? 'ar-MA' : 'fr-MA') : '—'}
                         {v.comment && <div className="text-slate-700 italic font-sans mt-0.5">« {v.comment} »</div>}
                       </td>
                     </tr>
@@ -749,3 +749,4 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
 };
 
 export default ResidentAGVoting;
+

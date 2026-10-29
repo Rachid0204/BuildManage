@@ -1,76 +1,110 @@
-import { operationActorScope, readOperationStatus } from './server/operationStatus';
-import { createAdmissionStore, registrationAdmission } from './server/registrationAdmission';
-import { monthlyBillingJob } from './server/monthlyBillingJob';
+import express from 'express';
 import { z } from 'zod';
-import { authorizeBillingBuilding, monthlyBillingHttpStatus } from './server/operations';
-import { assertFreshOperationId, runLifecycle, LifecycleError } from './server/lifecycle';
-import { validateProductionEnvironment } from "./server/productionConfig";
-import { buildingReport } from "./server/reports";
-import { registerLiveUpdates } from "./server/realtime";
+import {
+  installAiBodyParsers,
+  registerAiEndpoints,
+} from './server/aiEndpoints';
 import { projectAssemblyForRole } from './server/assemblyPrivacy';
-import { firebaseLinkedResidentIds } from './server/residentIdentity';
-import { installAiBodyParsers, registerAiEndpoints } from './server/aiEndpoints';
-import { identityTransaction, identityRequestFingerprint, assertIdentityReady, identityMutationActor,
-  queueFirebaseMutation, resumeIdentityMutations, pendingIdentityPlanId, resumeQueuedIdentityMutation } from './server/identityMutations';
+import { privateAttachments } from './server/attachments';
+import { DependencyError } from './server/dependencyErrors';
+import {
+  CommandEnvelopeSchema,
+  CommandIdentitySchema,
+} from './server/domain/commandContracts';
+import {
+  createIdentityAction,
+  registerIdentityRoutes,
+} from './server/identity';
+import {
+  assertIdentityReady,
+  identityMutationActor,
+  identityRequestFingerprint,
+  identityTransaction,
+  pendingIdentityPlanId,
+  queueFirebaseMutation,
+  resumeIdentityMutations,
+  resumeQueuedIdentityMutation,
+} from './server/identityMutations';
+import {
+  assertFreshOperationId,
+  LifecycleError,
+  runLifecycle,
+} from './server/lifecycle';
+import {
+  decrypt,
+  deliverOutbox,
+  encrypt,
+  mailIsConfigured,
+} from './server/mailer';
+import { monthlyBillingJob } from './server/monthlyBillingJob';
+import {
+  actorIdentity,
+  appendAudit,
+  authorizeBillingBuilding,
+  buildingFor,
+  canWrite,
+  generateScheduledMonthlyCharges,
+  monthlyBillingHttpStatus,
+  OperationError,
+  recomputeMeeting,
+  runOperation,
+} from './server/operations';
+import {
+  operationActorScope,
+  readOperationStatus,
+} from './server/operationStatus';
+import { hashPassword, verifyPassword } from './server/passwords';
+import { validateProductionEnvironment } from './server/productionConfig';
+import { registerLiveUpdates } from './server/realtime';
+import {
+  createAdmissionStore,
+  registrationAdmission,
+} from './server/registrationAdmission';
+import { buildingReport } from './server/reports';
 import {
   createRepository,
   currentState,
   sharedState,
-} from "./server/repository";
-import { hashPassword, verifyPassword } from "./server/passwords";
+} from './server/repository';
+import { firebaseLinkedResidentIds } from './server/residentIdentity';
 import {
-  runOperation,
-  generateScheduledMonthlyCharges,
-  appendAudit,
-  OperationError,
-  buildingFor,
-  canWrite,
-  recomputeMeeting,
-  actorIdentity,
-} from "./server/operations";
-import { privateAttachments } from './server/attachments';
-import {
-  registerIdentityRoutes,
-  createIdentityAction,
-} from "./server/identity";
-import {
-  deliverOutbox,
-  mailIsConfigured,
-  encrypt,
-  decrypt,
-} from "./server/mailer";
-import { savePrivateFile, readPrivateFile, lifecycleStorage } from './server/uploads';
-import { DependencyError } from './server/dependencyErrors';
-import express from "express";
+  lifecycleStorage,
+  readPrivateFile,
+  savePrivateFile,
+} from './server/uploads';
 
-import path from "path";
-import fs from "fs";
-import crypto from "crypto";
-import { isDeepStrictEqual } from "node:util";
+import crypto from 'crypto';
+import { isDeepStrictEqual } from 'node:util';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import firebaseConfig from './firebase-applet-config.json';
 import {
-  usesFirebaseAuth, firebaseAdminAuth, identityAccounts, accountUid,
-  registerFirebaseAccount, firebasePasswordLogin, migrateLegacyLogin,
-  bindFirebaseAccount, firebaseSessionUser, sendFirebaseVerification,
-  planFirebasePassword, executeFirebaseMutation,
+  accountUid,
+  bindFirebaseAccount,
+  executeFirebaseMutation,
+  firebaseAdminAuth,
+  firebasePasswordLogin,
+  firebaseSessionUser,
+  identityAccounts,
+  migrateLegacyLogin,
+  planFirebasePassword,
+  registerFirebaseAccount,
+  sendFirebaseVerification,
+  usesFirebaseAuth,
 } from './server/firebaseIdentity';
-import firebaseConfig from "./firebase-applet-config.json";
-import { applyResidentVote } from "./utils/agVoting";
-import type { AssembleeGenerale, Building } from "./types";
-import { fileURLToPath } from "url";
+import type { AssembleeGenerale, Building } from './types';
+import { applyResidentVote } from './utils/agVoting';
 import {
-  hashPasswordSync,
-  verifyPasswordSync,
-  computeSessionSignature,
   getBuildingReserveRate,
   isAlreadyHashedPassword,
-} from "./utils/security";
+} from './utils/security';
+
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const DATA_DIR = process.env.SYNDIK_DATA_DIR || path.join(__dirname, ".data");
 const UPLOADS_DIR = path.join(DATA_DIR, "uploads");
-const STATE_FILE = path.join(DATA_DIR, "shared-state.json");
 
 const HAS_CONFIGURED_SERVER_SECRET = (process.env.SYNDIK_SERVER_SECRET?.length || 0) >= 32;
 const HAS_CONFIGURED_SESSION_SECRET = (process.env.SYNDIK_SESSION_SECRET?.length || 0) >= 32 || HAS_CONFIGURED_SERVER_SECRET;
@@ -86,279 +120,6 @@ interface ServerStore {
   __resetAt?: number;
   __deletedIds?: Record<string, string[]>;
   [key: string]: any;
-}
-
-function loadPersistedState(): ServerStore {
-  try {
-    if (fs.existsSync(STATE_FILE)) {
-      const raw = fs.readFileSync(STATE_FILE, "utf-8");
-      return JSON.parse(raw);
-    }
-  } catch (err) {
-    console.error("Failed to read persisted shared state:", err);
-  }
-  return { __deletedIds: {} };
-}
-
-function savePersistedState(_state: ServerStore): void {}
-
-function recordTombstone(state: ServerStore, key: string, deletedId?: string) {
-  if (!deletedId) return;
-  if (!state.__deletedIds) state.__deletedIds = {};
-  const list = state.__deletedIds[key] || [];
-  if (!list.includes(deletedId)) {
-    list.push(deletedId);
-  }
-  state.__deletedIds[key] = list.slice(-500);
-}
-
-function getTombstones(state: ServerStore, key: string): Set<string> {
-  return new Set(state.__deletedIds?.[key] || []);
-}
-
-function mergeArrayById(
-  existingList: any[] = [],
-  incomingList: any[] = [],
-  idField: string,
-  tombstones: Set<string>,
-  deletedId?: string,
-  collectionKey?: string,
-) {
-  const map = new Map<string, any>();
-  for (const item of existingList) {
-    const id = item?.[idField];
-    if (id && !tombstones.has(id)) {
-      map.set(id, item);
-    }
-  }
-  for (const item of incomingList) {
-    const id = item?.[idField];
-    if (id && !tombstones.has(id)) {
-      const prev = map.get(id);
-      if (!prev) {
-        map.set(id, item);
-      } else {
-        let merged = { ...prev, ...item };
-        // Audit P0-4: Prevent stale snapshots from reverting settled charges, invoices, or reviewed proofs
-        if (collectionKey === "syndik_prod_charges_v1") {
-          const prevPaid =
-            Number(
-              prev.paidAmount ?? (prev.status === "paid" ? prev.amount : 0),
-            ) || 0;
-          const incPaid =
-            Number(
-              item.paidAmount ?? (item.status === "paid" ? item.amount : 0),
-            ) || 0;
-          if (prev.status === "paid" && item.status !== "paid") {
-            merged = {
-              ...merged,
-              status: "paid",
-              paidAmount: Math.max(prevPaid, incPaid, Number(prev.amount) || 0),
-              paidAt: prev.paidAt || item.paidAt,
-            };
-          } else if (prevPaid > incPaid) {
-            merged = {
-              ...merged,
-              paidAmount: prevPaid,
-              status:
-                prevPaid >= (Number(merged.amount) || 0) - 0.005
-                  ? "paid"
-                  : merged.status,
-            };
-          }
-        } else if (collectionKey === "syndik_prod_invoices_v1") {
-          const prevPaid =
-            Number(
-              prev.paidAmount ??
-                (prev.status === "paid" ? prev.totalAmount : 0),
-            ) || 0;
-          const incPaid =
-            Number(
-              item.paidAmount ??
-                (item.status === "paid" ? item.totalAmount : 0),
-            ) || 0;
-          if (prev.status === "paid" && item.status !== "paid") {
-            merged = {
-              ...merged,
-              status: "paid",
-              paidAmount: Math.max(
-                prevPaid,
-                incPaid,
-                Number(prev.totalAmount) || 0,
-              ),
-              paidAt: prev.paidAt || item.paidAt,
-            };
-          } else if (prevPaid > incPaid) {
-            merged = {
-              ...merged,
-              paidAmount: prevPaid,
-              status:
-                prevPaid >= (Number(merged.totalAmount) || 0) - 0.005
-                  ? "paid"
-                  : merged.status,
-            };
-          }
-        } else if (collectionKey === "syndik_prod_proofs_v1") {
-          if (
-            (prev.status === "approved" || prev.status === "rejected") &&
-            item.status === "pending"
-          ) {
-            merged = {
-              ...merged,
-              status: prev.status,
-              reviewedAt: prev.reviewedAt,
-              reviewedBy: prev.reviewedBy,
-            };
-          }
-        }
-        map.set(id, merged);
-      }
-    }
-  }
-  if (deletedId) {
-    map.delete(deletedId);
-  }
-  return Array.from(map.values());
-}
-
-/**
- * Merges Syndics and their nested buildings/apartments/residents/documents/transactions
- * while respecting tombstones so deleted buildings or records NEVER reappear (Audit Items 17 & 18).
- */
-function mergeSyndicsList(
-  existingSyndics: any[] = [],
-  incomingSyndics: any[] = [],
-  tombstones: Set<string>,
-  deletedId?: string,
-) {
-  const syndicMap = new Map<string, any>();
-  for (const s of existingSyndics) {
-    if (s && s.id && !tombstones.has(s.id)) {
-      syndicMap.set(s.id, s);
-    }
-  }
-
-  for (const inc of incomingSyndics) {
-    if (!inc || !inc.id || tombstones.has(inc.id)) continue;
-    const prev = syndicMap.get(inc.id);
-    if (!prev) {
-      const cleanBuildings = Array.isArray(inc.buildings)
-        ? inc.buildings.filter(
-            (b: any) => b?.id && !tombstones.has(b.id) && b.id !== deletedId,
-          )
-        : [];
-      syndicMap.set(inc.id, { ...inc, buildings: cleanBuildings });
-    } else {
-      const bldMap = new Map<string, any>();
-      for (const b of prev.buildings || []) {
-        if (b && b.id && !tombstones.has(b.id) && b.id !== deletedId) {
-          bldMap.set(b.id, b);
-        }
-      }
-      for (const b of inc.buildings || []) {
-        if (b && b.id && !tombstones.has(b.id) && b.id !== deletedId) {
-          const prevBld = bldMap.get(b.id);
-          if (!prevBld) {
-            bldMap.set(b.id, b);
-          } else {
-            // Merge nested collections by ID while respecting tombstones
-            const mergedApartments = mergeArrayById(
-              prevBld.apartments,
-              b.apartments,
-              "id",
-              tombstones,
-              deletedId,
-            );
-            const mergedResidents = mergeArrayById(
-              prevBld.residents,
-              b.residents,
-              "id",
-              tombstones,
-              deletedId,
-            ).map((r: any) => {
-              const {
-                generatedPassword: _gp,
-                password: _pw,
-                ...cleanRes
-              } = r || {};
-              return cleanRes;
-            });
-            const mergedDocuments = mergeArrayById(
-              prevBld.documents,
-              b.documents,
-              "id",
-              tombstones,
-              deletedId,
-            );
-            const mergedAnnouncements = mergeArrayById(
-              prevBld.announcements,
-              b.announcements,
-              "id",
-              tombstones,
-              deletedId,
-            );
-            const mergedTransactions = mergeArrayById(
-              prevBld.financials?.transactions,
-              b.financials?.transactions,
-              "id",
-              tombstones,
-              deletedId,
-            );
-
-            bldMap.set(b.id, {
-              ...prevBld,
-              ...b,
-              apartments: mergedApartments,
-              residents: mergedResidents,
-              documents: mergedDocuments,
-              announcements: mergedAnnouncements,
-              financials: {
-                ...(prevBld.financials || {}),
-                ...(b.financials || {}),
-                transactions: mergedTransactions,
-              },
-            });
-          }
-        }
-      }
-      syndicMap.set(inc.id, {
-        ...prev,
-        ...inc,
-        logoUrl: inc.logoUrl ?? prev.logoUrl ?? "",
-        buildings: Array.from(bldMap.values()),
-      });
-    }
-  }
-
-  if (deletedId) {
-    syndicMap.delete(deletedId);
-  }
-  return Array.from(syndicMap.values());
-}
-
-function sanitizeAccountPayload(list: any[], stripHash = false): any[] {
-  if (!Array.isArray(list)) return [];
-  return list.map((item) => {
-    if (!item || typeof item !== "object") return item;
-    const emailNorm = (item.email || "").trim().toLowerCase();
-    const passwordHash =
-      item.passwordHash ||
-      (typeof item.password === "string"
-        ? isAlreadyHashedPassword(item.password)
-          ? item.password
-          : hashPasswordSync(item.password, emailNorm)
-        : undefined);
-    const {
-      password: _pw,
-      generatedPassword: _gp,
-      passwordHash: _ph,
-      ...rest
-    } = item;
-    if (stripHash) {
-      return rest;
-    }
-    return passwordHash ? { ...rest, passwordHash } : rest;
-  });
 }
 
 interface AuthCallerContext {
@@ -1372,7 +1133,7 @@ async function startServer() {
     if (payload && 'revision' in payload) payload.revision = (state.__revision || 0) + 1;
   };
   const wrap =
-    (handler: any, transactional = true) => async (req: express.Request, res: express.Response) => {
+    (handler: express.RequestHandler, transactional = true) => async (req: express.Request, res: express.Response) => {
       const requestId = crypto.randomUUID();
       res.setHeader('X-Request-ID', requestId);
       const json = res.json.bind(res),
@@ -1397,7 +1158,7 @@ async function startServer() {
             format = "send";
             return res;
           }) as any;
-          await handler(req, res);
+          await handler(req, res, error => { if (error) throw error; });
           if (
             res.statusCode >= 400 &&
             !["/api/auth/login", "/api/auth/recovery/request"].includes(
@@ -1510,8 +1271,8 @@ async function startServer() {
       else json(payload);
     };
   const api = {
-    get: (route: string, handler: any) => app.get(route, wrap(handler)),
-    post: (route: string, handler: any) => app.post(route, wrap(handler)),
+    get: (route: string, handler: (req: express.Request, res: express.Response) => unknown) => app.get(route, wrap(handler)),
+    post: (route: string, handler: (req: express.Request, res: express.Response) => unknown) => app.post(route, wrap(handler)),
   };
   registerIdentityRoutes(api, extractAndVerifyCaller);
   registerLiveUpdates(app, repository, extractAndVerifyCaller);
@@ -1707,7 +1468,7 @@ async function startServer() {
           buildings: [],
         },
       ];
-      savePersistedState(sharedStore);
+
     }
     const firebaseAccount = identityAccounts(sharedStore).find(a => accountUid(a) === profile.uid);
     if (firebaseAccount && usesFirebaseAuth()) bindFirebaseAccount(sharedStore, firebaseAccount, await firebaseAdminAuth().getUser(decoded.uid));
@@ -1890,7 +1651,7 @@ async function startServer() {
       profile: cleanProfile, createdAt: new Date().toISOString() });
     sharedStore.syndik_prod_registered_users_v1 = registered;
     sharedStore.syndik_prod_syndics_v1 = cabinets;
-    savePersistedState(sharedStore);
+
     return res.json({
       ok: true,
       profile: cleanProfile,
@@ -2086,7 +1847,6 @@ async function startServer() {
       return u;
     });
 
-    savePersistedState(sharedStore);
     (sharedStore.__sessionVersions ??= {})[caller.uid] =
       (sharedStore.__sessionVersions?.[caller.uid] || 0) + 1;
     const profile = { ...caller, firebaseAuthTime, mustChangePassword: false };
@@ -2154,7 +1914,7 @@ async function startServer() {
       });
       list[index] = result;
       sharedStore.syndik_prod_ag_v1 = list;
-      savePersistedState(sharedStore);
+
       return res.json({ ag: projectAssemblyForRole(result, caller.role), revision: sharedStore.__revision });
     } catch (error) {
       return res.status(400).json({
@@ -2318,14 +2078,9 @@ async function startServer() {
     const caller = await extractAndVerifyCaller(req, sharedStore);
     if (!caller)
       return res.status(401).json({ error: "Authentification requise." });
-    const { operation, args, operationId } = req.body || {};
-    if (
-      typeof operation !== "string" ||
-      !Array.isArray(args) ||
-      typeof operationId !== "string" ||
-      !/^[a-zA-Z0-9:_-]{16,150}$/.test(operationId)
-    )
-      return res.status(400).json({ error: "Opération invalide." });
+    const command = CommandIdentitySchema.safeParse(req.body as unknown);
+    if (!command.success) return res.status(400).json({ error: 'Opération invalide.' });
+    const { operation, args, operationId } = command.data;
     const fingerprint = crypto
         .createHash("sha256")
         .update(JSON.stringify({ operation, args }))
@@ -2351,6 +2106,8 @@ async function startServer() {
       });
     }
     assertFreshOperationId(sharedStore,operationId);
+    if (!CommandEnvelopeSchema.safeParse(command.data).success)
+      return res.status(400).json({ error: 'Opération invalide.' });
     const firebaseBefore = new Map(identityAccounts(sharedStore).filter(a => a.firebaseUid)
       .map(a => [accountUid(a), { firebaseUid: a.firebaseUid, email: a.email,
         accountsJson: JSON.stringify(identityAccounts(sharedStore).filter(x => accountUid(x) === accountUid(a))) }]));
@@ -2372,7 +2129,7 @@ async function startServer() {
             Object.entries(result).filter(([k]) => !/^\d+$/.test(k)),
           )
         : undefined,
-      responseJson = JSON.stringify({ result, resultMeta });
+      responseJson = JSON.stringify({ operation, result, resultMeta });
     // Invitation secrets are returned once and kept encrypted in retry receipts.
     for (const cabinet of sharedStore.syndik_prod_syndics_v1 || [])
       for (const building of cabinet.buildings || [])
@@ -2567,5 +2324,6 @@ startServer().catch(error => {
   console.error(error instanceof Error ? error.message : "Server startup failed");
   process.exitCode = 1;
 });
+
 
 

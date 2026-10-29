@@ -36,6 +36,9 @@ jobs:
       - name: Lint Firestore security rules
         run: npm run lint
 
+      - name: Verify typed transport and production import boundaries
+        run: npm run test:transport
+
       - name: Verify strict financial and domain invariants
         run: npm run test:financial-invariants
 
@@ -161,4 +164,5 @@ jobs:
           node-version: '22'
       - name: Build runtime-only image and verify both ports without external network
         run: npm run test:container
+
 

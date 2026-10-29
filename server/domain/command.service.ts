@@ -496,7 +496,7 @@ async function runOperation(
     canWrite(actor, b);
     r.syndicId = b.syndicId;
     r.email = r.email.toLowerCase();
-    for (const field of secretFields) delete r[field];
+    for (const field of secretFields) Reflect.deleteProperty(r, field);
     if (operation === "addResident" && r.apartmentId)
       check(
         b.apartments.some((a: any) => a.id === r.apartmentId && !a.archivedAt),
@@ -1144,5 +1144,6 @@ const {createCabinet,subscriptionPayment,restoreArchived,archiveBuilding}=create
 const {recomputeMeeting,meetingOperation}=createAssemblyCommands(transactionState,dependencies);
 return {runOperation, cabinetFor, buildingFor, canWrite, appendAudit, actorIdentity, recomputeMeeting};
 }
+
 
 

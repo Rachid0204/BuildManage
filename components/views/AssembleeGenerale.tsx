@@ -918,7 +918,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                   return (
                     <option key={res.id} value={res.id}>
                       {res.name} — {tr('Lot', 'شقة')} {apt?.number || 'Lot'} ({apt?.tantiemes || 100}/1000 {tr('tantièmes', 'جزء')})
-                      {existingVote ? ` [${tr('Vote actuel:', 'التصويت الحالي:')} ${existingVote.vote.toUpperCase()}]` : ` [${tr('Non voté', 'لم يصوت')}]`}
+                      {existingVote ? ` [${tr('Vote actuel:', 'التصويت الحالي:')} ${(existingVote.choice || existingVote.vote || 'abstain').toUpperCase()}]` : ` [${tr('Non voté', 'لم يصوت')}]`}
                     </option>
                   );
                 })}
@@ -1071,7 +1071,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                         </span>
                       </td>
                       <td className="px-3 py-2 text-slate-500 font-mono text-[11px]">
-                        {new Date(v.castAt).toLocaleString(isAr ? 'ar-MA' : 'fr-MA')}
+                        {(v.castAt || v.votedAt) ? new Date((v.castAt || v.votedAt)!).toLocaleString(isAr ? 'ar-MA' : 'fr-MA') : '—'}
                         {v.comment && <div className="text-slate-700 italic font-sans mt-0.5">« {v.comment} »</div>}
                       </td>
                     </tr>
@@ -1095,4 +1095,5 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
 };
 
 export default AssembleeGeneraleView;
+
 

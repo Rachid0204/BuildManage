@@ -1,33 +1,40 @@
 import type {
-Announcement,
-Building,
-ChatMessage,
-CredentialAuditEntry,
-Document,
-MaintenanceRequest,
-MaintenanceStepUpdate,
-MarketplaceItem,
-Notification,
-Prestataire,
-PrestataireReview,
-Resident,
-Syndic
+  Announcement,
+  Building,
+  ChatMessage,
+  CredentialAuditEntry,
+  Document,
+  MaintenanceRequest,
+  MaintenanceStepUpdate,
+  MarketplaceItem,
+  Notification,
+  Prestataire,
+  PrestataireReview,
+  Resident,
+  Syndic,
 } from '../../types';
 import {
-generateSecureRandomDigits,
-hashPasswordSync
+  generateSecureRandomDigits,
+  hashPasswordSync,
 } from '../../utils/security';
-import {
-ResidentSchema,
-SyndicSchema
-} from '../../utils/validation';
+import { ResidentSchema, SyndicSchema } from '../../utils/validation';
 import { hashPassword } from '../passwords';
-import type { BackendMethods,DomainContext } from './context';
+import type { DomainContext } from './context';
 import { assertContext } from './context';
-import type { PrestataireAccountRecord,ResidentAccountRecord } from './records';
-import { DEFAULT_MAINTENANCE_REQUESTS,DEFAULT_NOTIFICATIONS,PRESTATAIRE_ACCOUNTS_KEY,RESIDENT_ACCOUNTS_KEY,STORAGE_KEYS } from './records';
+import type {
+  PrestataireAccountRecord,
+  ResidentAccountRecord,
+} from './records';
+import {
+  DEFAULT_MAINTENANCE_REQUESTS,
+  DEFAULT_NOTIFICATIONS,
+  PRESTATAIRE_ACCOUNTS_KEY,
+  RESIDENT_ACCOUNTS_KEY,
+  STORAGE_KEYS,
+} from './records';
 import { transactionRecords } from './state';
-export function createSupportingService(context: DomainContext, peers: BackendMethods) {
+
+export function createSupportingService(context: DomainContext) {
 assertContext(context);
 const {read: getLocalItem, write: setLocalItem, write} = transactionRecords(context.state);
 const saveSyndic = async (syndic: Syndic): Promise<Syndic> => {
@@ -131,6 +138,7 @@ const addResident = async (residentData: Omit<Resident, 'id'>, generateCredentia
             return persistedResident;
         }
     }
+    throw new Error('Enregistrement introuvable.');
 };
 
 function saveResidentCredentialAccount(resident: Resident, rawPassword: string): ResidentAccountRecord {
@@ -281,6 +289,7 @@ const updateResident = async (resident: Resident): Promise<Resident> => {
             }
         }
     }
+    throw new Error('Enregistrement introuvable.');
 };
 
 const regenerateResidentCredentials = async (residentId: string): Promise<Resident> => {
@@ -321,6 +330,7 @@ const regenerateResidentCredentials = async (residentId: string): Promise<Reside
             }
         }
     }
+    throw new Error('Enregistrement introuvable.');
 };
 
 const recordResidentCredentialShare = async (residentId: string, method: 'pdf' | 'copy'): Promise<Resident | null> => {
@@ -601,6 +611,7 @@ const regeneratePrestataireCredentials = async (prestataireId: string): Promise<
 
         return { ...updated, generatedPassword: newPassword };
     }
+    throw new Error('Enregistrement introuvable.');
 };
 
 const recordPrestataireCredentialShare = async (prestataireId: string, method: 'pdf' | 'copy'): Promise<Prestataire | null> => {
@@ -834,6 +845,7 @@ const addAnnouncement = async (buildingId: string, announcementData: {
             return newAnn;
         }
     }
+    throw new Error('Enregistrement introuvable.');
 };
 
 const deleteDocument = async (docToDelete: Document): Promise<boolean> => {
@@ -886,6 +898,7 @@ const toggleChatMessageLike = async (messageId: string, userId: string): Promise
         setLocalItem(STORAGE_KEYS.CHAT, list);
         return msg;
     }
+    return null;
 };
 
 const addMarketplaceItem = async (item: Omit<MarketplaceItem, 'id' | 'createdAt'>): Promise<MarketplaceItem> => {
@@ -899,6 +912,7 @@ const addMarketplaceItem = async (item: Omit<MarketplaceItem, 'id' | 'createdAt'
     list.unshift(newItem);
     setLocalItem(STORAGE_KEYS.MARKETPLACE, list);
     return newItem;
+    throw new Error('Enregistrement introuvable.');
 };
 
 const updateMarketplaceItemStatus = async (itemId: string, status: MarketplaceItem['status']): Promise<boolean> => {
@@ -922,4 +936,5 @@ const deleteMarketplaceItem = async (itemId: string): Promise<boolean> => {
 };
 return {saveSyndic, addResident, saveResidentCredentialAccount, updateResident, regenerateResidentCredentials, recordResidentCredentialShare, deleteResident, savePrestataire, generateTempPassword, savePrestataireCredentialAccount, regeneratePrestataireCredentials, recordPrestataireCredentialShare, deletePrestataire, addPrestataireReview, addMaintenanceRequest, normalizeMaintenanceRequestApartment, updateMaintenanceRequest, addAnnouncement, deleteDocument, markNotificationAsRead, sendChatMessage, toggleChatMessageLike, addMarketplaceItem, updateMarketplaceItemStatus, deleteMarketplaceItem};
 }
+
 

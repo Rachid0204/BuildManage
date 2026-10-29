@@ -35,7 +35,7 @@ export function lifecycleStorage(directory:string):import('./lifecycle').Lifecyc
   async list(cursor){
    if(cloud()){
     const [files,next]=await bucket().getFiles({prefix:'private/',maxResults:50,autoPaginate:false,...(cursor?{pageToken:cursor}:{})});
-    return {files:files.map(file=>({id:file.name.split('/').at(-1)!,key:file.name,createdAt:file.metadata.updated||file.metadata.timeCreated||'',generation:file.metadata.generation})),cursor:next?.pageToken};
+    return {files:files.map(file=>({id:file.name.split('/').at(-1)!,key:file.name,createdAt:file.metadata.updated||file.metadata.timeCreated||'',generation:file.metadata.generation === undefined ? undefined : String(file.metadata.generation)})),cursor:next?.pageToken};
    }
    const {readdir,stat}=await import('node:fs/promises');let names:string[];
    try{names=await readdir(directory);}catch(error:any){if(error.code==='ENOENT')return {files:[]};throw error;}
@@ -50,3 +50,4 @@ export function lifecycleStorage(directory:string):import('./lifecycle').Lifecyc
   }catch(error:any){if(error.code===404||error.code==='ENOENT')return true;if(error.code===412)return false;throw dependencyFailure('storage',error);}}
  };
 }
+

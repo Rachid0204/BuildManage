@@ -6,10 +6,12 @@
     "outDir": "lib",
     "rootDir": ".",
     "sourceMap": true,
-    "strict": false,
+    "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "noImplicitReturns": true
   },
-  "include": ["index.ts"]
+  "include": [
+    "index.ts"
+  ]
 }
