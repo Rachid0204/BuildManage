@@ -912,7 +912,6 @@ const addMarketplaceItem = async (item: Omit<MarketplaceItem, 'id' | 'createdAt'
     list.unshift(newItem);
     setLocalItem(STORAGE_KEYS.MARKETPLACE, list);
     return newItem;
-    throw new Error('Enregistrement introuvable.');
 };
 
 const updateMarketplaceItemStatus = async (itemId: string, status: MarketplaceItem['status']): Promise<boolean> => {
