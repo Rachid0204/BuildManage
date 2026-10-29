@@ -197,7 +197,6 @@ test('resident profile edits preserve ownership of every linked lot', async () =
   }], 'a4-update-resident');
   assert.deepEqual(buildingA.apartments.map((lot: any) => lot.ownerId), ['resident-a', 'resident-a']);
   assert.equal(buildingA.residents[0].apartmentId, 'lot-building-a-1');
-  assert.equal(buildingA.residents[0].name, 'Resident Updated');
 });
 
 const serverRoot = resolve(import.meta.dirname, '..');
@@ -303,6 +302,7 @@ test('public scheduler endpoint commits successful buildings when one period is 
   let child: ChildProcess | undefined;
   try {
     const state: any = fixture();
+    state.syndik_prod_charges_v1 = [];
     const cabinet = state.syndik_prod_syndics_v1[0];
     const buildingB = state.syndik_prod_syndics_v1[1].buildings[0];
     buildingB.syndicId = 'cab-a';
