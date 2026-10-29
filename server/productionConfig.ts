@@ -51,7 +51,8 @@ export const productionEnvironmentSchema = z.object({
 }).refine(env => !env.SYNDIK_SESSION_SECRET || env.SYNDIK_SESSION_SECRET !== env.SYNDIK_SERVER_SECRET,
  { path: ['SYNDIK_SESSION_SECRET'], message: 'Must be independent from the legacy compatibility secret' })
  .refine(env => {
-  const primary = JSON.parse(env.SYNDIK_ENCRYPTION_KEYS).primary.key;
+  let primary: string;
+  try { primary = JSON.parse(env.SYNDIK_ENCRYPTION_KEYS).primary.key; } catch { return false; }
   return primary !== env.SYNDIK_SERVER_SECRET && (!env.SYNDIK_SESSION_SECRET || primary !== env.SYNDIK_SESSION_SECRET);
  }, { path: ['SYNDIK_ENCRYPTION_KEYS'], message: 'Primary encryption key must be independent from signing and legacy compatibility secrets' })
  .refine(env => env.SYNDIK_SERVER_SECRET !== env.SYNDIK_SCHEDULER_SECRET &&
