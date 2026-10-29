@@ -1081,7 +1081,7 @@ test('password recovery errors stay inside the dialog and short reset passwords 
   await expect(page.getByRole('alert').first()).toContainText(/obligatoire|caractères/i);
 });
 
-test('retry after a lost publication response reuses the upload and does not create a duplicate listing', async ({ page }) => {
+test('reload after a lost publication response recovers its receipt without another upload or command', async ({ page }) => {
   await login(page);
   await page.getByRole('button', { name: /Souk Voisins/ }).first().click();
   await page.getByRole('button', { name: /Publier une annonce/ }).first().click();
@@ -1092,7 +1092,8 @@ test('retry after a lost publication response reuses the upload and does not cre
   await dialog.locator('input[type=file]').setInputFiles({ name: 'synthetic.png', mimeType: 'image/png', buffer: png });
   await expect(dialog.getByText(/Photos de l’objet \(1\/5\)|Photos de l'objet \(1\/5\)/)).toBeVisible();
   const ids: string[] = [];
-  let uploads = 0;
+  let uploads = 0, statusChecks = 0;
+  page.on('request', request => { if (new URL(request.url()).pathname === '/api/operations/status') statusChecks++; });
   page.on('request', request => { if (new URL(request.url()).pathname === '/api/uploads') uploads++; });
   await page.route('**/api/commands', async route => {
     ids.push(route.request().postDataJSON().operationId);
@@ -1104,11 +1105,18 @@ test('retry after a lost publication response reuses the upload and does not cre
   });
   await dialog.getByRole('button', { name: 'Publier mon annonce' }).click();
   await expect(dialog.getByRole('alert')).toContainText('Synthetic lost response');
+  await page.reload();
+  await page.getByRole('button', { name: /Souk Voisins/ }).first().click();
+  await page.getByRole('button', { name: /Publier une annonce/ }).first().click();
+  await dialog.getByPlaceholder('Ex: Table basse salon marocain...').fill('Uncertain publication response');
+  await dialog.locator('textarea').fill('Retry this publication without creating a second advertisement.');
+  await dialog.locator('input[type=file]').setInputFiles({ name: 'synthetic.png', mimeType: 'image/png', buffer: png });
+  await expect(dialog.getByText(/Photos de l’objet \(1\/5\)|Photos de l'objet \(1\/5\)/)).toBeVisible();
   await dialog.getByRole('button', { name: 'Publier mon annonce' }).click();
   await expect(dialog).toBeHidden();
-  expect(ids).toHaveLength(2);
-  expect(ids[0]).toBe(ids[1]);
+  expect(ids).toHaveLength(1); // Recovery reads the receipt instead of posting the command again.
   expect(uploads).toBe(1);
+  expect(statusChecks).toBe(1);
   expect((await disk()).syndik_prod_marketplace_v1.filter((item: any) => item.title === 'Uncertain publication response')).toHaveLength(1);
 });
 
@@ -1892,4 +1900,5 @@ for(const width of [390, 1280]) test(`A4: PDF export loads on demand and downloa
   expect(readFileSync(path!).subarray(0,5).toString()).toBe('%PDF-');
   expect(scripts.some(p=>/\/pdf-/.test(p))).toBe(true);
 });
+
 

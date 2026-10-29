@@ -43,6 +43,8 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     resolve: null,
   });
 
+  const [checking, setChecking] = useState<string[]>([]);
+
   const showToast = useCallback((message: string, type: ToastType = 'info', title?: string) => {
     const now = Date.now();
     if (lastToast.current.message === message && now - lastToast.current.at < 1000) return lastToast.current.id;
@@ -61,7 +63,12 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => {
     const timers = new Set<ReturnType<typeof setTimeout>>();
     const feedback = (event: Event) => {
-      const { operation, error } = (event as CustomEvent<FormFeedbackEvent>).detail;
+      const { operation, error, phase, operationId } = (event as CustomEvent<FormFeedbackEvent>).detail;
+      if (phase) {
+        const id = operationId || operation;
+        setChecking(current => phase === 'checking' ? [...new Set([...current, id])] : current.filter(x => x !== id));
+        return;
+      }
       const previous = lastToast.current;
       // Existing forms can supply a more specific toast in their completion handler.
       const timer = setTimeout(() => {
@@ -104,6 +111,9 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   return (
     <ToastContext.Provider value={{ showToast, dismissToast, confirmAction }}>
       {children}
+      {checking.length > 0 && <div role="status" aria-live="polite" className="fixed bottom-4 inset-x-4 z-[110] rounded-xl bg-slate-900 text-white p-4 text-center shadow-lg">
+        {isAr ? 'جارٍ التحقق من نتيجة العملية السابقة…' : 'Vérification du résultat de l’opération précédente…'}
+      </div>}
 
       {/* Floating Toast Container */}
       <div
@@ -203,3 +213,4 @@ export const useToast = (): ToastContextType => {
   }
   return ctx;
 };
+

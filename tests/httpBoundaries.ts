@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { createServer } from 'node:net';
@@ -99,6 +99,49 @@ try {
   assert.equal(upload.status, 200); assert.equal((await call(upload.data.url)).status, 401);
   assert.equal((await call(upload.data.url, residentHeaders)).data, '%PDF-1.4\nPRIVATE-FIXTURE');
   assert.equal((await call(upload.data.url, await login('b@audit.invalid'))).status, 403);
+  // Exercise the actual client against HTTP, dropping a committed response and simulating a reload.
+  const nativeFetch = globalThis.fetch;
+  const memory = new Map<string, string>();
+  const storage = { getItem: (k: string) => memory.get(k) ?? null,
+    setItem: (k: string, v: string) => { memory.set(k, v); }, removeItem: (k: string) => { memory.delete(k); } };
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage });
+  const client = await import('../firebase/services');
+  const { setActiveAuthContext } = await import('../utils/security');
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: { localStorage: storage, sessionStorage: storage, dispatchEvent: () => true } });
+  setActiveAuthContext(owner, ownerHeaders.Authorization.slice(7));
+  let commandPosts = 0, statusReads = 0, operationId = '';
+  const interruptedArgs = ['b-a', { title: 'Reload-safe announcement', content: 'Synthetic confidential text must not enter recovery storage.' }];
+  try {
+    globalThis.fetch = (async (url: any, init: any) => {
+      if (url === '/api/commands') { commandPosts++; operationId = JSON.parse(init.body).operationId; }
+      if (url === '/api/operations/status') statusReads++;
+      const response = await nativeFetch(new URL(url, `http://127.0.0.1:${port}`), init);
+      if (url === '/api/commands' && commandPosts === 1) {
+        assert.equal(response.status, 200, await response.clone().text());
+        await response.text();
+        throw new TypeError('Synthetic connection lost after commit');
+      }
+      return response;
+    }) as typeof fetch;
+    await assert.rejects(client.remoteMutation('addAnnouncement', interruptedArgs), /connection lost/);
+    assert.ok([...memory.values()].some(v => v.includes(operationId)));
+    assert.ok([...memory.values()].every(v => !v.includes('confidential text') && !v.includes(ownerHeaders.Authorization)));
+    client.clearStateCache(); // Drop all in-memory retry state; keep sessionStorage as a reload would.
+    const recovered = await client.remoteMutation('addAnnouncement', interruptedArgs);
+    assert.equal(recovered.title, 'Reload-safe announcement');
+    assert.equal(commandPosts, 1); assert.equal(statusReads, 1);
+    const persisted = JSON.parse(readFileSync(join(dataDir, 'shared-state.json'), 'utf8'));
+    assert.equal(persisted.syndik_prod_syndics_v1[0].buildings[0].announcements.filter((a: any) => a.title === recovered.title).length, 1);
+    assert.equal((await call('/api/operations/status', {}, { operationId })).status, 401);
+    assert.equal((await call('/api/operations/status', residentHeaders, { operationId })).data.status, 'not_found');
+    assert.equal((await call('/api/operations/status', ownerHeaders, { operationId })).data.status, 'completed');
+    assert.equal((await call('/api/operations/status', ownerHeaders, { operationId: 'bad' })).status, 400);
+    assert.equal((await call('/api/operations/status', ownerHeaders, { operationId: `op:${Date.now() - 15 * 86400000}:expired-test` })).status, 410);
+    console.log('PASS: interrupted HTTP response survives client reload, resolves original receipt without command replay, and enforces receipt ownership.');
+  } finally {
+    client.clearStateCache(); setActiveAuthContext(null, null); globalThis.fetch = nativeFetch;
+    Reflect.deleteProperty(globalThis, 'window'); Reflect.deleteProperty(globalThis, 'localStorage');
+  }
   const archived = await call('/api/commands',ownerHeaders,{operation:'deleteResident',args:['r-a'],operationId:crypto.randomUUID()});
   assert.equal(archived.status,200,JSON.stringify(archived.data));
   assert.equal((await call('/api/shared-state',residentHeaders)).status,401);
@@ -108,3 +151,4 @@ try {
   if (child.exitCode === null && child.signalCode === null) { const done = new Promise<void>((r) => child.once('exit', () => r())); child.kill(); await done; }
   rmSync(dataDir, { recursive: true, force: true });
 }
+

@@ -1,3 +1,5 @@
+import { operationHash, operationTarget, pendingFor, savePending, removePending, type PendingOperation } from './operationRecovery';
+import { abortMutationRequests, withRequestDeadline } from './requestDeadline';
 import type { PaymentPostingOptions } from '../types';
 import type { AddBuildingCommand, CreateQuittanceCommand, PostIncomeCommand, ToggleAGVotingCommand } from '../shared/domain/commands';
 import { allocateBudgetInCentimes, splitChargeReserveAndOperating, getBuildingReserveRate, getRecordedReserveSplit, centimes } from '../shared/domain/money';
@@ -208,95 +210,7 @@ export async function pushKeyToSharedServer<T>(
   const sanitizedVal = stripPlaintextCredentialsForStorage(key, val);
   if (getServerRuntime() || typeof window === 'undefined') return sanitizedVal;
   throw new Error('Utilisez une opération serveur explicite.');
-  const headers = getAuthenticatedRequestHeaders();
-  const isNetworkBlockedSim =
-    typeof engineStorage !== 'undefined' &&
-    engineStorage.getItem('syndik_simulate_network_offline') === 'true';
 
-  if (isNetworkBlockedSim) {
-    try {
-      engineStorage.setItem('syndik_sync_status_v1', 'failed');
-    } catch {
-      // ignore
-    }
-    if (!options?.background) {
-      throw new Error('Synchronisation serveur interrompue (réseau hors ligne).');
-    }
-    return sanitizedVal;
-  }
-
-  // In isolated Node unit tests with native fetch and no active session, skip network call unless fetch is mocked
-  const isNativeUnconfiguredNodeFetch =
-    typeof window === 'undefined' &&
-    !headers['Authorization'] &&
-    (typeof fetch === 'undefined' || fetch.toString().includes('[native code]'));
-
-  if (isNativeUnconfiguredNodeFetch) {
-    return sanitizedVal;
-  }
-
-  try {
-    const res = await fetch('/api/shared-state', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ key, value: sanitizedVal, deletedId }),
-    });
-    if (!res.ok) {
-      try {
-        engineStorage.setItem('syndik_sync_status_v1', 'failed');
-      } catch {
-        // ignore
-      }
-      if (!options?.background) {
-        throw new Error(`Échec d’écriture serveur durable (HTTP ${res.status})`);
-      }
-      return sanitizedVal;
-    }
-    try {
-      engineStorage.setItem('syndik_sync_status_v1', 'synced');
-    } catch {
-      // ignore
-    }
-    const contentType = res.headers?.get?.('content-type') || '';
-    if (contentType.includes('application/json')) {
-      const data = await res.json();
-      if (typeof data?.revision === 'number') {
-        lastKnownServerRevision = data.revision;
-        lastSyncTimestampMs = Date.now();
-      }
-      if (data && data.ok && data.value !== undefined && data.value !== null) {
-        const cleanServerVal = stripPlaintextCredentialsForStorage(key, data.value as T);
-        try {
-          engineStorage.setItem(key, JSON.stringify(cleanServerVal));
-        } catch {
-          // ignore
-        }
-        return cleanServerVal;
-      }
-    }
-    return sanitizedVal;
-  } catch (err: any) {
-    const msg = String(err?.message || err || '');
-    const causeCode = String(err?.cause?.code || '');
-    const isRelativeUrlNodeError =
-      causeCode === 'ERR_INVALID_URL' ||
-      msg.includes('Failed to parse URL') ||
-      msg.includes('Invalid URL');
-    if (isRelativeUrlNodeError) {
-      return sanitizedVal;
-    }
-    try {
-      engineStorage.setItem('syndik_sync_status_v1', 'failed');
-    } catch {
-      // ignore
-    }
-    if (!options?.background) {
-      throw err instanceof Error
-        ? err
-        : new Error('Échec de synchronisation durable avec le serveur.');
-    }
-    return sanitizedVal;
-  }
 }
 
 export async function syncAllSharedStateFromServer(
@@ -2210,9 +2124,8 @@ export const castResidentAGVote = async (
   const comment = isObjectCall ? residentIdOrPayload.comment : commentArg;
 
   if (typeof window !== 'undefined') {
-    const response = await fetch('/api/ag/vote', { method: 'POST', headers: getAuthenticatedRequestHeaders(),
+    const { response, data } = await commandRequest('/api/ag/vote', { method: 'POST', headers: getAuthenticatedRequestHeaders(),
       body: JSON.stringify({ agId, resolutionId, residentId, apartmentId, choice, comment }) });
-    const data = await response.json();
     if (!response.ok || !data.ag) throw new Error(data.error || 'Le vote a échoué.');
     const list = getLocalItem<AssembleeGenerale[]>(STORAGE_KEYS.AG, mockAssembleesGenerales);
     const index = list.findIndex((a) => a.id === agId);
@@ -3316,10 +3229,8 @@ async function readFileAsDurableDataUrl(file: File): Promise<string> {
 }
 
 export const uploadDocument = async (buildingId: string,file: File): Promise<Document> => {
-  const dataUrl = await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result));reader.onerror=()=>reject(new Error('Lecture impossible.'));reader.readAsDataURL(file);});
-  const response = await fetch('/api/uploads',{method:'POST',headers:getAuthenticatedRequestHeaders(),body:JSON.stringify({buildingId,name:file.name,dataUrl})});
-  const result = await readCommandResponse(response);if (!response.ok) throw new Error(result.error || 'Téléversement impossible.');
-  return remoteMutation('attachDocument',[buildingId,{fileId:result.fileId}]);
+  const dataUrl = await readFileAsDurableDataUrl(file);
+  return remoteMutation('attachDocument', [buildingId, { name: file.name, dataUrl }]);
 };
 
 export const deleteDocument = async (docToDelete: Document): Promise<boolean> => {
@@ -3549,11 +3460,10 @@ export const deleteMarketplaceItem = async (itemId: string): Promise<boolean> =>
   return true;
 };
 
-const pendingOperations = new Map<string, string>();
 const ephemeralInvites = new Map<string, any>();
 const preparedOperations = new Map<string, unknown[]>();
 const inflightOperations = new Map<string, Promise<unknown>>();
-export function clearStateCache() { stateCacheGeneration++; for (const controller of syncControllers) controller.abort(); syncControllers.clear(); inflightSyncPromise = null; clearBusinessCache(); pendingOperations.clear(); preparedOperations.clear(); inflightOperations.clear(); ephemeralInvites.clear(); lastKnownServerRevision = 0; lastSyncTimestampMs = 0; }
+export function clearStateCache() { stateCacheGeneration++; abortMutationRequests(); for (const controller of syncControllers) controller.abort(); syncControllers.clear(); inflightSyncPromise = null; clearBusinessCache(); preparedOperations.clear(); inflightOperations.clear(); ephemeralInvites.clear(); lastKnownServerRevision = 0; lastSyncTimestampMs = 0; }
 export function remoteMutation<T = any>(operation: string, args: unknown[]): Promise<T> {
   args = [...args];
   while (args.length && args.at(-1) === undefined) args.pop();
@@ -3569,24 +3479,64 @@ export function remoteMutation<T = any>(operation: string, args: unknown[]): Pro
 
 async function performRemoteMutation<T>(operation: string, args: unknown[], requestKey: string): Promise<T> {
   const generation = stateCacheGeneration;
-  const requireSameIdentity = () => { if (generation !== stateCacheGeneration) throw new Error('La session a changé. Recommencez depuis votre espace.'); };
+  const requireSameIdentity = () => { if (generation !== stateCacheGeneration || getAuthenticatedRequestHeaders()['X-Syndik-Uid'] !== uid) throw new Error('La session a changé. Recommencez depuis votre espace.'); };
+  const uid = getAuthenticatedRequestHeaders()['X-Syndik-Uid'];
+  if (!uid) throw new Error('Authentification requise.');
+  let record: PendingOperation | undefined;
   try {
+  const requestHash = await operationHash(requestKey);
+  requireSameIdentity();
+  const target = operationTarget(operation, args);
+  const records = pendingFor(uid);
+  record = records.find(r => r.requestHash === requestHash && r.operation === operation)
+    || records.find(r => r.operation === operation && r.target === target);
+  if (record) {
+    notifyOperation({ operation, phase: 'checking', operationId: record.operationId });
+    try {
+      const { response, data } = await commandRequest('/api/operations/status', { method: 'POST', headers: getAuthenticatedRequestHeaders(),
+        body: JSON.stringify({ operationId: record.operationId }) });
+      requireSameIdentity();
+      if (!response.ok) throw new Error(data.error || 'Vérification de la demande impossible.');
+      if (data.status === 'completed') {
+        if (data.operation !== operation) throw new Error('Résultat incompatible avec la demande.');
+        applyCommandResult(data, operation);
+        removePending(uid, record.operationId);
+        if (record.requestHash !== requestHash) throw new Error('La demande précédente a abouti. Vérifiez les données actualisées avant de soumettre une nouvelle demande.');
+        preparedOperations.delete(requestKey);
+        return (Array.isArray(data.result) ? Object.assign(data.result, data.resultMeta || {}) : data.result) as T;
+      }
+      if (record.requestHash !== requestHash) throw new Error('Une demande différente reste non résolue pour cette cible. Reprenez la demande initiale avant de continuer.');
+      if (data.status !== 'not_found') throw new Error('Demande encore en cours. Vérifiez son résultat dans un instant.');
+    } finally { notifyOperation({ operation, phase: 'settled', operationId: record.operationId }); }
+  } else {
+    record = { operationId: `op:${Date.now()}:${crypto.randomUUID()}`, operation, target: operationTarget(operation, args),
+      timestamp: Date.now(), requestHash, uploads: {} };
+    savePending(uid, record);
+  }
   const first: any = args[0];
   const linked = typeof first === 'string' ? [STORAGE_KEYS.MAINTENANCE, STORAGE_KEYS.MARKETPLACE, STORAGE_KEYS.CHAT].flatMap(key => JSON.parse(engineStorage.getItem(key) || '[]')).find(item => item.id === first) : undefined;
-  const buildingId = first?.buildingId || linked?.buildingId;
+  const buildingId = first?.buildingId || linked?.buildingId || (operation === 'attachDocument' ? first : undefined);
   if (preparedOperations.has(requestKey)) args = preparedOperations.get(requestKey)!;
   else if (buildingId) {
+    const uploadFile = async (value: string, name: string) => {
+      const hash = await operationHash(value);
+      requireSameIdentity();
+      if (record!.uploads[hash]) return record!.uploads[hash];
+      const { response, data: result } = await commandRequest('/api/uploads', { method: 'POST', headers: getAuthenticatedRequestHeaders(),
+        body: JSON.stringify({ buildingId, name, dataUrl: value }) });
+      requireSameIdentity();
+      if (!response.ok) throw new Error(result.error || 'Téléversement impossible.');
+      if (typeof result.url !== 'string' || !/^\/api\/uploads\/[a-zA-Z0-9_-]+$/.test(result.url)) throw new Error('Référence de fichier invalide.');
+      record!.uploads[hash] = result.url;
+      savePending(uid, record!);
+      return result.url;
+    };
     const uploaded = new Map<string, Promise<string>>();
     const upload = async (value: any, key = ''): Promise<any> => {
       if (typeof value === 'string' && value.startsWith('data:') && ['photoUrl','photos','images','imageUrl','receiptUrl','attachmentUrl','stepPhotos'].includes(key)) {
         let pending = uploaded.get(value);
         if (!pending) {
-          pending = (async () => {
-            const response = await fetch('/api/uploads', { method: 'POST', headers: getAuthenticatedRequestHeaders(), body: JSON.stringify({ buildingId, name: 'piece-jointe', dataUrl: value }) });
-            const result = await readCommandResponse(response);
-            if (!response.ok) throw new Error(result.error || 'Téléversement impossible.');
-            return result.url as string;
-          })();
+          pending = uploadFile(value, 'piece-jointe');
           uploaded.set(value, pending);
         }
         return pending;
@@ -3595,23 +3545,37 @@ async function performRemoteMutation<T>(operation: string, args: unknown[], requ
       if (value && typeof value === 'object') return Object.fromEntries(await Promise.all(Object.entries(value).map(async ([field,item]) => [field,await upload(item,field)])));
       return value;
     };
-    args = await upload(args);
+    if (operation === 'attachDocument' && typeof (args[1] as any)?.dataUrl === 'string') {
+      const url = await uploadFile((args[1] as any).dataUrl, (args[1] as any).name);
+      args = [buildingId, { fileId: url.split('/').at(-1) }];
+    } else args = await upload(args);
     requireSameIdentity();
     preparedOperations.set(requestKey, args);
   }
   requireSameIdentity();
-  // Keep one identity and the same uploaded file URLs across an uncertain response.
-  const operationId = pendingOperations.get(requestKey) || `op:${Date.now()}:${crypto.randomUUID()}`;
-  pendingOperations.set(requestKey, operationId);
-  const response = await fetch('/api/commands', { method: 'POST', headers: getAuthenticatedRequestHeaders(), body: JSON.stringify({ operation,args,operationId }) });
-  const data = await readCommandResponse(response);
+  // Persisted identity and private upload references survive an uncertain response and reload.
+  const operationId = record.operationId;
+  const { response, data } = await commandRequest('/api/commands', { method: 'POST', headers: getAuthenticatedRequestHeaders(), body: JSON.stringify({ operation,args,operationId }) });
   requireSameIdentity();
   if (!response.ok) {
-    if (response.status < 500) { pendingOperations.delete(requestKey); preparedOperations.delete(requestKey); }
+    if (response.status < 500 && ![401, 408, 409, 429].includes(response.status)) {
+      removePending(uid, operationId); preparedOperations.delete(requestKey);
+    }
     throw new Error(data.error || 'Enregistrement impossible.');
   }
-  pendingOperations.delete(requestKey);
+  if (data.ok !== true) throw new Error('Réponse serveur incertaine. Vérifiez le résultat avant de réessayer.');
+  applyCommandResult(data, operation);
+  removePending(uid, operationId);
   preparedOperations.delete(requestKey);
+  return (Array.isArray(data.result) ? Object.assign(data.result,data.resultMeta || {}) : data.result) as T;
+  } catch (error) {
+    if (generation !== stateCacheGeneration) throw new Error('La session a changé. Recommencez depuis votre espace.');
+    notifyOperation({ operation, error: error instanceof Error ? error.message : 'Enregistrement impossible.' });
+    throw error;
+  }
+}
+
+function applyCommandResult(data: any, operation: string) {
   if (data.result?.id && (data.result.invitationCode || data.result.invitationToken)) ephemeralInvites.set(data.result.id,{ invitationCode:data.result.invitationCode,invitationToken:data.result.invitationToken });
   if (data.store && (typeof data.revision !== 'number' || data.revision >= lastKnownServerRevision)) {
     if (typeof data.revision === 'number') lastKnownServerRevision = data.revision;
@@ -3620,11 +3584,10 @@ async function performRemoteMutation<T>(operation: string, args: unknown[], requ
   }
   for (const key of Object.values(STORAGE_KEYS)) notifyStateUpdated(key);
   notifyOperation({ operation });
-  return (Array.isArray(data.result) ? Object.assign(data.result,data.resultMeta || {}) : data.result) as T;
-  } catch (error) {
-    if (generation === stateCacheGeneration) notifyOperation({ operation, error: error instanceof Error ? error.message : 'Enregistrement impossible.' });
-    throw error;
-  }
+}
+
+async function commandRequest(url: string, init: RequestInit) {
+  return withRequestDeadline(url, init, async response => ({ response, data: await readCommandResponse(response) }));
 }
 
 async function readCommandResponse(response: Response): Promise<any> {

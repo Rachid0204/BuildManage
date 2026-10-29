@@ -1,3 +1,4 @@
+import { operationActorScope, readOperationStatus } from './server/operationStatus';
 import { monthlyBillingJob } from './server/monthlyBillingJob';
 import { z } from 'zod';
 import { authorizeBillingBuilding, monthlyBillingHttpStatus } from './server/operations';
@@ -2294,6 +2295,13 @@ async function startServer() {
     return res.send(bytes);
   });
 
+  api.post('/api/operations/status', async (req, res) => {
+    const caller = await extractAndVerifyCaller(req, sharedStore);
+    if (!caller) return res.status(401).json({ error: 'Authentification requise.' });
+    const result = readOperationStatus(sharedStore, caller, req.body?.operationId);
+    return res.json({ ok: true, ...result,
+      ...(result.status === 'completed' ? { store: filterStoreForCaller(sharedStore, caller), revision: sharedStore.__revision || 0 } : {}) });
+  });
   api.post("/api/commands", async (req, res) => {
     const caller = await extractAndVerifyCaller(req, sharedStore);
     if (!caller)
@@ -2365,6 +2373,8 @@ async function startServer() {
       delete provider.invitationToken;
     }
     receipts[key] = {
+      operation,
+      actorScope: operationActorScope(caller),
       fingerprint,
       identityMutationId: pendingIdentityPlanId(),
       encryptedResponse: encrypt(responseJson),
