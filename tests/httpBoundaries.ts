@@ -146,6 +146,20 @@ try {
   assert.equal(archived.status,200,JSON.stringify(archived.data));
   assert.equal((await call('/api/shared-state',residentHeaders)).status,401);
   console.log('PASS: registration isolation, token verification, roles, scoped voting, proof review and private files.');
+  // Exhaust admission, then make the platform file unreadable: the real route
+  // must still return 429, proving it never enters the platform transaction.
+  let limited = false;
+  for (let i = 0; i < 11; i++) {
+    const response = await call('/api/auth/register', {}, { email: `burst${i}@audit.invalid`, password: 'short' });
+    if (response.status === 429) { limited = true; break; }
+    assert.equal(response.status, 400);
+  }
+  assert.ok(limited);
+  writeFileSync(join(dataDir, 'shared-state.json'), 'unreadable platform state');
+  const blocked = await call('/api/auth/register', {}, { email: 'last@audit.invalid', password });
+  assert.equal(blocked.status, 429); assert.equal(blocked.data.code, 'AUTH_RATE_LIMITED');
+  assert.equal(readFileSync(join(dataDir, 'shared-state.json'), 'utf8'), 'unreadable platform state');
+  console.log('PASS: real registration route rejects bursts before reading platform state.');
 } finally {
   clearTimeout(timeout);
   if (child.exitCode === null && child.signalCode === null) { const done = new Promise<void>((r) => child.once('exit', () => r())); child.kill(); await done; }
