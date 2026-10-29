@@ -23,18 +23,26 @@ Required keys are shown in `deploy/runtime.env.example`:
 - `SYNDIK_UPLOAD_BUCKET` must name the actual existing private upload bucket.
 - `SYNDIK_SERVER_SECRET` and separate `SYNDIK_SCHEDULER_SECRET` must be stable,
   at least 32 characters, and not placeholder or repeated-pattern values.
-  Generate cryptographically random secrets privately; validation cannot prove
-  entropy or that a key remains identical across revisions.
+- `SYNDIK_ENCRYPTION_KEYS` is a Secret Manager JSON keyring with a primary
+  `{ "kid", "key" }` and optional retired decrypt-only entries. Each key is at
+  least 32 characters and each key ID is unique. Configure a dedicated
+  `SYNDIK_SESSION_SECRET`; it falls back to `SYNDIK_SERVER_SECRET` for older
+  deployments. Generate keys cryptographically and keep them stable across
+  revisions.
 
 Optional service/project aliases must match the target when supplied.
 Emulator hosts and test bypass flags are refused in production.
 
-The application uses `SYNDIK_SERVER_SECRET` for session HMAC/cookie tokens and
-AES-GCM key derivation for encrypted recovery/identity intents. There is no
-separate JWT/cookie secret to configure. **Preserve the existing strong server
-key exactly.** Automatic key rotation would break sessions and encrypted records.
-If an existing key fails validation, plan a separate credential migration before
-routing traffic; this change neither rotates keys nor rewrites data.
+Session HMAC/cookie tokens use `SYNDIK_SESSION_SECRET` (or the legacy
+`SYNDIK_SERVER_SECRET` fallback). Durable AES-GCM records use the independent
+`SYNDIK_ENCRYPTION_KEYS` keyring. Envelopes carry a format version and key ID;
+legacy v1 envelopes without a key ID still require the original server key.
+For a rotation, deploy the new primary while retaining the old key as retired,
+then run `npm run keys:rotate` against the authoritative repository. Confirm
+the reported counts and run it again until it reports zero changes before
+removing the retired key. Keep `SYNDIK_SERVER_SECRET` unchanged until all
+legacy v1 records have been migrated. Signing-key rotations do not change durable
+record decryption. Never paste key values into logs, PRs, or shell history.
 The scheduler key must match the scheduled Functions configuration, whose
 `SYNDIK_BACKEND_URL` must point to the authoritative backend.
 
