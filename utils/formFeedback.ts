@@ -1,5 +1,7 @@
 export type FormFeedbackEvent = {
   operation: string;
+  phase?: 'checking' | 'settled';
+  operationId?: string;
   error?: string;
 };
 
@@ -102,3 +104,4 @@ export function readableError(error: unknown, isAr = false): string {
 export function notifyOperation(detail: FormFeedbackEvent) {
   if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('syndik-operation-feedback', { detail }));
 }
+

@@ -11,7 +11,7 @@ const { syncAllSharedStateFromServer, remoteMutation, clearStateCache, addTransa
 const { setActiveAuthContext } = await import('../utils/security');
 const { engineStorage } = await import('../firebase/cache');
 const originalFetch = globalThis.fetch;
-Object.defineProperty(globalThis, 'window', { configurable: true, value: { localStorage: storage, dispatchEvent: () => true } });
+Object.defineProperty(globalThis, 'window', { configurable: true, value: { localStorage: storage, sessionStorage: storage, dispatchEvent: () => true } });
 const session = (id: string) => setActiveAuthContext({ uid: id, displayName: id, role: 'syndic', email: `${id}@synthetic.invalid` }, `synthetic-token-${id}`);
 const payload = (id: string) => ({ ok: true, revision: 1, store: { [STORAGE_KEYS.SYNDICS]: [{ id }] } });
 const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
@@ -30,8 +30,11 @@ try {
 
   session('old');
   globalThis.fetch = (() => new Promise<Response>(resolve => { release = resolve; })) as typeof fetch;
+  let mutationStarted = false;
+  globalThis.fetch = (() => new Promise<Response>(resolve => { release = resolve; mutationStarted = true; })) as typeof fetch;
   const mutation = remoteMutation('addAnnouncement', ['synthetic-building', { title: 'Old identity', content: 'Synthetic content' }]);
   const rejected = assert.rejects(mutation, /session a changé/);
+  while (!mutationStarted) await new Promise(resolve => setTimeout(resolve, 0));
   clearStateCache();
   session('current');
   engineStorage.setItem(STORAGE_KEYS.SYNDICS, JSON.stringify([{ id: 'current' }]));
@@ -72,3 +75,4 @@ try {
   assert.equal(financials.balance, -12);
   console.log('PASS: same-millisecond journal entries retain unique identities and reconcile exactly.');
 } finally { Date.now = now; }
+
