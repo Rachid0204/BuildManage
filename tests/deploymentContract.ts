@@ -7,6 +7,8 @@ import { readFileSync } from 'node:fs';
 const good: NodeJS.ProcessEnv = {
  NODE_ENV: 'production', SYNDIK_STATE_BACKEND: 'firestore', SYNDIK_UPLOAD_BACKEND: 'gcs',
  SYNDIK_AUTH_PROVIDER: 'firebase', SYNDIK_SERVER_SECRET: randomBytes(32).toString('hex'),
+ SYNDIK_SESSION_SECRET: randomBytes(32).toString('hex'),
+ SYNDIK_ENCRYPTION_KEYS: JSON.stringify({primary:{kid:'test-primary',key:randomBytes(32).toString('hex')},retired:[]}),
  SYNDIK_SCHEDULER_SECRET: randomBytes(32).toString('hex'), GOOGLE_CLOUD_PROJECT: 'immogest-7faaf',
  FIRESTORE_DATABASE_ID: 'ai-studio-immogest-6d16b790-183d-49fd-9d4f-086d99dc2be3',
  PUBLIC_APP_URL: 'https://immogest.cloud.run', SYNDIK_UPLOAD_BUCKET: 'immogest-7faaf-uploads', PORT: '3000',
@@ -50,7 +52,7 @@ test('typed validator preserves stable keys without mutating environment',async(
 });
 test('all required fields fail closed when missing',async()=>{
  const {validateProductionEnvironment}=await import('../server/productionConfig');
- for(const key of Object.keys(good).filter(k=>!['NODE_ENV','PORT'].includes(k)))
+ for(const key of Object.keys(good).filter(k=>!['NODE_ENV','PORT','SYNDIK_SESSION_SECRET'].includes(k)))
   assert.throws(()=>validateProductionEnvironment({...good,[key]:undefined}),new RegExp(`PRODUCTION_CONFIG_INVALID.*${key}`));
 });
 test('invalid target, auth, storage and URL values are refused',async()=>{
