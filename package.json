@@ -15,6 +15,8 @@
     "test:business": "node --import ./tests/helpers/networkGuard.mjs --import tsx tests/paymentBoundaries.ts",
     "test:ai-protection": "node --import ./tests/helpers/networkGuard.mjs --import tsx tests/aiEndpointProtection.ts",
     "test:security": "node --import ./tests/helpers/networkGuard.mjs --import tsx tests/httpBoundaries.ts && node --import ./tests/helpers/networkGuard.mjs --import tsx --test tests/registrationAdmission.test.ts",
+    "test:encryption-rotation": "node --import tsx --test tests/encryptionKeyRotation.test.ts",
+    "keys:rotate": "node --env-file-if-exists=.env.local --import tsx scripts/rotateEncryptionKeys.ts",
     "test:assembly-privacy": "node --import ./tests/helpers/networkGuard.mjs --import tsx tests/assemblyPrivacy.ts",
     "test:opening-balances": "node --import ./tests/helpers/networkGuard.mjs --import tsx tests/openingBalances.ts",
     "test:reserve-rate": "node --import ./tests/helpers/networkGuard.mjs --import tsx tests/reserveRateSync.ts",
