@@ -1,4 +1,5 @@
 import { operationActorScope, readOperationStatus } from './server/operationStatus';
+import { createAdmissionStore, registrationAdmission } from './server/registrationAdmission';
 import { monthlyBillingJob } from './server/monthlyBillingJob';
 import { z } from 'zod';
 import { authorizeBillingBuilding, monthlyBillingHttpStatus } from './server/operations';
@@ -1340,6 +1341,12 @@ async function startServer() {
     firebaseConfig.firestoreDatabaseId || "(default)";
   const repository = createRepository(),
     sharedStore: ServerStore = sharedState;
+  // Must precede every wrapped identity route and all platform transactions.
+  app.use(registrationAdmission(createAdmissionStore(), req => {
+    const token = String(req.headers.authorization || '').replace(/^Bearer /, '');
+    const caller = verifyServerSessionToken(token);
+    return caller?.email || caller?.uid;
+  }));
   const finalizeIdentityResponse: Parameters<typeof identityTransaction>[4] = (response, results, state, intent) => {
     const payload = response.payload;
     const actor = intent.actorUid && lookupCandidateProfilesInStore(state, intent.actorUid)[0];

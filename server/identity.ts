@@ -69,10 +69,13 @@ export function registerIdentityRoutes(api: any, authenticate: any) {
       return res.status(401).json({ error: "Authentification requise." });
     const u = identityAccounts(state).find(u => accountUid(u) === caller.uid);
     if (u?.profile?.emailVerified === false) {
-      if (u.lastVerificationAt > Date.now() - 60000)
+      if (u.lastVerificationAt > Date.now() - 60000) {
+        const retryAfter = Math.max(1, Math.ceil((u.lastVerificationAt + 60000 - Date.now()) / 1000));
         return res
           .status(429)
-          .json({ error: "Veuillez patienter une minute." });
+          .set('Retry-After', String(retryAfter))
+          .json({ ok: false, code: 'AUTH_RATE_LIMITED', error: "Veuillez patienter une minute.", retryAfter });
+      }
       if (u.firebaseUid) {
         const idToken = String(req.body?.idToken || '');
         let decoded;
@@ -154,4 +157,5 @@ export function registerIdentityRoutes(api: any, authenticate: any) {
     return res.json({ ok: true });
   });
 }
+
 
