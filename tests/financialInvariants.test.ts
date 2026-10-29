@@ -78,8 +78,7 @@ test('centime allocation conserves every budget and never leaks shares to zero-w
   ];
   for (let i = 0; i < 500; i++) {
     const weights = Array.from({ length: 1 + random(24) }, () => random(1001));
-    if (weights.every(weight => weight === 0)) weights[random(weights.length)] = 1;
-    cases.push(weights);
+    cases.push(weights.some(weight => weight > 0) ? weights : [1, ...weights.slice(1)]);
   }
   const budgets = [0, 0.01, 0.03, 1.01, 1000.99, 999999.99];
   for (let i = 0; i < 500; i++) budgets.push(random(100000000) / 100);
