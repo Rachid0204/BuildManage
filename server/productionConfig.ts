@@ -48,8 +48,14 @@ export const productionEnvironmentSchema = z.object({
  FIREBASE_STORAGE_EMULATOR_HOST: z.literal('').optional(),
  FUNCTIONS_EMULATOR: z.literal('').optional(),
  SYNDIK_TEST_MODE: z.literal('').optional(),
-}).refine(env => env.SYNDIK_SERVER_SECRET !== env.SYNDIK_SCHEDULER_SECRET &&
- (!env.SYNDIK_SESSION_SECRET || env.SYNDIK_SESSION_SECRET !== env.SYNDIK_SCHEDULER_SECRET),
+}).refine(env => !env.SYNDIK_SESSION_SECRET || env.SYNDIK_SESSION_SECRET !== env.SYNDIK_SERVER_SECRET,
+ { path: ['SYNDIK_SESSION_SECRET'], message: 'Must be independent from the legacy compatibility secret' })
+ .refine(env => {
+  const primary = JSON.parse(env.SYNDIK_ENCRYPTION_KEYS).primary.key;
+  return primary !== env.SYNDIK_SERVER_SECRET && (!env.SYNDIK_SESSION_SECRET || primary !== env.SYNDIK_SESSION_SECRET);
+ }, { path: ['SYNDIK_ENCRYPTION_KEYS'], message: 'Primary encryption key must be independent from signing and legacy compatibility secrets' })
+ .refine(env => env.SYNDIK_SERVER_SECRET !== env.SYNDIK_SCHEDULER_SECRET &&
+  (!env.SYNDIK_SESSION_SECRET || env.SYNDIK_SESSION_SECRET !== env.SYNDIK_SCHEDULER_SECRET),
  { path: ['SYNDIK_SCHEDULER_SECRET'], message: 'Must differ from session-signing and legacy compatibility keys' });
 export type ProductionEnvironment = z.infer<typeof productionEnvironmentSchema>;
 
