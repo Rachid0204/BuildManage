@@ -221,7 +221,6 @@ const ResidentDashboard: React.FC = () => {
         photos: data.photos && data.photos.length > 0 ? data.photos : undefined,
         photoUrl: data.photos && data.photos.length > 0 ? data.photos[0] : undefined,
         status: 'pending',
-        createdAt: new Date().toISOString(),
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['maintenance', currentResident?.id] });
@@ -1785,3 +1784,4 @@ const ResidentDashboard: React.FC = () => {
 };
 
 export default ResidentDashboard;
+

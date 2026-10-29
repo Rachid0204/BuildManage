@@ -6,7 +6,7 @@ const memory = new Map<string, string>();
 const storage = { getItem: (k: string) => memory.get(k) ?? null,
   setItem: (k: string, v: string) => { memory.set(k, v); }, removeItem: (k: string) => { memory.delete(k); } };
 Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage });
-const { remoteMutation, clearStateCache } = await import('../firebase/services');
+const { remoteMutation, clearStateCache, addMaintenanceRequest } = await import('../firebase/services');
 const { setActiveAuthContext } = await import('../utils/security');
 const events: any[] = [];
 Object.defineProperty(globalThis, 'window', { configurable: true, value: {
@@ -17,6 +17,30 @@ const session = (uid = 'recovery-owner') => setActiveAuthContext({ uid, role: 's
 const json = (data: any, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
 const reset = () => { clearStateCache(); memory.clear(); events.length = 0; session(); };
 try {
+  await test('maintenance retries preserve command identity when client creation timestamps change', async () => {
+    for (const committed of [false, true]) {
+      reset(); const commands: any[] = []; let checks = 0;
+      globalThis.fetch = (async (url, init) => {
+        if (url === '/api/operations/status') {
+          checks++;
+          return json(committed
+            ? { ok: true, status: 'completed', operation: 'addMaintenanceRequest', result: { id: 'report' } }
+            : { ok: true, status: 'not_found' });
+        }
+        commands.push(JSON.parse(String(init?.body)));
+        if (commands.length === 1) throw new TypeError('interrupted');
+        return json({ ok: true, result: { id: 'report' } });
+      }) as typeof fetch;
+      const draft: any = { buildingId: 'building', residentId: 'resident', title: 'Elevator', description: 'Stopped', priority: 'high', status: 'pending' };
+      await assert.rejects(addMaintenanceRequest({ ...draft, createdAt: '2026-10-28T10:00:00Z' }), /interrupted/);
+      clearStateCache();
+      assert.deepEqual(await addMaintenanceRequest({ ...draft, createdAt: '2026-10-29T10:00:00Z' }), { id: 'report' });
+      assert.equal(checks, 1);
+      assert.equal(commands.length, committed ? 1 : 2);
+      assert.equal('createdAt' in commands[0].args[0], false);
+      if (!committed) assert.deepEqual(commands[1], commands[0]);
+    }
+  });
   await test('reload reuses uploaded references and the original opId after an uncommitted response', async () => {
     reset(); let uploads = 0; const ids: string[] = []; const args: any[] = [];
     globalThis.fetch = (async (url, init) => {

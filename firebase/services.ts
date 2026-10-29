@@ -3027,12 +3027,18 @@ export const getMaintenanceRequestsForResident = async (
   );
 };
 
-export const addMaintenanceRequest = async (request: Omit<MaintenanceRequest, 'id'>) => {
-  if (typeof window !== 'undefined') return remoteMutation('addMaintenanceRequest', [request]);
+export const addMaintenanceRequest = async (request: Omit<MaintenanceRequest, 'id' | 'createdAt'> & { createdAt?: string }) => {
+  if (typeof window !== 'undefined') {
+    // The command assigns createdAt on the server. Do not let a regenerated
+    // presentation timestamp change the identity of an interrupted submission.
+    const { createdAt: _createdAt, ...input } = request;
+    return remoteMutation('addMaintenanceRequest', [input]);
+  }
 
   const normalizedDraft = normalizeMaintenanceRequestApartment({
     id: crypto.randomUUID(),
     ...request,
+    createdAt: request.createdAt || new Date().toISOString(),
   });
 
   const initialUpdate: MaintenanceStepUpdate = {
