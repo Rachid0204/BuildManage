@@ -229,19 +229,21 @@ async function startHttpServer(directory: string) {
   child.stdout!.on('data', chunk => { logs += chunk; });
   child.stderr!.on('data', chunk => { logs += chunk; });
   for (let i = 0; i < 300 && !logs.includes('Server running'); i++) {
-    if (child.exitCode !== null) throw new Error('Server exited before readiness: ' + logs);
+    if (child.exitCode !== null || child.signalCode !== null) throw new Error('Server exited before readiness: ' + logs);
     await new Promise(resolveDelay => setTimeout(resolveDelay, 50));
   }
   assert.ok(logs.includes('Server running'), 'server did not become ready: ' + logs);
   return { child, origin: 'http://127.0.0.1:' + port };
 }
 async function stopHttpServer(child: ChildProcess | undefined) {
-  if (!child || child.exitCode !== null) return;
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
   const exited = once(child, 'exit');
   child.kill('SIGTERM');
-  const timeout = new Promise(resolveTimeout => setTimeout(resolveTimeout, 5000));
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise(resolveTimeout => { timer = setTimeout(resolveTimeout, 5000); });
   await Promise.race([exited, timeout]);
-  if (child.exitCode === null) {
+  clearTimeout(timer!);
+  if (child.exitCode === null && child.signalCode === null) {
     const stopped = once(child, 'exit');
     child.kill('SIGKILL');
     await stopped;
