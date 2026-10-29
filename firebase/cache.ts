@@ -1,26 +1,9 @@
+// Server snapshots are memory-only. Authentication and pending command identities
+// have separate, explicit persistence paths. No domain storage adapter lives here.
 const records = new Map<string, string>();
 export const engineStorage = {
-  getItem(key: string): string | null {
-    return typeof window === "undefined"
-      ? globalThis.localStorage.getItem(key)
-      : key.startsWith("syndik_prod_")
-        ? (records.get(key) ?? null)
-        : window.localStorage.getItem(key);
-  },
-  setItem(key: string, value: string) {
-    if (typeof window === "undefined")
-      globalThis.localStorage.setItem(key, value);
-    else if (key.startsWith("syndik_prod_")) records.set(key, value);
-    else window.localStorage.setItem(key, value);
-  },
-  removeItem(key: string) {
-    if (typeof window === "undefined") globalThis.localStorage.removeItem(key);
-    else {
-      records.delete(key);
-      window.localStorage.removeItem(key);
-    }
-  },
+  getItem: (key: string): string | null => records.get(key) ?? null,
+  setItem: (key: string, value: string): void => { records.set(key, value); },
+  removeItem: (key: string): void => { records.delete(key); },
 };
-export function clearBusinessCache() {
-  records.clear();
-}
+export function clearBusinessCache(): void { records.clear(); }

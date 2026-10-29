@@ -71,7 +71,7 @@ import {
   regeneratePrestataireCredentials,
   uploadDocument,
   STORAGE_KEYS,
-} from '../firebase/services';
+} from './fixtures/legacy/services';
 import type { Syndic, UserProfile } from '../types';
 
 function assert(condition: unknown, message: string): void {
@@ -817,3 +817,4 @@ runVerification().catch((err) => {
   console.error('❌ Verification failed with unhandled error:', err);
   process.exit(1);
 });
+

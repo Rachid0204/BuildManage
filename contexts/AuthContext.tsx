@@ -1,17 +1,39 @@
 import { useQueryClient } from '@tanstack/react-query';
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
-import { User, onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut, signInWithEmailAndPassword } from 'firebase/auth';
-import { auth } from '../firebase/config';
-import { STORAGE_KEYS, pushKeyToSharedServer, syncAllSharedStateFromServer, sanitizeAccountRecordsInStorage, clearStateCache } from '../firebase/services';
-import type { UserProfile, UserRole, SubscriptionPlan, Prestataire } from '../types';
 import {
-  hashPasswordSync,
-  isAlreadyHashedPassword,
+  GoogleAuthProvider,
+  User,
+  onAuthStateChanged,
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  signOut,
+} from 'firebase/auth';
+import React, {
+  ReactNode,
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
+import { auth } from '../firebase/config';
+import {
+  clearStateCache,
+  syncAllSharedStateFromServer,
+} from '../firebase/services';
+import type {
+  Prestataire,
+  SubscriptionPlan,
+  UserProfile,
+  UserRole,
+} from '../types';
+import {
   createSignedSessionEnvelope,
-  verifySignedSessionEnvelope,
-  setActiveAuthContext,
   getAuthenticatedRequestHeaders,
+  isAlreadyHashedPassword,
+  setActiveAuthContext,
 } from '../utils/security';
+
 
 export interface RegisterAccountInput {
   role: UserRole;
@@ -88,81 +110,6 @@ export const getHomeRouteForRole = (role?: UserRole): string => {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const SESSION_STORAGE_KEY = 'syndik_auth_session_v1';
-const REGISTERED_USERS_KEY = STORAGE_KEYS.REGISTERED_USERS;
-const TRIAL_DURATION_MS = 30 * 86400000; // Standardized 30-day trial (Audit Item 21)
-
-interface StoredUserAccount {
-  uid: string;
-  email: string;
-  passwordHash: string;
-  profile: UserProfile;
-  createdAt: string;
-}
-
-function getStoredRegisteredUsers(): StoredUserAccount[] {
-  try {
-    const raw = localStorage.getItem(REGISTERED_USERS_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as any[];
-    if (!Array.isArray(parsed)) return [];
-    let migrated = false;
-    const cleaned: StoredUserAccount[] = parsed
-      .filter((item) => item && typeof item.email === 'string' && (item.profile || item.role))
-      .map((item) => {
-        const emailNorm = item.email.trim().toLowerCase();
-        const passwordHash =
-          item.passwordHash ||
-          (typeof item.password === 'string' ? hashPasswordSync(item.password, emailNorm) : '');
-        const profile: UserProfile = item.profile || {
-          uid: item.uid || `usr-${Date.now()}`,
-          email: emailNorm,
-          displayName: item.displayName || emailNorm.split('@')[0],
-          role: item.role || 'syndic',
-          syndicId: item.syndicId,
-          buildingId: item.buildingId,
-          buildingName: item.buildingName,
-          phone: item.phone,
-        };
-        if ('password' in item || !item.profile) {
-          migrated = true;
-        }
-        return {
-          uid: item.uid || profile.uid,
-          email: emailNorm,
-          passwordHash,
-          profile,
-          createdAt: item.createdAt || new Date().toISOString(),
-        };
-      });
-    if (migrated) {
-      localStorage.setItem(REGISTERED_USERS_KEY, JSON.stringify(cleaned));
-    }
-    return cleaned;
-  } catch {
-    return [];
-  }
-}
-
-function saveStoredRegisteredUser(account: StoredUserAccount) {
-  const existing = getStoredRegisteredUsers();
-  const sanitizedAccount: StoredUserAccount = {
-    uid: account.uid,
-    email: account.email.trim().toLowerCase(),
-    passwordHash: account.passwordHash,
-    profile: account.profile,
-    createdAt: account.createdAt,
-  };
-  const idx = existing.findIndex(
-    (u) => u.email.toLowerCase() === sanitizedAccount.email || u.uid === sanitizedAccount.uid
-  );
-  if (idx >= 0) {
-    existing[idx] = sanitizedAccount;
-  } else {
-    existing.push(sanitizedAccount);
-  }
-  localStorage.setItem(REGISTERED_USERS_KEY, JSON.stringify(existing));
-  void pushKeyToSharedServer(REGISTERED_USERS_KEY, existing);
-}
 
 function createVerifiedIdentityAdapter(profile: UserProfile, apiToken: string): User {
   return {
@@ -546,3 +493,4 @@ export const useAuth = () => {
   }
   return context;
 };
+

@@ -110,7 +110,7 @@ try {
   Object.defineProperty(globalThis, 'window', { configurable: true, value: { localStorage: storage, sessionStorage: storage, dispatchEvent: () => true } });
   setActiveAuthContext(owner, ownerHeaders.Authorization.slice(7));
   let commandPosts = 0, statusReads = 0, operationId = '';
-  const interruptedArgs = ['b-a', { title: 'Reload-safe announcement', content: 'Synthetic confidential text must not enter recovery storage.' }];
+  const interruptedArgs: import('../shared/api/commands').CommandArgs<'addAnnouncement'> = ['b-a', { title: 'Reload-safe announcement', content: 'Synthetic confidential text must not enter recovery storage.' }];
   try {
     globalThis.fetch = (async (url: any, init: any) => {
       if (url === '/api/commands') { commandPosts++; operationId = JSON.parse(init.body).operationId; }
@@ -165,4 +165,5 @@ try {
   if (child.exitCode === null && child.signalCode === null) { const done = new Promise<void>((r) => child.once('exit', () => r())); child.kill(); await done; }
   rmSync(dataDir, { recursive: true, force: true });
 }
+
 

@@ -7,7 +7,7 @@ const storage = {
   removeItem: (key: string) => { memory.delete(key); },
 };
 Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage });
-const { syncAllSharedStateFromServer, remoteMutation, clearStateCache, addTransaction, STORAGE_KEYS } = await import('../firebase/services');
+const { syncAllSharedStateFromServer, remoteMutation, clearStateCache, STORAGE_KEYS } = await import('../firebase/services');
 const { setActiveAuthContext } = await import('../utils/security');
 const { engineStorage } = await import('../firebase/cache');
 const originalFetch = globalThis.fetch;
@@ -65,6 +65,7 @@ storage.setItem(STORAGE_KEYS.SYNDICS, JSON.stringify([{ id: 'synthetic-cabinet',
 const now = Date.now;
 Date.now = () => 1234567890;
 try {
+  const { addTransaction } = await import('./fixtures/legacy/services');
   const transactions = await Promise.all(Array.from({ length: 12 }, (_, index) => addTransaction('synthetic-building', {
     date: '2026-10-22', description: `Synthetic expense ${index}`, amount: 1,
     type: 'expense', fundType: 'courant', category: 'maintenance', paymentMethod: 'especes',
@@ -75,4 +76,5 @@ try {
   assert.equal(financials.balance, -12);
   console.log('PASS: same-millisecond journal entries retain unique identities and reconcile exactly.');
 } finally { Date.now = now; }
+
 

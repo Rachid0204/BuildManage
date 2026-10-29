@@ -69,6 +69,7 @@ export interface CredentialAuditEntry {
 }
 
 export interface Resident {
+  archivedAt?: string;
   /** Server-derived account binding; never accepted as identity authority on writes. */
   readonly emailIdentityLinked?: boolean;
   id: string;
@@ -95,6 +96,7 @@ export interface Resident {
 }
 
 export interface Apartment {
+  archivedAt?: string;
   id: string;
   number: string;
   floor: number;
@@ -429,6 +431,7 @@ export interface PrestataireReview {
 }
 
 export interface Prestataire {
+  archivedAt?: string;
   id: string;
   syndicId: string;
   buildingId: string;
@@ -592,6 +595,7 @@ export interface Building {
 }
 
 export interface Syndic {
+  archivedAt?: string;
   id: string;
   name: string;
   logoUrl?: string;
@@ -613,6 +617,7 @@ export interface Syndic {
   email?: string;
   buildings: Building[];
 }
+
 
 
 

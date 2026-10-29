@@ -34,7 +34,7 @@ export function applyResidentVote(
     const present = ag.attendees.some((a) => a.residentId === vote.residentId && a.apartmentNumber === actualLot?.number &&
       ['present', 'represented'].includes(a.status));
     if (actualLot && present && Number.isFinite(actualLot.tantiemes) && actualLot.tantiemes! > 0 &&
-      ['for', 'against', 'abstain'].includes(vote.choice || vote.vote)) {
+      ['for', 'against', 'abstain'].includes(vote.choice || vote.vote || '')) {
       canonical.set(actualLot.id, { ...vote, apartmentId: actualLot.id, tantiemes: actualLot.tantiemes! });
     }
   }
@@ -49,8 +49,9 @@ export function applyResidentVote(
   ag.presentTantiemes = building.apartments.filter((a) => ag.attendees.some((p) => p.residentId === a.ownerId &&
     p.apartmentNumber === a.number && ['present', 'represented'].includes(p.status)))
     .reduce((sum, a) => sum + (Number.isFinite(a.tantiemes) ? a.tantiemes! : 0), 0);
-  ag.quorumReached = ag.presentTantiemes >= ag.quorumRequired;
+  ag.quorumReached = ag.quorumRequired !== undefined && ag.presentTantiemes >= ag.quorumRequired;
   resolution.status = evaluateResolutionStatus(resolution, ag);
   return ag;
 }
+
 

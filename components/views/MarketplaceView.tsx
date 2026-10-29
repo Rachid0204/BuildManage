@@ -130,7 +130,7 @@ const MarketplaceCard: React.FC<MarketplaceCardProps> = ({
 
   const [cardPhotoIndex, setCardPhotoIndex] = useState(0);
 
-  const cleanPhone = (item.whatsapp || item.phone).replace(/\s+/g, '').replace('+', '');
+  const cleanPhone = (item.whatsapp || item.phone || '').replace(/\s+/g, '').replace('+', '');
   const waUrl = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(
     tr(
       `Salam ${item.residentName}, je suis votre voisin (${currentApartmentNumber}). Je vous contacte au sujet de votre annonce sur le Souk : "${item.title}". Est-ce toujours disponible ?`,
@@ -664,7 +664,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
         const q = searchQuery.toLowerCase();
         const matchesTitle = item.title.toLowerCase().includes(q);
         const matchesDesc = item.description.toLowerCase().includes(q);
-        const matchesSeller = item.residentName.toLowerCase().includes(q);
+        const matchesSeller = (item.residentName || '').toLowerCase().includes(q);
         if (!matchesTitle && !matchesDesc && !matchesSeller) return false;
       }
       return true;
@@ -1284,7 +1284,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
                     )}
                   </button>
                   <a
-                    href={`https://wa.me/${(activeDetailItem.whatsapp || activeDetailItem.phone).replace(/\s+/g, '').replace('+', '')}`}
+                    href={`https://wa.me/${(activeDetailItem.whatsapp || activeDetailItem.phone || '').replace(/\s+/g, '').replace('+', '')}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="flex items-center gap-1.5 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition-colors shadow-xs"
@@ -1293,7 +1293,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
                     <span>WhatsApp</span>
                   </a>
                   <a
-                    href={`tel:${activeDetailItem.phone.replace(/\s+/g, '')}`}
+                    href={`tel:${(activeDetailItem.phone || '').replace(/\s+/g, '')}`}
                     className="flex items-center gap-1.5 py-2 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs transition-colors shadow-xs"
                   >
                     <PhoneIcon />
@@ -1589,3 +1589,4 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
 };
 
 export default MarketplaceView;
+

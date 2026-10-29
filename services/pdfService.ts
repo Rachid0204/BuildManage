@@ -228,7 +228,7 @@ export const generatePvAgPDF = (ag: AssembleeGenerale, building: Building, syndi
   doc.setFont("helvetica", "bold");
   doc.text("ORDRE DU JOUR :", 14, y);
   doc.setFont("helvetica", "normal");
-  ag.agendaItems.forEach((item, index) => {
+  (ag.agendaItems ?? []).forEach((item, index) => {
     y += 6;
     doc.text(`${index + 1}. ${item}`, 18, y);
   });
@@ -1956,4 +1956,5 @@ export const exportMiseEnDemeurePDF = (
 
   doc.save(`Mise_En_Demeure_Lot_${apartment?.number || resident.id}.pdf`);
 };
+
 

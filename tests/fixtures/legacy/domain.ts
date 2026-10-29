@@ -1,8 +1,8 @@
 /** @deprecated Legacy parity oracle only. Production dispatch uses server/domain/command.service.ts. */
-import { currentState } from "./repository";
-import { hashPassword } from "./passwords";
-import { configureServerRuntime } from "../firebase/serverRuntime";
-import * as services from "../firebase/services";
+import { currentState } from "../../../server/repository";
+import { hashPassword } from "../../../server/passwords";
+import { configureServerRuntime } from "./serverRuntime";
+import * as services from "./services";
 configureServerRuntime({ hashPassword });
 Object.defineProperty(globalThis, "localStorage", {
   configurable: true,
@@ -82,4 +82,5 @@ export async function executeMutation(
     services[operation as keyof typeof services] as (...args: any[]) => unknown
   )(...args);
 }
+
 

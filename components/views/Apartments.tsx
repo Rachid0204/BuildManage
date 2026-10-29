@@ -823,7 +823,10 @@ const Apartments: React.FC<ApartmentsProps> = ({
       <ApartmentModal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
-        onSave={selectedApartment ? onUpdateApartment : onAddApartment}
+        onSave={async apartment => {
+          if ('id' in apartment) await onUpdateApartment(apartment);
+          else await onAddApartment(apartment);
+        }}
         existingApartment={selectedApartment}
         residents={residents}
         apartments={building.apartments}
@@ -1148,3 +1151,4 @@ const Apartments: React.FC<ApartmentsProps> = ({
 };
 
 export default Apartments;
+

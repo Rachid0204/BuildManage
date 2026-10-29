@@ -16,7 +16,7 @@ const trace = (kind: string) => {
   appendFileSync(file + '.trace', JSON.stringify({ kind, inTransaction }) + '\n');
 };
 const original = Firestore.prototype.runTransaction;
-Firestore.prototype.runTransaction = function (...args: any[]) {
+Firestore.prototype.runTransaction = function (this: Firestore, ...args: any[]) {
   const config = settings();
   if (config.commitFailure) {
     const mode = config.commitFailure; delete config.commitFailure; writeFileSync(file, JSON.stringify(config));
@@ -43,3 +43,4 @@ for (const method of ['updateUser', 'revokeRefreshTokens', 'createUser'] as cons
     return result;
   };
 }
+

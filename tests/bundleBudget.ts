@@ -29,7 +29,14 @@ check('role navigation cannot statically fetch PDF code',()=>{
     visitRole(root.file);
   }
 });
+check('legacy domain and unused Firebase data SDKs absent from every chunk', () => {
+  for (const chunk of chunks) {
+    assert.ok(!chunk.modules.some(m => /tests\/fixtures|server\/domain|firebase\/(legacyClient|serverRuntime)|@firebase\/(firestore|functions|storage)\//.test(m)), chunk.file);
+    assert.ok(!/legacyClient/.test(chunk.file), chunk.file);
+  }
+});
 check('unused Firebase data SDKs absent from initial graph',()=>assert.ok(!modules.some(m=>/@firebase\/(firestore|functions|storage)/.test(m))));
 check('vendor and deferred chunk budgets',()=>chunks.forEach(c=>{const limit=/\/pdf-/.test(c.file)?160:/\/(vendor|firebase)-/.test(c.file)?120:200;assert.ok(size(c.file)<=limit*1024,`${c.file}: ${size(c.file)} > ${limit} KiB`);}));
 console.log(`Bundle budget: ${passed} passed, ${failed} failed`);
 process.exitCode=failed?1:0;
+
