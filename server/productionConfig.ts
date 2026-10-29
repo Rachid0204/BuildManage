@@ -3,8 +3,18 @@ import target from '../deploy/target.json' with { type: 'json' };
 
 const secret = z.string().min(32).refine(value =>
  value === value.trim() && new Set(value).size >= 12 &&
- !/^(.{1,16})\1+$/.test(value) &&
+ !/^(.{1,16})\\1+$/.test(value) &&
  !/change.?me|replace.?me|your.?secret|default|insecure|example|synthetic|test.?secret|dev.?secret|temporary|ephemeral/i.test(value));
+const encryptionKeys = z.string().min(1).superRefine((raw, ctx) => {
+ try {
+  const value = JSON.parse(raw), primary = value?.primary, retired = value?.retired ?? [];
+  const valid = (entry: any) => entry && typeof entry.kid === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(entry.kid) &&
+   typeof entry.key === 'string' && entry.key.length >= 32;
+  if (!valid(primary) || !Array.isArray(retired) || !retired.every(valid) ||
+   new Set([primary?.kid, ...retired.map((entry: any) => entry.kid)]).size !== 1 + retired.length)
+   ctx.addIssue({ code: 'custom', message: 'Expected a primary key and unique retired keys with kid and 32+ character key values' });
+ } catch { ctx.addIssue({ code: 'custom', message: 'Must be valid JSON' }); }
+});
 const origin = z.string().url().refine(value => {
  try {
   const url = new URL(value);
@@ -13,13 +23,15 @@ const origin = z.string().url().refine(value => {
  } catch { return false; }
 });
 
-/** Production has no inferred backend, project, database or secret defaults. */
+/** Production has no inferred backend, project, database or durable key defaults. */
 export const productionEnvironmentSchema = z.object({
  NODE_ENV: z.literal('production'),
  SYNDIK_STATE_BACKEND: z.literal('firestore'),
  SYNDIK_UPLOAD_BACKEND: z.literal('gcs'),
  SYNDIK_AUTH_PROVIDER: z.literal('firebase'),
  SYNDIK_SERVER_SECRET: secret,
+ SYNDIK_SESSION_SECRET: secret.optional(),
+ SYNDIK_ENCRYPTION_KEYS: encryptionKeys,
  SYNDIK_SCHEDULER_SECRET: secret,
  GOOGLE_CLOUD_PROJECT: z.literal(target.projectId),
  FIRESTORE_DATABASE_ID: z.literal(target.databaseId),
@@ -36,15 +48,15 @@ export const productionEnvironmentSchema = z.object({
  FIREBASE_STORAGE_EMULATOR_HOST: z.literal('').optional(),
  FUNCTIONS_EMULATOR: z.literal('').optional(),
  SYNDIK_TEST_MODE: z.literal('').optional(),
-}).refine(env => env.SYNDIK_SERVER_SECRET !== env.SYNDIK_SCHEDULER_SECRET,
- { path: ['SYNDIK_SCHEDULER_SECRET'], message: 'Must differ from session/encryption key' });
+}).refine(env => env.SYNDIK_SERVER_SECRET !== env.SYNDIK_SCHEDULER_SECRET &&
+ (!env.SYNDIK_SESSION_SECRET || env.SYNDIK_SESSION_SECRET !== env.SYNDIK_SCHEDULER_SECRET),
+ { path: ['SYNDIK_SCHEDULER_SECRET'], message: 'Must differ from session-signing and legacy compatibility keys' });
 export type ProductionEnvironment = z.infer<typeof productionEnvironmentSchema>;
 
 export function validateProductionEnvironment(env: NodeJS.ProcessEnv = process.env): ProductionEnvironment | undefined {
  if (env.NODE_ENV !== 'production') return undefined;
  const result = productionEnvironmentSchema.safeParse(env);
  if (!result.success) {
-  // Zod issues may contain received values. Only emit field names, never secrets.
   const fields = [...new Set(result.error.issues.map(issue => issue.path.join('.')))];
   throw new Error(`PRODUCTION_CONFIG_INVALID: ${fields.join(', ')}. See docs/deployment-contract.md; no fallback is permitted.`);
  }
