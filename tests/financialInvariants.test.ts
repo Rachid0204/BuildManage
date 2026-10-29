@@ -107,7 +107,7 @@ test('payment confirmation and reconciliation remain scoped to the selected cabi
   });
   const beforeForeign = structuredClone({
     charge: state.syndik_prod_charges_v1[1],
-    proof: state.syndik_prod_proofs_v1[0],
+    proof: state.syndik_prod_proofs_v1.find((proof: any) => proof.id === 'proof-b'),
     building: state.syndik_prod_syndics_v1[1],
     receipts: state.syndik_prod_quittances_v1,
   });
@@ -121,7 +121,7 @@ test('payment confirmation and reconciliation remain scoped to the selected cabi
     /autorisé|immeuble/i);
   noMutation(beforeForeign, {
     charge: state.syndik_prod_charges_v1[1],
-    proof: state.syndik_prod_proofs_v1[0],
+    proof: state.syndik_prod_proofs_v1.find((proof: any) => proof.id === 'proof-b'),
     building: state.syndik_prod_syndics_v1[1],
     receipts: state.syndik_prod_quittances_v1,
   });
@@ -132,7 +132,7 @@ test('payment confirmation and reconciliation remain scoped to the selected cabi
   assert.equal(reconciled.matchedCount, 1);
   assert.equal(state.syndik_prod_charges_v1[0].paidAmount, 100);
   assert.equal(state.syndik_prod_charges_v1[1].paidAmount, 0);
-  assert.equal(state.syndik_prod_proofs_v1[0].status, 'pending');
+  assert.equal(state.syndik_prod_proofs_v1.find((proof: any) => proof.id === 'proof-b').status, 'pending');
 });
 
 test('reversal is building-scoped and preserves historical bank dates; closed periods reject new postings', async () => {
@@ -304,6 +304,7 @@ test('public scheduler endpoint commits successful buildings when one period is 
     const state: any = fixture();
     state.syndik_prod_charges_v1 = [];
     const cabinet = state.syndik_prod_syndics_v1[0];
+    cabinet.buildings[0].apartments = cabinet.buildings[0].apartments.slice(0, 1);
     const buildingB = state.syndik_prod_syndics_v1[1].buildings[0];
     buildingB.syndicId = 'cab-a';
     buildingB.residents[0].syndicId = 'cab-a';
