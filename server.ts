@@ -73,6 +73,7 @@ const UPLOADS_DIR = path.join(DATA_DIR, "uploads");
 const STATE_FILE = path.join(DATA_DIR, "shared-state.json");
 
 const HAS_CONFIGURED_SERVER_SECRET = (process.env.SYNDIK_SERVER_SECRET?.length || 0) >= 32;
+const HAS_CONFIGURED_SESSION_SECRET = (process.env.SYNDIK_SESSION_SECRET?.length || 0) >= 32 || HAS_CONFIGURED_SERVER_SECRET;
 const LEGACY_SERVER_SECRET = HAS_CONFIGURED_SERVER_SECRET
   ? process.env.SYNDIK_SERVER_SECRET!
   : process.env.NODE_ENV === "production" ? "" : crypto.randomBytes(32).toString("hex");
@@ -2455,12 +2456,12 @@ async function startServer() {
       revision: process.env.K_REVISION || 'local',
       database: { backend: process.env.SYNDIK_STATE_BACKEND || (process.env.NODE_ENV === 'production' ? 'firestore' : 'file'), id: process.env.FIRESTORE_DATABASE_ID, read: 'ok' },
       storage: { backend: process.env.NODE_ENV === 'production' || process.env.SYNDIK_UPLOAD_BACKEND === 'gcs' ? 'gcs' : 'file', bucket: process.env.SYNDIK_UPLOAD_BUCKET, write: 'not_checked' },
-      sessionSecretConfigured: HAS_CONFIGURED_SERVER_SECRET,
+      sessionSecretConfigured: HAS_CONFIGURED_SESSION_SECRET,
       authenticationProvider: usesFirebaseAuth() ? 'firebase' : 'legacy',
       accountEmailProvider: usesFirebaseAuth() ? 'firebase' : 'sendgrid',
       firebaseAuthentication: { configured: Boolean(process.env.FIREBASE_API_KEY || firebaseConfig.apiKey), liveCheck: 'not_checked' },
       transactionalMailConfigured: mailIsConfigured(),
-      warnings: HAS_CONFIGURED_SERVER_SECRET ? [] : ['SESSION_SECRET_NOT_CONFIGURED'],
+      warnings: HAS_CONFIGURED_SESSION_SECRET ? [] : ['SESSION_SECRET_NOT_CONFIGURED'],
     });
   });
   const scheduler = (req: express.Request) => {
