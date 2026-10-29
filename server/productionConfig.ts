@@ -3,7 +3,7 @@ import target from '../deploy/target.json' with { type: 'json' };
 
 const secret = z.string().min(32).refine(value =>
  value === value.trim() && new Set(value).size >= 12 &&
- !/^(.{1,16})\\1+$/.test(value) &&
+ !/^(.{1,16})\1+$/.test(value) &&
  !/change.?me|replace.?me|your.?secret|default|insecure|example|synthetic|test.?secret|dev.?secret|temporary|ephemeral/i.test(value));
 const encryptionKeys = z.string().min(1).superRefine((raw, ctx) => {
  try {
