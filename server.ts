@@ -73,9 +73,12 @@ const UPLOADS_DIR = path.join(DATA_DIR, "uploads");
 const STATE_FILE = path.join(DATA_DIR, "shared-state.json");
 
 const HAS_CONFIGURED_SERVER_SECRET = (process.env.SYNDIK_SERVER_SECRET?.length || 0) >= 32;
-const SERVER_HMAC_SECRET = HAS_CONFIGURED_SERVER_SECRET
+const LEGACY_SERVER_SECRET = HAS_CONFIGURED_SERVER_SECRET
   ? process.env.SYNDIK_SERVER_SECRET!
   : process.env.NODE_ENV === "production" ? "" : crypto.randomBytes(32).toString("hex");
+const SESSION_HMAC_SECRET = (process.env.SYNDIK_SESSION_SECRET?.length || 0) >= 32
+  ? process.env.SYNDIK_SESSION_SECRET!
+  : LEGACY_SERVER_SECRET;
 
 interface ServerStore {
   __revision?: number;
@@ -398,7 +401,7 @@ function issueServerSessionToken(profile: Record<string, any>): string {
     "base64url",
   );
   const hmacHex = crypto
-    .createHmac("sha256", SERVER_HMAC_SECRET)
+    .createHmac("sha256", SESSION_HMAC_SECRET)
     .update(payloadB64)
     .digest("hex");
   return `syndik-srv1.${payloadB64}.${hmacHex}`;
@@ -411,7 +414,7 @@ function verifyServerSessionToken(token: string): AuthCallerContext | null {
   const [, payloadB64, providedHmac] = parts;
   if (!payloadB64 || !providedHmac) return null;
   const expectedHmac = crypto
-    .createHmac("sha256", SERVER_HMAC_SECRET)
+    .createHmac("sha256", SESSION_HMAC_SECRET)
     .update(payloadB64)
     .digest("hex");
   if (!timingSafeStringEqual(providedHmac, expectedHmac)) {
@@ -1330,10 +1333,11 @@ async function startServer() {
   installAiBodyParsers(app);
   app.use(express.json({ limit: "15mb" }));
 
-  process.env.SYNDIK_SERVER_SECRET ||= SERVER_HMAC_SECRET;
+  process.env.SYNDIK_SERVER_SECRET ||= LEGACY_SERVER_SECRET;
   if (process.env.SYNDIK_SERVER_SECRET.length < 32) {
-    process.env.SYNDIK_SERVER_SECRET = SERVER_HMAC_SECRET;
+    process.env.SYNDIK_SERVER_SECRET = LEGACY_SERVER_SECRET;
   }
+  process.env.SYNDIK_SESSION_SECRET ||= SESSION_HMAC_SECRET;
   process.env.SYNDIK_UPLOAD_BUCKET ||=
     firebaseConfig.storageBucket || "immogest-7faaf.firebasestorage.app";
   process.env.PUBLIC_APP_URL ||= "https://immogest.cloud.run";
