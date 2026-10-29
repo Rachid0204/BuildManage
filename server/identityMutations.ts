@@ -52,7 +52,7 @@ export function queueFirebaseMutation(state: State, action: FirebaseMutation) {
   plan.actions.push(action);
 }
 export const identityRequestFingerprint = (route: string, authorization: string, body: any) =>
-  createHmac('sha256', process.env.SYNDIK_SERVER_SECRET || '').update(JSON.stringify([route, authorization, body])).digest('hex');
+  createHmac('sha256', process.env.SYNDIK_SESSION_SECRET || process.env.SYNDIK_SERVER_SECRET || '').update(JSON.stringify([route, authorization, body])).digest('hex');
 type Execute = (action: FirebaseMutation, results: any[]) => Promise<any>;
 type Finalize = (response: Response, results: any[], state: State, intent: Intent) => void;
 
