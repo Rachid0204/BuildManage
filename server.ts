@@ -2304,13 +2304,38 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
+    const assetsPath = path.join(distPath, "assets") + path.sep;
+    // The HTML shell must be revalidated so a new release is picked up at once, and
+    // it should not be framed by other origins. Vite content-hashes everything under
+    // /assets, so those files never change in place and can be cached indefinitely.
+    const shellHeaders = (res: express.Response) => {
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("X-Frame-Options", "SAMEORIGIN");
+      res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+    };
+    app.use(
+      express.static(distPath, {
+        setHeaders(res, filePath) {
+          res.setHeader("X-Content-Type-Options", "nosniff");
+          if (filePath.startsWith(assetsPath))
+            res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+          else if (filePath.endsWith(".html")) shellHeaders(res);
+        },
+      }),
+    );
     app.get("*all", async (req, res) => {
       if (req.path.startsWith("/api/")) {
         return res
           .status(404)
           .json({ ok: false, error: "API route not found" });
       }
+      // A hashed file that no longer exists (an open tab from the previous release
+      // lazy-loading a chunk) must fail as a 404. Answering with index.html and a
+      // 200 turns it into an opaque "Unexpected token <" script error.
+      if (req.path.startsWith("/assets/"))
+        return res.status(404).type("text/plain").send("Not found");
+      shellHeaders(res);
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
