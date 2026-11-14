@@ -54,7 +54,7 @@ const SettingsForm: React.FC<SettingsProps> = ({ syndic, onUpdate }) => {
       throw new Error(tr("L'identifiant Commun de l'Entreprise (ICE) doit comporter exactement 15 chiffres.", 'يجب أن يتكون التعريف الموحد للمقاولة (ICE) من 15 رقماً بالضبط.'));
     }
 
-    const submitted = { name: safeName, logoUrl: safeLogoUrl || (syndic.logoUrl ?? ''),
+    const submitted = { name: safeName, logoUrl: safeLogoUrl,
       ice: safeIce, taxId: safeTaxId, rc: safeRc, patente: safePatente };
     const updated = { ...syndic, ...submitted };
     dispatch({ type: 'saveStarted', values: submitted });

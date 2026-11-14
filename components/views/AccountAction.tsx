@@ -29,9 +29,6 @@ export default function AccountAction() {
         ),
       );
       showToast(tr("Terminé. Vous pouvez vous connecter.", "تمت العملية. يمكنك تسجيل الدخول."), 'success');
-    } catch (e: any) {
-      setMessage(e.message);
-      throw e;
     } finally {
       setBusy(false);
     }

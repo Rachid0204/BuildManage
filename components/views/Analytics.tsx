@@ -84,40 +84,54 @@ const Analytics: React.FC<{ building: Building }> = ({ building }) => {
   }, [charges]);
 
   const maintenanceCostData = useMemo(() => {
-    const months: Record<string, number> = {};
+    const buckets: Array<{ key: string; name: string; cost: number }> = [];
+    const byKey = new Map<string, { key: string; name: string; cost: number }>();
     const now = new Date();
     const locale = language === 'ar' ? 'ar-MA' : 'fr-MA';
 
     for (let i = 5; i >= 0; i--) {
       const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const key = d.toLocaleString(locale, { month: 'short' });
-      months[key] = 0;
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const label = d.toLocaleString(locale, { month: 'short' });
+      const entry = { key, name: label, cost: 0 };
+      buckets.push(entry);
+      byKey.set(key, entry);
     }
 
+    const monthKey = (raw: string) => {
+      const d = new Date(raw);
+      if (Number.isNaN(d.getTime())) return '';
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    };
+
+    const recordedTicketCosts = new Set<string>();
     maintenance.forEach((req) => {
       if ((req.status === 'completed' || req.cost) && (req.completedAt || req.createdAt)) {
-        const d = new Date(req.completedAt || req.createdAt);
-        const key = d.toLocaleString(locale, { month: 'short' });
-        if (months[key] !== undefined) {
-          months[key] += req.cost ?? 0;
+        const key = monthKey(req.completedAt || req.createdAt);
+        const bucket = byKey.get(key);
+        if (bucket && (req.cost ?? 0) > 0) {
+          bucket.cost += req.cost ?? 0;
+          if (req.invoiceRef) recordedTicketCosts.add(`${key}:${req.invoiceRef}`);
         }
       }
     });
 
     ledgerTransactions
-      .filter((tx: any) => tx.amount < 0 || tx.type === 'expense')
+      .filter(
+        (tx: any) =>
+          (tx.amount < 0 || tx.type === 'expense') &&
+          !tx.reversalOf &&
+          ['maintenance', 'elevator', 'cleaning', 'security'].includes(tx.category || '')
+      )
       .forEach((tx: any) => {
-        const d = new Date(tx.date);
-        const key = d.toLocaleString(locale, { month: 'short' });
-        if (months[key] !== undefined) {
-          months[key] += Math.abs(tx.amount || 0);
+        const key = monthKey(tx.date);
+        const bucket = byKey.get(key);
+        if (bucket && (!tx.reference || !recordedTicketCosts.has(`${key}:${tx.reference}`))) {
+          bucket.cost += Math.abs(tx.amount || 0);
         }
       });
 
-    return Object.keys(months).map((key) => ({
-      name: key,
-      cost: months[key],
-    }));
+    return buckets.map(({ name, cost }) => ({ name, cost }));
   }, [maintenance, ledgerTransactions, language]);
 
   const COLORS_OCCUPANCY = ['#0D9488', '#E2E8F0'];

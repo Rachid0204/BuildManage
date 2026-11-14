@@ -6,13 +6,23 @@ export const generateAnnouncementContent = async (topic: string, buildingId: str
   if (!trimmedTopic) {
     throw new Error('Veuillez saisir un sujet pour générer l’annonce.');
   }
-  if (topic.length > AI_LIMITS.topicCharacters) throw new Error('Le sujet est limité à 2 000 caractères.');
+  if (trimmedTopic.length > AI_LIMITS.topicCharacters) throw new Error('Le sujet est limité à 2 000 caractères.');
 
   const response = await fetch('/api/ai/announcement', {
     method: 'POST',
     headers: getAuthenticatedRequestHeaders(),
     body: JSON.stringify({ topic: trimmedTopic, buildingId }),
+    signal: typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+      ? AbortSignal.timeout(30000)
+      : undefined,
   });
+
+  if (response.status === 401 || response.status === 403) {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('syndik-session-invalid', { detail: { status: response.status } }));
+    }
+    throw new Error('Votre session a expiré. Veuillez vous reconnecter.');
+  }
 
   const contentType = response.headers.get('content-type') || '';
   if (!contentType.includes('application/json')) {

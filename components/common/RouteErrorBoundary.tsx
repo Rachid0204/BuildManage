@@ -24,14 +24,21 @@ class RouteErrorBoundary extends React.Component<
 
   render() {
     if (this.state.hasError) {
+      const isAr =
+        typeof window !== 'undefined' &&
+        (document.documentElement.lang === 'ar' ||
+          localStorage.getItem('syndik_lang') === 'ar');
       return (
-        <div className="min-h-[60vh] flex items-center justify-center p-6">
+        <div className="min-h-[60vh] flex items-center justify-center p-6" dir={isAr ? 'rtl' : 'ltr'}>
           <Card className="max-w-md w-full border border-rose-200 bg-rose-50/40 text-center space-y-4">
             <h2 className="text-lg font-bold text-slate-900">
-              Une erreur est survenue lors du chargement du module
+              {isAr
+                ? 'حدث خطأ غير متوقع أثناء تحميل هذه الصفحة'
+                : 'Une erreur est survenue lors du chargement du module'}
             </h2>
             <p className="text-xs text-slate-600 font-mono">
-              {this.state.errorMessage}
+              {this.state.errorMessage ||
+                (isAr ? 'خطأ غير متوقع.' : 'Erreur inattendue lors du chargement de la vue.')}
             </p>
             <div className="flex justify-center gap-2">
               <Button
@@ -40,7 +47,7 @@ class RouteErrorBoundary extends React.Component<
                   window.location.reload();
                 }}
               >
-                Actualiser la page
+                {isAr ? 'تحديث الصفحة' : 'Actualiser la page'}
               </Button>
             </div>
           </Card>

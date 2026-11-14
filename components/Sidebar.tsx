@@ -216,6 +216,8 @@ const Sidebar: React.FC<SidebarProps> = ({
     if (onClose) onClose();
   };
 
+  const activeBuildings = syndic.buildings.filter((b) => !b.archivedAt);
+
   const sidebarContent = (
     <div className="w-72 lg:w-64 h-full flex-shrink-0 bg-slate-900 text-white flex flex-col shadow-xl lg:shadow-none">
       <div className="h-16 lg:h-20 flex items-center justify-between px-5 border-b border-slate-800">
@@ -229,7 +231,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           <button
             type="button"
             onClick={onClose}
-            aria-label="Fermer le menu"
+            aria-label={t('header.closeMenu')}
             className="lg:hidden p-2 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 min-w-[44px] min-h-[44px] flex items-center justify-center"
           >
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -250,7 +252,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           id="building-select"
           value={selectedBuilding?.id || ''}
           onChange={(e) => {
-            const building = syndic.buildings.find(
+            const building = activeBuildings.find(
               (b) => b.id === e.target.value
             );
             if (building) {
@@ -263,7 +265,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           <option value="" disabled>
             {t('sidebar.selectBuildingPrompt')}
           </option>
-          {syndic.buildings.map((building) => (
+          {activeBuildings.map((building) => (
             <option key={building.id} value={building.id}>
               {building.name}
             </option>

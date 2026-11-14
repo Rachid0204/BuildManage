@@ -283,6 +283,31 @@ const updateResident = async (resident: Resident): Promise<Resident> => {
                         }
                     }
                 }
+                if (Array.isArray(context.state[STORAGE_KEYS.REGISTERED_USERS])) {
+                    const regUsers = getLocalItem<any[]>(STORAGE_KEYS.REGISTERED_USERS, []);
+                    let regUpdated = false;
+                    for (const u of regUsers) {
+                        if (
+                            u?.uid === `user-res-${mergedResident.id}` ||
+                            u?.uid === `res-${mergedResident.id}` ||
+                            u?.profile?.residentId === mergedResident.id
+                        ) {
+                            u.email = mergedResident.email.trim().toLowerCase();
+                            if (u.profile) {
+                                u.profile.email = mergedResident.email.trim().toLowerCase();
+                                u.profile.displayName = mergedResident.name;
+                                u.profile.cin = mergedResident.cin?.trim() || undefined;
+                                u.profile.phone = mergedResident.phone?.trim() || undefined;
+                                u.profile.isOwner = mergedResident.isOwner;
+                                u.profile.apartmentId = mergedResident.apartmentId;
+                            }
+                            regUpdated = true;
+                        }
+                    }
+                    if (regUpdated) {
+                        setLocalItem(STORAGE_KEYS.REGISTERED_USERS, regUsers);
+                    }
+                }
                 setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
 
                 return mergedResident;
@@ -466,6 +491,34 @@ const savePrestataire = async (prestataire: Prestataire, generateCredentials?: b
             }
         }
     }
+    if (Array.isArray(context.state[STORAGE_KEYS.REGISTERED_USERS])) {
+        const regUsers = getLocalItem<any[]>(STORAGE_KEYS.REGISTERED_USERS, []);
+        let regUpdated = false;
+        for (const u of regUsers) {
+            if (
+                u?.uid === `user-prest-${finalPrestataire.id}` ||
+                u?.uid === `prov-${finalPrestataire.id}` ||
+                u?.profile?.prestataireId === finalPrestataire.id
+            ) {
+                if (finalPrestataire.email) {
+                    u.email = finalPrestataire.email.trim().toLowerCase();
+                }
+                if (u.profile) {
+                    if (finalPrestataire.email) {
+                        u.profile.email = finalPrestataire.email.trim().toLowerCase();
+                    }
+                    u.profile.displayName = finalPrestataire.name;
+                    u.profile.phone = finalPrestataire.phone?.trim() || undefined;
+                    u.profile.prestataireCategory = finalPrestataire.category;
+                    u.profile.providerCategory = finalPrestataire.category;
+                }
+                regUpdated = true;
+            }
+        }
+        if (regUpdated) {
+            setLocalItem(STORAGE_KEYS.REGISTERED_USERS, regUsers);
+        }
+    }
     if (index >= 0) {
         list[index] = finalPrestataire;
     }
@@ -492,7 +545,7 @@ function generateTempPassword(name: string): string {
 function savePrestataireCredentialAccount(prestataire: Prestataire, rawPassword: string): PrestataireAccountRecord {
     const accounts = getLocalItem<PrestataireAccountRecord[]>(PRESTATAIRE_ACCOUNTS_KEY, []);
     const emailNorm = prestataire.email.trim().toLowerCase();
-    const passwordHash = hashPasswordSync(rawPassword, emailNorm);
+    const passwordHash = hashPassword(rawPassword);
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, []);
     let resolvedSyndicId = prestataire.syndicId;
     let buildingName = 'Résidence';
@@ -650,11 +703,13 @@ const deletePrestataire = async (prestataireId: string): Promise<boolean> => {
 };
 
 const addPrestataireReview = async (prestataireId: string, review: Omit<PrestataireReview, 'id' | 'date'>): Promise<Prestataire | null> => {
-
+    const numericRating = Number(review.rating);
     const newRev: PrestataireReview = {
         id: `rev-${crypto.randomUUID()}`,
         date: new Date().toISOString().split('T')[0],
         ...review,
+        rating: Number.isFinite(numericRating) ? Math.min(5, Math.max(1, numericRating)) : 5,
+        comment: typeof review.comment === 'string' ? review.comment.trim() : '',
     };
     const list = getLocalItem<Prestataire[]>(STORAGE_KEYS.PRESTATAIRES, []);
     const prest = list.find((p) => p.id === prestataireId);
@@ -662,7 +717,7 @@ const addPrestataireReview = async (prestataireId: string, review: Omit<Prestata
         prest.reviews = prest.reviews || [];
         prest.reviews.unshift(newRev);
         prest.reviewsCount = prest.reviews.length;
-        const total = prest.reviews.reduce((sum, r) => sum + r.rating, 0);
+        const total = prest.reviews.reduce((sum, r) => sum + (Number(r.rating) || 0), 0);
         prest.rating = Math.round((total / prest.reviews.length) * 10) / 10;
         setLocalItem(STORAGE_KEYS.PRESTATAIRES, list);
         return prest;
@@ -853,6 +908,7 @@ const deleteDocument = async (docToDelete: Document): Promise<boolean> => {
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, []);
     for (const s of syndics) {
         for (const bld of s.buildings) {
+            if (context.buildingId && bld.id !== context.buildingId) continue;
             if (bld.documents) {
                 bld.documents = bld.documents.filter((d) => d.id !== docToDelete.id);
             }

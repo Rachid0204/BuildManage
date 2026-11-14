@@ -1,4 +1,5 @@
-import { hashPasswordSync,isAlreadyHashedPassword } from '../../utils/security';
+import { isAlreadyHashedPassword } from '../../utils/security';
+import { hashPassword } from '../passwords';
 import type { State } from '../repository';
 import { STORAGE_KEYS } from './records';
 function stripPlaintextCredentialsForStorage<T>(key: string, val: T): T {
@@ -32,13 +33,12 @@ function stripPlaintextCredentialsForStorage<T>(key: string, val: T): T {
     Array.isArray(val)
   ) {
     return val.map((acc: any) => {
-      const emailNorm = (acc?.email || '').trim().toLowerCase();
       const passwordHash =
         acc?.passwordHash ||
         (typeof acc?.password === 'string'
           ? isAlreadyHashedPassword(acc.password)
             ? acc.password
-            : hashPasswordSync(acc.password, emailNorm)
+            : hashPassword(acc.password)
           : '');
       const { password: _pw, generatedPassword: _gp, ...cleanAcc } = acc || {};
       return { ...cleanAcc, passwordHash };
@@ -55,7 +55,7 @@ export function transactionRecords(state: State) {
    return clone(state[key]);
   },
   write<T>(key: string, value: T, deletedId?: string): void {
-   if(deletedId) { const ids=state.syndik_deleted_building_ids_v1 ??= []; if(!ids.includes(deletedId))ids.push(deletedId); }
+   if(deletedId && key === STORAGE_KEYS.SYNDICS && String(deletedId).startsWith('bld-')) { const ids=state.syndik_deleted_building_ids_v1 ??= []; if(!ids.includes(deletedId))ids.push(deletedId); }
    state[key]=clone(stripPlaintextCredentialsForStorage(key,value));
   }
  };

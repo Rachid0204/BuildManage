@@ -21,9 +21,21 @@ export function pruneOperationReceipts(state:State,now=Date.now(),limit=100) {
   if(now<meta.legacyAcceptedUntil)continue;
   if(Number.isFinite(last)&&last<now-OPERATION_RETENTION){delete receipts[key];removed++;}
  }
+ const activeMutationIds=new Set(Object.values(receipts).map((r:any)=>r?.identityMutationId).filter(Boolean));
+ for(const [id,i] of Object.entries(state.__firebaseMutations_v1||{}) as [string,any][])
+  if(i?.status==='finalized'&&!activeMutationIds.has(id)&&instant(i.finalizedAt||i.createdAt)<now-OPERATION_RETENTION)delete state.__firebaseMutations_v1[id];
+ for(const [k,a] of Object.entries(state.__identityActions||{}) as [string,any][])
+  if(a?.expiresAt<now)delete state.__identityActions[k];
+ for(const [k,a] of Object.entries(state.__authAttempts||{}) as [string,any][])
+  if(a?.since<now-15*60000)delete state.__authAttempts[k];
+ for(const [k,rate] of Object.entries(state.__recoveryAttempts||{}) as [string,any][])
+  if(rate<now-60000)delete state.__recoveryAttempts[k];
+ for(const [k,m] of Object.entries(state.__outbox||{}) as [string,any][])
+  if((m?.status==='sent'||m?.attempts>=8)&&instant(m.createdAt)<now-OPERATION_RETENTION)delete state.__outbox[k];
  meta.operationCursor=batch.length?batch.at(-1):'';return removed;
 }
-function referenceText(state:State){return JSON.stringify(Object.fromEntries(Object.entries(state).filter(([k])=>!['__files','__lifecycle'].includes(k))));}
+const NON_ATTACHMENT_KEYS=new Set(['__files','__lifecycle','syndik_prod_audit_v1','content','description','message','comment','notes','title','reason','pvSummary','rejectionReason','subject','body','text']);
+function referenceText(state:State){return JSON.stringify(state,(key,value)=>NON_ATTACHMENT_KEYS.has(key)?undefined:value);}
 export function fileIsReferenced(state:State,file:{id:string;key:string}){const text=referenceText(state);return text.includes(file.id)||text.includes(file.key);}
 export function assertFileLifecycle(state:State,before:State){
  const text=referenceText(state),previous=referenceText(before);
@@ -76,6 +88,8 @@ export async function cleanupFiles(repo:StateRepository,storage:LifecycleStorage
 export async function runLifecycle(repo:StateRepository,storage:LifecycleStorage,now=Date.now()){
  const owner=randomUUID(),acquired=await repo.transaction(async s=>{const m=s.__lifecycle??={};if(m.leaseUntil>now||m.nextRunAt>now)return false;m.leaseOwner=owner;m.leaseUntil=now+600000;m.nextRunAt=now+3600000;return true;});
  if(!acquired)return {skipped:true};
+ let failed=false;
  try{const operations=await repo.transaction(async s=>pruneOperationReceipts(s,now));const generations=await repo.cleanupGenerations?.(now),files=await cleanupFiles(repo,storage,now);return {skipped:false,operations,generations,files};}
- finally{await repo.transaction(async s=>{if(s.__lifecycle?.leaseOwner===owner){delete s.__lifecycle.leaseOwner;delete s.__lifecycle.leaseUntil;}});}
+ catch(e){failed=true;throw e;}
+ finally{await repo.transaction(async s=>{if(s.__lifecycle?.leaseOwner===owner){delete s.__lifecycle.leaseOwner;delete s.__lifecycle.leaseUntil;if(failed)delete s.__lifecycle.nextRunAt;}});}
 }

@@ -38,12 +38,15 @@ export function savePending(uid: string, record: PendingOperation) {
 export function removePending(uid: string, id: string) {
   storage().setItem(PREFIX + uid, JSON.stringify(pendingFor(uid).filter(r => r.operationId !== id)));
 }
-export function operationTarget(operation: string, args: unknown[]): string {
+export function operationTarget(_operation: string, args: unknown[]): string {
   // Use IDs only, never titles, names, email addresses, passwords or free-form text.
   const item: any = args[0];
-  const ids = item && typeof item === 'object' ? ['buildingId', 'residentId', 'apartmentId', 'id']
-    .filter(k => typeof item[k] === 'string' && /^[a-zA-Z0-9_-]{1,100}$/.test(item[k]))
+  const ids = item && typeof item === 'object' ? ['buildingId', 'residentId', 'apartmentId', 'agId', 'prestataireId', 'chargeId', 'syndicId', 'proofId', 'requestId', 'itemId', 'invoiceId', 'id']
+    .filter(k => typeof item[k] === 'string' && /^[a-zA-Z0-9:_-]{1,100}$/.test(item[k]))
     .map(k => `${k}:${item[k]}`).join('/') : '';
-  const knownIdFirst = /^(addAnnouncement|addTransaction|attachDocument|generateMonthlyCharges|createInvoiceForResident|deleteResident|updateResident|reviewPaymentProof|deleteMarketplaceItem|updateMarketplaceItemStatus)$/;
-  return ids || (knownIdFirst.test(operation) && typeof item === 'string' && /^[a-zA-Z0-9_-]{1,100}$/.test(item) ? item : 'command');
+  if (ids) return ids;
+  if (typeof item === 'string' && /^[a-zA-Z0-9:_-]{1,100}$/.test(item)) {
+    return typeof args[1] === 'string' && /^[a-zA-Z0-9:_-]{1,100}$/.test(args[1]) ? `${item}/${args[1]}` : item;
+  }
+  return 'command';
 }

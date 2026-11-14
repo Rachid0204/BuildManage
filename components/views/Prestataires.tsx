@@ -24,6 +24,7 @@ import Loading from '../common/Loading';
 import ServiceProvidersDirectory from './ServiceProvidersDirectory';
 import { useI18n } from '../../hooks/useI18n';
 import { notifyOperation } from '../../utils/formFeedback';
+import { useToast } from '../common/Toast';
 
 function formatAuditTimestamp(iso?: string, lang?: string): string {
   if (!iso) return '—';
@@ -254,6 +255,7 @@ const PrestataireCredentialsModal: React.FC<{
 
 const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
   const { tr, language } = useI18n();
+  const { showToast, confirmAction } = useToast();
   const queryClient = useQueryClient();
   const [activeViewMode, setActiveViewMode] = useState<'directory' | 'legal'>('directory');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -314,16 +316,38 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
     onSuccess: (updated) => {
       queryClient.invalidateQueries({ queryKey: ['prestataires', building.id] });
       if (updated) {
-
         setCredentialPrestataireId(updated.id);
       }
+    },
+    onError: (err: unknown) => {
+      showToast(
+        err instanceof Error ? err.message : tr('Impossible de régénérer les identifiants.', 'تعذر إعادة توليد بيانات الولوج.'),
+        'error'
+      );
     },
   });
 
   const deleteMutation = useMutation({
     mutationFn: deletePrestataire,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['prestataires', building.id] }),
+    onError: (err: unknown) => {
+      showToast(
+        err instanceof Error ? err.message : tr('Impossible de supprimer ce prestataire.', 'تعذر حذف مقدم الخدمة.'),
+        'error'
+      );
+    },
   });
+
+  const handleConfirmDeletePrestataire = async (prestataire: Prestataire) => {
+    const confirmed = await confirmAction({
+      title: tr('Supprimer le prestataire', 'حذف مقدم الخدمة'),
+      message: tr(`Supprimer le prestataire ${prestataire.name} ?`, `حذف مقدم الخدمة ${prestataire.name} ؟`),
+      confirmLabel: tr('Supprimer', 'حذف'),
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+    await deleteMutation.mutateAsync(prestataire.id).catch(() => {});
+  };
 
   const resetForm = () => {
     setName('');
@@ -373,7 +397,7 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
           ) });
         return;
       }
-      regenerateMutation.mutate(p.id);
+      regenerateMutation.mutateAsync(p.id).catch(() => {});
     }
   };
 
@@ -457,7 +481,7 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
             : ''
         }
         onClose={() => setCredentialPrestataireId(null)}
-        onRegenerate={(id) => regenerateMutation.mutate(id)}
+        onRegenerate={(id) => regenerateMutation.mutateAsync(id).catch(() => {})}
         onShareRecorded={handleRecordShare}
       />
 
@@ -520,6 +544,7 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
         <ServiceProvidersDirectory
           building={building}
           isResidentPortal={false}
+          residentId={building.syndicId}
           residentName={tr('Syndic Gestionnaire', 'وكيل الاتحاد (السنديك)')}
           apartmentNumber={tr('Bureau Syndic', 'مكتب السنديك')}
           onManageCredentials={handleManageCredentials}
@@ -556,18 +581,7 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
                         <PencilIcon />
                       </button>
                       <button
-                        onClick={() => {
-                          if (
-                            confirm(
-                              tr(
-                                `Supprimer le prestataire ${p.name} ?`,
-                                `حذف مقدم الخدمة ${p.name} ؟`
-                              )
-                            )
-                          ) {
-                            deleteMutation.mutate(p.id);
-                          }
-                        }}
+                        onClick={() => void handleConfirmDeletePrestataire(p)}
                         className="p-1 text-slate-400 hover:text-rose-600 rounded"
                         title={tr('Supprimer', 'حذف')}
                       >
@@ -813,23 +827,25 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
                         </span>
                       )}
                     </td>
-                    <td className="px-5 py-3.5 whitespace-nowrap text-end text-sm font-medium space-x-2">
-                      <Button
-                        variant="secondary"
-                        className="!p-2"
-                        onClick={() => handleOpenEdit(p)}
-                        title={tr('Modifier', 'تعديل')}
-                      >
-                        <PencilIcon />
-                      </Button>
-                      <Button
-                        variant="danger"
-                        className="!p-2"
-                        onClick={() => deleteMutation.mutate(p.id)}
-                        title={tr('Supprimer', 'حذف')}
-                      >
-                        <TrashIcon />
-                      </Button>
+                    <td className="px-5 py-3.5 whitespace-nowrap text-end text-sm font-medium">
+                      <div className="inline-flex items-center gap-2">
+                        <Button
+                          variant="secondary"
+                          className="!p-2"
+                          onClick={() => handleOpenEdit(p)}
+                          title={tr('Modifier', 'تعديل')}
+                        >
+                          <PencilIcon />
+                        </Button>
+                        <Button
+                          variant="danger"
+                          className="!p-2"
+                          onClick={() => void handleConfirmDeletePrestataire(p)}
+                          title={tr('Supprimer', 'حذف')}
+                        >
+                          <TrashIcon />
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 ))}

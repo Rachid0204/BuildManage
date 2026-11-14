@@ -5,7 +5,7 @@ function deferred<K extends keyof Renderer>(name: K) {
   return async (...args: Parameters<Renderer[K]>): Promise<boolean> => {
     try {
       const renderer = await import('./pdfService');
-      (renderer[name] as (...args: any[]) => unknown)(...args);
+      await Promise.resolve((renderer[name] as (...args: any[]) => unknown)(...args));
       return true;
     } catch { failure(); return false; }
   };
@@ -15,6 +15,7 @@ export const exportAnnualRepartitionPDF = deferred('exportAnnualRepartitionPDF')
 export const exportApartmentsCSV = deferred('exportApartmentsCSV');
 export const exportApartmentsPDF = deferred('exportApartmentsPDF');
 export const exportBuildingSummaryReportPDF = deferred('exportBuildingSummaryReportPDF');
+export const exportMiseEnDemeurePDF = deferred('exportMiseEnDemeurePDF');
 export const exportPrestataireCredentialsPDF = deferred('exportPrestataireCredentialsPDF');
 export const exportResidentCredentialsPDF = deferred('exportResidentCredentialsPDF');
 export const exportResidentsCSV = deferred('exportResidentsCSV');

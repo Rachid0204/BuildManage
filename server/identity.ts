@@ -1,6 +1,7 @@
 import { randomBytes, createHash } from "node:crypto";
 import { currentState, type State } from "./repository";
 import { hashPassword } from "./passwords";
+import { isAlreadyHashedPassword } from "../utils/security";
 import { mailIsConfigured, queueMail } from "./mailer";
 import { OperationError, appendAudit } from "./operations";
 import { usesFirebaseAuth, identityAccounts, accountUid, prepareFirebaseRecovery,
@@ -106,7 +107,7 @@ export function registerIdentityRoutes(api: any, authenticate: any) {
       throw new OperationError('Demandez un nouveau lien depuis la page de connexion.', 400);
     if (action.kind === "reset") {
       const password = String(req.body?.password || "");
-      if (password.length < 10 || password.length > 200)
+      if (password.length < 10 || password.length > 200 || isAlreadyHashedPassword(password))
         throw new OperationError("Mot de passe : 10 caractères minimum.", 400);
       const passwordHash = hashPassword(password);
       for (const u of accounts) {

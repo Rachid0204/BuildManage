@@ -5,6 +5,7 @@ import {
   createDecipheriv,
   randomUUID,
 } from "node:crypto";
+import { OperationError } from "./domain/errors";
 import type { State, StateRepository } from "./repository";
 
 type EncryptionKey = { kid: string; key: string };
@@ -95,7 +96,7 @@ export function reencryptDurableState(state: State) {
   for (const intent of Object.values(state.__firebaseMutations_v1 || {}) as any[]) {
     rotate(intent, "encryptedPlan", "identityPlans");
     rotate(intent, "encryptedResponse", "identityResponses");
-  }
+  };
   for (const receipt of Object.values(state.__operations || {}) as any[])
     rotate(receipt, "encryptedResponse", "operationReceipts");
   for (const message of Object.values(state.__outbox || {}) as any[]) {
@@ -112,7 +113,7 @@ export function mailIsConfigured() {
 }
 export function queueMail(state: State, to: string, subject: string, text: string) {
   if (!mailIsConfigured())
-    throw Object.assign(new Error("Email indisponible."), { status: 503 });
+    throw new OperationError("Email indisponible.", 503);
   const id = randomUUID();
   (state.__outbox ??= {})[id] = {
     id, to, subject, encryptedText: encrypt(text), status: "queued", attempts: 0,

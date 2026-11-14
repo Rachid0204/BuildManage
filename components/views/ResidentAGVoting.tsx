@@ -9,6 +9,7 @@ import { getAssembleesGeneralesForBuilding, castResidentAGVote } from '../../fir
 import { generatePvAgPDF } from '../../services/pdfOnDemand';
 import Loading from '../common/Loading';
 import { useI18n } from '../../hooks/useI18n';
+import { useToast } from '../common/Toast';
 
 interface ResidentAGVotingProps {
   building: Building;
@@ -24,6 +25,7 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
   syndic,
 }) => {
   const { tr, isAr } = useI18n();
+  const { showToast } = useToast();
   const queryClient = useQueryClient();
   const [selectedAGId, setSelectedAGId] = useState<string | null>(null);
   const [editingResolutionId, setEditingResolutionId] = useState<string | null>(null);
@@ -41,6 +43,12 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
   const activeAG = selectedAGId
     ? agList.find((ag) => ag.id === selectedAGId) || agList[0]
     : agList[0];
+
+  const isVotingOpen = activeAG
+    ? activeAG.isVotingOpen === true && !['completed', 'closed'].includes(activeAG.status)
+    : false;
+  const isOwner = currentResident?.isOwner !== false;
+  const canVote = isVotingOpen && isOwner;
 
   // Resolve resident's tantièmes
   const residentTantiemes = currentApartment?.tantiemes || 100;
@@ -87,6 +95,9 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
       queryClient.invalidateQueries({ queryKey: ['ag', building.id] });
       setEditingResolutionId(null);
       setVoteComment('');
+    },
+    onError: (err: Error) => {
+      showToast(err.message, 'error');
     },
   });
 
@@ -145,9 +156,21 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
               <span className="text-[11px] font-bold uppercase tracking-wider bg-teal-700/80 text-teal-100 px-2.5 py-0.5 rounded-full border border-teal-500/30">
                 {tr('Loi n° 18-00 · Art. 21 à 24', 'القانون رقم 18-00 · المواد 21 إلى 24')}
               </span>
-              <span className="text-[11px] font-semibold bg-emerald-500/20 text-emerald-300 px-2.5 py-0.5 rounded-full border border-emerald-500/30 flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                {tr('Vote Électronique Ouvert', 'التصويت الإلكتروني مفتوح')}
+              <span
+                className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full border flex items-center gap-1.5 ${
+                  isVotingOpen
+                    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                    : 'bg-slate-700/60 text-slate-300 border-slate-600'
+                }`}
+              >
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    isVotingOpen ? 'bg-emerald-400 animate-pulse' : 'bg-slate-400'
+                  }`}
+                ></span>
+                {isVotingOpen
+                  ? tr('Vote Électronique Ouvert', 'التصويت الإلكتروني مفتوح')
+                  : tr('Vote Électronique Clôturé', 'التصويت الإلكتروني مغلق')}
               </span>
               <span className="text-xs text-teal-200">
                 {activeAG.type === 'AGO'
@@ -288,10 +311,36 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
               <span className="text-[10px] text-slate-500"> {tr('du scrutin', 'من الاقتراع')}</span>
             </div>
 
-            <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-1.5 text-center">
-              <span className="text-[10px] text-emerald-600 block font-semibold uppercase">{tr('Statut Électoral', 'الصفة الانتخابية')}</span>
-              <span className="font-bold text-emerald-800 text-xs">{tr('Électeur Actif', 'مصوت نشط')}</span>
-              <span className="text-[10px] text-emerald-600 block">{tr('Loi n° 18-00', 'القانون 18-00')}</span>
+            <div
+              className={`border rounded-lg px-3 py-1.5 text-center ${
+                isOwner
+                  ? 'bg-emerald-50 border-emerald-200'
+                  : 'bg-slate-100 border-slate-300'
+              }`}
+            >
+              <span
+                className={`text-[10px] block font-semibold uppercase ${
+                  isOwner ? 'text-emerald-600' : 'text-slate-500'
+                }`}
+              >
+                {tr('Statut Électoral', 'الصفة الانتخابية')}
+              </span>
+              <span
+                className={`font-bold text-xs ${
+                  isOwner ? 'text-emerald-800' : 'text-slate-700'
+                }`}
+              >
+                {isOwner
+                  ? tr('Électeur Actif', 'مصوت نشط')
+                  : tr('Consultation seule (Locataire)', 'اطلاع فقط (مكتري)')}
+              </span>
+              <span
+                className={`text-[10px] block ${
+                  isOwner ? 'text-emerald-600' : 'text-slate-500'
+                }`}
+              >
+                {tr('Loi n° 18-00', 'القانون 18-00')}
+              </span>
             </div>
           </div>
         </div>
@@ -317,7 +366,7 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
         {activeAG.resolutions.map((res) => {
           const totalTantiemesCast = res.votesFor + res.votesAgainst + res.votesAbstain;
           const myVote = res.voters?.find((v) => v.residentId === currentResident?.id);
-          const isEditing = editingResolutionId === res.id;
+          const isEditing = editingResolutionId === res.id && canVote;
           const percentFor = totalTantiemesCast > 0 ? Math.round((res.votesFor / totalTantiemesCast) * 100) : 0;
           const percentAgainst = totalTantiemesCast > 0 ? Math.round((res.votesAgainst / totalTantiemesCast) * 100) : 0;
 
@@ -439,12 +488,14 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
                     </div>
 
                     <div className="flex items-center gap-2 shrink-0">
-                      <button
-                        onClick={() => handleStartVote(res)}
-                        className="text-xs px-3 py-1.5 bg-white hover:bg-teal-100 text-teal-800 font-semibold rounded-lg border border-teal-300 transition-colors shadow-xs"
-                      >
-                        {tr('Modifier mon vote', 'تعديل تصويتي')}
-                      </button>
+                      {canVote && (
+                        <button
+                          onClick={() => handleStartVote(res)}
+                          className="text-xs px-3 py-1.5 bg-white hover:bg-teal-100 text-teal-800 font-semibold rounded-lg border border-teal-300 transition-colors shadow-xs"
+                        >
+                          {tr('Modifier mon vote', 'تعديل تصويتي')}
+                        </button>
+                      )}
                       <button
                         onClick={() => setViewVotersResolution(res)}
                         className="text-xs px-3 py-1.5 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg border border-slate-200 transition-colors"
@@ -560,24 +611,35 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-amber-50/60 p-3.5 rounded-xl border border-amber-200">
                     <div>
                       <div className="text-xs font-bold text-amber-900">
-                        {tr("Votre vote n'a pas encore été enregistré sur cette résolution", 'لم يتم تسجيل تصويتك على هذا القرار بعد')}
+                        {!isOwner
+                          ? tr('Droit de vote réservé aux copropriétaires (Loi 18-00)', 'حق التصويت مخصص للملاك المشتركين (القانون 18-00)')
+                          : !isVotingOpen
+                          ? tr('Le scrutin électronique est actuellement fermé', 'التصويت الإلكتروني مغلق حالياً')
+                          : tr("Votre vote n'a pas encore été enregistré sur cette résolution", 'لم يتم تسجيل تصويتك على هذا القرار بعد')}
                       </div>
                       <p className="text-[11px] text-amber-800">
-                        {tr(
-                          `Cliquez pour faire valoir vos ${residentTantiemes} tantièmes de copropriété.`,
-                          `اضغط للتصويت واستعمال حصتك البالغة ${residentTantiemes} جزء في الملكية المشتركة.`
-                        )}
+                        {canVote
+                          ? tr(
+                              `Cliquez pour faire valoir vos ${residentTantiemes} tantièmes de copropriété.`,
+                              `اضغط للتصويت واستعمال حصتك البالغة ${residentTantiemes} جزء في الملكية المشتركة.`
+                            )
+                          : tr(
+                              'Vous pouvez consulter les résultats et le détail des votes exprimés.',
+                              'يمكنك الاطلاع على النتائج وتفاصيل الأصوات المعبر عنها.'
+                            )}
                       </p>
                     </div>
 
                     <div className="flex items-center gap-2 shrink-0">
-                      <Button
-                        onClick={() => handleStartVote(res)}
-                        className="text-xs bg-teal-700 hover:bg-teal-800 font-bold flex items-center gap-1.5 shadow-xs"
-                      >
-                        <span>🗳️</span>
-                        <span>{tr(`Voter maintenant (+${residentTantiemes})`, `صوّت الآن (+${residentTantiemes})`)}</span>
-                      </Button>
+                      {canVote && (
+                        <Button
+                          onClick={() => handleStartVote(res)}
+                          className="text-xs bg-teal-700 hover:bg-teal-800 font-bold flex items-center gap-1.5 shadow-xs"
+                        >
+                          <span>🗳️</span>
+                          <span>{tr(`Voter maintenant (+${residentTantiemes})`, `صوّت الآن (+${residentTantiemes})`)}</span>
+                        </Button>
+                      )}
                       <button
                         onClick={() => setViewVotersResolution(res)}
                         className="text-xs px-3 py-1.5 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg border border-slate-200 transition-colors"

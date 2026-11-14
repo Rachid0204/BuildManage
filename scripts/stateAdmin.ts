@@ -175,15 +175,35 @@ if (mode === "export") {
           delete account.password;
         }
       const versions = (snapshot.__sessionVersions ??= {});
-      for (const user of snapshot.syndik_prod_registered_users_v1 || [])
-        versions[user.uid] =
-          Math.max(
-            versions[user.uid] || 0,
-            state.__sessionVersions?.[user.uid] || 0,
-          ) + 1;
+      const uids = new Set<string>([
+        ...Object.keys(state.__sessionVersions || {}),
+        ...Object.keys(versions),
+        ...[
+          ...(snapshot.syndik_prod_registered_users_v1 || []),
+          ...(snapshot.syndik_prod_resident_accounts_v1 || []),
+          ...(snapshot.syndik_prod_prestataire_accounts_v1 || []),
+        ].map((u: any) =>
+          u.uid ||
+          u.profile?.uid ||
+          (u.residentId
+            ? `user-res-${u.residentId}`
+            : u.prestataireId
+              ? `user-prest-${u.prestataireId}`
+              : ""),
+        ),
+      ]);
+      for (const uid of uids)
+        if (uid)
+          versions[uid] =
+            Math.max(
+              versions[uid] || 0,
+              state.__sessionVersions?.[uid] || 0,
+            ) + 1;
       snapshot.__identityActions = {};
       snapshot.__outbox = {};
       snapshot.__operations = {};
+      snapshot.__firebaseMutations_v1 = {};
+      snapshot.__firebaseMutationLocks_v1 = {};
       snapshot.__restoredAt = new Date().toISOString();
       for (const key of Object.keys(state)) delete state[key];
       Object.assign(state, snapshot);

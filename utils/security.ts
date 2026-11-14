@@ -5,7 +5,10 @@ const SESSION_SECRET_SALT = 'immogest_syndik_auth_v1_9f4b2c8e';
 
 export function isAlreadyHashedPassword(value: string | undefined): boolean {
   return Boolean(
-    value && (value.startsWith(HASH_PREFIX) || value.startsWith('pbkdf2$'))
+    value &&
+      (value.startsWith(HASH_PREFIX) ||
+        value.startsWith('pbkdf2$') ||
+        value.startsWith('scrypt$'))
   );
 }
 

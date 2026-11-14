@@ -224,14 +224,25 @@ function validateAttachments(actor: Actor, b: any, input: unknown, existing?: un
   }
 }
 function assertPeriod(b: any, date: any) {
+  const s = String(date || "");
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:$|T)/.exec(s);
+  const valid =
+    Boolean(m) &&
+    Number.isFinite(Date.parse(s)) &&
+    (() => {
+      const y = Number(m![1]);
+      const mo = Number(m![2]);
+      const d = Number(m![3]);
+      const dt = new Date(Date.UTC(y, mo - 1, d));
+      return (
+        dt.getUTCFullYear() === y &&
+        dt.getUTCMonth() === mo - 1 &&
+        dt.getUTCDate() === d
+      );
+    })();
+  check(valid, "Date comptable invalide.", 400);
   check(
-    /^\d{4}-\d{2}-\d{2}/.test(String(date)) &&
-      Number.isFinite(Date.parse(String(date))),
-    "Date comptable invalide.",
-    400,
-  );
-  check(
-    !transactionState.__closedPeriods?.[`${b.id}:${String(date).slice(0, 7)}`],
+    !transactionState.__closedPeriods?.[`${b.id}:${s.slice(0, 7)}`],
     "Période comptable clôturée.",
     409,
   );
@@ -415,13 +426,21 @@ async function runOperation(
       );
       args[1] = b.syndicId;
       if (typeof args[2] !== "string") {
+        const requestedPeriod =
+          args[2] && typeof args[2] === "object" && typeof args[2].periodName === "string"
+            ? args[2].periodName.trim()
+            : "";
         if (args[2] && typeof args[2] === "object") args[3] = args[2];
-        const parts = new Intl.DateTimeFormat("en-CA", {
-          timeZone: "Africa/Casablanca",
-          year: "numeric",
-          month: "2-digit",
-        }).formatToParts(new Date());
-        args[2] = `${parts.find((p) => p.type === "year")!.value}-${parts.find((p) => p.type === "month")!.value}`;
+        if (requestedPeriod) {
+          args[2] = requestedPeriod;
+        } else {
+          const parts = new Intl.DateTimeFormat("en-CA", {
+            timeZone: "Africa/Casablanca",
+            year: "numeric",
+            month: "2-digit",
+          }).formatToParts(new Date());
+          args[2] = `${parts.find((p) => p.type === "year")!.value}-${parts.find((p) => p.type === "month")!.value}`;
+        }
       }
     }
     if (operation === "addTransaction") {
@@ -454,7 +473,7 @@ async function runOperation(
     links(b, apt);
     if (operation === "updateApartment")
       check(
-        b.apartments.some((a: any) => a.id === apt.id),
+        b.apartments.some((a: any) => a.id === apt.id && !a.archivedAt),
         "Lot introuvable.",
         404,
       );
@@ -463,6 +482,18 @@ async function runOperation(
   } else if (operation === "deleteApartment") {
     const row = nested(actor, "apartments", str(args[0]));
     row.item.archivedAt = new Date().toISOString();
+    row.item.ownerId = null;
+    row.item.tenantId = null;
+    for (const res of row.b.residents || []) {
+      if (res.apartmentId === row.item.id) {
+        res.apartmentId = (row.b.apartments || []).find(
+          (a: any) =>
+            !a.archivedAt &&
+            a.id !== row.item.id &&
+            (a.ownerId === res.id || a.tenantId === res.id),
+        )?.id;
+      }
+    }
     appendAudit(transactionState, actor, operation, row.b.id);
     return true;
   } else if (operation === "assignApartmentOwner") {
@@ -484,7 +515,12 @@ async function runOperation(
     const previous = b.residents.find((r: any) => r.id === previousOwnerId);
     if (previous && previous.apartmentId === apt.id && previousOwnerId !== apt.ownerId)
       previous.apartmentId = b.apartments.find((a: any) => !a.archivedAt && a.ownerId === previous.id)?.id;
-    if (next && !next.apartmentId) next.apartmentId = apt.id;
+    if (
+      next &&
+      (!next.apartmentId ||
+        !b.apartments.some((a: any) => !a.archivedAt && a.id === next.apartmentId))
+    )
+      next.apartmentId = apt.id;
     appendAudit(transactionState, actor, operation, b.id, {
       apartmentId: apt.id, previousOwnerId, ownerId: apt.ownerId, reason, operationId,
     });
@@ -539,6 +575,7 @@ async function runOperation(
     if (operation === "deleteResident") {
       row.item.archivedAt = new Date().toISOString();
       row.item.hasAccount = false;
+      row.item.apartmentId = undefined;
       for (const apt of b.apartments)
         for (const field of ["ownerId", "tenantId"])
           if (apt[field] === row.item.id) apt[field] = null;
@@ -551,6 +588,8 @@ async function runOperation(
     b = buildingFor(actor, str(p.buildingId));
     buildingId = b.id;
     canWrite(actor, b);
+    p.name = str(p.name, 200).trim();
+    p.category = str(p.category, 100).trim();
     const old = (transactionState.syndik_prod_prestataires_v1 || []).find(
       (x: any) => x.id === p.id,
     );
@@ -564,7 +603,7 @@ async function runOperation(
         "Email déjà lié.",
         409,
       );
-    for (const field of [...secretFields, "hasAccount"]) delete p[field];
+    for (const field of [...secretFields, "hasAccount", "rating", "reviews", "reviewsCount"]) delete p[field];
     if (old?.hasAccount && old.email.toLowerCase() !== p.email)
       changedCredentials = { kind: "Prestataire", id: String(p.id) };
     args[0] = { ...p, syndicId: b.syndicId };
@@ -584,6 +623,11 @@ async function runOperation(
     );
     b = row.b;
     buildingId = b.id;
+    if (operation === "regeneratePrestataireCredentials" && !row.item.email?.trim()) {
+      const slug = String(row.item.name || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 12) || 'prestataire';
+      const fallbackEmail = `contact@${slug}.ma`;
+      check(emailAvailable(fallbackEmail, "prestataireId", row.item.id), "Email déjà lié.", 409);
+    }
     if (operation === "deletePrestataire") {
       row.item.archivedAt = new Date().toISOString();
       row.item.active = false;
@@ -593,8 +637,14 @@ async function runOperation(
     }
     if (operation === "addPrestataireReview") {
       check(actor.role === "resident", "Avis réservé aux résidents.");
+      const rawReview = pick(args[1], ["rating", "comment"]);
+      const rating = Number(rawReview.rating);
+      check(Number.isFinite(rating) && rating >= 1 && rating <= 5, "Note invalide.", 400);
+      const comment = typeof rawReview.comment === "string" ? rawReview.comment.trim() : "";
+      check(comment.length <= 2000, "Commentaire trop long.", 400);
       args[1] = {
-        ...pick(args[1], ["rating", "comment"]),
+        rating,
+        comment,
         residentId: actorIdentity(actor),
         residentName: b.residents.find(
           (r: any) => r.id === actorIdentity(actor),
@@ -603,11 +653,6 @@ async function runOperation(
         authorRole: "resident",
         date: new Date().toISOString(),
       };
-      check(
-        Number(args[1].rating) >= 1 && Number(args[1].rating) <= 5,
-        "Note invalide.",
-        400,
-      );
     }
   } else if (operation === "submitPaymentProof") {
     const proof = object(args[0]),
@@ -692,7 +737,7 @@ async function runOperation(
     buildingId = b.id;
     canWrite(actor, b);
     check(
-      b.residents.some((r: any) => r.id === args[0]),
+      b.residents.some((r: any) => !r.archivedAt && r.id === args[0]),
       "Résident non lié.",
       400,
     );
@@ -794,6 +839,10 @@ async function runOperation(
         request.status === "completed" ? new Date().toISOString() : undefined;
       (request.updates ??= []).push({
         id: randomUUID(),
+        title:
+          operation === "confirmMaintenanceCompletion"
+            ? "Intervention validée"
+            : "Intervention réouverte",
         note: str(args[1]),
         status: request.status,
         updatedBy: actor.uid,
@@ -846,9 +895,13 @@ async function runOperation(
     if (actor.role === "provider" && args[1].status === "completed") {
       request.completionPending = true;
       args[1].status = "in_progress";
-    } else if (args[1].status)
+    } else if (args[1].status) {
+      if (["completed", "pending"].includes(args[1].status)) {
+        request.completionPending = false;
+      }
       request.completedAt =
         args[1].status === "completed" ? new Date().toISOString() : undefined;
+    }
     args[2] = {
       ...pick(args[2] || {}, ["title", "note", "stepPhotos"]),
       updatedBy: actor.uid,
@@ -875,7 +928,9 @@ async function runOperation(
     const id = actorIdentity(actor),
       peer = m.recipientId;
     check(
-      !peer || b.residents.some((r: any) => r.id === peer && !r.archivedAt),
+      !peer ||
+        peer === b.syndicId ||
+        b.residents.some((r: any) => r.id === peer && !r.archivedAt),
       "Destinataire non lié.",
     );
     let channelId = str(m.channelId, 200);
@@ -888,6 +943,8 @@ async function runOperation(
         "Conversation non liée.",
       );
       channelId = `market-${item.id}:${[id, peer].sort().join(":")}`;
+    } else {
+      check(!channelId.startsWith("market-"), "Conversation non liée.");
     }
     args[0] = {
       ...pick(m, [
@@ -998,7 +1055,7 @@ async function runOperation(
             : undefined;
     if (method)
       check(
-        ["virement", "versement", "cheque", "especes"].includes(method),
+        ["virement", "versement", "versement_especes", "cheque", "especes"].includes(method),
         "Mode de paiement indisponible.",
         400,
       );
@@ -1015,14 +1072,18 @@ async function runOperation(
       "generateMonthlyCharges",
     ].includes(operation)
   )
-    if (!["reviewPaymentProof", "approvePaymentProofsBatch", "reconcileBankStatementCSV"].includes(operation)) assertPeriod(
-      b,
-      operation === "createQuittance"
-        ? (args[0].postingDate ?? args[0].paymentDate)
-        : operation === "addTransaction"
-          ? args[1].date
-          : new Date().toISOString(),
-    );
+    if (
+      !["reviewPaymentProof", "approvePaymentProofsBatch", "reconcileBankStatementCSV"].includes(operation) &&
+      !(operation === "createQuittance" && args[0]?.addTransactionToLedger === false)
+    )
+      assertPeriod(
+        b,
+        operation === "createQuittance"
+          ? (args[0].postingDate ?? args[0].paymentDate)
+          : operation === "addTransaction"
+            ? args[1].date
+            : new Date().toISOString(),
+      );
   const oldJournalIds = new Set(
     (b?.financials?.transactions || []).map((t: any) => t.id),
   );

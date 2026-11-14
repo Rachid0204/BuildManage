@@ -1,4 +1,5 @@
 import React from 'react';
+import { useI18n } from '../../hooks/useI18n';
 
 interface SkeletonProps {
   className?: string;
@@ -9,8 +10,9 @@ export const SkeletonBlock: React.FC<SkeletonProps> = ({ className = 'h-4 w-full
 );
 
 export const DashboardSkeleton: React.FC = () => {
+  const { tr } = useI18n();
   return (
-    <div className="space-y-6" aria-busy="true" aria-label="Chargement des données...">
+    <div className="space-y-6" aria-busy="true" aria-label={tr('Chargement des données...', 'جاري تحميل البيانات...')}>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {[1, 2, 3, 4].map((i) => (
           <div key={i} className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">

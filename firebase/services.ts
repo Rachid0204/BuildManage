@@ -30,6 +30,7 @@ import type {
   Syndic,
   Transaction,
 } from '../types';
+import { notifyOperation } from '../utils/formFeedback';
 import { normalizeMaintenanceRequestApartment } from '../utils/maintenanceDisplay';
 import { getAuthenticatedRequestHeaders } from '../utils/security';
 import { engineStorage } from './cache';
@@ -41,7 +42,7 @@ import {
   remoteMutation,
   syncAllSharedStateFromServer,
 } from './transport';
-import { isRecord } from './wire';
+import { isRecord, sanitizeSnapshot } from './wire';
 export { STORAGE_KEYS } from '../shared/api/records';
 export type {
   BankStatementCSVRow,
@@ -54,6 +55,7 @@ export { normalizeBillingPeriodKey } from '../shared/domain/billingPeriod';
 export {
   clearStateCache,
   getKnownServerRevision,
+  readSnapshot,
   remoteMutation,
   resetAllProductionData,
   syncAllSharedStateFromServer,
@@ -87,8 +89,16 @@ export const getBuildingsForSyndic = async (
 ): Promise<Building[]> => {
   await syncAllSharedStateFromServer();
   const syndics = readSnapshot<Syndic[]>(STORAGE_KEYS.SYNDICS, []);
-  const targetSyndic = syndics.find((s) => s.id === syndicId);
-  return targetSyndic?.buildings || [];
+  const targetSyndic = syndics.find((s) => s.id === syndicId && !s.archivedAt);
+  return (targetSyndic?.buildings || [])
+    .filter((b) => !b.archivedAt)
+    .map((b) => ({
+      ...b,
+      residents: b.residents
+        .filter((r) => !r.archivedAt)
+        .map((r) => ({ ...r, ...ephemeralInvitation(r.id) })),
+      apartments: b.apartments.filter((a) => !a.archivedAt),
+    }));
 };
 
 export const addBuilding = async (
@@ -176,6 +186,7 @@ export const deleteResident = async (residentId: string) => {
 export const getChargesForBuilding = async (
   buildingId: string,
 ): Promise<Charge[]> => {
+  await syncAllSharedStateFromServer();
   const charges = readSnapshot<Charge[]>(STORAGE_KEYS.CHARGES, []);
   return charges.filter((c) => c.buildingId === buildingId);
 };
@@ -183,6 +194,7 @@ export const getChargesForBuilding = async (
 export const getChargesForResident = async (
   residentId: string,
 ): Promise<Charge[]> => {
+  await syncAllSharedStateFromServer();
   const charges = readSnapshot<Charge[]>(STORAGE_KEYS.CHARGES, []);
   return charges.filter((c) => c.residentId === residentId);
 };
@@ -219,6 +231,7 @@ export const generateMonthlyCharges = async (
 export const getPaymentProofsForBuilding = async (
   buildingId: string,
 ): Promise<PaymentProof[]> => {
+  await syncAllSharedStateFromServer();
   const proofs = readSnapshot<PaymentProof[]>(STORAGE_KEYS.PROOFS, []);
   return proofs.filter((p) => p.buildingId === buildingId);
 };
@@ -226,6 +239,7 @@ export const getPaymentProofsForBuilding = async (
 export const getPaymentProofsForResident = async (
   residentId: string,
 ): Promise<PaymentProof[]> => {
+  await syncAllSharedStateFromServer();
   const proofs = readSnapshot<PaymentProof[]>(STORAGE_KEYS.PROOFS, []);
   return proofs.filter((p) => p.residentId === residentId);
 };
@@ -297,6 +311,7 @@ export const reviewPaymentProof = async (
 export const getQuittancesForBuilding = async (
   buildingId: string,
 ): Promise<Quittance[]> => {
+  await syncAllSharedStateFromServer();
   const quittances = readSnapshot<Quittance[]>(STORAGE_KEYS.QUITTANCES, []);
   return quittances.filter((q) => q.buildingId === buildingId && !q.voidedAt);
 };
@@ -304,6 +319,7 @@ export const getQuittancesForBuilding = async (
 export const getQuittancesForResident = async (
   residentId: string,
 ): Promise<Quittance[]> => {
+  await syncAllSharedStateFromServer();
   const quittances = readSnapshot<Quittance[]>(STORAGE_KEYS.QUITTANCES, []);
   return quittances.filter((q) => q.residentId === residentId && !q.voidedAt);
 };
@@ -331,6 +347,7 @@ export const generateQuittanceForCharge = async (
 export const getAssembleesGeneralesForBuilding = async (
   buildingId: string,
 ): Promise<AssembleeGenerale[]> => {
+  await syncAllSharedStateFromServer();
   const agList = readSnapshot<AssembleeGenerale[]>(STORAGE_KEYS.AG, []);
   return agList.filter((ag) => ag.buildingId === buildingId);
 };
@@ -390,13 +407,14 @@ export const castResidentAGVote = async (
   });
   if (!response.ok || !isRecord(data.ag) || data.ag.id !== agId)
     throw new Error(data.error || 'Le vote a échoué.');
-  const ag = data.ag as unknown as AssembleeGenerale;
+  const ag = sanitizeSnapshot(data.ag) as AssembleeGenerale;
   const list = readSnapshot<AssembleeGenerale[]>(STORAGE_KEYS.AG, []);
   const index = list.findIndex((a) => a.id === agId);
   if (index >= 0) list[index] = ag;
   else list.push(ag);
   engineStorage.setItem(STORAGE_KEYS.AG, JSON.stringify(list));
   notifyStateUpdated(STORAGE_KEYS.AG);
+  notifyOperation({ operation: 'castResidentAGVote' });
   return ag;
 };
 
@@ -507,6 +525,7 @@ export const addTransaction = async (
 export const getInvoicesForBuilding = async (
   buildingId: string,
 ): Promise<Invoice[]> => {
+  await syncAllSharedStateFromServer();
   const invoices = readSnapshot<Invoice[]>(STORAGE_KEYS.INVOICES, []);
   return invoices.filter((inv) => inv.buildingId === buildingId);
 };
@@ -540,29 +559,23 @@ export const recordPayment = async (
 export const getMaintenanceRequestsForBuilding = async (
   buildingId: string,
 ): Promise<MaintenanceRequest[]> => {
+  await syncAllSharedStateFromServer();
   const list = readSnapshot<MaintenanceRequest[]>(STORAGE_KEYS.MAINTENANCE, []);
+  const syndics = readSnapshot<Syndic[]>(STORAGE_KEYS.SYNDICS, []);
   return list
     .filter((m) => m.buildingId === buildingId)
-    .map((m) =>
-      normalizeMaintenanceRequestApartment(
-        m,
-        readSnapshot<Syndic[]>(STORAGE_KEYS.SYNDICS, []),
-      ),
-    );
+    .map((m) => normalizeMaintenanceRequestApartment(m, syndics));
 };
 
 export const getMaintenanceRequestsForResident = async (
   residentId: string,
 ): Promise<MaintenanceRequest[]> => {
+  await syncAllSharedStateFromServer();
   const list = readSnapshot<MaintenanceRequest[]>(STORAGE_KEYS.MAINTENANCE, []);
+  const syndics = readSnapshot<Syndic[]>(STORAGE_KEYS.SYNDICS, []);
   return list
     .filter((m) => m.residentId === residentId)
-    .map((m) =>
-      normalizeMaintenanceRequestApartment(
-        m,
-        readSnapshot<Syndic[]>(STORAGE_KEYS.SYNDICS, []),
-      ),
-    );
+    .map((m) => normalizeMaintenanceRequestApartment(m, syndics));
 };
 
 export const addMaintenanceRequest = async (
@@ -602,6 +615,9 @@ export const addAnnouncement = async (
 const MAX_DOCUMENT_UPLOAD_BYTES = 5 * 1024 * 1024;
 
 async function readFileAsDurableDataUrl(file: File): Promise<string> {
+  if (file.size > MAX_DOCUMENT_UPLOAD_BYTES) {
+    throw new Error('Fichier limité à 5 Mo.');
+  }
   if (typeof FileReader !== 'undefined') {
     return new Promise<string>((resolve, reject) => {
       const reader = new FileReader();

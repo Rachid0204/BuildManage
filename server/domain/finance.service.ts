@@ -57,6 +57,7 @@ export function createFinanceService(context: DomainContext) {
     maybeOptions?:
       | boolean
       | {
+          periodName?: string;
           chargeType?: Charge['chargeType'];
           totalBudgetToSplit?: number;
           totalMonthlyBudget?: number;
@@ -68,10 +69,6 @@ export function createFinanceService(context: DomainContext) {
       month: 'long',
       year: 'numeric',
     });
-    const resolvedPeriod =
-      typeof periodOrOptions === 'string'
-        ? periodOrOptions.trim() || defaultPeriod
-        : periodOrOptions?.periodName?.trim() || defaultPeriod;
     const normalizedMaybeOptions =
       typeof maybeOptions === 'boolean'
         ? { useTantiemes: maybeOptions }
@@ -80,6 +77,10 @@ export function createFinanceService(context: DomainContext) {
       typeof periodOrOptions === 'object' && periodOrOptions !== null
         ? { ...periodOrOptions, ...normalizedMaybeOptions }
         : normalizedMaybeOptions;
+    const resolvedPeriod =
+      typeof periodOrOptions === 'string' && periodOrOptions.trim()
+        ? periodOrOptions.trim()
+        : opts.periodName?.trim() || defaultPeriod;
     const resolvedChargeType: Charge['chargeType'] =
       opts.chargeType || 'courante';
     const normalizedPeriodKey = normalizeBillingPeriodKey(resolvedPeriod);
@@ -109,16 +110,37 @@ export function createFinanceService(context: DomainContext) {
     if (budgetToSplit !== undefined) centimes(budgetToSplit);
     const useTantiemesBudget =
       budgetToSplit !== undefined && opts.useTantiemes !== false;
+    const isArchivedResident = (id: string | null | undefined) =>
+      Boolean(
+        id && building.residents.some((r: any) => r.id === id && r.archivedAt),
+      );
     const targets = building.apartments
       .filter((a: any) => !a.archivedAt)
-      .map((apt) => ({
-        apt,
-        residentId: useTantiemesBudget
-          ? billingPayer(building, apt)
-          : apt.ownerId ||
-            apt.tenantId ||
-            building.residents.find((r) => r.apartmentId === apt.id)?.id,
-      }));
+      .map((apt) => {
+        if (useTantiemesBudget) {
+          return { apt, residentId: billingPayer(building, apt) };
+        }
+        const canonicalPayer = billingPayer(
+          { ...building, syndicId: building.syndicId || syndicId },
+          apt,
+        );
+        if (canonicalPayer) {
+          return { apt, residentId: canonicalPayer };
+        }
+        const candidateId =
+          (!isArchivedResident(apt.ownerId) ? apt.ownerId : undefined) ||
+          (!isArchivedResident(apt.tenantId) ? apt.tenantId : undefined) ||
+          building.residents.find(
+            (r: any) => !r.archivedAt && r.apartmentId === apt.id,
+          )?.id;
+        return {
+          apt,
+          residentId:
+            candidateId && !isArchivedResident(candidateId)
+              ? candidateId
+              : undefined,
+        };
+      });
     if (useTantiemesBudget)
       targets.forEach(({ apt, residentId }) =>
         requireBudgetPayer(apt, residentId),
@@ -300,6 +322,13 @@ export function createFinanceService(context: DomainContext) {
     let totalAmountMad = 0;
     const quittances: Quittance[] = [];
     for (const cand of candidates) {
+      const currentChg = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, []).find(
+        (c) => c.id === cand.chargeId,
+      );
+      const rem = currentChg
+        ? Math.max(0, currentChg.amount - (currentChg.paidAmount || 0))
+        : 0;
+      if (cand.amount > rem + 0.005) continue;
       const res = await reviewPaymentProof(cand.id, 'approved');
       if (res.success) {
         approvedCount += 1;
@@ -1152,7 +1181,7 @@ export function createFinanceService(context: DomainContext) {
     const building = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, [])
       .find((s) => s.id === syndicId)
       ?.buildings.find((b) => b.id === buildingId);
-    if (!building?.residents.some((r) => r.id === residentId))
+    if (!building?.residents.some((r) => !r.archivedAt && r.id === residentId))
       throw new OperationError(
         'Copropriétaire hors de cet immeuble.',
         400,
@@ -1184,12 +1213,27 @@ export function createFinanceService(context: DomainContext) {
         'NO_BILLABLE_CHARGES',
       );
     }
+    const year = new Date().getFullYear();
+    const yearPrefix = `FAC-${year}-`;
+    const nextInvoiceSeq =
+      invoices
+        .filter(
+          (i) =>
+            i.syndicId === syndicId &&
+            typeof i.invoiceNumber === 'string' &&
+            i.invoiceNumber.startsWith(yearPrefix),
+        )
+        .reduce(
+          (max, i) =>
+            Math.max(max, Number(i.invoiceNumber.slice(yearPrefix.length)) || 0),
+          0,
+        ) + 1;
     const invoice: Invoice = {
       id: `inv-${crypto.randomUUID()}`,
       syndicId,
       buildingId,
       residentId,
-      invoiceNumber: `FAC-${new Date().getFullYear()}-${String(invoices.length + 1).padStart(4, '0')}`,
+      invoiceNumber: `${yearPrefix}${String(nextInvoiceSeq).padStart(4, '0')}`,
       totalAmount: eligible.reduce((sum, c) => sum + outstanding(c), 0) / 100,
       paidAmount: 0,
       status: 'unpaid',
@@ -1512,10 +1556,11 @@ function financialOperation(
         residentId: row.residentId,
         period,
         periodKey: period,
-        amount: row.amount,
+        amount: cents(row.amount) / 100,
         paidAmount: 0,
         status: "unpaid",
         dueDate: `${period}-01`,
+        chargeType: "opening_arrears",
         openingArrears: true,
         description: str(row.description || "Arriéré initial"),
         createdAt: new Date().toISOString(),
@@ -1597,10 +1642,27 @@ function financialOperation(
     if (invoice) {
       invoice.paidAmount = (cents(invoice.paidAmount) - total) / 100;
       invoice.status = "unpaid";
+      if (Array.isArray(invoice.paymentIds)) {
+        invoice.paymentIds = invoice.paymentIds.filter((id: string) => id !== paymentId);
+      }
+    }
+    if (paymentId.startsWith("proof:")) {
+      const proofId = paymentId.slice("proof:".length);
+      const proof = (transactionState.syndik_prod_proofs_v1 || []).find(
+        (p: any) =>
+          p.id === proofId &&
+          p.buildingId === b.id &&
+          (!p.syndicId || p.syndicId === b.syndicId),
+      );
+      if (proof) {
+        proof.status = "rejected";
+        proof.rejectionReason = reason;
+      }
     }
     for (const t of original) {
+      const { receiptSnapshots: _rs, ...txRest } = t;
       const inverse = {
-        ...t,
+        ...txRest,
         id: randomUUID(),
         paymentId: `reversal:${operationId}`,
         reversalOf: paymentId,

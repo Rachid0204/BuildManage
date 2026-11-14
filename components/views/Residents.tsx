@@ -11,7 +11,8 @@ import {
   exportResidentsCSV,
   exportResidentCredentialsPDF,
 } from '../../services/pdfOnDemand';
-import { recordResidentCredentialShare } from '../../firebase/services';
+import { recordResidentCredentialShare, updateApartment } from '../../firebase/services';
+import { useToast } from '../common/Toast';
 
 function formatAuditTimestamp(iso?: string, lang?: string): string {
   if (!iso) return '—';
@@ -405,7 +406,7 @@ const CredentialsModal: React.FC<CredentialsModalProps> = ({
   if (!resident) return null;
 
   const buildingName = building.name;
-  const password = resident.invitationCode || resident.invitationToken || 'INV-2026-MA';
+  const password = resident.generatedPassword || resident.invitationCode || resident.invitationToken || '';
   const portalUrl =
     typeof window !== 'undefined' ? `${window.location.origin}/login` : 'https://syndik.ma/login';
 
@@ -414,19 +415,20 @@ const CredentialsModal: React.FC<CredentialsModalProps> = ({
       apartmentNumber ? ` - Lot ${apartmentNumber}` : ''
     }) :\n• Lien de connexion : ${portalUrl}\n• Identifiant (Email) : ${resident.email}${
       resident.cin ? ` (ou CIN : ${resident.cin})` : ''
-    }\n• Mot de passe temporaire : ${password}\n• Statut : ${
+    }\n• Mot de passe temporaire : ${password || '(Régénérer un accès temporaire)'}\n• Statut : ${
       resident.isOwner ? 'Copropriétaire' : 'Locataire'
     }\nNote : Lors de votre première connexion, il vous sera demandé de choisir un mot de passe personnel.`,
     `مرحباً ${resident.name}،\nإليكم بيانات الولوج الرسمية إلى بوابة الملكية المشتركة (${buildingName}${
       apartmentNumber ? ` - شقة ${apartmentNumber}` : ''
     }) :\n• رابط الدخول : ${portalUrl}\n• المعرف (البريد الإلكتروني) : ${resident.email}${
       resident.cin ? ` (أو CIN : ${resident.cin})` : ''
-    }\n• كلمة المرور المؤقتة : ${password}\n• الصفة : ${
+    }\n• كلمة المرور المؤقتة : ${password || '(إعادة توليد كلمة مرور مؤقتة)'}\n• الصفة : ${
       resident.isOwner ? 'مالك مشترك' : 'مكتري'
     }\nملاحظة : عند أول تسجيل دخول، سيُطلب منكم تعيين كلمة مرور شخصية جديدة.`
   );
 
   const handleCopy = () => {
+    if (!password) return;
     if (navigator.clipboard) {
       navigator.clipboard.writeText(shareText);
       setCopied(true);
@@ -436,6 +438,7 @@ const CredentialsModal: React.FC<CredentialsModalProps> = ({
   };
 
   const handleDownloadPDF = async () => {
+    if (!password) return;
     if (!await exportResidentCredentialsPDF(resident, building, apartmentNumber)) return;
     onShareRecorded?.(resident.id, 'pdf');
   };
@@ -462,13 +465,14 @@ const CredentialsModal: React.FC<CredentialsModalProps> = ({
             </Button>
             <Button
               variant="secondary"
+              disabled={!password}
               onClick={handleDownloadPDF}
               className="flex items-center gap-1.5 border-teal-200 text-teal-800 hover:bg-teal-50"
             >
               <DocumentsIcon />
               <span>{tr("Fiche d'Accès PDF", 'تحميل بطاقة PDF')}</span>
             </Button>
-            <Button onClick={handleCopy}>
+            <Button disabled={!password} onClick={handleCopy}>
               {copied
                 ? tr('✓ Identifiants copiés !', '✓ تم نسخ البيانات!')
                 : tr('Copier les identifiants', 'نسخ بيانات الولوج')}
@@ -539,7 +543,7 @@ const CredentialsModal: React.FC<CredentialsModalProps> = ({
               {tr('Mot de passe temporaire :', 'كلمة المرور المؤقتة :')}
             </span>
             <span className="px-2.5 py-1 rounded bg-slate-800 text-emerald-300 font-bold text-sm tracking-wider select-all border border-slate-700 tabular-nums">
-              {password}
+              {password || tr('Non disponible — régénérez', 'غير متوفر — أعد التوليد')}
             </span>
           </div>
         </div>
@@ -633,9 +637,13 @@ const Residents: React.FC<{
   onRegenerateCredentials,
 }) => {
   const { t, tr, language } = useI18n();
+  const { showToast } = useToast();
   const queryClient = useQueryClient();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedResident, setSelectedResident] = useState<Resident | null>(null);
+  const [assigningResident, setAssigningResident] = useState<Resident | null>(null);
+  const [assignLotId, setAssignLotId] = useState<string>('');
+  const [isAssigningLot, setIsAssigningLot] = useState(false);
   const [credentialResidentId, setCredentialResidentId] = useState<string | null>(
     null
   );
@@ -676,6 +684,47 @@ const Residents: React.FC<{
   const handleAdd = () => {
     setSelectedResident(null);
     setIsModalOpen(true);
+  };
+
+  const openAssignLotModal = (resident: Resident) => {
+    const firstAvailable = building.apartments.find((a) =>
+      resident.isOwner ? !a.ownerId : !a.tenantId
+    );
+    setAssigningResident(resident);
+    setAssignLotId(firstAvailable?.id || building.apartments[0]?.id || '');
+  };
+
+  const handleConfirmAssignLot = async () => {
+    if (!assigningResident || !assignLotId) return;
+    const targetApt = building.apartments.find((a) => a.id === assignLotId);
+    if (!targetApt) return;
+    setIsAssigningLot(true);
+    try {
+      await updateApartment({
+        ...targetApt,
+        ...(assigningResident.isOwner
+          ? { ownerId: assigningResident.id }
+          : { tenantId: assigningResident.id }),
+      });
+      await queryClient.invalidateQueries({ queryKey: ['syndics'] });
+      showToast(
+        tr(
+          `Lot ${targetApt.number} assigné à ${assigningResident.name}.`,
+          `تم تعيين الشقة ${targetApt.number} لـ ${assigningResident.name}.`
+        ),
+        'success'
+      );
+      setAssigningResident(null);
+    } catch (err: unknown) {
+      showToast(
+        err instanceof Error
+          ? err.message
+          : tr("Impossible d'assigner ce lot.", 'تعذر تعيين هذه الشقة.'),
+        'error'
+      );
+    } finally {
+      setIsAssigningLot(false);
+    }
   };
 
   const handleSaveResident = async (
@@ -743,6 +792,57 @@ const Residents: React.FC<{
         onRegenerate={handleRegenerateInsideModal}
         onShareRecorded={handleRecordShare}
       />
+
+      {/* Lot Assignment Modal */}
+      <Modal
+        isOpen={!!assigningResident}
+        onClose={() => !isAssigningLot && setAssigningResident(null)}
+        onSubmit={handleConfirmAssignLot}
+        busy={isAssigningLot}
+        title={tr('Assigner un lot au résident', 'تعيين شقة للساكن')}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setAssigningResident(null)} disabled={isAssigningLot}>
+              {tr('Annuler', 'إلغاء')}
+            </Button>
+            <Button type="submit" disabled={!assignLotId || isAssigningLot} className="ms-3">
+              {tr('Assigner le lot', 'تعيين الشقة')}
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-3 text-sm">
+          <p className="text-slate-600">
+            {assigningResident
+              ? tr(
+                  `Sélectionnez le lot à attribuer à ${assigningResident.name} (${assigningResident.isOwner ? 'Copropriétaire' : 'Locataire'}) :`,
+                  `اختر الشقة المراد تعيينها لـ ${assigningResident.name} (${assigningResident.isOwner ? 'مالك مشترك' : 'مكتري'}) :`
+                )
+              : ''}
+          </p>
+          <select
+            value={assignLotId}
+            onChange={(e) => setAssignLotId(e.target.value)}
+            className="block w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
+          >
+            <option value="">{tr('-- Choisir un lot --', '-- اختر شقة --')}</option>
+            {building.apartments.map((apt) => {
+              const holderId = assigningResident?.isOwner ? apt.ownerId : apt.tenantId;
+              const holderName = holderId
+                ? building.residents.find((r) => r.id === holderId)?.name
+                : null;
+              return (
+                <option key={apt.id} value={apt.id} disabled={!!holderId && holderId !== assigningResident?.id}>
+                  {tr('Lot', 'شقة')} {apt.number} ({tr('Étage', 'طابق')} {apt.floor} · {apt.area}m²) —{' '}
+                  {holderName
+                    ? `${assigningResident?.isOwner ? tr('Propriétaire', 'المالك') : tr('Locataire', 'المكتري')}: ${holderName}`
+                    : tr('Libre', 'شاغرة')}
+                </option>
+              );
+            })}
+          </select>
+        </div>
+      </Modal>
 
       {/* Delete Confirmation Modal */}
       <Modal
@@ -981,7 +1081,7 @@ const Residents: React.FC<{
                       ) : (
                         <button
                           type="button"
-                          onClick={() => handleEdit(resident)}
+                          onClick={() => openAssignLotModal(resident)}
                           className="text-xs text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-2.5 py-1 rounded-md font-medium"
                         >
                           {tr('+ Assigner un lot', '+ تعيين شقة')}
@@ -1061,23 +1161,25 @@ const Residents: React.FC<{
                         </span>
                       )}
                     </td>
-                    <td className="px-5 py-3.5 whitespace-nowrap text-end text-sm font-medium space-x-2">
-                      <Button
-                        variant="secondary"
-                        className="!p-2"
-                        onClick={() => handleEdit(resident)}
-                        title={t('residents.modal.editTitle')}
-                      >
-                        <PencilIcon />
-                      </Button>
-                      <Button
-                        variant="danger"
-                        className="!p-2"
-                        onClick={() => setDeletingResident(resident)}
-                        title={tr('Supprimer', 'حذف')}
-                      >
-                        <TrashIcon />
-                      </Button>
+                    <td className="px-5 py-3.5 whitespace-nowrap text-end text-sm font-medium">
+                      <div className="inline-flex items-center gap-2">
+                        <Button
+                          variant="secondary"
+                          className="!p-2"
+                          onClick={() => handleEdit(resident)}
+                          title={t('residents.modal.editTitle')}
+                        >
+                          <PencilIcon />
+                        </Button>
+                        <Button
+                          variant="danger"
+                          className="!p-2"
+                          onClick={() => setDeletingResident(resident)}
+                          title={tr('Supprimer', 'حذف')}
+                        >
+                          <TrashIcon />
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 );

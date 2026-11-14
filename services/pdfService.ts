@@ -22,15 +22,17 @@ const currencyFormatter = new Intl.NumberFormat('fr-MA', {
   minimumFractionDigits: 2,
 });
 
-(jsPDF.API as any).events.push(['addFonts',function(this:jsPDF){this.addFileToVFS('ImmoGest-Regular.ttf',normalFont);this.addFileToVFS('ImmoGest-Bold.ttf',boldFont);for(const style of ['normal','italic'])this.addFont('ImmoGest-Regular.ttf','helvetica',style);for(const style of ['bold','bolditalic'])this.addFont('ImmoGest-Bold.ttf','helvetica',style);}]);
+(jsPDF.API as any).events.push(['addFonts',function(this:jsPDF){this.addFileToVFS('ImmoGest-Regular.ttf',normalFont);this.addFileToVFS('ImmoGest-Bold.ttf',boldFont);for(const family of ['helvetica','courier']){for(const style of ['normal','italic'])this.addFont('ImmoGest-Regular.ttf',family,style);for(const style of ['bold','bolditalic'])this.addFont('ImmoGest-Bold.ttf',family,style);}}]);
 // Helper to convert numbers to French words for formal receipts
-function numberToFrenchWords(amount: number): string {
-  const integerPart = Math.floor(amount);
-  const decimalPart = Math.round((amount - integerPart) * 100);
+export function numberToFrenchWords(amount: number): string {
+  const safeAmount = Number.isFinite(amount) ? Math.max(0, amount) : 0;
+  const totalCentimes = Math.round(safeAmount * 100);
+  const integerPart = Math.floor(totalCentimes / 100);
+  const decimalPart = totalCentimes % 100;
 
   const units = ["zéro", "un", "deux", "trois", "quatre", "cinq", "six", "sept", "huit", "neuf", "dix",
                  "onze", "douze", "treize", "quatorze", "quinze", "seize", "dix-sept", "dix-huit", "dix-neuf"];
-  const tens = ["", "", "vingt", "trente", "quarante", "cinquante", "soixante", "soixante-dix", "quatre-vingts", "quatre-vingt-dix"];
+  const tens = ["", "", "vingt", "trente", "quarante", "cinquante", "soixante", "soixante-dix", "quatre-vingt", "quatre-vingt-dix"];
 
   function convertChunk(n: number): string {
     if (n === 0) return "";
@@ -39,6 +41,7 @@ function numberToFrenchWords(amount: number): string {
       const ten = Math.floor(n / 10);
       const unit = n % 10;
       if (ten === 7) return "soixante-" + (unit === 1 ? "et-onze" : units[10 + unit]);
+      if (ten === 8) return unit === 0 ? "quatre-vingts" : "quatre-vingt-" + units[unit];
       if (ten === 9) return "quatre-vingt-" + units[10 + unit];
       if (unit === 0) return tens[ten];
       if (unit === 1) return tens[ten] + "-et-un";
@@ -54,6 +57,18 @@ function numberToFrenchWords(amount: number): string {
   function convert(n: number): string {
     if (n === 0) return "zéro";
     if (n < 1000) return convertChunk(n);
+    if (n >= 1_000_000_000) {
+      const billions = Math.floor(n / 1_000_000_000);
+      const rest = n % 1_000_000_000;
+      const billionStr = billions === 1 ? "un milliard" : convert(billions) + " milliards";
+      return rest === 0 ? billionStr : billionStr + " " + convert(rest);
+    }
+    if (n >= 1_000_000) {
+      const millions = Math.floor(n / 1_000_000);
+      const rest = n % 1_000_000;
+      const millionStr = millions === 1 ? "un million" : convert(millions) + " millions";
+      return rest === 0 ? millionStr : millionStr + " " + convert(rest);
+    }
     const thousands = Math.floor(n / 1000);
     const rest = n % 1000;
     const thousandStr = thousands === 1 ? "mille" : convertChunk(thousands) + " mille";
@@ -212,52 +227,71 @@ export const generatePvAgPDF = (ag: AssembleeGenerale, building: Building, syndi
   // Quorum section
   y += 28;
   doc.setFillColor(241, 245, 249);
-  doc.rect(14, y, 182, 18, 'F');
+  doc.rect(14, y, 182, 24, 'F');
   doc.setFont("helvetica", "bold");
   doc.text("CONSTATATION DU QUORUM LÉGAL (Loi 18-00 / Loi 106-12) :", 18, y + 6);
   doc.setFont("helvetica", "normal");
-  const quorumText = `Tantièmes présents et représentés : ${ag.presentTantiemes} / ${ag.totalTantiemes} tantièmes (${Math.round((ag.presentTantiemes / ag.totalTantiemes) * 100)}%).`;
-  doc.text(quorumText, 18, y + 12);
+  const totalTant = ag.totalTantiemes || 1;
+  const quorumText = `Tantièmes présents et représentés : ${ag.presentTantiemes} / ${ag.totalTantiemes} tantièmes (${Math.round((ag.presentTantiemes / totalTant) * 100)}%).`;
+  doc.text(quorumText, 18, y + 12.5);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(ag.quorumReached ? 15 : 185, ag.quorumReached ? 118 : 28, ag.quorumReached ? 110 : 28);
-  doc.text(ag.quorumReached ? "-> QUORUM ATTEINT : L'Assemblée peut valablement délibérer." : "-> QUORUM NON ATTEINT : Deuxième convocation requise.", 115, y + 12);
+  doc.text(ag.quorumReached ? "-> QUORUM ATTEINT : L'Assemblée peut valablement délibérer." : "-> QUORUM NON ATTEINT : Deuxième convocation requise.", 18, y + 19);
 
   // Order of business
-  y += 26;
+  y += 32;
   doc.setTextColor(15, 23, 42);
   doc.setFont("helvetica", "bold");
   doc.text("ORDRE DU JOUR :", 14, y);
   doc.setFont("helvetica", "normal");
+  y += 6;
   (ag.agendaItems ?? []).forEach((item, index) => {
-    y += 6;
-    doc.text(`${index + 1}. ${item}`, 18, y);
+    const agendaLines = doc.splitTextToSize(`${index + 1}. ${item}`, 174);
+    if (y + agendaLines.length * 5 > 268) {
+      doc.addPage();
+      y = 20;
+    }
+    doc.text(agendaLines, 18, y);
+    y += agendaLines.length * 5 + 1.5;
   });
 
   // Resolutions & Votes
-  y += 12;
+  y += 8;
+  if (y > 262) {
+    doc.addPage();
+    y = 20;
+  }
   doc.setFont("helvetica", "bold");
   doc.text("DÉLIBÉRATIONS ET VOTES DES RÉSOLUTIONS :", 14, y);
+  y += 6;
 
   ag.resolutions.forEach((res) => {
-    y += 10;
-    if (y > 250) {
+    doc.setFontSize(9.5);
+    const titleLines = doc.splitTextToSize(`Résolution N° ${res.number} : ${res.title}`, 174);
+    doc.setFontSize(8.5);
+    const descLines = doc.splitTextToSize(res.description || '', 174);
+    const boxHeight = 14 + titleLines.length * 4.5 + descLines.length * 4.2;
+    if (y + boxHeight > 270) {
       doc.addPage();
       y = 20;
     }
     doc.setFillColor(248, 250, 252);
-    doc.rect(14, y, 182, 22, 'F');
+    doc.rect(14, y, 182, boxHeight, 'F');
+    doc.setTextColor(15, 23, 42);
     doc.setFont("helvetica", "bold");
     doc.setFontSize(9.5);
-    doc.text(`Résolution N° ${res.number} : ${res.title}`, 18, y + 6);
+    doc.text(titleLines, 18, y + 6);
+    const descY = y + 6 + titleLines.length * 4.5;
     doc.setFont("helvetica", "normal");
     doc.setFontSize(8.5);
-    doc.text(res.description, 18, y + 11);
+    doc.text(descLines, 18, descY);
+    const voteY = descY + descLines.length * 4.2 + 2;
     doc.setFont("helvetica", "bold");
-    doc.text(`Votes : POUR : ${res.votesFor} tantièmes  |  CONTRE : ${res.votesAgainst}  |  ABSTENTION : ${res.votesAbstain}`, 18, y + 17);
+    doc.text(`Votes : POUR : ${res.votesFor}  |  CONTRE : ${res.votesAgainst}  |  ABSTENTION : ${res.votesAbstain}`, 18, voteY);
     doc.setTextColor(res.status === 'approved' ? 15 : 185, res.status === 'approved' ? 118 : 28, res.status === 'approved' ? 110 : 28);
-    doc.text(`RÉSULTAT : ${res.status === 'approved' ? "ADOPTÉE" : "REJETÉE"}`, 145, y + 17);
+    doc.text(`RÉSULTAT : ${res.status === 'approved' ? "ADOPTÉE" : "REJETÉE"}`, 192, voteY, { align: 'right' });
     doc.setTextColor(15, 23, 42);
-    y += 14;
+    y += boxHeight + 4;
   });
 
   // Signatures
@@ -1108,7 +1142,7 @@ export const exportResidentCredentialsPDF = (
   doc.setFont('courier', 'bold');
   doc.setFontSize(12);
   doc.text(
-    resident.generatedPassword || resident.invitationCode || resident.invitationToken || 'Syndik-Demo2026!',
+    resident.generatedPassword || resident.invitationCode || resident.invitationToken || '—',
     83,
     y + 38
   );
@@ -1836,6 +1870,10 @@ export const exportAnnualRepartitionPDF = (
     y += 7;
   }
 
+  if (y > 260) {
+    doc.addPage();
+    y = 20;
+  }
   y += 4;
   doc.setFont('helvetica', 'bold');
   doc.setFillColor(240, 253, 250);
@@ -1919,7 +1957,11 @@ export const exportMiseEnDemeurePDF = (
   );
   doc.text(bodyText, 14, y);
 
-  y += 42;
+  y += bodyText.length * 4.8 + 6;
+  if (y > 245) {
+    doc.addPage();
+    y = 24;
+  }
   doc.setFillColor(241, 245, 249);
   doc.rect(14, y, 182, 8, 'F');
   doc.setFont('helvetica', 'bold');
@@ -1930,7 +1972,20 @@ export const exportMiseEnDemeurePDF = (
 
   y += 13;
   doc.setFont('helvetica', 'normal');
-  for (const chg of unpaidCharges.slice(0, 12)) {
+  for (const chg of unpaidCharges) {
+    if (y > 258) {
+      doc.addPage();
+      y = 24;
+      doc.setFillColor(241, 245, 249);
+      doc.rect(14, y, 182, 8, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.text('Période / Désignation de la charge impayée', 18, y + 5.5);
+      doc.text('Échéance', 125, y + 5.5);
+      doc.text('Reste dû (MAD)', 160, y + 5.5);
+      y += 13;
+      doc.setFont('helvetica', 'normal');
+    }
     const rem = Math.max(0, chg.amount - (chg.paidAmount || 0));
     doc.text(sanitizePdfText(chg.description || chg.period || 'Appel de charges').slice(0, 52), 18, y);
     doc.text(new Date(chg.dueDate).toLocaleDateString('fr-MA'), 125, y);
@@ -1938,6 +1993,10 @@ export const exportMiseEnDemeurePDF = (
     y += 7;
   }
 
+  if (y > 262) {
+    doc.addPage();
+    y = 24;
+  }
   y += 5;
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(153, 27, 27);

@@ -17,8 +17,8 @@ import LoginScreen from './components/views/LoginScreen';
 import LandingPage from './components/views/LandingPage';
 import Card from './components/common/Card';
 import Button from './components/common/Button';
-import { getSyndics } from './firebase/services';
-import type { SubscriptionPlan, Syndic, UserRole } from './types';
+import { getSyndics, readSnapshot, STORAGE_KEYS } from './firebase/services';
+import type { Prestataire, SubscriptionPlan, Syndic, UserRole } from './types';
 
 import RouteErrorBoundary from './components/common/RouteErrorBoundary';
 import PortalSkeleton from './components/common/PortalSkeleton';
@@ -44,18 +44,19 @@ const SyndicDataProvider: React.FC<{ children: React.ReactNode }> = ({
   });
 
   useEffect(() => {
-    if (userProfile && !isLoading) setReadyForIdentity(userProfile.uid);
+    if (userProfile && !isLoading && !dataError) setReadyForIdentity(userProfile.uid);
     if (!userProfile) {
       setSyndicData(null);
       setUnassignedAccount(false);
       return;
     }
+    if (isLoading || dataError) {
+      return;
+    }
 
     if (userProfile.role === 'admin') {
       setUnassignedAccount(false);
-      if (syndics.length > 0) {
-        setSyndicData(syndics[0]);
-      }
+      setSyndicData(syndics[0] ?? null);
       return;
     }
 
@@ -93,10 +94,24 @@ const SyndicDataProvider: React.FC<{ children: React.ReactNode }> = ({
       }
 
       if (!matchedSyndic && userProfile.role === 'provider') {
-        matchedSyndic =
-          syndics.find((s) =>
-            s.buildings.some((b) => userProfile.buildingId && b.id === userProfile.buildingId)
-          ) || (userProfile.prestataireId || userProfile.buildingId ? syndics[0] : undefined);
+        const cleanPrestId =
+          userProfile.prestataireId || userProfile.uid.replace(/^(user-prest-|prov-)/, '');
+        const prestataires = readSnapshot<Prestataire[]>(STORAGE_KEYS.PRESTATAIRES, []);
+        matchedSyndic = syndics.find((s) =>
+          s.buildings.some(
+            (b) =>
+              (userProfile.buildingId && b.id === userProfile.buildingId) ||
+              ((b as { prestataires?: Array<{ id: string }> }).prestataires || []).some(
+                (p) => p.id === cleanPrestId
+              ) ||
+              prestataires.some(
+                (p) =>
+                  !p.archivedAt &&
+                  p.id === cleanPrestId &&
+                  (p.buildingId === b.id || p.syndicId === s.id)
+              )
+          )
+        );
       }
 
       if (matchedSyndic) {
@@ -106,8 +121,9 @@ const SyndicDataProvider: React.FC<{ children: React.ReactNode }> = ({
       }
     }
 
-    if (!isLoading) { setSyndicData(null); setUnassignedAccount(true); }
-  }, [syndics, isLoading, userProfile, setSyndicData]);
+    setSyndicData(null);
+    setUnassignedAccount(true);
+  }, [syndics, isLoading, dataError, userProfile, setSyndicData]);
 
   if (dataError && syndics.length === 0) return (
     <div role="alert" className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
@@ -301,7 +317,7 @@ const FirstLoginPasswordGate: React.FC = () => {
               required
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
-              placeholder={tr('Minimum 6 caractères', '10 أحرف على الأقل')}
+              placeholder={tr('Minimum 10 caractères', '10 أحرف على الأقل')}
               className="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 focus:border-teal-500"
             />
           </div>

@@ -62,11 +62,15 @@ export function startLiveSync(onStatus: (status: LiveStatus) => void, onUnauthor
             buffer = buffer.slice(end + 2);
             const data = frame.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trim()).join('\n');
             if (data) {
-              const decoded = EventRevision.safeParse(JSON.parse(data) as unknown);
-              if (decoded.success) {
-                const value = decoded.data;
-                attempt = 0;
-                if (value.revision > getKnownServerRevision()) refresh();
+              try {
+                const decoded = EventRevision.safeParse(JSON.parse(data) as unknown);
+                if (decoded.success) {
+                  const value = decoded.data;
+                  attempt = 0;
+                  if (value.revision > getKnownServerRevision()) refresh();
+                }
+              } catch {
+                // Ignore malformed SSE event payload
               }
             }
           }
@@ -74,7 +78,8 @@ export function startLiveSync(onStatus: (status: LiveStatus) => void, onUnauthor
         }
       } finally { void reader.cancel().catch(() => {}); }
     } catch {
-      if (!stopped) refresh();
+      if (stopped || controller !== active) return;
+      refresh();
     } finally {
       clearTimeout(idle);
       if (controller === active) {

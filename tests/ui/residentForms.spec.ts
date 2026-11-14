@@ -671,10 +671,11 @@ test("a rejected proof can be resubmitted from the exact charge on mobile in Ara
     .locator("div.p-4")
     .filter({ has: page.locator("strong", { hasText: "NEW-REF-AR" }) })
     .last();
-  page.once("dialog", (dialog) =>
-    dialog.accept("Receipt unclear - please resend"),
-  );
   await row.getByRole("button", { name: "Rejeter", exact: true }).click();
+  const rejectModal = page.getByRole("dialog");
+  await rejectModal.locator("textarea").fill("Receipt unclear - please resend");
+  await rejectModal.getByRole("button", { name: "Confirmer le rejet", exact: true }).click();
+  await expect(rejectModal).toBeHidden();
   await expect
     .poll(
       async () =>

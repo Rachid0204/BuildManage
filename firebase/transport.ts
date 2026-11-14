@@ -126,7 +126,7 @@ export async function syncAllSharedStateFromServer(
   const task = (async () => {
     try {
       const url =
-        !force && lastKnownServerRevision > 0
+        lastKnownServerRevision > 0
           ? `/api/shared-state?sinceRevision=${lastKnownServerRevision}`
           : '/api/shared-state';
       const res = await fetch(url, {
@@ -212,7 +212,11 @@ export async function resetAllProductionData(): Promise<void> {
 
 const ephemeralInvites = new Map<
   string,
-  { invitationCode?: string; invitationToken?: string }
+  {
+    generatedPassword?: string;
+    invitationCode?: string;
+    invitationToken?: string;
+  }
 >();
 
 const preparedOperations = new Map<string, unknown[]>();
@@ -341,6 +345,7 @@ async function performRemoteMutation<K extends CommandName>(
       savePending(uid, record);
     }
     const first: unknown = args[0];
+    const second: unknown = args[1];
     const linked =
       typeof first === 'string'
         ? [
@@ -357,10 +362,15 @@ async function performRemoteMutation<K extends CommandName>(
       (isRecord(first) && typeof first.buildingId === 'string'
         ? first.buildingId
         : undefined) ||
+      (isRecord(second) && typeof second.buildingId === 'string'
+        ? second.buildingId
+        : undefined) ||
       linked?.buildingId ||
-      (operation === 'attachDocument' && typeof first === 'string'
+      ((operation === 'attachDocument' || operation === 'addTransaction') &&
+      typeof first === 'string'
         ? first
-        : undefined);
+        : undefined) ||
+      getAuthenticatedRequestHeaders()['X-Syndik-Building'];
     if (preparedOperations.has(requestKey))
       args = preparedOperations.get(requestKey)!;
     else if (buildingId) {
@@ -377,8 +387,16 @@ async function performRemoteMutation<K extends CommandName>(
           },
         );
         requireSameIdentity();
-        if (!response.ok)
+        if (!response.ok) {
+          if (
+            response.status < 500 &&
+            ![401, 408, 429].includes(response.status) &&
+            Object.keys(record!.uploads).length === 0
+          ) {
+            removePending(uid, record!.operationId);
+          }
           throw new Error(result.error || 'Téléversement impossible.');
+        }
         if (
           typeof result.url !== 'string' ||
           !/^\/api\/uploads\/[a-zA-Z0-9_-]+$/.test(result.url)
@@ -446,9 +464,12 @@ async function performRemoteMutation<K extends CommandName>(
     });
     requireSameIdentity();
     if (!response.ok) {
+      const keepOn409 =
+        response.status === 409 && data.code === 'IDENTITY_MUTATION_PENDING';
       if (
         response.status < 500 &&
-        ![401, 408, 409, 429].includes(response.status)
+        !keepOn409 &&
+        ![401, 408, 429].includes(response.status)
       ) {
         removePending(uid, operationId);
         preparedOperations.delete(requestKey);
@@ -481,6 +502,10 @@ async function performRemoteMutation<K extends CommandName>(
 
 function applyCommandResult(data: WireResponse, operation: string) {
   if (isRecord(data.result) && typeof data.result.id === 'string') {
+    const generatedPassword =
+      typeof data.result.generatedPassword === 'string'
+        ? data.result.generatedPassword
+        : undefined;
     const invitationCode =
       typeof data.result.invitationCode === 'string'
         ? data.result.invitationCode
@@ -489,8 +514,12 @@ function applyCommandResult(data: WireResponse, operation: string) {
       typeof data.result.invitationToken === 'string'
         ? data.result.invitationToken
         : undefined;
-    if (invitationCode || invitationToken)
-      ephemeralInvites.set(data.result.id, { invitationCode, invitationToken });
+    if (generatedPassword || invitationCode || invitationToken)
+      ephemeralInvites.set(data.result.id, {
+        generatedPassword,
+        invitationCode,
+        invitationToken,
+      });
   }
   if (
     data.store &&

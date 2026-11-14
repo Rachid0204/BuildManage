@@ -2,6 +2,7 @@ import type { AddBuildingCommand } from '../../shared/domain/commands';
 import { getBuildingReserveRate } from '../../shared/domain/money';
 import { getBuildingCapacity } from '../../shared/domain/subscription';
 import type { Apartment, Building, Syndic } from '../../types';
+import { isAlreadyHashedPassword } from '../../utils/security';
 import { ApartmentSchema, BuildingSchema } from '../../utils/validation';
 import { hashPassword } from '../passwords';
 import type { DomainContext } from './context';
@@ -78,8 +79,17 @@ export function createBuildingService(context: DomainContext) {
       name: coreBuilding.name,
       address: coreBuilding.address,
       city: coreBuilding.city,
+      ...((coreBuilding as any).postalCode !== undefined
+        ? { postalCode: (coreBuilding as any).postalCode }
+        : {}),
+      ...((coreBuilding as any).ice !== undefined
+        ? { ice: (coreBuilding as any).ice }
+        : {}),
+      ...((coreBuilding as any).rc !== undefined
+        ? { rc: (coreBuilding as any).rc }
+        : {}),
       monthlySyndicFees: coreBuilding.monthlySyndicFees,
-      totalTantiemes: 1000,
+      totalTantiemes: validation.data.totalTantiemes ?? 1000,
       reserveFundRate: validation.data.reserveFundRate,
       bankName: coreBuilding.bankName,
       bankRib: coreBuilding.bankRib,
@@ -190,11 +200,11 @@ export function createBuildingService(context: DomainContext) {
         bld.apartments.push(newApt);
         if (newApt.ownerId) {
           const owner = bld.residents.find((r) => r.id === newApt.ownerId);
-          if (owner) owner.apartmentId = newApt.id;
+          if (owner && !owner.apartmentId) owner.apartmentId = newApt.id;
         }
         if (newApt.tenantId) {
           const tenant = bld.residents.find((r) => r.id === newApt.tenantId);
-          if (tenant) tenant.apartmentId = newApt.id;
+          if (tenant && !tenant.apartmentId) tenant.apartmentId = newApt.id;
         }
         setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
 
@@ -213,16 +223,17 @@ export function createBuildingService(context: DomainContext) {
       const bld = syndic.buildings.find((b) => b.id === buildingId);
       if (bld) {
         const existingNumbers = new Set(
-          bld.apartments.map((a) => a.number.trim().toLowerCase()),
+          bld.apartments
+            .filter((a: any) => !a.archivedAt)
+            .map((a) => a.number.trim().toLowerCase()),
         );
         const createdApartments: Apartment[] = [];
-        const baseTimestamp = Date.now();
-        apartmentsList.forEach((aptData, idx) => {
+        apartmentsList.forEach((aptData) => {
           const normalizedNum = aptData.number.trim().toLowerCase();
           if (existingNumbers.has(normalizedNum)) return;
           existingNumbers.add(normalizedNum);
           const newApt: Apartment = {
-            id: `apt-${baseTimestamp}-${idx}`,
+            id: `apt-${randomUUID()}`,
             buildingId,
             number: aptData.number.trim(),
             floor: Number(aptData.floor) || 0,
@@ -237,6 +248,14 @@ export function createBuildingService(context: DomainContext) {
             tenantId: aptData.tenantId || null,
           };
           bld.apartments.push(newApt);
+          if (newApt.ownerId) {
+            const owner = bld.residents.find((r) => r.id === newApt.ownerId);
+            if (owner && !owner.apartmentId) owner.apartmentId = newApt.id;
+          }
+          if (newApt.tenantId) {
+            const tenant = bld.residents.find((r) => r.id === newApt.tenantId);
+            if (tenant && !tenant.apartmentId) tenant.apartmentId = newApt.id;
+          }
           createdApartments.push(newApt);
         });
         setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
@@ -252,22 +271,39 @@ export function createBuildingService(context: DomainContext) {
     for (const syndic of syndics) {
       const bld = syndic.buildings.find((b) => b.id === buildingId);
       if (bld && bld.apartments.length > 0) {
-        const totalArea = bld.apartments.reduce(
+        const activeApts = bld.apartments.filter((a: any) => !a.archivedAt);
+        if (activeApts.length === 0) return bld.apartments;
+        const totalTarget = bld.totalTantiemes || 1000;
+        const totalArea = activeApts.reduce(
           (sum, a) => sum + (Number(a.area) || 1),
           0,
         );
         let allocated = 0;
-        bld.apartments = bld.apartments.map((apt, idx) => {
-          if (idx === bld.apartments.length - 1) {
-            return { ...apt, tantiemes: Math.max(1, 1000 - allocated) };
+        const updatedActiveIds = new Map<string, number>();
+        activeApts.forEach((apt, idx) => {
+          if (idx === activeApts.length - 1) {
+            updatedActiveIds.set(apt.id, Math.max(1, totalTarget - allocated));
+            return;
           }
+          const maxAllowed = Math.max(
+            1,
+            totalTarget - allocated - (activeApts.length - 1 - idx),
+          );
           const share = Math.max(
             1,
-            Math.round(((Number(apt.area) || 1) / totalArea) * 1000),
+            Math.min(
+              maxAllowed,
+              Math.round(((Number(apt.area) || 1) / totalArea) * totalTarget),
+            ),
           );
           allocated += share;
-          return { ...apt, tantiemes: share };
+          updatedActiveIds.set(apt.id, share);
         });
+        bld.apartments = bld.apartments.map((apt) =>
+          updatedActiveIds.has(apt.id)
+            ? { ...apt, tantiemes: updatedActiveIds.get(apt.id)! }
+            : apt,
+        );
         setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
 
         return bld.apartments;
@@ -294,7 +330,8 @@ export function createBuildingService(context: DomainContext) {
             );
             if (oldOwner && oldOwner.apartmentId === apartment.id) {
               const otherOwned = bld.apartments.find(
-                (a) =>
+                (a: any) =>
+                  !a.archivedAt &&
                   a.id !== apartment.id &&
                   (a.ownerId === oldOwner.id || a.tenantId === oldOwner.id),
               );
@@ -307,7 +344,8 @@ export function createBuildingService(context: DomainContext) {
             );
             if (oldTenant && oldTenant.apartmentId === apartment.id) {
               const otherRented = bld.apartments.find(
-                (a) =>
+                (a: any) =>
+                  !a.archivedAt &&
                   a.id !== apartment.id &&
                   (a.ownerId === oldTenant.id || a.tenantId === oldTenant.id),
               );
@@ -318,13 +356,13 @@ export function createBuildingService(context: DomainContext) {
             const newOwner = bld.residents.find(
               (r) => r.id === apartment.ownerId,
             );
-            if (newOwner) newOwner.apartmentId = apartment.id;
+            if (newOwner && !newOwner.apartmentId) newOwner.apartmentId = apartment.id;
           }
           if (apartment.tenantId) {
             const newTenant = bld.residents.find(
               (r) => r.id === apartment.tenantId,
             );
-            if (newTenant) newTenant.apartmentId = apartment.id;
+            if (newTenant && !newTenant.apartmentId) newTenant.apartmentId = apartment.id;
           }
           setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
 
@@ -344,7 +382,8 @@ export function createBuildingService(context: DomainContext) {
           bld.residents.forEach((res) => {
             if (res.apartmentId === apartmentId) {
               const fallbackApt = bld.apartments.find(
-                (a) => a.ownerId === res.id || a.tenantId === res.id,
+                (a: any) =>
+                  !a.archivedAt && (a.ownerId === res.id || a.tenantId === res.id),
               );
               res.apartmentId = fallbackApt?.id || undefined;
             }
@@ -387,6 +426,7 @@ async function createCabinet(actor: Actor, input: any) {
     data = object(input),
     email = z.string().email().parse(data.email).toLowerCase(),
     password = z.string().min(10).max(200).parse(data.password);
+  check(!isAlreadyHashedPassword(password), "Mot de passe invalide.", 400);
   check(
     !(transactionState.syndik_prod_registered_users_v1 || []).some(
       (u: any) => u.email === email,
@@ -549,6 +589,75 @@ function restoreArchived(actor: Actor,args:any[]) { const operation='restoreArch
     } else ({ b, item } = nested(actor, kind, id));
     if (kind === "apartments") links(b, item);
     delete item.archivedAt;
+    const accountKeys = [
+      "syndik_prod_registered_users_v1",
+      "syndik_prod_resident_accounts_v1",
+      "syndik_prod_prestataire_accounts_v1",
+    ];
+    if (kind === "prestataires") {
+      item.active = true;
+      const canReenable =
+        !item.email ||
+        accountKeys.every((key) =>
+          (transactionState[key] || []).every(
+            (u: any) =>
+              u.disabled ||
+              u.email?.toLowerCase() !== item.email.toLowerCase() ||
+              u.prestataireId === item.id ||
+              u.profile?.prestataireId === item.id,
+          ),
+        );
+      if (canReenable) {
+        let restoredAcc = false;
+        for (const key of accountKeys) {
+          for (const a of transactionState[key] || []) {
+            if (a.prestataireId === item.id || a.profile?.prestataireId === item.id) {
+              delete a.disabled;
+              restoredAcc = true;
+            }
+          }
+        }
+        if (restoredAcc) item.hasAccount = true;
+      }
+    }
+    if (kind === "residents") {
+      if (item.apartmentId) {
+        const apt = b.apartments.find(
+          (a: any) => a.id === item.apartmentId && !a.archivedAt,
+        );
+        const occupiedByOther =
+          apt &&
+          (item.isOwner
+            ? apt.ownerId && apt.ownerId !== item.id
+            : apt.tenantId && apt.tenantId !== item.id);
+        if (!apt || occupiedByOther) {
+          delete item.apartmentId;
+        }
+      }
+      const canReenable =
+        !item.email ||
+        accountKeys.every((key) =>
+          (transactionState[key] || []).every(
+            (u: any) =>
+              u.disabled ||
+              u.email?.toLowerCase() !== item.email.toLowerCase() ||
+              u.residentId === item.id ||
+              u.profile?.residentId === item.id,
+          ),
+        );
+      if (canReenable) {
+        let restoredAcc = false;
+        for (const key of accountKeys) {
+          for (const a of transactionState[key] || []) {
+            if (a.residentId === item.id || a.profile?.residentId === item.id) {
+              delete a.disabled;
+              restoredAcc = true;
+            }
+          }
+        }
+        if (restoredAcc) item.hasAccount = true;
+      }
+    }
     appendAudit(transactionState, actor, operation, b.id, { kind, id });
     return item;
 

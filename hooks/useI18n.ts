@@ -71,7 +71,7 @@ export const I18nProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             let directText = dashboardTranslations[activeLang][key];
             if (replacements) {
                 Object.keys(replacements).forEach((placeholder) => {
-                    directText = directText.replace(`{{${placeholder}}}`, replacements[placeholder]);
+                    directText = directText.replaceAll(`{{${placeholder}}}`, replacements[placeholder]);
                 });
             }
             return directText;
@@ -101,7 +101,7 @@ export const I18nProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
         if (replacements) {
             Object.keys(replacements).forEach((placeholder) => {
-                result = result.replace(`{{${placeholder}}}`, replacements[placeholder]);
+                result = result.replaceAll(`{{${placeholder}}}`, replacements[placeholder]);
             });
         }
 

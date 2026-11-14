@@ -169,7 +169,7 @@ const MarketplaceCard: React.FC<MarketplaceCardProps> = ({
           <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-black/20 pointer-events-none" />
 
           {/* Top Badges */}
-          <div className="absolute top-2.5 left-2.5 flex items-center gap-1.5 flex-wrap z-10">
+          <div className="absolute top-2.5 start-2.5 flex items-center gap-1.5 flex-wrap z-10">
             {item.type === 'free' ? (
               <span className="bg-emerald-600 text-white font-bold text-[10px] uppercase tracking-wider px-2.5 py-0.5 rounded-full shadow-sm">
                 🎁 {tr('Don Gratuit', 'تبرع مجاني')}
@@ -199,7 +199,7 @@ const MarketplaceCard: React.FC<MarketplaceCardProps> = ({
 
           {/* Photo Counter Badge */}
           {itemPhotos.length > 1 && (
-            <div className="absolute top-2.5 right-2.5 bg-black/60 backdrop-blur-sm text-white font-mono text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 z-10">
+            <div className="absolute top-2.5 end-2.5 bg-black/60 backdrop-blur-sm text-white font-mono text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 z-10">
               <span>📷</span>
               <span>
                 {cardPhotoIndex + 1}/{itemPhotos.length}
@@ -213,7 +213,7 @@ const MarketplaceCard: React.FC<MarketplaceCardProps> = ({
               <button
                 type="button"
                 onClick={handlePrevPhoto}
-                className="absolute left-1.5 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-black/40 hover:bg-black/70 text-white flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity z-10"
+                className="absolute start-1.5 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-black/40 hover:bg-black/70 text-white flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity z-10"
                 title={tr('Photo précédente', 'الصورة السابقة')}
               >
                 ‹
@@ -221,7 +221,7 @@ const MarketplaceCard: React.FC<MarketplaceCardProps> = ({
               <button
                 type="button"
                 onClick={handleNextPhoto}
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-black/40 hover:bg-black/70 text-white flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity z-10"
+                className="absolute end-1.5 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-black/40 hover:bg-black/70 text-white flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity z-10"
                 title={tr('Photo suivante', 'الصورة التالية')}
               >
                 ›
@@ -257,7 +257,7 @@ const MarketplaceCard: React.FC<MarketplaceCardProps> = ({
           )}
 
           {/* Price Tag in Bottom Right */}
-          <div className="absolute bottom-2.5 right-2.5 z-10">
+          <div className="absolute bottom-2.5 end-2.5 z-10">
             <span className="bg-white/95 text-slate-900 font-mono font-bold text-sm px-2.5 py-1 rounded-lg shadow-sm border border-slate-200">
               {item.type === 'free' ? tr('0 DH (Don)', '0 درهم (مجاني)') : currencyFormatter.format(item.price)}
             </span>
@@ -381,11 +381,7 @@ const MarketplaceCard: React.FC<MarketplaceCardProps> = ({
             )}
 
             <button
-              onClick={() => {
-                if (confirm(tr('Voulez-vous vraiment supprimer cette annonce ?', 'هل تريد حقاً حذف هذا الإعلان؟'))) {
-                  onDelete(item.id);
-                }
-              }}
+              onClick={() => onDelete(item.id)}
               className="text-rose-500 hover:text-rose-700 p-1"
               title={tr("Supprimer l'annonce", 'حذف الإعلان')}
             >
@@ -400,17 +396,17 @@ const MarketplaceCard: React.FC<MarketplaceCardProps> = ({
 
 export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
   building,
-  currentResidentId = 'res-2',
-  currentResidentName = 'Fatima Zahra Mansouri',
-  currentApartmentNumber = 'Lot A-102',
-  currentPhone = '0661 22 33 44',
+  currentResidentId = '',
+  currentResidentName = '',
+  currentApartmentNumber = '',
+  currentPhone = '',
   isResidentPortal = false,
 }) => {
   const { tr, isAr } = useI18n();
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const publishFormId = useId();
-  const { showToast } = useToast();
+  const { showToast, confirmAction } = useToast();
 
   const [activeTypeTab, setActiveTypeTab] = useState<'all' | 'sale' | 'free' | 'service'>('all');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -459,7 +455,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
     mutationFn: (content: string) => {
       if (!activeChatListing) throw new Error(tr('Aucune annonce sélectionnée', 'لم يتم تحديد أي إعلان'));
       const isSeller = activeChatListing.residentId === currentResidentId;
-      if (isSeller && !activeBuyer) throw new Error(tr('Sélectionnez un acheteur.','اختر مشترياً.'));
+      if (isSeller && !activeBuyer) throw new Error(tr('Sélectionnez un acheteur.', 'اختر مشترياً.'));
       const payload: Omit<ChatMessage, 'id' | 'createdAt'> = {
         buildingId: building.id,
         channelId: `market-${activeChatListing.id}`,
@@ -486,18 +482,33 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
         chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
       }, 100);
     },
+    onError: (err: unknown) => {
+      showToast(
+        err instanceof Error ? err.message : tr("Erreur lors de l'envoi du message.", 'خطأ أثناء إرسال الرسالة.'),
+        'error'
+      );
+    },
   });
 
   const handleOpenChatForItem = (item: MarketplaceItem) => {
     setActiveChatListing(item);
     setChatInputText('');
+    if (item.residentId === currentResidentId) {
+      const firstBuyer = allMarketplaceMessages
+        .filter((m) => m.marketplaceItemId === item.id || m.channelId === `market-${item.id}`)
+        .map((m) => (m.senderId === currentResidentId ? m.recipientId : m.senderId))
+        .find(Boolean);
+      setActiveBuyer(firstBuyer || '');
+    } else {
+      setActiveBuyer('');
+    }
   };
 
   const handleSendMarketplaceChat = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const trimmed = chatInputText.trim();
     if (!trimmed || !activeChatListing) return;
-    sendChatMutation.mutate(trimmed);
+    return sendChatMutation.mutateAsync(trimmed);
   };
 
   // Count messages per item
@@ -820,7 +831,15 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
             onOpenDetails={handleOpenDetails}
             onOpenChat={handleOpenChatForItem}
             onUpdateStatus={(id, status) => statusMutation.mutate({ id, status })}
-            onDelete={(id) => deleteMutation.mutate(id)}
+            onDelete={async (id) => {
+              const confirmed = await confirmAction({
+                title: tr("Supprimer l'annonce", 'حذف الإعلان'),
+                message: tr('Voulez-vous vraiment supprimer cette annonce ?', 'هل تريد حقاً حذف هذا الإعلان؟'),
+                confirmLabel: tr('Supprimer', 'حذف'),
+                variant: 'danger',
+              });
+              if (confirmed) deleteMutation.mutate(id);
+            }}
           />
         ))}
 
@@ -1038,7 +1057,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
                     <img src={photoUrl} alt={`Photo ${idx + 1}`} className="w-full h-full object-cover" />
 
                     {idx === 0 && (
-                      <span className="absolute top-1 left-1 bg-teal-600 text-white text-[9px] font-bold px-1.5 py-0.2 rounded shadow">
+                      <span className="absolute top-1 start-1 bg-teal-600 text-white text-[9px] font-bold px-1.5 py-0.2 rounded shadow">
                         {tr('Principale ★', 'رئيسية ★')}
                       </span>
                     )}
@@ -1177,7 +1196,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
                         (prev) => (prev - 1 + modalPhotos.length) % modalPhotos.length
                       )
                     }
-                    className="absolute left-3 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/60 hover:bg-black/90 text-white flex items-center justify-center text-lg font-bold shadow-lg transition-transform hover:scale-105"
+                    className="absolute start-3 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/60 hover:bg-black/90 text-white flex items-center justify-center text-lg font-bold shadow-lg transition-transform hover:scale-105"
                   >
                     ‹
                   </button>
@@ -1186,12 +1205,12 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
                     onClick={() =>
                       setDetailPhotoIndex((prev) => (prev + 1) % modalPhotos.length)
                     }
-                    className="absolute right-3 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/60 hover:bg-black/90 text-white flex items-center justify-center text-lg font-bold shadow-lg transition-transform hover:scale-105"
+                    className="absolute end-3 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/60 hover:bg-black/90 text-white flex items-center justify-center text-lg font-bold shadow-lg transition-transform hover:scale-105"
                   >
                     ›
                   </button>
 
-                  <div className="absolute bottom-3 right-3 bg-black/70 backdrop-blur-sm text-white px-2.5 py-1 rounded-full text-xs font-mono font-bold">
+                  <div className="absolute bottom-3 end-3 bg-black/70 backdrop-blur-sm text-white px-2.5 py-1 rounded-full text-xs font-mono font-bold">
                     {detailPhotoIndex + 1} / {modalPhotos.length}
                   </div>
                 </>
@@ -1327,8 +1346,14 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
                     </button>
                   )}
                   <button
-                    onClick={() => {
-                      if (confirm(tr('Supprimer définitivement cette annonce ?', 'هل تريد حذف هذا الإعلان نهائياً؟'))) {
+                    onClick={async () => {
+                      const confirmed = await confirmAction({
+                        title: tr("Supprimer l'annonce", 'حذف الإعلان'),
+                        message: tr('Supprimer définitivement cette annonce ?', 'هل تريد حذف هذا الإعلان نهائياً؟'),
+                        confirmLabel: tr('Supprimer', 'حذف'),
+                        variant: 'danger',
+                      });
+                      if (confirmed) {
                         deleteMutation.mutate(activeDetailItem.id);
                       }
                     }}

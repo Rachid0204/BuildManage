@@ -80,13 +80,15 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
     const split = getRecordedReserveSplit(receipt);
     return split ? currencyFormatter.format(split[fund]) : tr('Non documenté', 'غير موثق');
   };
-  const { showToast } = useToast();
+  const { showToast, confirmAction } = useToast();
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<TabType>('transactions');
   const [isTrxModalOpen, setIsTrxModalOpen] = useState(false);
   const [isGenerateModalOpen, setIsGenerateModalOpen] = useState(false);
   const [selectedTrxForView, setSelectedTrxForView] = useState<Transaction | null>(null);
   const [approvingBatch, setApprovingBatch] = useState(false);
+  const [rejectingProofId, setRejectingProofId] = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState('');
 
   const CATEGORY_LABELS: Record<string, string> = useMemo(
     () => ({
@@ -311,7 +313,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
     setQuittanceChargeId(charge.id);
     setQuittanceApartmentId(charge.apartmentId);
     setQuittanceResidentId(charge.residentId);
-    setQuittanceResidentCin(res?.cin || 'AB123456');
+    setQuittanceResidentCin(res?.cin || '');
     setQuittancePeriod(charge.period || 'Octobre 2026');
     setQuittanceAmount(String(charge.status === 'paid' ? (charge.paidAmount ?? charge.amount) : Math.max(0, charge.amount - (charge.paidAmount ?? 0))));
     setQuittanceReserveRatio(getBuildingReserveRate(building));
@@ -334,7 +336,12 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
   const openQuittanceModalNew = () => {
     const defaultApt = building.apartments[0];
     const defaultRes = defaultApt
-      ? building.residents.find((r) => r.apartmentId === defaultApt.id)
+      ? building.residents.find(
+          (r) =>
+            r.id === defaultApt.ownerId ||
+            r.id === defaultApt.tenantId ||
+            r.apartmentId === defaultApt.id
+        )
       : building.residents[0];
     const amt = defaultApt ? (defaultApt.monthlyFees || building.monthlySyndicFees) : building.monthlySyndicFees;
 
@@ -342,7 +349,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
     setQuittanceChargeId('');
     setQuittanceApartmentId(defaultApt?.id || '');
     setQuittanceResidentId(defaultRes?.id || '');
-    setQuittanceResidentCin(defaultRes?.cin || 'AB123456');
+    setQuittanceResidentCin(defaultRes?.cin || '');
     setQuittancePeriod(
       new Date().toLocaleDateString(isAr ? 'ar-MA' : 'fr-FR', { month: 'long', year: 'numeric' })
     );
@@ -427,7 +434,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
 
     const overdueChargesTotal = charges
       .filter((c) => c.status === 'overdue')
-      .reduce((sum, c) => sum + c.amount, 0);
+      .reduce((sum, c) => sum + Math.max(0, c.amount - (c.paidAmount || 0)), 0);
 
     const pendingProofsCount = paymentProofs.filter((p) => p.status === 'pending').length;
 
@@ -442,7 +449,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
 
   // Overdue Debts Grouped by Resident
   const overdueResidents = useMemo(() => {
-    const overdueList = charges.filter((c) => c.status === 'overdue');
+    const overdueList = charges.filter((c) => c.status === 'overdue' && c.amount > (c.paidAmount || 0));
     const grouped: Record<
       string,
       {
@@ -470,7 +477,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
           oldestDate: c.dueDate,
         };
       }
-      grouped[c.residentId].totalOverdue += c.amount;
+      grouped[c.residentId].totalOverdue += Math.max(0, c.amount - (c.paidAmount || 0));
       grouped[c.residentId].overdueCount += 1;
       if (new Date(c.dueDate) < new Date(grouped[c.residentId].oldestDate)) {
         grouped[c.residentId].oldestDate = c.dueDate;
@@ -1283,7 +1290,12 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                       const preview = await reconcileBankStatementCSV(building.id, parsedRows, { ...bankPostingOptions, preview: true });
                       const dates = (preview.preview || []).map(row =>
                         `${row.amount} MAD — ${tr('Date bancaire', 'تاريخ البنك')}: ${row.bankTransactionDate} — ${tr('Comptabilisation', 'تاريخ القيد')}: ${row.postingDate}`);
-                      if (!window.confirm([tr('Confirmer le rapprochement', 'تأكيد المطابقة'), ...dates].join('\n'))) return;
+                      const confirmed = await confirmAction({
+                        title: tr('Confirmer le rapprochement bancaire', 'تأكيد المطابقة البنكية'),
+                        message: [tr('Confirmer le rapprochement', 'تأكيد المطابقة'), ...dates].join('\n'),
+                        confirmLabel: tr('Confirmer', 'تأكيد'),
+                      });
+                      if (!confirmed) return;
                       const res = await reconcileBankStatementCSV(building.id, parsedRows, bankPostingOptions);
                       await queryClient.invalidateQueries({ queryKey: ['charges', building.id] });
                       await queryClient.invalidateQueries({ queryKey: ['proofs', building.id] });
@@ -1413,17 +1425,10 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                         variant="secondary"
                         disabled={reviewProofMutation.isPending}
                         onClick={() => {
-                          const reason = prompt(
-                            tr('Motif du rejet :', 'سبب الرفض:'),
+                          setRejectingProofId(proof.id);
+                          setRejectReason(
                             tr('Référence introuvable sur le relevé', 'المرجع غير موجود في الكشف البنكي')
                           );
-                          if (reason !== null) {
-                            reviewProofMutation.mutate({
-                              proofId: proof.id,
-                              decision: 'reject',
-                              reason,
-                            });
-                          }
                         }}
                         className="text-xs text-rose-600 hover:bg-rose-50"
                       >
@@ -1748,7 +1753,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                           if (resident && apt) {
                             generateMiseEnDemeurePDF(resident, apt, building, item.totalOverdue, syndic);
                           } else {
-                            alert(tr('Informations du copropriétaire incomplètes.', 'بيانات المالك المشترك غير مكتملة.'));
+                            showToast(tr('Informations du copropriétaire incomplètes.', 'بيانات المالك المشترك غير مكتملة.'), 'error');
                           }
                         }}
                         className="text-xs bg-rose-700 hover:bg-rose-800 flex items-center gap-1.5"
@@ -2598,10 +2603,20 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                     const aptId = e.target.value;
                     setQuittanceApartmentId(aptId);
                     const selectedApt = building.apartments.find((a) => a.id === aptId);
-                    const resident = building.residents.find((r) => r.apartmentId === aptId) || building.residents[0];
+                    const resident = selectedApt
+                      ? building.residents.find(
+                          (r) =>
+                            r.id === selectedApt.ownerId ||
+                            r.id === selectedApt.tenantId ||
+                            r.apartmentId === selectedApt.id
+                        )
+                      : undefined;
                     if (resident) {
                       setQuittanceResidentId(resident.id);
-                      setQuittanceResidentCin(resident.cin || 'AB123456');
+                      setQuittanceResidentCin(resident.cin || '');
+                    } else {
+                      setQuittanceResidentId('');
+                      setQuittanceResidentCin('');
                     }
                     if (selectedApt && !quittanceAmount) {
                       setQuittanceAmount(
@@ -2613,7 +2628,9 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                 >
                   <option value="">{tr('Sélectionnez un lot...', 'اختر شقة...')}</option>
                   {building.apartments.map((a) => {
-                    const res = building.residents.find((r) => r.apartmentId === a.id);
+                    const res = building.residents.find(
+                      (r) => r.id === a.ownerId || r.id === a.tenantId || r.apartmentId === a.id
+                    );
                     return (
                       <option key={a.id} value={a.id}>
                         {tr('Lot', 'شقة')} {a.number} — {res?.name || tr('Copropriétaire', 'مالك مشترك')} ({a.tantiemes || 100}/1000)
@@ -2634,7 +2651,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                     setQuittanceResidentId(rId);
                     const r = building.residents.find((res) => res.id === rId);
                     if (r) {
-                      setQuittanceResidentCin(r.cin || 'AB123456');
+                      setQuittanceResidentCin(r.cin || '');
                       if (r.apartmentId) setQuittanceApartmentId(r.apartmentId);
                     }
                   }}
@@ -2931,7 +2948,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                   {tr('Lot', 'شقة')} {selectedQuittanceForPreview.apartmentNumber} · {selectedQuittanceForPreview.tantiemes} / 1000
                 </p>
                 <p className="text-slate-500 font-mono text-[11px]">
-                  CIN: {selectedQuittanceForPreview.residentCin || 'AB123456'}
+                  CIN: {selectedQuittanceForPreview.residentCin || tr('Non renseigné', 'غير محدد')}
                 </p>
                 <p className="text-slate-500 text-[11px]">{tr('Usage : Résidentiel', 'الاستعمال: سكني')}</p>
               </div>
@@ -2985,6 +3002,63 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                 <span className="font-bold text-[8px]">{tr('CONFORME', 'مطابق')}</span>
                 <span className="text-[6px]">LOI 18-00</span>
               </div>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {rejectingProofId && (
+        <Modal
+          isOpen={!!rejectingProofId}
+          onClose={() => {
+            setRejectingProofId(null);
+            setRejectReason('');
+          }}
+          title={tr('Motif du rejet du justificatif', 'سبب رفض إثبات التحويل')}
+          maxWidthClass="max-w-md"
+          onSubmit={(e) => {
+            e.preventDefault();
+            reviewProofMutation.mutate({
+              proofId: rejectingProofId,
+              decision: 'reject',
+              reason: rejectReason.trim(),
+            });
+            setRejectingProofId(null);
+            setRejectReason('');
+          }}
+          busy={reviewProofMutation.isPending}
+        >
+          <div className="space-y-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                {tr('Motif du rejet :', 'سبب الرفض:')}
+              </label>
+              <textarea
+                rows={3}
+                value={rejectReason}
+                onChange={(e) => setRejectReason(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-rose-500 outline-none"
+                required
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => {
+                  setRejectingProofId(null);
+                  setRejectReason('');
+                }}
+              >
+                {tr('Annuler', 'إلغاء')}
+              </Button>
+              <Button
+                type="submit"
+                disabled={!rejectReason.trim() || reviewProofMutation.isPending}
+                className="bg-rose-600 hover:bg-rose-700"
+              >
+                {tr('Confirmer le rejet', 'تأكيد الرفض')}
+              </Button>
             </div>
           </div>
         </Modal>

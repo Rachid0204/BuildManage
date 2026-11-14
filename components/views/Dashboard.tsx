@@ -70,7 +70,7 @@ const Dashboard: React.FC<DashboardProps> = ({ building, syndic }) => {
   const navigate = useNavigate();
 
   const portfolioSummary = useMemo(() => {
-    const blds = syndic?.buildings || [];
+    const blds = (syndic?.buildings ?? []).filter((b) => !b.archivedAt);
     if (blds.length <= 1) return null;
     let totalPortfolioOperating = 0;
     let totalPortfolioReserve = 0;
@@ -361,7 +361,7 @@ const Dashboard: React.FC<DashboardProps> = ({ building, syndic }) => {
                       : 'bg-teal-500 hover:bg-teal-400 text-slate-950'
                   }`}
                 >
-                  {step.actionLabel} →
+                  {step.actionLabel} {language === 'ar' ? '←' : '→'}
                 </button>
               </div>
             ))}
@@ -436,7 +436,7 @@ const Dashboard: React.FC<DashboardProps> = ({ building, syndic }) => {
                 onClick={() => navigate('/financials')}
                 className="text-xs font-semibold text-teal-700 hover:text-teal-900"
               >
-                {t('dashboard.openFullLedger')} →
+                {t('dashboard.openFullLedger')} {language === 'ar' ? '←' : '→'}
               </button>
             </div>
             <div className="divide-y divide-slate-100">
@@ -496,7 +496,7 @@ const Dashboard: React.FC<DashboardProps> = ({ building, syndic }) => {
                 onClick={() => navigate('/maintenance')}
                 className="text-xs font-semibold text-teal-700 hover:text-teal-900"
               >
-                {t('dashboard.manageInterventions')} →
+                {t('dashboard.manageInterventions')} {language === 'ar' ? '←' : '→'}
               </button>
             </div>
             <div className="space-y-3">
@@ -560,7 +560,7 @@ const Dashboard: React.FC<DashboardProps> = ({ building, syndic }) => {
                 onClick={() => navigate('/announcements')}
                 className="text-xs font-semibold text-teal-700 hover:text-teal-900"
               >
-                {tr('Publier', 'نشر')} →
+                {tr('Publier', 'نشر')} {language === 'ar' ? '←' : '→'}
               </button>
             </div>
             <div className="space-y-4">

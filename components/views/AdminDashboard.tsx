@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Navigate, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Card from '../common/Card';
 import Button from '../common/Button';
@@ -131,8 +131,7 @@ const AdminDashboard: React.FC = () => {
   };
 
   if (userProfile && userProfile.role !== 'admin') {
-    navigate(getHomeRouteForRole(userProfile.role), { replace: true });
-    return null;
+    return <Navigate to={getHomeRouteForRole(userProfile.role)} replace />;
   }
 
   return (
@@ -304,8 +303,8 @@ const AdminDashboard: React.FC = () => {
                       <div className="text-[11px] text-slate-400 font-mono">{s.phone || '—'}</div>
                     </td>
                     <td className="px-4 py-3.5 whitespace-nowrap font-mono text-xs text-slate-600">
-                      <div>ICE : {s.ice || '001524367000089'}</div>
-                      <div className="text-[11px] text-slate-400">RC : {s.rc || '458921'}</div>
+                      <div>ICE : {s.ice || tr('Non renseigné', 'غير محدد')}</div>
+                      <div className="text-[11px] text-slate-400">RC : {s.rc || tr('Non renseigné', 'غير محدد')}</div>
                     </td>
                     <td className="px-4 py-3.5 text-center font-mono font-bold text-slate-800">
                       {countActiveBuildings(s.buildings)}
@@ -541,8 +540,9 @@ const AdminDashboard: React.FC = () => {
                   type="number"
                   min={1}
                   max={200}
-                  value={newApartmentsCount}
-                  onChange={(e) => setNewApartmentsCount(Number(e.target.value) || 8)}
+                  value={newApartmentsCount || ''}
+                  onChange={(e) => setNewApartmentsCount(e.target.value === '' ? 0 : Math.max(0, Number(e.target.value)))}
+                  onBlur={() => { if (!newApartmentsCount || newApartmentsCount < 1) setNewApartmentsCount(8); }}
                   className="w-full p-2.5 rounded-lg border border-slate-300 font-mono"
                 />
               </div>
@@ -553,8 +553,9 @@ const AdminDashboard: React.FC = () => {
                 <input
                   type="number"
                   min={50}
-                  value={newMonthlyFees}
-                  onChange={(e) => setNewMonthlyFees(Number(e.target.value) || 250)}
+                  value={newMonthlyFees || ''}
+                  onChange={(e) => setNewMonthlyFees(e.target.value === '' ? 0 : Math.max(0, Number(e.target.value)))}
+                  onBlur={() => { if (!newMonthlyFees || newMonthlyFees < 50) setNewMonthlyFees(250); }}
                   className="w-full p-2.5 rounded-lg border border-slate-300 font-mono"
                 />
               </div>

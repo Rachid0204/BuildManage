@@ -261,9 +261,12 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           return 'invalid';
         }
         if (!response.ok) throw new Error('Session service unavailable');
-        const data = await response.json();
+        const data = await response.json().catch(() => ({}));
         if (!data.profile || !data.token) throw new Error('Incomplete session response');
-        if (current()) persistSession(data.profile, undefined, data.token);
+        if (current()) {
+          persistSession(data.profile, undefined, data.token);
+          void syncAllSharedStateFromServer(true);
+        }
         return 'authenticated';
       } catch {
         if (current()) setSessionError(true);
@@ -346,6 +349,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, [sessionError, retrySession]);
 
   const signInWithGoogle = async (): Promise<UserProfile> => {
+    cancelSessionRequest();
     const result = await signInWithPopup(auth, new GoogleAuthProvider());
     return exchangeFirebaseSession(result.user);
   };
@@ -358,8 +362,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const password = (pass || '').trim();
       if (!identifier || !password || isAlreadyHashedPassword(password)) throw new Error('Identifiants invalides.');
       const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identifier, password }) });
-      const data = await response.json();
+        body: JSON.stringify({ identifier, password }), signal: AbortSignal.timeout(15000) });
+      const data = await response.json().catch(() => ({}));
       if (response.ok && data.profile && data.token) {
         const firebaseUser = data.firebaseAuth
           ? (await signInWithEmailAndPassword(auth, data.profile.email, password)).user : undefined;
@@ -392,6 +396,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       apartmentId?: string;
     }
   ): Promise<UserProfile> => {
+    cancelSessionRequest();
     const input: RegisterAccountInput =
       typeof emailOrInput === 'object' && emailOrInput !== null
         ? emailOrInput
@@ -412,6 +417,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     try {
       const initialName = optionsArg?.initialBuildingName?.trim() || (input as any).initialBuildingName?.trim();
       const response = await fetch('/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(15000),
         body: JSON.stringify({ email: input.email.trim().toLowerCase(), password: input.password,
           profile: { role: input.role, displayName: input.companyName || input.name, phone: input.phone },
           syndic: input.role === 'syndic' ? { name: input.cabinetName || input.name, city: input.city,
@@ -420,7 +426,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
               apartmentsCount: Number(optionsArg?.initialApartmentsCount ?? (input as any).initialApartmentsCount ?? 0),
               monthlyFees: Number(optionsArg?.initialBuildingFees ?? (input as any).initialBuildingFees ?? 250) } : undefined,
           } : undefined }) });
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.profile || !data.token) throw new Error(data.error || 'Inscription impossible.');
       const firebaseUser = data.firebaseAuth
         ? (await signInWithEmailAndPassword(auth, input.email.trim().toLowerCase(), input.password)).user : undefined;
@@ -435,17 +441,31 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const password = newPassword.trim();
     if (password.length < 10 || isAlreadyHashedPassword(password)) throw new Error('Mot de passe invalide.');
     const response = await fetch('/api/auth/change-password', { method: 'POST',
+      signal: AbortSignal.timeout(15000),
       headers: getAuthenticatedRequestHeaders(), body: JSON.stringify({ newPassword: password }) });
-    const data = await response.json();
+    const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) throw new Error(data.error || 'Le mot de passe n’a pas été enregistré.');
-    const firebaseUser = data.firebaseAuth
-      ? (await signInWithEmailAndPassword(auth, userProfile.email, password)).user : undefined;
-    persistSession(data.profile || { ...userProfile, mustChangePassword:false },firebaseUser,data.token);
+    const updatedProfile = data.profile || { ...userProfile, mustChangePassword: false };
+    persistSession(updatedProfile, auth.currentUser || user, data.token);
+    if (data.firebaseAuth && userProfile.email) {
+      try {
+        const cred = await signInWithEmailAndPassword(auth, userProfile.email, password);
+        persistSession(updatedProfile, cred.user, data.token);
+      } catch {
+        // Server session is already persisted
+      }
+    }
     await syncAllSharedStateFromServer(true);
   };
 
   const logout = async () => {
-    try { await fetch('/api/auth/logout',{method:'POST',headers:getAuthenticatedRequestHeaders()}); } finally { persistSession(null); }
+    try {
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: getAuthenticatedRequestHeaders(),
+        signal: AbortSignal.timeout(5000),
+      });
+    } finally { persistSession(null); }
     if (typeof window !== 'undefined') {
       // Audit Item 22: Clear selected building and user-scoped cached state on logout
       localStorage.removeItem('syndik_selected_building_id');

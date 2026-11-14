@@ -1,10 +1,10 @@
-import { buildingFor, actorIdentity, type Actor } from "./operations";
+import { buildingFor, actorIdentity, OperationError, type Actor } from "./operations";
 import type { State } from "./repository";
 export function buildingReport(state: State, actor: Actor, id: string) {
   const b = buildingFor(actor, id, false),
     managed = ["admin", "syndic"].includes(actor.role);
   if (actor.role === "provider")
-    throw Object.assign(new Error("Accès refusé"), { status: 403 });
+    throw new OperationError("Accès refusé", 403);
   const charges = (state.syndik_prod_charges_v1 || []).filter(
       (c: any) =>
         c.buildingId === id &&
@@ -29,7 +29,10 @@ export function buildingReport(state: State, actor: Actor, id: string) {
         name: r.name,
         openingArrears: entries
           .filter((c: any) => c.openingArrears)
-          .reduce((s: number, c: any) => s + c.amount, 0),
+          .reduce(
+            (s: number, c: any) => Math.round(s * 100 + c.amount * 100) / 100,
+            0,
+          ),
         billed:
           entries.reduce(
             (s: number, c: any) => s + Math.round(c.amount * 100),
@@ -66,7 +69,14 @@ export function buildingReport(state: State, actor: Actor, id: string) {
             .reduce(
               (s: number, c: any) =>
                 s +
-                Math.max(0, Math.round((c.amount - (c.paidAmount || 0)) * 100)),
+                Math.max(
+                  0,
+                  Math.round(
+                    (c.amount -
+                      (c.paidAmount ?? (c.status === "paid" ? c.amount : 0))) *
+                      100,
+                  ),
+                ),
               0,
             ) / 100,
       };

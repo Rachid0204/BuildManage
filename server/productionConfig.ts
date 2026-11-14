@@ -42,6 +42,7 @@ export const productionEnvironmentSchema = z.object({
  CLOUD_RUN_PROJECT_ID: z.literal(target.projectId).optional(),
  CLOUD_RUN_SERVICE: z.literal(target.service).optional(),
  CLOUD_RUN_REGION: z.literal(target.region).optional(),
+ TRUST_PROXY_HOPS: z.string().regex(/^\d+$/).optional(),
  FIRESTORE_EMULATOR_HOST: z.literal('').optional(),
  FIREBASE_AUTH_EMULATOR_HOST: z.literal('').optional(),
  STORAGE_EMULATOR_HOST: z.literal('').optional(),

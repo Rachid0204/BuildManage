@@ -38,7 +38,7 @@ export const ApartmentSchema = z.object({
   buildingId: z.string(),
   monthlyFees: z.number().nonnegative("Fees cannot be negative"),
   tantiemes: z.number().nonnegative().optional().default(100),
-  coproType: z.enum(['apartment', 'duplex', 'commercial', 'parking', 'box']).optional().default('apartment'),
+  coproType: z.enum(['apartment', 'duplex', 'villa', 'commercial', 'parking', 'box']).optional().default('apartment'),
   ownerId: z.string().nullable().optional(),
   tenantId: z.string().nullable().optional(),
 });
@@ -48,8 +48,11 @@ export const BuildingSchema = z.object({
   name: z.string().min(2, "Building name is required"),
   address: z.string().min(3, "Address is required"),
   city: z.string().min(2, "City is required"),
+  postalCode: z.string().max(20).optional(),
+  ice: z.string().max(50).optional(),
+  rc: z.string().max(50).optional(),
   monthlySyndicFees: z.number().nonnegative(),
-  totalTantiemes: z.number().optional().default(1000),
+  totalTantiemes: z.number().positive().optional().default(1000),
   reserveFundRate: z.number().finite().min(0).max(100).optional().default(5),
   bankName: z.string().optional(),
   bankRib: z.string().optional(),
@@ -78,7 +81,7 @@ export const SyndicSchema = z.object({
 export const TransactionSchema = z.object({
   id: z.string().optional(),
   description: z.string().min(3, "Le libellé de l'opération est obligatoire (min 3 caractères)"),
-  amount: z.number().positive("Le montant doit être supérieur à 0"),
+  amount: z.number().finite().positive("Le montant doit être supérieur à 0").refine((n) => Math.round(n * 100) > 0, "Le montant doit être supérieur à 0.01"),
   type: z.enum(['income', 'expense']),
   category: z
     .enum([
@@ -91,13 +94,14 @@ export const TransactionSchema = z.object({
       'bank_fees',
       'legal',
       'cleaning',
+      'security',
       'elevator',
       'reimbursement',
       'other',
     ])
     .optional(),
   fundType: z.enum(['courant', 'reserve']).default('courant'),
-  paymentMethod: z.enum(['virement', 'cmi', 'versement', 'cheque', 'especes']).optional(),
+  paymentMethod: z.enum(['virement', 'cmi', 'versement', 'versement_especes', 'cheque', 'especes']).optional(),
   date: z.string(),
   reference: z.string().optional(),
   documentType: z.enum(['facture', 'quittance', 'recu', 'devis', 'releve', 'autre']).optional(),

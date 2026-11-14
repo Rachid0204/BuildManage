@@ -99,7 +99,7 @@ export const CommunityChat: React.FC<CommunityChatProps> = ({
   const isSyndicUser = !isResidentPortal && userProfile?.role !== 'resident';
   const effectiveSenderId = isSyndicUser
     ? userProfile?.uid || 'syndic-user'
-    : currentResidentId || userProfile?.uid || 'res-2';
+    : currentResidentId || userProfile?.uid || '';
 
   const effectiveSenderName = isSyndicUser
     ? tr('Syndic Gestionnaire', 'وكيل الاتحاد (السنديك)')
@@ -107,7 +107,7 @@ export const CommunityChat: React.FC<CommunityChatProps> = ({
 
   const effectiveApartment = isSyndicUser
     ? tr('Bureau Syndic', 'مكتب السنديك')
-    : currentApartmentNumber || `${tr('Lot', 'شقة')} A-102`;
+    : currentApartmentNumber || tr('Résident', 'ساكن');
 
   const effectiveRole: 'syndic' | 'resident' = isSyndicUser ? 'syndic' : 'resident';
 

@@ -26,9 +26,9 @@ interface ServiceProvidersDirectoryProps {
 
 export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps> = ({
   building,
-  residentName = 'Résident',
-  apartmentNumber = 'Lot A-102',
-  residentId = 'res-2',
+  residentName = '',
+  apartmentNumber = '',
+  residentId = '',
   isResidentPortal = true,
   onManageCredentials,
 }) => {
@@ -214,27 +214,43 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
 
         {/* Quick emergency call pills */}
         <div className="flex flex-wrap items-center gap-2">
-          <a
-            href="tel:0662114477"
-            className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition-colors shadow-sm"
-          >
-            <PhoneIcon />
-            <span>{tr('SOS Plombier', 'سباك طوارئ')}</span>
-          </a>
-          <a
-            href="tel:0661774411"
-            className="flex items-center gap-1.5 px-3 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl transition-colors shadow-sm"
-          >
-            <PhoneIcon />
-            <span>{tr('SOS Serrurier', 'أقفال طوارئ')}</span>
-          </a>
-          <a
-            href="tel:0522345678"
-            className="flex items-center gap-1.5 px-3 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold rounded-xl transition-colors shadow-sm"
-          >
-            <PhoneIcon />
-            <span>{tr('Ascenseur 24/7', 'المصعد 24/7')}</span>
-          </a>
+          {[
+            { category: 'plumbing', label: tr('SOS Plombier', 'سباك طوارئ'), cls: 'bg-blue-600 hover:bg-blue-700' },
+            { category: 'locksmith', label: tr('SOS Serrurier', 'أقفال طوارئ'), cls: 'bg-amber-600 hover:bg-amber-700' },
+            { category: 'elevator', label: tr('Ascenseur 24/7', 'المصعد 24/7'), cls: 'bg-emerald-700 hover:bg-emerald-800' },
+          ].map((slot) => {
+            const match =
+              prestataires.find((p) => p.category === slot.category && p.isEmergency247 && p.phone) ||
+              prestataires.find((p) => p.category === slot.category && p.phone);
+            const cleanTel = match?.phone ? match.phone.replace(/[^+\d]/g, '') : '';
+            if (cleanTel) {
+              return (
+                <a
+                  key={slot.category}
+                  href={`tel:${cleanTel}`}
+                  title={`${match?.name} (${match?.phone})`}
+                  className={`flex items-center gap-1.5 px-3 py-2 ${slot.cls} text-white text-xs font-bold rounded-xl transition-colors shadow-sm`}
+                >
+                  <PhoneIcon />
+                  <span>{slot.label}</span>
+                </a>
+              );
+            }
+            return (
+              <button
+                key={slot.category}
+                type="button"
+                onClick={() => {
+                  setSelectedCategory(slot.category);
+                  setEmergencyOnly(false);
+                }}
+                className={`flex items-center gap-1.5 px-3 py-2 ${slot.cls} text-white text-xs font-bold rounded-xl transition-colors shadow-sm opacity-90`}
+              >
+                <PhoneIcon />
+                <span>{slot.label}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
 

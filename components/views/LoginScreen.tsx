@@ -76,8 +76,8 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
   const [phone, setPhone] = useState('');
   const [city, setCity] = useState('Casablanca');
   const [initialBuildingName, setInitialBuildingName] = useState('');
-  const [initialApartmentsCount, setInitialApartmentsCount] = useState(8);
-  const [initialBuildingFees, setInitialBuildingFees] = useState(250);
+  const [initialApartmentsCount, setInitialApartmentsCount] = useState<number | ''>(8);
+  const [initialBuildingFees, setInitialBuildingFees] = useState<number | ''>(250);
 
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -133,8 +133,8 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
           city,
           subscriptionPlan: selectedPlan,
           initialBuildingName: initialBuildingName.trim() || undefined,
-          initialApartmentsCount,
-          initialBuildingFees,
+          initialApartmentsCount: Number(initialApartmentsCount) || 8,
+          initialBuildingFees: Number(initialBuildingFees) || 250,
         });
       } else {
         profile = await loginWithEmail(identifier, password);
@@ -395,7 +395,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
                         min={1}
                         max={200}
                         value={initialApartmentsCount}
-                        onChange={(e) => setInitialApartmentsCount(Number(e.target.value) || 8)}
+                        onChange={(e) => setInitialApartmentsCount(e.target.value === '' ? '' : Number(e.target.value))}
                         className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-mono bg-white"
                       />
                     </div>
@@ -408,7 +408,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
                         min={50}
                         step={50}
                         value={initialBuildingFees}
-                        onChange={(e) => setInitialBuildingFees(Number(e.target.value) || 250)}
+                        onChange={(e) => setInitialBuildingFees(e.target.value === '' ? '' : Number(e.target.value))}
                         className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-mono bg-white"
                       />
                     </div>

@@ -74,7 +74,6 @@ import {
 } from './server/uploads';
 
 import crypto from 'crypto';
-import { isDeepStrictEqual } from 'node:util';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import firebaseConfig from './firebase-applet-config.json';
@@ -422,12 +421,12 @@ async function extractAndVerifyCaller(
     const bound = identityAccounts(store).find(a => a.firebaseUid === decoded.uid);
     let candidates = lookupCandidateProfilesInStore(store, bound ? accountUid(bound) : decoded.uid);
     if (!candidates.length && decoded.email_verified && decoded.email) {
-      const registered = (store.syndik_prod_registered_users_v1 || []).find(
+      const known = identityAccounts(store).find(
         (u: any) =>
-          u.email?.trim().toLowerCase() === decoded.email!.toLowerCase(),
+          !u.disabled && u.email?.trim().toLowerCase() === decoded.email!.toLowerCase(),
       );
-      if (registered)
-        candidates = lookupCandidateProfilesInStore(store, registered.uid);
+      if (known)
+        candidates = lookupCandidateProfilesInStore(store, accountUid(known));
     }
     identity = candidates.length ? { ...candidates[0], firebaseAuthTime: decoded.auth_time } as AuthCallerContext : null;
   }
@@ -458,7 +457,8 @@ async function extractAndVerifyCaller(
   if (account?.firebaseUid && firebaseIdentityUid && account.firebaseUid !== firebaseIdentityUid) return null;
   const firebaseUser = await firebaseSessionUser(account || {}, identity.firebaseAuthTime);
   if (firebaseUser === null) return null;
-  if (firebaseUser && account?.profile) account.profile.emailVerified = firebaseUser.emailVerified;
+  if (firebaseUser && account?.profile && account.profile.emailVerified !== firebaseUser.emailVerified)
+    account.profile.emailVerified = firebaseUser.emailVerified;
   // Resolve current trusted membership on every request; a token does not grant a caller-selected tenant.
   const current = lookupCandidateProfilesInStore(store, identity.uid).find(
     (p) => p.role === identity!.role && p.email === identity!.email,
@@ -770,9 +770,32 @@ function filterStoreForCaller(store: ServerStore, caller: AuthCallerContext) {
             (caller.role === "resident" &&
               item.residentId === scope.callerResId)
           );
+        if (
+          key === "syndik_prod_marketplace_v1" &&
+          caller.role === "provider"
+        )
+          return false;
         return true;
       });
   }
+  if (!managed && Array.isArray(result.syndik_prod_prestataires_v1))
+    result.syndik_prod_prestataires_v1 = result.syndik_prod_prestataires_v1.map(
+      (item: any) => {
+        if (caller.role === "provider" && item?.id === scope.callerPrestId)
+          return item;
+        const {
+          rib: _rib,
+          bankName: _bankName,
+          ice: _ice,
+          rc: _rc,
+          ifNumber: _ifNumber,
+          contractRef: _contractRef,
+          notes: _notes,
+          ...publicFields
+        } = item || {};
+        return publicFields;
+      },
+    );
   if (Array.isArray(result.syndik_prod_ag_v1))
     result.syndik_prod_ag_v1 = result.syndik_prod_ag_v1.map(
       (assembly: AssembleeGenerale) => projectAssemblyForRole(assembly, caller.role),
@@ -780,317 +803,19 @@ function filterStoreForCaller(store: ServerStore, caller: AuthCallerContext) {
   return clean(result);
 }
 
-const RESIDENT_WRITABLE_KEYS = new Set([
-  "syndik_prod_proofs_v1",
-  "syndik_prod_maintenance_v1",
-  "syndik_prod_chat_v1",
-  "syndik_prod_marketplace_v1",
-  "syndik_prod_notifications_v1",
-]);
-
-const PROVIDER_WRITABLE_KEYS = new Set([
-  "syndik_prod_maintenance_v1",
-  "syndik_prod_chat_v1",
-  "syndik_prod_notifications_v1",
-]);
-
-function validateWriteForCaller(
-  store: ServerStore,
-  caller: AuthCallerContext,
-  key: string,
-  value: any,
-  deletedId?: string,
-): { allowed: boolean; status?: number; error?: string } {
-  if (caller.role === "admin") {
-    return { allowed: true };
-  }
-
-  if (caller.role === "resident" && !RESIDENT_WRITABLE_KEYS.has(key)) {
-    return {
-      allowed: false,
-      status: 403,
-      error: "Forbidden: residents are not permitted to modify this collection",
-    };
-  }
-
-  if (caller.role === "provider" && !PROVIDER_WRITABLE_KEYS.has(key)) {
-    return {
-      allowed: false,
-      status: 403,
-      error: "Forbidden: providers are not permitted to modify this collection",
-    };
-  }
-
-  const scope = getAuthorizedScopeForCaller(store, caller);
-
-  if (key === "syndik_prod_syndics_v1") {
-    if (caller.role !== "syndic") {
-      return { allowed: false, status: 403, error: "Forbidden" };
-    }
-    const existingSyndics: any[] = Array.isArray(store.syndik_prod_syndics_v1)
-      ? store.syndik_prod_syndics_v1
-      : [];
-    if (deletedId) {
-      const ownsSyndic = scope.authorizedSyndicIds.has(deletedId);
-      const ownsBld = scope.authorizedBuildingIds.has(deletedId);
-      let ownsNestedRecord = false;
-      for (const s of scope.authorizedSyndics) {
-        for (const b of s.buildings || []) {
-          if (
-            (b.apartments || []).some((a: any) => a?.id === deletedId) ||
-            (b.residents || []).some((r: any) => r?.id === deletedId) ||
-            (b.documents || []).some((d: any) => d?.id === deletedId)
-          ) {
-            ownsNestedRecord = true;
-          }
-        }
-      }
-      if (!ownsSyndic && !ownsBld && !ownsNestedRecord) {
-        return {
-          allowed: false,
-          status: 403,
-          error: "Forbidden: cannot delete another cabinet resource",
-        };
-      }
-    }
-
-    const incomingSyndics = Array.isArray(value) ? value : [];
-    for (const s of incomingSyndics) {
-      if (!s || !s.id) continue;
-      const existing = existingSyndics.find((ex) => ex?.id === s.id);
-      if (existing) {
-        for (const field of [
-          "createdBy",
-          "subscriptionPlan",
-          "subscriptionStatus",
-          "subscriptionExpiry",
-          "subscriptionExpiresAt",
-        ]) {
-          if (field in s && s[field] !== existing[field])
-            return {
-              allowed: false,
-              status: 403,
-              error: "Forbidden: protected cabinet field",
-            };
-        }
-        if (
-          existing.createdBy !== caller.uid &&
-          (!caller.syndicId || existing.id !== caller.syndicId)
-        ) {
-          return {
-            allowed: false,
-            status: 403,
-            error: "Forbidden: cross-cabinet syndic modification denied",
-          };
-        }
-      } else {
-        if (
-          s.createdBy !== caller.uid &&
-          (!caller.syndicId || s.id !== caller.syndicId)
-        ) {
-          return {
-            allowed: false,
-            status: 403,
-            error: "Forbidden: cannot create syndic for another user",
-          };
-        }
-      }
-    }
-    return { allowed: true };
-  }
-
-  if (key === "syndik_prod_registered_users_v1") {
-    if (caller.role !== "syndic" || !Array.isArray(value))
-      return { allowed: false, status: 403, error: "Forbidden" };
-    const existingUsers: any[] = store[key] || [];
-    for (const u of value) {
-      if (
-        !u?.profile ||
-        !u.uid ||
-        u.profile.uid !== u.uid ||
-        (u.role && u.role !== u.profile.role) ||
-        (u.syndicId && u.syndicId !== u.profile.syndicId) ||
-        (u.buildingId && u.buildingId !== u.profile.buildingId) ||
-        !["syndic", "resident", "provider"].includes(u.profile.role)
-      ) {
-        return {
-          allowed: false,
-          status: 403,
-          error: "Forbidden: conflicting or privileged identity fields",
-        };
-      }
-      const previous = existingUsers.find((p) => p.uid === u.uid);
-      if (
-        previous &&
-        (previous.profile?.role !== u.profile.role ||
-          previous.profile?.syndicId !== u.profile.syndicId ||
-          previous.profile?.buildingId !== u.profile.buildingId)
-      ) {
-        return {
-          allowed: false,
-          status: 403,
-          error:
-            "Forbidden: membership changes require a separate authorized operation",
-        };
-      }
-      if (u.profile.role === "syndic" && u.uid !== caller.uid)
-        return { allowed: false, status: 403, error: "Forbidden" };
-      if (
-        !scope.authorizedSyndicIds.has(u.profile.syndicId) ||
-        (u.profile.buildingId &&
-          !scope.authorizedBuildingIds.has(u.profile.buildingId))
-      ) {
-        return {
-          allowed: false,
-          status: 403,
-          error: "Forbidden: account outside cabinet",
-        };
-      }
-      if (
-        previous &&
-        previous.profile?.syndicId &&
-        !scope.authorizedSyndicIds.has(previous.profile.syndicId)
-      ) {
-        return {
-          allowed: false,
-          status: 403,
-          error: "Forbidden: existing account outside cabinet",
-        };
-      }
-    }
-    return { allowed: true };
-  }
-
-  if (key === "syndik_prod_notifications_v1") {
-    return { allowed: true };
-  }
-
-  if (caller.role === "resident" && key === "syndik_prod_proofs_v1") {
-    if (deletedId || !Array.isArray(value))
-      return { allowed: false, status: 403, error: "Forbidden" };
-    for (const proof of value) {
-      const charge = (store.syndik_prod_charges_v1 || []).find(
-        (c: any) => c.id === proof.chargeId,
-      );
-      const previous = (store[key] || []).find((p: any) => p.id === proof.id);
-      if (previous) {
-        if (!isDeepStrictEqual(previous, proof))
-          return {
-            allowed: false,
-            status: 403,
-            error: "Forbidden: proof review belongs to the manager",
-          };
-        continue;
-      }
-      if (
-        !charge ||
-        charge.residentId !== scope.callerResId ||
-        proof.residentId !== scope.callerResId ||
-        proof.status !== "pending" ||
-        proof.buildingId !== charge.buildingId ||
-        !scope.authorizedBuildingIds.has(charge.buildingId) ||
-        !Number.isFinite(proof.amount) ||
-        proof.amount <= 0 ||
-        Math.round(proof.amount * 100) >
-          Math.round((charge.amount - (charge.paidAmount || 0)) * 100)
-      ) {
-        return {
-          allowed: false,
-          status: 403,
-          error: "Forbidden: invalid payment proof ownership or amount",
-        };
-      }
-    }
-  }
-
-  // Building-scoped collections
-  const idField = ID_MERGE_KEYS[key] || "id";
-  const existingItems: any[] = Array.isArray(store[key]) ? store[key] : [];
-
-  if (deletedId) {
-    const targetExisting = existingItems.find(
-      (item) => item?.[idField] === deletedId,
-    );
-    if (
-      targetExisting &&
-      (!targetExisting.buildingId ||
-        !scope.authorizedBuildingIds.has(targetExisting.buildingId))
-    ) {
-      return {
-        allowed: false,
-        status: 403,
-        error: "Forbidden: cannot delete record belonging to another building",
-      };
-    }
-  }
-
-  const incomingItems = Array.isArray(value) ? value : [];
-  for (const item of incomingItems) {
-    if (!item || typeof item !== "object") continue;
-    const itemId = item[idField];
-    const existingItem = itemId
-      ? existingItems.find((ex) => ex?.[idField] === itemId)
-      : undefined;
-
-    if (
-      existingItem &&
-      existingItem.buildingId &&
-      !scope.authorizedBuildingIds.has(existingItem.buildingId)
-    ) {
-      return {
-        allowed: false,
-        status: 403,
-        error:
-          "Forbidden: cannot overwrite record belonging to another building or cabinet",
-      };
-    }
-
-    if (!item.buildingId || !scope.authorizedBuildingIds.has(item.buildingId)) {
-      return {
-        allowed: false,
-        status: 403,
-        error:
-          "Forbidden: record buildingId is outside caller authorized scope",
-      };
-    }
-
-    if (
-      item.syndicId &&
-      scope.authorizedSyndicIds.size > 0 &&
-      !scope.authorizedSyndicIds.has(item.syndicId)
-    ) {
-      return {
-        allowed: false,
-        status: 403,
-        error:
-          "Forbidden: record syndicId is outside caller authorized cabinet",
-      };
-    }
-  }
-
-  return { allowed: true };
-}
-
-const ID_MERGE_KEYS: Record<string, string> = {
-  syndik_prod_charges_v1: "id",
-  syndik_prod_proofs_v1: "id",
-  syndik_prod_quittances_v1: "id",
-  syndik_prod_invoices_v1: "id",
-  syndik_prod_ag_v1: "id",
-  syndik_prod_prestataires_v1: "id",
-  syndik_prod_maintenance_v1: "id",
-  syndik_prod_chat_v1: "id",
-  syndik_prod_marketplace_v1: "id",
-  syndik_prod_notifications_v1: "id",
-  syndik_prod_resident_accounts_v1: "residentId",
-  syndik_prod_prestataire_accounts_v1: "prestataireId",
-  syndik_prod_registered_users_v1: "uid",
-};
-
 async function startServer() {
   validateProductionEnvironment();
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
+
+  app.disable("x-powered-by");
+  app.set(
+    "trust proxy",
+    Number(
+      process.env.TRUST_PROXY_HOPS ??
+        (process.env.K_SERVICE || process.env.NODE_ENV === "production" ? 1 : 0),
+    ),
+  );
 
   installAiBodyParsers(app);
   app.use(express.json({ limit: "15mb" }));
@@ -1276,8 +1001,6 @@ async function startServer() {
   };
   registerIdentityRoutes(api, extractAndVerifyCaller);
   registerLiveUpdates(app, repository, extractAndVerifyCaller);
-  app.disable("x-powered-by");
-  app.set("trust proxy", Number(process.env.TRUST_PROXY_HOPS || 0));
   app.use("/api", (_req, res, next) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Cache-Control", "no-store");
@@ -1324,11 +1047,27 @@ async function startServer() {
     let firebaseCredential: Awaited<ReturnType<typeof firebasePasswordLogin>> | undefined;
     if (account) {
       if (account.firebaseUid) {
+        const matching = records.filter((a: any) => accountUid(a) === uid);
         try {
           firebaseCredential = await firebasePasswordLogin(account.email.trim().toLowerCase(), password);
           if (firebaseCredential.user.uid !== account.firebaseUid) return res.status(401).json({ error: 'Identifiants invalides.' });
+          if (matching.some((a: any) => a.password || a.passwordHash)) {
+            for (const a of matching) { delete a.password; delete a.passwordHash; }
+            (sharedStore.__sessionVersions ??= {})[uid] = (sharedStore.__sessionVersions?.[uid] || 0) + 1;
+          }
         } catch (error: any) {
           if (error.status !== 401) throw error;
+          if (matching.some((a: any) => a.password || a.passwordHash)) {
+            const fbUser = await firebaseAdminAuth().getUser(account.firebaseUid).catch(() => null);
+            if (fbUser && !fbUser.passwordHash && verifyPassword(password, account.passwordHash || account.password, account.email)) {
+              planFirebasePassword(sharedStore, uid, account.firebaseUid, account.email.trim().toLowerCase(), password, true);
+              for (const a of matching) { delete a.password; delete a.passwordHash; }
+              (sharedStore.__sessionVersions ??= {})[uid] = (sharedStore.__sessionVersions?.[uid] || 0) + 1;
+              firebaseCredential = { user: fbUser, idToken: '', authTime: Math.floor(Date.now() / 1000) };
+            } else if (fbUser?.passwordHash) {
+              for (const a of matching) { delete a.password; delete a.passwordHash; }
+            }
+          }
         }
       } else if (usesFirebaseAuth()) {
         if (verifyPassword(password, account.passwordHash || account.password, account.email)) {
@@ -1420,17 +1159,18 @@ async function startServer() {
     }
     const registered: any[] = sharedStore.syndik_prod_registered_users_v1 || [];
     if (!candidates.length) {
-      const known = registered.find(
-        (u) => u.email?.trim().toLowerCase() === decoded.email!.toLowerCase(),
+      const known = identityAccounts(sharedStore).find(
+        (u) => !u.disabled && u.email?.trim().toLowerCase() === decoded.email!.toLowerCase(),
       );
       if (known)
-        candidates = lookupCandidateProfilesInStore(sharedStore, known.uid);
+        candidates = lookupCandidateProfilesInStore(sharedStore, accountUid(known));
     }
     let profile = candidates[0];
     const knownAccount = identityAccounts(sharedStore).find(a => profile && accountUid(a) === profile.uid);
     if (knownAccount) assertIdentityReady(sharedStore, accountUid(knownAccount));
     if (knownAccount?.disabled) return res.status(403).json({ error: 'Compte désactivé.' });
-    if (knownAccount && usesFirebaseAuth()) bindFirebaseAccount(sharedStore, knownAccount, await firebaseAdminAuth().getUser(decoded.uid));
+    const fbUser = usesFirebaseAuth() ? await firebaseAdminAuth().getUser(decoded.uid) : undefined;
+    if (knownAccount && fbUser) bindFirebaseAccount(sharedStore, knownAccount, fbUser);
     if (profile && invitationExpired(sharedStore, profile))
       return res.status(403).json({ error: "Invitation expirée." });
     if (!profile) {
@@ -1471,7 +1211,7 @@ async function startServer() {
 
     }
     const firebaseAccount = identityAccounts(sharedStore).find(a => accountUid(a) === profile.uid);
-    if (firebaseAccount && usesFirebaseAuth()) bindFirebaseAccount(sharedStore, firebaseAccount, await firebaseAdminAuth().getUser(decoded.uid));
+    if (firebaseAccount && fbUser && firebaseAccount !== knownAccount) bindFirebaseAccount(sharedStore, firebaseAccount, fbUser);
     const storedProfile = registered.find((u) => u.uid === profile.uid)?.profile || {};
     profile = {
       ...storedProfile,
@@ -1888,15 +1628,16 @@ async function startServer() {
         .status(403)
         .json({ error: "Identité du votant non autorisée." });
     }
-    const building: Building | undefined = (
-      sharedStore.syndik_prod_syndics_v1 || []
-    )
-      .flatMap((s: any) => s.buildings || [])
-      .find((b: Building) => b.id === ag.buildingId);
+    const cabinet = (sharedStore.syndik_prod_syndics_v1 || []).find((s: any) =>
+      (s.buildings || []).some((b: Building) => b.id === ag.buildingId),
+    );
+    const building: Building | undefined = cabinet?.buildings?.find(
+      (b: Building) => b.id === ag.buildingId,
+    );
     if (!building)
       return res.status(404).json({ error: "Immeuble introuvable." });
     try {
-      canWrite(caller, building);
+      canWrite(caller, { ...building, syndicId: building.syndicId || cabinet?.id });
       const result = applyResidentVote(
         ag,
         ag.votingSnapshot || building,
@@ -1917,7 +1658,7 @@ async function startServer() {
 
       return res.json({ ag: projectAssemblyForRole(result, caller.role), revision: sharedStore.__revision });
     } catch (error) {
-      return res.status(400).json({
+      return res.status(error instanceof OperationError ? error.status : 400).json({
         error: error instanceof Error ? error.message : "Vote invalide.",
       });
     }
@@ -2340,9 +2081,16 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  const server = app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
+  const shutdown = () => {
+    server.closeIdleConnections?.();
+    setTimeout(() => process.exit(0), 5000).unref();
+    server.close(() => process.exit(0));
+  };
+  process.once("SIGTERM", shutdown);
+  process.once("SIGINT", shutdown);
 }
 
 startServer().catch(error => {

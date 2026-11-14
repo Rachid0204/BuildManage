@@ -125,7 +125,7 @@ export interface Charge {
   period?: string;
   description?: string;
   invoiceId?: string | null;
-  chargeType?: 'courante' | 'exceptionnelle_travaux' | 'fonds_reserve';
+  chargeType?: 'courante' | 'exceptionnelle_travaux' | 'fonds_reserve' | 'opening_arrears';
   tantiemesApplied?: number;
   createdAt: string;
 }

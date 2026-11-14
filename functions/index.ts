@@ -22,7 +22,7 @@ async function backend(route: string, body: unknown, authorization?: string) {
     },
     body: JSON.stringify(body),
   });
-  const data = await response.json();
+  const data = await response.json().catch(() => ({}));
   if (route === '/api/jobs/monthly-charges' && data.ok === false) {
     functions.logger.error('Monthly billing has failed buildings', data);
     if (response.ok && Array.isArray(data.results) && data.results.some((r: any) => r.status === 'failed') &&

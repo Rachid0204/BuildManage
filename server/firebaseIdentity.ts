@@ -70,7 +70,7 @@ async function userByEmail(email: string): Promise<UserRecord | undefined> {
   }
 }
 
-export function bindFirebaseAccount(state: State, account: any, user: UserRecord) {
+export function bindFirebaseAccount(state: State, account: any, user: UserRecord, preserveCredentials = false) {
   const uid = accountUid(account), email = String(account.email).trim().toLowerCase();
   if (!uid || user.disabled || user.email?.toLowerCase() !== email ||
       (account.firebaseUid && account.firebaseUid !== user.uid))
@@ -79,12 +79,16 @@ export function bindFirebaseAccount(state: State, account: any, user: UserRecord
     a.firebaseUid === user.uid && accountUid(a) !== uid);
   if (linkedElsewhere) throw new FirebaseIdentityError('IDENTITY_COLLISION', 409);
   const firstLink = !account.firebaseUid;
+  let clearedCredentials = false;
   for (const a of identityAccounts(state).filter(a => accountUid(a) === uid)) {
     a.firebaseUid = user.uid;
-    delete a.password; delete a.passwordHash;
+    if (!preserveCredentials) {
+      if (a.password || a.passwordHash) clearedCredentials = true;
+      delete a.password; delete a.passwordHash;
+    }
     if (a.profile) a.profile.emailVerified = user.emailVerified;
   }
-  if (firstLink) {
+  if (!preserveCredentials && (firstLink || clearedCredentials)) {
     (state.__sessionVersions ??= {})[uid] = (state.__sessionVersions?.[uid] || 0) + 1;
     for (const [key, action] of Object.entries(state.__identityActions || {}))
       if ((action as any).email === email) delete state.__identityActions[key];
@@ -186,7 +190,7 @@ export async function prepareFirebaseRecovery(state: State, account: any) {
   }
   if (!user || (!account.firebaseUid && user.uid !== uid && !user.emailVerified))
     throw new FirebaseIdentityError('UNVERIFIED_IDENTITY_COLLISION', 409);
-  bindFirebaseAccount(state, account, user);
+  bindFirebaseAccount(state, account, user, true);
 }
 
 const continueUrl = () => new URL('/login', process.env.PUBLIC_APP_URL || 'https://immogest.cloud.run').toString();

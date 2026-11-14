@@ -53,7 +53,13 @@ const VIEW_TO_ROUTE: Record<View, string> = {
 const SyndicPortal: React.FC = () => {
   const { userProfile } = useAuth();
   const { selectedBuilding: storedBuilding, setSelectedBuilding, syndic } = useBuilding();
-  const selectedBuilding = storedBuilding || syndic?.buildings[0] || null;
+  const activeBuildings = (syndic?.buildings || []).filter((b) => !b.archivedAt);
+  const selectedBuilding = storedBuilding || activeBuildings[0] || null;
+  React.useEffect(() => {
+    if (!storedBuilding && activeBuildings[0]) {
+      setSelectedBuilding(activeBuildings[0]);
+    }
+  }, [storedBuilding, activeBuildings, setSelectedBuilding]);
   const { tr } = useI18n();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -443,7 +449,12 @@ const SyndicPortal: React.FC = () => {
               path="/maintenance"
               element={
                 selectedBuilding ? (
-                  <Maintenance building={selectedBuilding} />
+                  <Maintenance
+                    building={selectedBuilding}
+                    currentResidentId={syndic?.id || userProfile?.uid || ''}
+                    currentResidentName={syndic?.name || userProfile?.displayName || ''}
+                    currentApartmentNumber={tr('Bureau Syndic', 'مكتب السنديك')}
+                  />
                 ) : (
                   <Navigate to="/buildings" replace />
                 )
@@ -487,7 +498,14 @@ const SyndicPortal: React.FC = () => {
               path="/marketplace"
               element={
                 selectedBuilding ? (
-                  <MarketplaceView building={selectedBuilding} />
+                  <MarketplaceView
+                    building={selectedBuilding}
+                    currentResidentId={syndic?.id || ''}
+                    currentResidentName={syndic?.name || ''}
+                    currentApartmentNumber={tr('Bureau Syndic', 'مكتب السنديك')}
+                    currentPhone={syndic?.phone || ''}
+                    isResidentPortal={false}
+                  />
                 ) : (
                   <Navigate to="/buildings" replace />
                 )

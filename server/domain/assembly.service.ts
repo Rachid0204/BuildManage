@@ -220,7 +220,9 @@ function recomputeMeeting(ag: any) {
     const unique = new Map();
     for (const v of r.voterChoices || []) {
       const lot = ag.votingSnapshot.apartments.find(
-        (a: any) => a.id === v.apartmentId && a.ownerId === v.residentId,
+        (a: any) =>
+          (v.apartmentId ? a.id === v.apartmentId : a.number === v.apartmentNumber) &&
+          a.ownerId === v.residentId,
       );
       check(
         lot && ["for", "against", "abstain"].includes(v.choice || v.vote),
@@ -298,9 +300,9 @@ async function meetingOperation(actor: Actor, operation: string, args: any[]) {
       Object.assign(old, metadata);
       ag = old;
       if (input.status === "completed") {
-        recomputeMeeting(ag);
         ag.status = "completed";
         ag.isVotingOpen = false;
+        recomputeMeeting(ag);
       }
     } else {
       check(
@@ -420,7 +422,7 @@ async function meetingOperation(actor: Actor, operation: string, args: any[]) {
           str(voter.residentId),
           str(args[1]),
           args[2],
-          str(voter.apartmentId),
+          voter.apartmentId ? str(voter.apartmentId) : undefined,
         ),
       );
       recomputeMeeting(ag);
@@ -431,6 +433,7 @@ async function meetingOperation(actor: Actor, operation: string, args: any[]) {
         "Présence invalide.",
         400,
       );
+      if (!ag.votingSnapshot) Object.assign(ag, roll(b, ag.attendees));
       const attendees = ag.attendees.filter(
         (a: any) => a.residentId === args[1],
       );

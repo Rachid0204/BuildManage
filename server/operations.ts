@@ -61,6 +61,8 @@ interface BillingOptions {
 export async function generateScheduledMonthlyCharges(repository: StateRepository, period: string, requestId?: string, options: BillingOptions = {}) {
   z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/).parse(period);
   const runId = randomUUID(), startedAt = new Date().toISOString();
+  const usePeriodLease = !options.target;
+  const LEASE_TTL_MS = 10 * 60 * 1000;
   const candidates = await repository.transaction(async state => {
     if (options.target) {
       const t = options.target;
@@ -70,9 +72,18 @@ export async function generateScheduledMonthlyCharges(repository: StateRepositor
         throw new OperationError('Échec de facturation introuvable.', 404);
       return [{ syndicId: t.syndicId, buildingId: t.buildingId }];
     }
+    const leases = (state.__billingLeases ??= {});
+    const existingLease = leases[period];
+    if (existingLease && existingLease.expiresAt > Date.now()) {
+      throw new OperationError('Une exécution de facturation mensuelle est déjà en cours pour cette période.', 409, 'BILLING_RUN_IN_PROGRESS');
+    }
+    leases[period] = { runId, startedAt, expiresAt: Date.now() + LEASE_TTL_MS };
     if (options.retryRunId) {
       const previous = (state.__billingRuns || []).find((r: any) => r.id === options.retryRunId && r.period === period);
-      if (!previous) throw new OperationError('Exécution introuvable.', 404);
+      if (!previous) {
+        delete leases[period];
+        throw new OperationError('Exécution introuvable.', 404);
+      }
       return previous.results.filter((r: MonthlyBuildingResult) => r.status === 'failed' && r.retryable)
         .map(({ syndicId, buildingId }: MonthlyBuildingResult) => ({ syndicId, buildingId }));
     }
@@ -89,12 +100,22 @@ export async function generateScheduledMonthlyCharges(repository: StateRepositor
     const runs = state.__billingRuns ??= [];
     const index = runs.findIndex((r: any) => r.id === runId);
     if (index < 0) runs.push(run); else runs[index] = run;
+    if (runs.length > 200) runs.splice(0, runs.length - 200);
+    if (usePeriodLease) {
+      const leases = (state.__billingLeases ??= {});
+      if (completed) {
+        if (leases[period]?.runId === runId) delete leases[period];
+      } else if (!leases[period] || leases[period].runId === runId) {
+        leases[period] = { runId, startedAt, expiresAt: Date.now() + LEASE_TTL_MS };
+      }
+    }
   });
   const totals = () => ({ ok: !results.some(r => r.status === 'failed'), total: candidates.length,
     succeeded: results.filter(r => r.status === 'succeeded').length,
     skipped: results.filter(r => r.status === 'skipped').length,
     failed: results.filter(r => r.status === 'failed').length,
     created: results.reduce((sum, r) => sum + r.created, 0) });
+  try {
   await persist();
   for (const candidate of candidates) {
     const operationId = `scheduled:${candidate.buildingId}:${period}`;
@@ -148,4 +169,13 @@ export async function generateScheduledMonthlyCharges(repository: StateRepositor
   }
   await persist(true);
   return { id: runId, startedAt, period, ...totals(), results };
+  } finally {
+    if (usePeriodLease) {
+      await repository.transaction(async state => {
+        if (state.__billingLeases?.[period]?.runId === runId) {
+          delete state.__billingLeases[period];
+        }
+      }).catch(() => {});
+    }
+  }
 }

@@ -44,6 +44,11 @@ export default function LiveDataSync() {
       if (!connection) connection = startLiveSync(setStatus, invalidSession);
       else connection.reconnect();
     };
+    const onFocus = () => {
+      if (!active || document.visibilityState === 'hidden' || navigator.onLine === false) return;
+      if (!connection) connection = startLiveSync(setStatus, invalidSession);
+      else connection.refresh();
+    };
     const channel = typeof BroadcastChannel === 'undefined' ? undefined : new BroadcastChannel('syndik_realtime_sync');
     channel?.addEventListener('message', event => {
       if (event.data?.type === 'STATE_UPDATED') connection?.refresh();
@@ -53,7 +58,7 @@ export default function LiveDataSync() {
     window.addEventListener('syndik-session-invalid', invalidSession);
     window.addEventListener('online', resume);
     window.addEventListener('offline', resume);
-    window.addEventListener('focus', resume);
+    window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', resume);
     resume();
     return () => {
@@ -64,7 +69,7 @@ export default function LiveDataSync() {
       window.removeEventListener('syndik-session-invalid', invalidSession);
       window.removeEventListener('online', resume);
       window.removeEventListener('offline', resume);
-      window.removeEventListener('focus', resume);
+      window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', resume);
     };
   }, [scope, queryClient, retrySession]);

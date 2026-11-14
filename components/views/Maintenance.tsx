@@ -18,6 +18,7 @@ import CameraCaptureModal from '../common/CameraCaptureModal';
 import { Camera, Image as ImageIcon } from 'lucide-react';
 import { WrenchIcon, PlusIcon, PencilIcon } from '../icons/IconComponents';
 import { useI18n } from '../../hooks/useI18n';
+import { useToast } from '../common/Toast';
 
 interface MaintenanceProps {
   building: Building;
@@ -249,11 +250,12 @@ const MaintenanceProgressStepper: React.FC<{ request: MaintenanceRequest; provid
 const Maintenance: React.FC<MaintenanceProps> = ({
   building,
   isResidentPortal = false,
-  currentResidentId = 'res-2',
-  currentResidentName = 'Fatima Zahra Mansouri',
-  currentApartmentNumber = 'Lot A-102',
+  currentResidentId = '',
+  currentResidentName = '',
+  currentApartmentNumber = '',
 }) => {
   const { tr, isAr } = useI18n();
+  const { showToast } = useToast();
   const createFormId = useId();
   const updateFormId = useId();
   const queryClient = useQueryClient();
@@ -944,11 +946,15 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                               className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${
                                 upd.updatedByRole === 'syndic'
                                   ? 'bg-blue-900 text-amber-300'
+                                  : upd.updatedByRole === 'provider'
+                                  ? 'bg-amber-100 text-amber-900'
                                   : 'bg-teal-100 text-teal-900'
                               }`}
                             >
                               {upd.updatedByRole === 'syndic'
                                 ? tr('🏢 Syndic', '🏢 السنديك')
+                                : upd.updatedByRole === 'provider'
+                                ? tr('🛠️ Prestataire', '🛠️ مقدم الخدمة')
                                 : tr('👤 Copropriétaire', '👤 مالك مشترك')}
                             </span>
                             <span className="font-bold text-slate-900">{upd.title}</span>
@@ -1061,8 +1067,8 @@ const Maintenance: React.FC<MaintenanceProps> = ({
               <p className="text-slate-600 mt-0.5">{selectedRequest.description}</p>
             </div>
 
-            {(selectedRequest as any).completionPending && <Button onClick={async()=>{try{await remoteMutation('confirmMaintenanceCompletion',[selectedRequest.id,tr('Intervention validée','تم تأكيد التدخل')]);void queryClient.invalidateQueries();setSelectedRequest(null);}catch(e:any){window.alert(e.message);}}}>{tr('Confirmer la réparation','تأكيد الإصلاح')}</Button>}
-            {selectedRequest.status === 'completed' && <Button onClick={async()=>{try{await remoteMutation('reopenMaintenance',[selectedRequest.id,tr('Réouverture demandée','طلب إعادة فتح')]);void queryClient.invalidateQueries();setSelectedRequest(null);}catch(e:any){window.alert(e.message);}}}>{tr('Réouvrir le signalement','إعادة فتح البلاغ')}</Button>}
+            {(selectedRequest as any).completionPending && <Button onClick={async()=>{try{await remoteMutation('confirmMaintenanceCompletion',[selectedRequest.id,tr('Intervention validée','تم تأكيد التدخل')]);void queryClient.invalidateQueries();setSelectedRequest(null);}catch(e:any){showToast(e?.message || tr('Erreur lors de la validation.','خطأ أثناء التأكيد.'),'error');}}}>{tr('Confirmer la réparation','تأكيد الإصلاح')}</Button>}
+            {selectedRequest.status === 'completed' && <Button onClick={async()=>{try{await remoteMutation('reopenMaintenance',[selectedRequest.id,tr('Réouverture demandée','طلب إعادة فتح')]);void queryClient.invalidateQueries();setSelectedRequest(null);}catch(e:any){showToast(e?.message || tr('Erreur lors de la réouverture.','خطأ أثناء إعادة الفتح.'),'error');}}}>{tr('Réouvrir le signalement','إعادة فتح البلاغ')}</Button>}
             {!isResidentPortal && (
               <>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1223,7 +1229,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                         onClick={() =>
                           setStepPhotos((prev) => prev.filter((_, i) => i !== idx))
                         }
-                        className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full bg-rose-600 text-white text-[10px] flex items-center justify-center"
+                        className="absolute top-0.5 end-0.5 w-4 h-4 rounded-full bg-rose-600 text-white text-[10px] flex items-center justify-center"
                       >
                         ✕
                       </button>
@@ -1379,7 +1385,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                         onClick={() =>
                           setNewPhotos((prev) => prev.filter((_, i) => i !== idx))
                         }
-                        className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full bg-rose-600 text-white text-[10px] flex items-center justify-center"
+                        className="absolute top-0.5 end-0.5 w-4 h-4 rounded-full bg-rose-600 text-white text-[10px] flex items-center justify-center"
                       >
                         ✕
                       </button>

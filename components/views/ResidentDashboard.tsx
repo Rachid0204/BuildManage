@@ -1,13 +1,13 @@
 import { notifyOperation } from '../../utils/formFeedback';
-import FinancialTools from './FinancialTools';
 import ResidentPaymentModal from './ResidentPaymentModal';
 import React, { Suspense, useState, useMemo, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Navigate, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Camera, Image as ImageIcon } from 'lucide-react';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import Modal from '../common/Modal';
+import { useToast } from '../common/Toast';
 import CameraCaptureModal, { compressImageFile } from '../common/CameraCaptureModal';
 import { useAuth, getHomeRouteForRole } from '../../contexts/AuthContext';
 import {
@@ -54,6 +54,7 @@ const Maintenance = React.lazy(() => import('./Maintenance'));
 const ResidentDashboard: React.FC = () => {
   const { userProfile, logout, changePassword } = useAuth();
   const { t, tr, language } = useI18n();
+  const { showToast } = useToast();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -268,7 +269,7 @@ const ResidentDashboard: React.FC = () => {
         type: 'error',
         text: tr('Les deux mots de passe ne correspondent pas.', 'كلمتا المرور غير متطابقتين.'),
       });
-      throw new Error(tr('Les deux mots de passe ne correspondent pas.', 'كلمتا المرور غير متطابقتين.'));
+      return;
     }
     try {
       await changePassword(newPassword);
@@ -310,8 +311,7 @@ const ResidentDashboard: React.FC = () => {
   );
 
   if (userProfile && userProfile.role !== 'resident') {
-    navigate(getHomeRouteForRole(userProfile.role), { replace: true });
-    return null;
+    return <Navigate to={getHomeRouteForRole(userProfile.role)} replace />;
   }
 
   if (loadingResidence || loadingCharges)
@@ -336,7 +336,6 @@ const ResidentDashboard: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-100" dir={language === 'ar' ? 'rtl' : 'ltr'}>
-      {activeBuilding && <div className="max-w-7xl mx-auto p-4"><FinancialTools building={activeBuilding} /></div>}
       {/* Top Navbar */}
       <nav className="bg-slate-900 text-white shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -697,11 +696,12 @@ const ResidentDashboard: React.FC = () => {
                         setSelectedChargeId(payableCharges[0].id);
                         setIsProofModalOpen(true);
                       } else {
-                        alert(
+                        showToast(
                           tr(
                             'Aucune charge à régler ou un justificatif est déjà en cours de validation.',
                             'لا توجد مساهمة مستحقة أو أن إثبات الأداء قيد التحقق.'
-                          )
+                          ),
+                          'info'
                         );
                       }
                     }}
@@ -1181,57 +1181,71 @@ const ResidentDashboard: React.FC = () => {
       </main>
 
       {/* Modal: Official Document Preview for Resident */}
-      {previewDocName && (
-        <Modal
-          isOpen={!!previewDocName}
-          onClose={() => setPreviewDocName(null)}
-          title={`${tr('Consultation Document Officiel', 'معاينة وثيقة رسمية')} — ${previewDocName}`}
-          footer={
-            <div className="flex justify-end">
-              <Button variant="secondary" onClick={() => setPreviewDocName(null)}>
-                {tr('Fermer', 'إغلاق')}
-              </Button>
-            </div>
-          }
-        >
-          <div className="p-5 bg-slate-50 rounded-xl border border-slate-200 space-y-3 text-xs text-slate-700">
-            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
-              <div>
-                <div className="font-bold text-slate-900 text-sm">{previewDocName}</div>
-                <div className="text-[11px] text-slate-500">
-                  {activeBuilding?.name} ·{' '}
+      {previewDocName && (() => {
+        const previewDoc = (activeBuilding?.documents || []).find((d) => d.name === previewDocName);
+        return (
+          <Modal
+            isOpen={!!previewDocName}
+            onClose={() => setPreviewDocName(null)}
+            title={`${tr('Consultation Document Officiel', 'معاينة وثيقة رسمية')} — ${previewDocName}`}
+            footer={
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {previewDoc?.url && (
+                  <a
+                    href={previewDoc.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    download={previewDoc.name}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold transition-colors"
+                  >
+                    {tr('Ouvrir / Télécharger le document', 'فتح / تحميل الوثيقة')}
+                  </a>
+                )}
+                <Button variant="secondary" onClick={() => setPreviewDocName(null)}>
+                  {tr('Fermer', 'إغلاق')}
+                </Button>
+              </div>
+            }
+          >
+            <div className="p-5 bg-slate-50 rounded-xl border border-slate-200 space-y-3 text-xs text-slate-700">
+              <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+                <div>
+                  <div className="font-bold text-slate-900 text-sm">{previewDocName}</div>
+                  <div className="text-[11px] text-slate-500">
+                    {activeBuilding?.name} ·{' '}
+                    {tr(
+                      `Archive officielle certifiée par ${activeSyndic?.name}`,
+                      `أرشيف رسمي معتمد من طرف ${activeSyndic?.name}`
+                    )}
+                  </div>
+                </div>
+                <span className="px-2.5 py-1 rounded bg-teal-100 text-teal-800 font-mono font-bold text-[11px]">
+                  {tr('Loi n° 18-00', 'قانون رقم 18-00')}
+                </span>
+              </div>
+              <p className="leading-relaxed">
+                {tr(
+                  `Ce document fait partie intégrante du registre légal de la copropriété ${activeBuilding?.name} (${activeBuilding?.address}, ${activeBuilding?.city}). Il est mis à la disposition de l'ensemble des copropriétaires conformément aux dispositions de la Loi n° 18-00 telle que modifiée et complétée par la Loi n° 106-12.`,
+                  `تعتبر هذه الوثيقة جزءاً لا يتجزأ من السجل القانوني للملكية المشتركة ${activeBuilding?.name} (${activeBuilding?.address}، ${activeBuilding?.city}). وهي موضوعة رهن إشارة جميع الملاك المشتركين طبقا لمقتضيات القانون رقم 18-00 كما تم تغييره وتتميمه بالقانون رقم 106-12.`
+                )}
+              </p>
+              <div className="p-3 bg-white rounded-lg border border-slate-200 font-mono text-[11px] text-slate-600 space-y-1">
+                <div>
+                  • {tr('Syndic Gestionnaire :', 'السنديك المسير :')} {activeSyndic?.name}
+                </div>
+                <div>• ICE : {activeSyndic?.ice || tr('Non renseigné', 'غير محدد')}</div>
+                <div>
+                  •{' '}
                   {tr(
-                    `Archive officielle certifiée par ${activeSyndic?.name}`,
-                    `أرشيف رسمي معتمد من طرف ${activeSyndic?.name}`
+                    'Statut : Document vérifié et archivé numériquement',
+                    'الحالة : وثيقة محققة ومؤرشفة رقمياً'
                   )}
                 </div>
               </div>
-              <span className="px-2.5 py-1 rounded bg-teal-100 text-teal-800 font-mono font-bold text-[11px]">
-                {tr('Loi n° 18-00', 'قانون رقم 18-00')}
-              </span>
             </div>
-            <p className="leading-relaxed">
-              {tr(
-                `Ce document fait partie intégrante du registre légal de la copropriété ${activeBuilding?.name} (${activeBuilding?.address}, ${activeBuilding?.city}). Il est mis à la disposition de l'ensemble des copropriétaires conformément aux dispositions de la Loi n° 18-00 telle que modifiée et complétée par la Loi n° 106-12.`,
-                `تعتبر هذه الوثيقة جزءاً لا يتجزأ من السجل القانوني للملكية المشتركة ${activeBuilding?.name} (${activeBuilding?.address}، ${activeBuilding?.city}). وهي موضوعة رهن إشارة جميع الملاك المشتركين طبقا لمقتضيات القانون رقم 18-00 كما تم تغييره وتتميمه بالقانون رقم 106-12.`
-              )}
-            </p>
-            <div className="p-3 bg-white rounded-lg border border-slate-200 font-mono text-[11px] text-slate-600 space-y-1">
-              <div>
-                • {tr('Syndic Gestionnaire :', 'السنديك المسير :')} {activeSyndic?.name}
-              </div>
-              <div>• ICE : {activeSyndic?.ice || '001524367000089'}</div>
-              <div>
-                •{' '}
-                {tr(
-                  'Statut : Document vérifié et archivé numériquement',
-                  'الحالة : وثيقة محققة ومؤرشفة رقمياً'
-                )}
-              </div>
-            </div>
-          </div>
-        </Modal>
-      )}
+          </Modal>
+        );
+      })()}
 
       <ResidentPaymentModal
         isOpen={isProofModalOpen}
@@ -1407,7 +1421,7 @@ const ResidentDashboard: React.FC = () => {
                       onClick={() =>
                         setMaintPhotos((prev) => prev.filter((_, i) => i !== idx))
                       }
-                      className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full bg-rose-600 text-white text-[10px] flex items-center justify-center"
+                      className="absolute top-0.5 end-0.5 w-4 h-4 rounded-full bg-rose-600 text-white text-[10px] flex items-center justify-center"
                     >
                       ✕
                     </button>

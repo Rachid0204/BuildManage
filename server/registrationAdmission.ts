@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
@@ -62,7 +62,19 @@ export function createAdmissionStore(): AdmissionStore {
     let acquired = false;
     for (let i = 0; i < 40; i++) {
       try { await mkdir(lock); acquired = true; break; }
-      catch (error: any) { if (error.code !== 'EEXIST') throw error; await new Promise(r => setTimeout(r, 25)); }
+      catch (error: any) {
+        if (error.code !== 'EEXIST') throw error;
+        try {
+          const info = await stat(lock);
+          if (Date.now() - info.mtimeMs > 60000) {
+            await rm(lock, { recursive: true, force: true });
+            continue;
+          }
+        } catch {
+          // Lock vanished before stat; retry mkdir
+        }
+        await new Promise(r => setTimeout(r, 25));
+      }
     }
     if (!acquired) throw new Error('Admission store busy');
     const file = path.join(directory, 'registration.json');

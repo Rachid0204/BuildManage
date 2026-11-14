@@ -86,7 +86,7 @@ const DashboardLayout: React.FC = () => {
 
             {/* Mobile Bottom Navigation Bar (< lg) */}
             <nav
-                aria-label="Navigation mobile rapide"
+                aria-label={tr('Navigation mobile rapide', 'التنقل السريع عبر الهاتف')}
                 className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-white border-t border-slate-200 shadow-lg pb-safe"
             >
                 <div className="grid grid-cols-5 h-16">

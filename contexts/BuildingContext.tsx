@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import type { Building, Syndic } from '../types';
 
 interface BuildingContextType {
@@ -26,6 +26,20 @@ export const BuildingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   });
 
+  const buildings = useMemo(
+    () => (syndic?.buildings || []).filter((b) => !b.archivedAt),
+    [syndic]
+  );
+
+  useEffect(() => {
+    const handleLogout = () => {
+      setSyndic(null);
+      setSelectedBuildingId(null);
+    };
+    window.addEventListener('syndik-user-logout', handleLogout);
+    return () => window.removeEventListener('syndik-user-logout', handleLogout);
+  }, []);
+
   useEffect(() => {
     if (!syndic) {
       setSelectedBuildingId(null);
@@ -33,32 +47,30 @@ export const BuildingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
     try {
       const tenantScopedId = localStorage.getItem(getTenantBuildingStorageKey(syndic.id));
-      if (tenantScopedId && syndic.buildings.some((b) => b.id === tenantScopedId)) {
+      if (tenantScopedId && buildings.some((b) => b.id === tenantScopedId)) {
         setSelectedBuildingId(tenantScopedId);
-      } else if (syndic.buildings.length > 0) {
-        setSelectedBuildingId(syndic.buildings[0].id);
+      } else if (buildings.length > 0) {
+        setSelectedBuildingId(buildings[0].id);
       } else {
         setSelectedBuildingId(null);
       }
     } catch {
       // Ignore storage access errors
     }
-  }, [syndic]);
+  }, [syndic, buildings]);
 
   useEffect(() => {
     try {
-      if (selectedBuildingId && syndic?.id) {
+      if (selectedBuildingId && syndic?.id && buildings.some((b) => b.id === selectedBuildingId)) {
         localStorage.setItem(getTenantBuildingStorageKey(syndic.id), selectedBuildingId);
         localStorage.setItem('syndik_selected_building_id', selectedBuildingId);
-      } else if (syndic?.id) {
+      } else if (!selectedBuildingId && syndic?.id) {
         localStorage.removeItem(getTenantBuildingStorageKey(syndic.id));
       }
     } catch {
       // Ignore storage access errors
     }
-  }, [selectedBuildingId, syndic?.id]);
-
-  const buildings = syndic?.buildings || [];
+  }, [selectedBuildingId, syndic?.id, buildings]);
 
   // Derived state
   const selectedBuilding = buildings.find((b) => b.id === selectedBuildingId) || null;

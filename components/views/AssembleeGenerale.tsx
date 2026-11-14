@@ -72,6 +72,8 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
   // Resolution filtering & voters expansion state
   const [resolutionFilter, setResolutionFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
   const [viewVotersResolution, setViewVotersResolution] = useState<AGResolution | null>(null);
+  const [proxyAttendee, setProxyAttendee] = useState<{ residentId: string; residentName: string } | null>(null);
+  const [proxyNameInput, setProxyNameInput] = useState('');
 
   const { data: agList = [], isLoading } = useQuery({
     queryKey: ['ag', building.id],
@@ -136,9 +138,14 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
     },
   });
 
+  const eligibleOwners = useMemo(
+    () => building.residents.filter((res) => res.isOwner !== false),
+    [building.residents]
+  );
+
   const handleOpenRecordVoteModal = (resolution: AGResolution) => {
     setSelectedResolutionForVote(resolution);
-    const defaultRes = building.residents[0];
+    const defaultRes = eligibleOwners[0];
     setSelectedResidentIdForVote(defaultRes?.id || '');
     setInSessionVoteChoice('for');
     setInSessionVoteComment('');
@@ -147,7 +154,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
 
   const handleConfirmInSessionVote = async () => {
     if (!activeAG || !selectedResolutionForVote || !selectedResidentIdForVote) throw new Error(tr('Sélectionnez une résolution et un copropriétaire.', 'حدد قراراً ومالكاً مشتركاً.'));
-    const res = building.residents.find((r) => r.id === selectedResidentIdForVote);
+    const res = eligibleOwners.find((r) => r.id === selectedResidentIdForVote);
     const apt = building.apartments.find((a) => a.ownerId === res?.id || a.id === res?.apartmentId);
     if (!res || !apt) throw new Error(tr('Ce copropriétaire doit être associé à un lot.', 'يجب ربط هذا المالك بوحدة.'));
 
@@ -170,8 +177,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
     if (!newDate || !newTime || !newLocation.trim()) throw new Error(tr('La date, l’heure et le lieu sont obligatoires.', 'التاريخ والوقت والمكان مطلوبة.'));
     if (!agendaInput.trim()) throw new Error(tr('Ajoutez au moins un point à l’ordre du jour.', 'أضف نقطة واحدة على الأقل لجدول الأعمال.'));
 
-    const eligibleOwners = building.residents.filter((res) => res.isOwner !== false);
-    const attendeesPool = eligibleOwners.length > 0 ? eligibleOwners : building.residents;
+    const attendeesPool = eligibleOwners;
     const initialAttendees = attendeesPool.map((res) => {
       const apt = building.apartments.find((a) => a.id === res.apartmentId || a.ownerId === res.id);
       return {
@@ -217,8 +223,8 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
       date: newDate,
       time: newTime,
       location: newLocation,
-      status: 'in_progress',
-      isVotingOpen: true,
+      status: 'planned',
+      isVotingOpen: false,
       quorumRequired: 500,
       totalTantiemes: building.totalTantiemes || 1000,
       presentTantiemes: 0,
@@ -365,8 +371,28 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
               >
                 {activeAG.isVotingOpen !== false
                   ? tr('Clôturer le vote en ligne', 'إغلاق التصويت الإلكتروني')
+                  : !activeAG.votingSnapshot
+                  ? tr('Ouvrir le scrutin en ligne', 'فتح التصويت الإلكتروني')
                   : tr('Ouvrir le vote en ligne', 'فتح التصويت الإلكتروني')}
               </button>
+
+              {(activeAG.status === 'in_progress' ||
+                (Boolean(activeAG.votingSnapshot) && !['completed', 'closed'].includes(activeAG.status))) && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await saveAssembleeGenerale({
+                      ...activeAG,
+                      status: 'completed',
+                      isVotingOpen: false,
+                    });
+                    await queryClient.invalidateQueries({ queryKey: ['ag', building.id] });
+                  }}
+                  className="text-xs px-3 py-1.5 rounded-lg font-bold transition-all shadow-xs bg-teal-600 hover:bg-teal-500 text-white"
+                >
+                  {tr('Clôturer l’AG (Valider le PV)', 'إغلاق الجمع العام (اعتماد المحضر)')}
+                </button>
+              )}
 
               <Button
                 variant="secondary"
@@ -499,18 +525,11 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                       </button>
                       <button
                         onClick={() => {
-                          const proxyName = prompt(
-                            tr('Nom du mandataire (procuration écrite) :', 'اسم الوكيل (تفويض كتابي):'),
-                            attendee.proxyHolderName || 'Ahmed Alami'
-                          );
-                          if (proxyName !== null) {
-                            attendeeMutation.mutate({
-                              agId: activeAG.id,
-                              residentId: attendee.residentId,
-                              status: 'represented',
-                              proxy: proxyName,
-                            });
-                          }
+                          setProxyAttendee({
+                            residentId: attendee.residentId,
+                            residentName: attendee.residentName,
+                          });
+                          setProxyNameInput(attendee.proxyHolderName || '');
                         }}
                         className={`px-2 py-1 rounded transition-colors ${
                           attendee.status === 'represented'
@@ -590,6 +609,16 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                     }`}
                   >
                     {tr('Adoptées', 'مصادق عليها')}
+                  </button>
+                  <button
+                    onClick={() => setResolutionFilter('rejected')}
+                    className={`px-2.5 py-1 rounded-md font-semibold transition-colors ${
+                      resolutionFilter === 'rejected'
+                        ? 'bg-rose-700 text-white'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    {tr('Rejetées', 'مرفوضة')}
                   </button>
                 </div>
               </div>
@@ -912,7 +941,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                 onChange={(e) => setSelectedResidentIdForVote(e.target.value)}
                 className="w-full px-3 py-2 border border-slate-300 rounded text-xs bg-white text-slate-900"
               >
-                {building.residents.map((res) => {
+                {eligibleOwners.map((res) => {
                   const apt = building.apartments.find((a) => a.ownerId === res.id || a.id === res.apartmentId);
                   const existingVote = selectedResolutionForVote.voters?.find((v) => v.residentId === res.id);
                   return (
@@ -927,7 +956,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
 
             {/* Resolved Tantièmes Indicator */}
             {(() => {
-              const res = building.residents.find((r) => r.id === selectedResidentIdForVote);
+              const res = eligibleOwners.find((r) => r.id === selectedResidentIdForVote);
               const apt = building.apartments.find((a) => a.ownerId === res?.id || a.id === res?.apartmentId);
               const tantiemes = apt?.tantiemes || 100;
 
@@ -1086,6 +1115,67 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                   )}
                 </tbody>
               </table>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {proxyAttendee && activeAG && (
+        <Modal
+          isOpen={!!proxyAttendee}
+          onClose={() => {
+            setProxyAttendee(null);
+            setProxyNameInput('');
+          }}
+          title={tr('Mandataire (Procuration écrite)', 'الوكيل (تفويض كتابي)')}
+          maxWidthClass="max-w-md"
+          onSubmit={(e) => {
+            e.preventDefault();
+            attendeeMutation.mutate({
+              agId: activeAG.id,
+              residentId: proxyAttendee.residentId,
+              status: 'represented',
+              proxy: proxyNameInput.trim(),
+            });
+            setProxyAttendee(null);
+            setProxyNameInput('');
+          }}
+          busy={attendeeMutation.isPending}
+        >
+          <div className="space-y-4">
+            <p className="text-xs text-slate-600">
+              {tr(
+                `Saisissez le nom complet du mandataire représentant ${proxyAttendee.residentName} :`,
+                `أدخل الاسم الكامل للوكيل الذي يمثل ${proxyAttendee.residentName}:`
+              )}
+            </p>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                {tr('Nom du mandataire', 'اسم الوكيل')}
+              </label>
+              <input
+                type="text"
+                value={proxyNameInput}
+                onChange={(e) => setProxyNameInput(e.target.value)}
+                placeholder={tr('Ex: Nom et prénom du mandataire', 'مثال: الاسم الكامل للوكيل')}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 outline-none"
+                required
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => {
+                  setProxyAttendee(null);
+                  setProxyNameInput('');
+                }}
+              >
+                {tr('Annuler', 'إلغاء')}
+              </Button>
+              <Button type="submit" disabled={!proxyNameInput.trim() || attendeeMutation.isPending}>
+                {tr('Enregistrer', 'حفظ')}
+              </Button>
             </div>
           </div>
         </Modal>
