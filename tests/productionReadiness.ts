@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { createServer } from "node:net";
 import { hashPasswordSync } from "../utils/security";
 import { decrypt } from "../server/mailer";
+import { PLANS } from "../shared/domain/subscription";
 const root = resolve(import.meta.dirname, ".."),
   directory = mkdtempSync(join(tmpdir(), "buildmanage-operations-")),
   secret = "synthetic-server-secret-12345678901234567890",
@@ -698,7 +699,7 @@ try {
           syndicId: "s-a",
           plan: "starter",
           months: 1,
-          amount: 200,
+          amount: PLANS.starter.price,
           reference: "synthetic-platform-payment",
         },
       ])

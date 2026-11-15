@@ -11,7 +11,13 @@ import { createSupportingService } from '../server/domain/supporting.service';
 import { buildingReport } from '../server/reports';
 import { generateScheduledMonthlyCharges } from '../server/operations';
 import { escapeCSVCell, numberToFrenchWords, sanitizePdfText } from '../services/pdfService';
-import { getEffectiveSubscriptionStatus, subscriptionCanWrite } from '../utils/subscriptionPolicy';
+import {
+  PLAN_CATALOG,
+  PLANS,
+  getEffectiveSubscriptionStatus,
+  isUnlimitedPlan,
+  subscriptionCanWrite,
+} from '../utils/subscriptionPolicy';
 import type { AGResolution, AssembleeGenerale } from '../types';
 
 const actor = { uid: 'owner-1', role: 'syndic', syndicId: 'cab-1' } as const;
@@ -1012,6 +1018,21 @@ test('Admin subscription policy & CRUD: effective status distinguishes trialing 
     false,
   );
 
+  assert.equal(
+    isUnlimitedPlan(PLANS.enterprise.buildings),
+    true,
+  );
+  assert.equal(
+    isUnlimitedPlan(PLANS.professional.buildings),
+    false,
+  );
+  assert.equal(PLAN_CATALOG.starter.priceMad, PLANS.starter.price);
+  assert.equal(PLAN_CATALOG.professional.priceMad, PLANS.professional.price);
+  assert.equal(PLAN_CATALOG.enterprise.priceMad, PLANS.enterprise.price);
+
+  const proSixMonths = PLANS.professional.price * 6;
+  const entSixMonths = PLANS.enterprise.price * 6;
+
   const state = baseState();
   const cab = state.syndik_prod_syndics_v1[0];
   cab.subscriptionPlan = 'professional';
@@ -1025,7 +1046,7 @@ test('Admin subscription policy & CRUD: effective status distinguishes trialing 
   // Non-admin cannot record payment or archive cabinet
   await assert.rejects(
     cmd.runOperation(actor, 'recordSubscriptionPayment', [{
-      syndicId: 'cab-1', plan: 'professional', months: 6, reference: 'VIR-UNAUTH', amount: 2100,
+      syndicId: 'cab-1', plan: 'professional', months: 6, reference: 'VIR-UNAUTH', amount: proSixMonths,
     }], 'op-sub-unauth'),
     /Administration uniquement/i,
   );
@@ -1036,12 +1057,12 @@ test('Admin subscription policy & CRUD: effective status distinguishes trialing 
 
   // Admin records 6-month payment: status becomes active, expiry extends by 6 months, payment metadata populated
   const payment = await cmd.runOperation(adminActor, 'recordSubscriptionPayment', [{
-    syndicId: 'cab-1', plan: 'professional', months: 6, reference: 'VIR-2026-6M', amount: 2100,
+    syndicId: 'cab-1', plan: 'professional', months: 6, reference: 'VIR-2026-6M', amount: proSixMonths,
   }], 'op-sub-6m');
   assert.equal(payment.syndicId, 'cab-1');
   assert.equal(payment.syndicName, cab.name);
   assert.equal(payment.months, 6);
-  assert.equal(payment.amount, 2100);
+  assert.equal(payment.amount, proSixMonths);
   assert.equal(payment.subscriptionStatus, 'active');
   assert.equal(cab.subscriptionStatus, 'active');
   assert.equal(getEffectiveSubscriptionStatus(cab), 'active');
@@ -1072,9 +1093,9 @@ test('Admin subscription policy & CRUD: effective status distinguishes trialing 
 
   // Reusing same reference succeeds once previous payment is voided
   const reentered = await cmd.runOperation(adminActor, 'recordSubscriptionPayment', [{
-    syndicId: 'cab-1', plan: 'enterprise', months: 6, reference: 'VIR-2026-6M', amount: 3000,
+    syndicId: 'cab-1', plan: 'enterprise', months: 6, reference: 'VIR-2026-6M', amount: entSixMonths,
   }], 'op-sub-reuse');
-  assert.equal(reentered.amount, 3000);
+  assert.equal(reentered.amount, entSixMonths);
   assert.equal((state as any).syndik_prod_subscription_payments_v1.length, 2);
 
   // Archiving blocks syndic writes and payment recording; restoring re-enables
@@ -1086,7 +1107,7 @@ test('Admin subscription policy & CRUD: effective status distinguishes trialing 
   );
   await assert.rejects(
     cmd.runOperation(adminActor, 'recordSubscriptionPayment', [{
-      syndicId: 'cab-1', plan: 'enterprise', months: 1, reference: 'VIR-ARCH-BLOCK', amount: 500,
+      syndicId: 'cab-1', plan: 'enterprise', months: 1, reference: 'VIR-ARCH-BLOCK', amount: PLANS.enterprise.price,
     }], 'op-sub-arch'),
     /Cabinet archivé/i,
   );

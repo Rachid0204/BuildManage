@@ -100,16 +100,16 @@ export const translations = {
             unlimited: "Unlimited buildings",
             allFeatures: "All features included",
             tier1: {
-                name: "Starter",
-                desc: "Perfect for small syndics starting out.",
+                name: "Essential",
+                desc: "Ideal for volunteer syndics and small residences.",
             },
             tier2: {
-                name: "Professional",
-                desc: "For growing management companies.",
+                name: "Pro",
+                desc: "For growing professional syndic firms.",
             },
             tier3: {
                 name: "Enterprise",
-                desc: "For large scale property managers.",
+                desc: "For large portfolios and property groups.",
             },
         },
     },
@@ -133,8 +133,8 @@ export const translations = {
         trial: "Trial Period",
         trialBanner: "Free Trial: You have {{days}} days remaining.",
         plans: {
-            starter: "Starter",
-            professional: "Professional",
+            starter: "Essential",
+            professional: "Pro",
             enterprise: "Enterprise"
         }
     },
@@ -610,16 +610,16 @@ export const translations = {
             unlimited: "Immeubles illimités",
             allFeatures: "Toutes les fonctionnalités incluses",
             tier1: {
-                name: "Débutant",
-                desc: "Parfait pour les petits syndics qui débutent.",
+                name: "Essentiel",
+                desc: "Idéal pour syndic bénévole & petites copropriétés.",
             },
             tier2: {
-                name: "Professionnel",
-                desc: "Pour les sociétés de gestion en croissance.",
+                name: "Pro",
+                desc: "Pour les cabinets syndics professionnels en croissance.",
             },
             tier3: {
                 name: "Entreprise",
-                desc: "Pour les gestionnaires de biens à grande échelle.",
+                desc: "Pour les grands cabinets & gestionnaires multi-villes.",
             },
         },
     },
@@ -643,8 +643,8 @@ export const translations = {
         trial: "Période d'essai",
         trialBanner: "Essai gratuit : Il vous reste {{days}} jours.",
         plans: {
-            starter: "Débutant",
-            professional: "Professionnel",
+            starter: "Essentiel",
+            professional: "Pro",
             enterprise: "Entreprise"
         }
     },
@@ -1120,16 +1120,16 @@ export const translations = {
             unlimited: "عدد غير محدود من العمارات",
             allFeatures: "جميع الميزات مشمولة",
             tier1: {
-                name: "مبتدئ",
-                desc: "مثالية للسانديك المبتدئين.",
+                name: "الأساسية",
+                desc: "مثالية للسنديك التطوعي والإقامات الصغيرة.",
             },
             tier2: {
-                name: "محترف",
-                desc: "لشركات الإدارة المتنامية.",
+                name: "الاحترافية",
+                desc: "لمكاتب السنديك المهنية في طور النمو.",
             },
             tier3: {
-                name: "مؤسسة",
-                desc: "لمديري العقارات واسعة النطاق.",
+                name: "المقاولات",
+                desc: "للمكاتب الكبرى ومديري العقارات متعددي المدن.",
             },
         },
     },
@@ -1153,9 +1153,9 @@ export const translations = {
         trial: "فترة تجريبية",
         trialBanner: "فترة تجريبية مجانية: لديك {{days}} أيام متبقية.",
         plans: {
-            starter: "مبتدئ",
-            professional: "محترف",
-            enterprise: "مؤسسة"
+            starter: "الأساسية",
+            professional: "الاحترافية",
+            enterprise: "المقاولات"
         }
     },
     dashboard: {

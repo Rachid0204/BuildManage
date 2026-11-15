@@ -1,5 +1,118 @@
-import type { SubscriptionStatus } from '../types';
+import type { SubscriptionPlan, SubscriptionStatus } from '../types';
+import { PLANS } from '../shared/domain/subscription';
 export * from '../shared/domain/subscription';
+
+export const SUBSCRIPTION_TRIAL_DAYS = 30;
+
+export interface PlanCatalogEntry {
+  id: SubscriptionPlan;
+  priceMad: number;
+  buildingsLimit: number;
+  popular?: boolean;
+  nameFr: string;
+  nameAr: string;
+  targetFr: string;
+  targetAr: string;
+  badgeFr: string;
+  badgeAr: string;
+  limitLabelFr: string;
+  limitLabelAr: string;
+  ctaFr: string;
+  ctaAr: string;
+  highlightsFr: string[];
+  highlightsAr: string[];
+}
+
+export const PLAN_CATALOG: Record<SubscriptionPlan, PlanCatalogEntry> = {
+  starter: {
+    id: 'starter',
+    priceMad: PLANS.starter.price,
+    buildingsLimit: PLANS.starter.buildings,
+    nameFr: 'Essentiel',
+    nameAr: 'الأساسية',
+    targetFr: 'Idéal pour syndic bénévole & petites copropriétés',
+    targetAr: 'مثالية للسنديك التطوعي والإقامات الصغيرة',
+    badgeFr: '≤ 4 immeubles',
+    badgeAr: 'حتى 4 عمارات',
+    limitLabelFr: "Jusqu'à 4 immeubles actifs",
+    limitLabelAr: 'حتى 4 عمارات نشطة',
+    ctaFr: 'Essayer Essentiel gratuitement',
+    ctaAr: 'جرّب الباقة الأساسية مجاناً',
+    highlightsFr: [
+      'Jusqu’à 4 immeubles & lots illimités',
+      'Appels mensuels automatisés & tantièmes Loi 18-00',
+      'Quittances PDF numérotées & Fonds de Réserve 106-12',
+      'Portails Résidents & Prestataires + Fiches d’accès PDF',
+      'Assemblées Générales (AGO/AGE) & vote en ligne inclus',
+    ],
+    highlightsAr: [
+      'حتى 4 عمارات وشقق غير محدودة',
+      'فوترة شهرية تلقائية وحصص التانتييم (قانون 18-00)',
+      'وصولات PDF مرقمة وصندوق الاحتياط (قانون 106-12)',
+      'بوابات السكان ومقدمي الخدمات + بطاقات الولوج PDF',
+      'الجموع العامة والتصويت الرقمي مشمولة',
+    ],
+  },
+  professional: {
+    id: 'professional',
+    priceMad: PLANS.professional.price,
+    buildingsLimit: PLANS.professional.buildings,
+    popular: true,
+    nameFr: 'Pro',
+    nameAr: 'الاحترافية',
+    targetFr: 'Pour les cabinets syndics professionnels en croissance',
+    targetAr: 'لمكاتب السنديك المهنية في طور النمو',
+    badgeFr: '≤ 8 immeubles',
+    badgeAr: 'حتى 8 عمارات',
+    limitLabelFr: "Jusqu'à 8 immeubles actifs",
+    limitLabelAr: 'حتى 8 عمارات نشطة',
+    ctaFr: 'Démarrer avec Pro (30 j offerts)',
+    ctaAr: 'ابدأ بالباقة الاحترافية (30 يوماً مجاناً)',
+    highlightsFr: [
+      'Jusqu’à 8 immeubles actifs (archives conservées à vie)',
+      'Rapprochement bancaire CSV & validation 1-clic des virements',
+      'Appels travaux AG configurables & clôture comptable',
+      'Suivi prestataires agréés (ICE/RC/RIB) & interventions photo',
+      'Assistant IA bilingue FR/AR & exports comptables CSV/PDF',
+    ],
+    highlightsAr: [
+      'حتى 8 عمارات نشطة (مع حفظ الأرشيف مدى الحياة)',
+      'مطابقة كشف الحساب البنكي CSV واعتماد التحويلات بنقرة',
+      'طلبات تمويل الأشغال من الجمع العام وإغلاق الفترة المحاسبية',
+      'تتبع المزودين المعتمدين (ICE/RC) والتدخلات بالصور',
+      'مساعد الذكاء الاصطناعي بالعربية والفرنسية وتصدير CSV/PDF',
+    ],
+  },
+  enterprise: {
+    id: 'enterprise',
+    priceMad: PLANS.enterprise.price,
+    buildingsLimit: PLANS.enterprise.buildings,
+    nameFr: 'Entreprise',
+    nameAr: 'المقاولات',
+    targetFr: 'Pour les grands cabinets & gestionnaires multi-villes',
+    targetAr: 'للمكاتب الكبرى ومديري العقارات متعددي المدن',
+    badgeFr: 'Illimité',
+    badgeAr: 'غير محدود',
+    limitLabelFr: 'Immeubles & résidences illimités',
+    limitLabelAr: 'عدد غير محدود من العمارات',
+    ctaFr: 'Choisir Entreprise',
+    ctaAr: 'اختر باقة المقاولات',
+    highlightsFr: [
+      'Immeubles, lots, résidents & prestataires illimités',
+      'Toutes les fonctionnalités Finance, AG, Banque CSV & IA',
+      'Import des soldes initiaux & arriérés d’ouverture',
+      'Rapports analytiques de recouvrement & gestion multi-résidences',
+      'Accompagnement démarrage & support prioritaire WhatsApp',
+    ],
+    highlightsAr: [
+      'عدد غير محدود من العمارات والشقق والسكان والمزودين',
+      'جميع خصائص المالية والجموع العامة والبنك والذكاء الاصطناعي',
+      'استيراد الأرصدة الافتتاحية والمتأخرات السابقة',
+      'تقارير تحليلية للتحصيل وإدارة المحافظ الكبرى',
+      'مواكبة الإطلاق ودعم فني ذو أولوية عبر واتساب',
+    ],
+  },
+};
 
 export function getEffectiveSubscriptionStatus(
   cabinet: {

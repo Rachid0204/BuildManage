@@ -7,7 +7,12 @@ import Modal from '../common/Modal';
 import { PlusIcon, PencilIcon, TrashIcon } from '../icons/IconComponents';
 import { useI18n } from '../../hooks/useI18n';
 import { getBuildingReserveRate } from '../../utils/security';
-import { getBuildingCapacity } from '../../utils/subscriptionPolicy';
+import {
+  PLAN_CATALOG,
+  getBuildingCapacity,
+  getEffectiveSubscriptionStatus,
+  subscriptionCanWrite,
+} from '../../utils/subscriptionPolicy';
 
 export type BuildingFormPayload = Omit<
   Building,
@@ -483,36 +488,72 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
 };
 
 const SubscriptionStatusCard: React.FC<{ syndic: Syndic }> = ({ syndic }) => {
-  const { t, tr } = useI18n();
-  const { active: currentCount, limit: maxCount } = getBuildingCapacity(syndic);
-  const isUnlimited = maxCount === Infinity;
+  const { t, tr, language } = useI18n();
+  const { active: currentCount, limit: maxCount, canAdd } = getBuildingCapacity(syndic);
+  const isUnlimited = maxCount >= 9999 || maxCount === Infinity;
   const usagePercent = isUnlimited
     ? 0
-    : Math.min((currentCount / maxCount) * 100, 100);
+    : Math.min((currentCount / Math.max(1, maxCount)) * 100, 100);
 
-  const isExpired = new Date(syndic.subscriptionExpiry) < new Date();
+  const effectiveStatus = getEffectiveSubscriptionStatus(syndic);
+  const isExpired = effectiveStatus === 'expired';
+  const isCancelled = effectiveStatus === 'cancelled';
+  const isTrialing = effectiveStatus === 'trialing';
+  const canWrite = subscriptionCanWrite(syndic);
+
+  const badgeStyle =
+    effectiveStatus === 'active'
+      ? 'bg-emerald-100 text-emerald-800'
+      : effectiveStatus === 'trialing'
+        ? 'bg-sky-100 text-sky-800'
+        : effectiveStatus === 'cancelled'
+          ? 'bg-slate-200 text-slate-700'
+          : 'bg-rose-100 text-rose-800';
+  const badgeLabel =
+    effectiveStatus === 'active'
+      ? tr('Actif', 'نشط')
+      : effectiveStatus === 'trialing'
+        ? tr('Essai gratuit (30 j)', 'تجربة مجانية (30 يوماً)')
+        : effectiveStatus === 'cancelled'
+          ? tr('Suspendu', 'معلق')
+          : tr('Expiré', 'منتهي الصلاحية');
+
+  const currentPlanMeta = PLAN_CATALOG[syndic.subscriptionPlan];
+  const nextPlan =
+    syndic.subscriptionPlan === 'starter'
+      ? PLAN_CATALOG.professional
+      : syndic.subscriptionPlan === 'professional'
+        ? PLAN_CATALOG.enterprise
+        : null;
 
   return (
     <Card className="mb-8 border-t-4 border-primary-500">
-      <h3 className="text-lg font-semibold text-gray-800">
-        {t('subscription.status')}
-      </h3>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-lg font-semibold text-gray-800">
+          {t('subscription.status')}
+        </h3>
+        <span className="text-xs font-mono font-semibold text-slate-500">
+          {currentPlanMeta
+            ? `${language === 'ar' ? currentPlanMeta.nameAr : currentPlanMeta.nameFr} · ${currentPlanMeta.priceMad} MAD/${tr('mois', 'شهر')}`
+            : ''}
+        </span>
+      </div>
       <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-6">
         <div>
           <p className="text-sm text-gray-500">
             {t('subscription.plan', {
-              plan: t(`subscription.plans.${syndic.subscriptionPlan}` as any),
+              plan: currentPlanMeta
+                ? language === 'ar'
+                  ? currentPlanMeta.nameAr
+                  : currentPlanMeta.nameFr
+                : t(`subscription.plans.${syndic.subscriptionPlan}` as any),
             })}
           </p>
-          <div className="mt-2 flex items-center">
+          <div className="mt-2 flex items-center gap-2">
             <span
-              className={`px-2 py-1 text-xs font-semibold rounded-full ${
-                isExpired
-                  ? 'bg-red-100 text-red-800'
-                  : 'bg-green-100 text-green-800'
-              }`}
+              className={`px-2.5 py-1 text-xs font-semibold rounded-full ${badgeStyle}`}
             >
-              {isExpired ? tr('Expiré', 'منتهي الصلاحية') : tr('Actif', 'نشط')}
+              {badgeLabel}
             </span>
           </div>
         </div>
@@ -539,14 +580,43 @@ const SubscriptionStatusCard: React.FC<{ syndic: Syndic }> = ({ syndic }) => {
         <div>
           <p className="text-sm text-gray-500">
             {t('subscription.expiresOn', {
-              date: new Date(syndic.subscriptionExpiry).toLocaleDateString(),
+              date: new Date(syndic.subscriptionExpiry).toLocaleDateString(
+                language === 'ar' ? 'ar-MA' : 'fr-MA',
+              ),
             })}
           </p>
         </div>
       </div>
-      {isExpired && (
-        <div className="mt-4 p-3 bg-red-50 text-red-700 text-sm rounded-md">
-          {t('subscription.expired')}
+      {(!canWrite || isTrialing) && (
+        <div
+          className={`mt-4 p-3 text-sm rounded-md ${
+            isExpired || isCancelled
+              ? 'bg-rose-50 text-rose-800 border border-rose-200'
+              : 'bg-sky-50 text-sky-900 border border-sky-200'
+          }`}
+        >
+          {isCancelled
+            ? tr(
+                'Votre abonnement est actuellement suspendu. Contactez l’administration Syndik pour le réactiver.',
+                'اشتراككم معلق حالياً. يرجى التواصل مع إدارة المنصة لإعادة تفعيله.',
+              )
+            : isExpired
+              ? t('subscription.expired')
+              : tr(
+                  `Période d'essai gratuite active jusqu'au ${new Date(syndic.subscriptionExpiry).toLocaleDateString('fr-MA')}. Profitez de toutes les fonctionnalités pour configurer vos résidences.`,
+                  `الفترة التجريبية المجانية مفعلة حتى ${new Date(syndic.subscriptionExpiry).toLocaleDateString('ar-MA')}.`,
+                )}
+        </div>
+      )}
+      {!canAdd && nextPlan && (
+        <div className="mt-3 p-3 bg-amber-50 border border-amber-200 text-amber-900 text-xs sm:text-sm rounded-md flex flex-wrap items-center justify-between gap-2">
+          <span>{t('subscription.limitReached')}</span>
+          <span className="font-bold">
+            {tr(
+              `Forfait supérieur : ${nextPlan.nameFr} (${nextPlan.limitLabelFr} — ${nextPlan.priceMad} MAD/mois)`,
+              `الباقة الأعلى: ${nextPlan.nameAr} (${nextPlan.limitLabelAr} — ${nextPlan.priceMad} درهم/شهر)`,
+            )}
+          </span>
         </div>
       )}
     </Card>
@@ -581,7 +651,7 @@ const Buildings: React.FC<{
 
   const activeBuildings = syndic.buildings.filter(building => !building.archivedAt);
   const limitReached = !getBuildingCapacity(syndic).canAdd;
-  const isExpired = new Date(syndic.subscriptionExpiry) < new Date();
+  const isExpired = !subscriptionCanWrite(syndic);
   const canAdd = !limitReached && !isExpired;
 
   const handleOpenCreate = () => {

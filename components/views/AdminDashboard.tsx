@@ -19,6 +19,8 @@ import {
 } from '../../firebase/services';
 import { generateSecureRandomDigits } from '../../utils/security';
 import {
+  PLANS,
+  PLAN_CATALOG,
   countActiveBuildings,
   getEffectiveSubscriptionStatus,
 } from '../../utils/subscriptionPolicy';
@@ -35,12 +37,6 @@ import {
   PlusIcon,
   TrashIcon,
 } from '../icons/IconComponents';
-
-const PLAN_PRICES: Record<SubscriptionPlan, number> = {
-  starter: 200,
-  professional: 350,
-  enterprise: 500,
-};
 
 type AdminTab = 'cabinets' | 'reports';
 type StatusFilter = 'all' | SubscriptionStatus | 'archived';
@@ -321,7 +317,7 @@ const AdminDashboard: React.FC = () => {
       activeSyndics.reduce(
         (acc, s) =>
           getEffectiveSubscriptionStatus(s) === 'active'
-            ? acc + (PLAN_PRICES[s.subscriptionPlan] || 350)
+            ? acc + (PLANS[s.subscriptionPlan]?.price || PLANS.professional.price)
             : acc,
         0,
       ),
@@ -540,7 +536,7 @@ const AdminDashboard: React.FC = () => {
         plan: editPlan,
         months: subscriptionMonths,
         reference: subscriptionReference.trim(),
-        amount: PLAN_PRICES[editPlan] * subscriptionMonths,
+        amount: PLANS[editPlan].price * subscriptionMonths,
       });
       const nextExpiry =
         result.subscriptionExpiry || selectedSyndic.subscriptionExpiry;
@@ -918,9 +914,21 @@ const AdminDashboard: React.FC = () => {
                   <option value="all">
                     {tr('Tous les forfaits', 'كل الباقات')}
                   </option>
-                  <option value="starter">Starter</option>
-                  <option value="professional">Professional</option>
-                  <option value="enterprise">Enterprise</option>
+                  <option value="starter">
+                    {language === 'ar'
+                      ? PLAN_CATALOG.starter.nameAr
+                      : PLAN_CATALOG.starter.nameFr}
+                  </option>
+                  <option value="professional">
+                    {language === 'ar'
+                      ? PLAN_CATALOG.professional.nameAr
+                      : PLAN_CATALOG.professional.nameFr}
+                  </option>
+                  <option value="enterprise">
+                    {language === 'ar'
+                      ? PLAN_CATALOG.enterprise.nameAr
+                      : PLAN_CATALOG.enterprise.nameFr}
+                  </option>
                 </select>
               </div>
             </div>
@@ -956,6 +964,7 @@ const AdminDashboard: React.FC = () => {
                   {filteredSyndics.map((s) => {
                     const days = getDaysRemaining(s.subscriptionExpiry);
                     const effective = getEffectiveSubscriptionStatus(s);
+                    const planEntry = PLAN_CATALOG[s.subscriptionPlan];
                     return (
                       <tr
                         key={s.id}
@@ -990,16 +999,20 @@ const AdminDashboard: React.FC = () => {
                         </td>
                         <td className="px-4 py-3.5 whitespace-nowrap">
                           <span
-                            className={`px-2.5 py-0.5 inline-flex text-xs font-bold rounded-full capitalize ${
+                            className={`px-2.5 py-0.5 inline-flex text-xs font-bold rounded-full ${
                               s.subscriptionPlan === 'enterprise'
-                                ? 'bg-purple-100 text-purple-800'
+                                ? 'bg-slate-900 text-amber-300'
                                 : s.subscriptionPlan === 'professional'
                                   ? 'bg-teal-100 text-teal-800'
                                   : 'bg-slate-100 text-slate-800'
                             }`}
                           >
-                            {t(`subscription.plans.${s.subscriptionPlan}`)} (
-                            {PLAN_PRICES[s.subscriptionPlan]} DH)
+                            {planEntry
+                              ? language === 'ar'
+                                ? planEntry.nameAr
+                                : planEntry.nameFr
+                              : t(`subscription.plans.${s.subscriptionPlan}`)}{' '}
+                            ({PLANS[s.subscriptionPlan]?.price} DH)
                           </span>
                         </td>
                         <td className="px-4 py-3.5 whitespace-nowrap">
@@ -1174,28 +1187,34 @@ const AdminDashboard: React.FC = () => {
                 </h3>
                 <div className="space-y-2 text-xs">
                   {(['starter', 'professional', 'enterprise'] as const).map(
-                    (plan) => (
-                      <div
-                        key={plan}
-                        className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 border border-slate-200"
-                      >
-                        <div>
-                          <span className="font-bold capitalize text-slate-900">
-                            {plan}
-                          </span>
-                          <span className="text-slate-500 ms-2">
-                            ({planSummary[plan].cabinets}{' '}
-                            {tr('cabinets', 'مكتب')} ·{' '}
-                            {planSummary[plan].activeSubscribers}{' '}
-                            {tr('actifs', 'نشط')})
-                          </span>
+                    (plan) => {
+                      const entry = PLAN_CATALOG[plan];
+                      return (
+                        <div
+                          key={plan}
+                          className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 border border-slate-200"
+                        >
+                          <div>
+                            <span className="font-bold text-slate-900">
+                              {language === 'ar' ? entry.nameAr : entry.nameFr}
+                            </span>
+                            <span className="text-slate-500 ms-1.5 font-mono">
+                              ({PLANS[plan].price} MAD)
+                            </span>
+                            <span className="text-slate-500 ms-2">
+                              · {planSummary[plan].cabinets}{' '}
+                              {tr('cabinets', 'مكتب')} ·{' '}
+                              {planSummary[plan].activeSubscribers}{' '}
+                              {tr('actifs', 'نشط')}
+                            </span>
+                          </div>
+                          <div className="font-mono font-bold text-slate-900">
+                            {planSummary[plan].collected.toLocaleString('fr-MA')}{' '}
+                            MAD
+                          </div>
                         </div>
-                        <div className="font-mono font-bold text-slate-900">
-                          {planSummary[plan].collected.toLocaleString('fr-MA')}{' '}
-                          MAD
-                        </div>
-                      </div>
-                    ),
+                      );
+                    },
                   )}
                 </div>
               </Card>
@@ -1564,24 +1583,18 @@ const AdminDashboard: React.FC = () => {
                 onChange={(e) => setNewPlan(e.target.value as SubscriptionPlan)}
                 className="w-full p-2.5 rounded-lg border border-slate-300 bg-white font-semibold"
               >
-                <option value="starter">
-                  {tr(
-                    "Starter — 200 MAD/mois (Jusqu'à 4 résidences)",
-                    'مبتدئ (Starter) — 200 درهم/شهر (حتى 4 إقامات)',
-                  )}
-                </option>
-                <option value="professional">
-                  {tr(
-                    "Professional — 350 MAD/mois (Jusqu'à 8 résidences)",
-                    'محترف (Professional) — 350 درهم/شهر (حتى 8 إقامات)',
-                  )}
-                </option>
-                <option value="enterprise">
-                  {tr(
-                    'Enterprise — 500 MAD/mois (Immeubles illimités)',
-                    'مؤسسة (Enterprise) — 500 درهم/شهر (عدد غير محدود من العمارات)',
-                  )}
-                </option>
+                {(['starter', 'professional', 'enterprise'] as const).map(
+                  (planKey) => {
+                    const entry = PLAN_CATALOG[planKey];
+                    return (
+                      <option key={planKey} value={planKey}>
+                        {language === 'ar'
+                          ? `${entry.nameAr} — ${PLANS[planKey].price} درهم/شهر (${entry.limitLabelAr})`
+                          : `${entry.nameFr} — ${PLANS[planKey].price} MAD/mois (${entry.limitLabelFr})`}
+                      </option>
+                    );
+                  },
+                )}
               </select>
             </div>
 
@@ -1849,24 +1862,18 @@ const AdminDashboard: React.FC = () => {
                   }
                   className="w-full p-2.5 rounded-lg border border-slate-300 bg-white font-semibold"
                 >
-                  <option value="starter">
-                    {tr(
-                      "Starter — 200 MAD/mois (Jusqu'à 4 résidences)",
-                      'مبتدئ (Starter) — 200 درهم/شهر (حتى 4 إقامات)',
-                    )}
-                  </option>
-                  <option value="professional">
-                    {tr(
-                      "Professional — 350 MAD/mois (Jusqu'à 8 résidences)",
-                      'محترف (Professional) — 350 درهم/شهر (حتى 8 إقامات)',
-                    )}
-                  </option>
-                  <option value="enterprise">
-                    {tr(
-                      'Enterprise — 500 MAD/mois (Immeubles illimités)',
-                      'مؤسسة (Enterprise) — 500 درهم/شهر (عدد غير محدود من العمارات)',
-                    )}
-                  </option>
+                  {(['starter', 'professional', 'enterprise'] as const).map(
+                    (planKey) => {
+                      const entry = PLAN_CATALOG[planKey];
+                      return (
+                        <option key={planKey} value={planKey}>
+                          {language === 'ar'
+                            ? `${entry.nameAr} — ${PLANS[planKey].price} درهم/شهر (${entry.limitLabelAr})`
+                            : `${entry.nameFr} — ${PLANS[planKey].price} MAD/mois (${entry.limitLabelFr})`}
+                        </option>
+                      );
+                    },
+                  )}
                 </select>
               </div>
 
@@ -1963,7 +1970,7 @@ const AdminDashboard: React.FC = () => {
               <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
                 <p className="font-mono font-bold text-sm text-teal-900">
                   {tr('Montant à encaisser :', 'المبلغ المطلوب:')}{' '}
-                  {(PLAN_PRICES[editPlan] * subscriptionMonths).toLocaleString(
+                  {(PLANS[editPlan].price * subscriptionMonths).toLocaleString(
                     'fr-MA',
                   )}{' '}
                   MAD

@@ -82,6 +82,7 @@ interface AuthContextType {
       city?: string;
       subscriptionPlan?: SubscriptionPlan;
       initialBuildingName?: string;
+      initialBuildingAddress?: string;
       initialApartmentsCount?: number;
       initialBuildingFees?: number;
       buildingId?: string;
@@ -390,6 +391,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       city?: string;
       subscriptionPlan?: SubscriptionPlan;
       initialBuildingName?: string;
+      initialBuildingAddress?: string;
       initialApartmentsCount?: number;
       initialBuildingFees?: number;
       buildingId?: string;
@@ -423,6 +425,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           syndic: input.role === 'syndic' ? { name: input.cabinetName || input.name, city: input.city,
             subscriptionPlan: input.plan || 'professional',
             initialBuilding: initialName ? { name: initialName,
+              address: String(optionsArg?.initialBuildingAddress ?? (input as { initialBuildingAddress?: string }).initialBuildingAddress ?? '').trim(),
               apartmentsCount: Number(optionsArg?.initialApartmentsCount ?? (input as any).initialApartmentsCount ?? 0),
               monthlyFees: Number(optionsArg?.initialBuildingFees ?? (input as any).initialBuildingFees ?? 250) } : undefined,
           } : undefined }) });

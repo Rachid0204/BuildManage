@@ -11,39 +11,13 @@ import { useI18n } from '../../hooks/useI18n';
 import { useAuth, getHomeRouteForRole } from '../../contexts/AuthContext';
 import { auth } from '../../firebase/config';
 import { BuildingsIcon } from '../icons/IconComponents';
+import { PLAN_CATALOG } from '../../utils/subscriptionPolicy';
 
 interface LoginScreenProps {
   syndics?: Syndic[];
   onLogin?: (syndic: Syndic) => void;
   onBack?: () => void;
 }
-
-const PLAN_DETAILS: Record<
-  SubscriptionPlan,
-  { nameFr: string; nameAr: string; price: string; limitFr: string; limitAr: string }
-> = {
-  starter: {
-    nameFr: 'Forfait Essentiel',
-    nameAr: 'الباقة الأساسية',
-    price: '200 MAD / mois',
-    limitFr: 'Jusqu’à 4 immeubles gérés',
-    limitAr: 'حتى 4 عمارات مُسيّرة',
-  },
-  professional: {
-    nameFr: 'Forfait Pro (Recommandé)',
-    nameAr: 'الباقة الاحترافية (موصى بها)',
-    price: '350 MAD / mois',
-    limitFr: 'Jusqu’à 8 immeubles gérés',
-    limitAr: 'حتى 8 عمارات مُسيّرة',
-  },
-  enterprise: {
-    nameFr: 'Forfait Entreprise',
-    nameAr: 'باقة المقاولات الكبرى',
-    price: '500 MAD / mois',
-    limitFr: 'Immeubles & résidences illimités',
-    limitAr: 'عدد غير محدود من العمارات',
-  },
-};
 
 const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
   const { tr, language } = useI18n();
@@ -76,6 +50,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
   const [phone, setPhone] = useState('');
   const [city, setCity] = useState('Casablanca');
   const [initialBuildingName, setInitialBuildingName] = useState('');
+  const [initialBuildingAddress, setInitialBuildingAddress] = useState('');
   const [initialApartmentsCount, setInitialApartmentsCount] = useState<number | ''>(8);
   const [initialBuildingFees, setInitialBuildingFees] = useState<number | ''>(250);
 
@@ -133,6 +108,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
           city,
           subscriptionPlan: selectedPlan,
           initialBuildingName: initialBuildingName.trim() || undefined,
+          initialBuildingAddress: initialBuildingAddress.trim() || undefined,
           initialApartmentsCount: Number(initialApartmentsCount) || 8,
           initialBuildingFees: Number(initialBuildingFees) || 250,
         });
@@ -178,7 +154,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
     setError('');
   };
 
-  const currentPlanMeta = PLAN_DETAILS[selectedPlan];
+  const currentPlanMeta = PLAN_CATALOG[selectedPlan];
 
   return (
     <div
@@ -244,37 +220,45 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-[10px] uppercase tracking-wider text-teal-400 font-bold">
-                      {tr('Forfait Sélectionné', 'الباقة المختارة')}
+                      {tr('Forfait Sélectionné · 30 jours d’essai offerts', 'الباقة المختارة · 30 يوماً تجربة مجانية')}
                     </p>
                     <p className="text-sm font-bold">
-                      {language === 'ar' ? currentPlanMeta.nameAr : currentPlanMeta.nameFr} —{' '}
-                      <span className="font-mono text-amber-300">{currentPlanMeta.price}</span>
+                      {tr('Forfait', 'الباقة')}{' '}
+                      {language === 'ar' ? currentPlanMeta.nameAr : currentPlanMeta.nameFr}{' '}
+                      {currentPlanMeta.popular
+                        ? tr('(Recommandé)', '(موصى بها)')
+                        : ''}{' '}
+                      —{' '}
+                      <span className="font-mono text-amber-300">
+                        {currentPlanMeta.priceMad} MAD / {tr('mois', 'شهر')}
+                      </span>
                     </p>
                     <p className="text-[11px] text-slate-300">
-                      {language === 'ar' ? currentPlanMeta.limitAr : currentPlanMeta.limitFr}
+                      {language === 'ar'
+                        ? currentPlanMeta.limitLabelAr
+                        : currentPlanMeta.limitLabelFr}
                     </p>
                   </div>
                 </div>
                 <div className="grid grid-cols-3 gap-1.5 pt-1">
                   {(['starter', 'professional', 'enterprise'] as SubscriptionPlan[]).map(
-                    (planKey) => (
-                      <button
-                        key={planKey}
-                        type="button"
-                        onClick={() => setSelectedPlan(planKey)}
-                        className={`py-1.5 px-2 rounded-lg text-[11px] font-bold border transition-all ${
-                          selectedPlan === planKey
-                            ? 'bg-teal-600 text-white border-teal-400'
-                            : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
-                        }`}
-                      >
-                        {planKey === 'starter'
-                          ? 'Essentiel (200)'
-                          : planKey === 'professional'
-                          ? 'Pro (350)'
-                          : 'Entreprise (500)'}
-                      </button>
-                    )
+                    (planKey) => {
+                      const entry = PLAN_CATALOG[planKey];
+                      return (
+                        <button
+                          key={planKey}
+                          type="button"
+                          onClick={() => setSelectedPlan(planKey)}
+                          className={`py-1.5 px-2 rounded-lg text-[11px] font-bold border transition-all ${
+                            selectedPlan === planKey
+                              ? 'bg-teal-600 text-white border-teal-400'
+                              : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
+                          }`}
+                        >
+                          {language === 'ar' ? entry.nameAr : entry.nameFr} ({entry.priceMad})
+                        </button>
+                      );
+                    }
                   )}
                 </div>
               </div>
@@ -412,6 +396,18 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
                         className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-mono bg-white"
                       />
                     </div>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                      {tr('Adresse complète de la résidence', 'العنوان الكامل للإقامة')}
+                    </label>
+                    <input
+                      type="text"
+                      value={initialBuildingAddress}
+                      onChange={(e) => setInitialBuildingAddress(e.target.value)}
+                      placeholder={tr('Ex: 24 Bd d’Anfa, Quartier Gautier', 'مثال: 24 شارع أنفا')}
+                      className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs bg-white"
+                    />
                   </div>
                 </div>
 

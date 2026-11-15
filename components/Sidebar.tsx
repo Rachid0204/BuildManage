@@ -2,6 +2,11 @@ import React from 'react';
 import type { Building, Syndic } from '../types';
 import { useI18n } from '../hooks/useI18n';
 import {
+  PLAN_CATALOG,
+  SUBSCRIPTION_TRIAL_DAYS,
+  getEffectiveSubscriptionStatus,
+} from '../utils/subscriptionPolicy';
+import {
   DashboardIcon,
   ResidentsIcon,
   ApartmentsIcon,
@@ -70,46 +75,125 @@ const NavLink: React.FC<{
   );
 };
 
-const TrialProgressBar: React.FC<{ expiryDate: string }> = ({
-  expiryDate,
-}) => {
-  const { t } = useI18n();
-  const today = new Date();
-  const expiry = new Date(expiryDate);
+function parseSubscriptionExpiryMs(raw?: string): number {
+  const trimmed = (raw || '').trim();
+  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
+    ? `${trimmed}T23:59:59.999Z`
+    : trimmed;
+  return Date.parse(normalized);
+}
 
-  const diffTime = expiry.getTime() - today.getTime();
-  const daysLeft = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+const SubscriptionFooterWidget: React.FC<{
+  syndic: Syndic;
+  onManageClick: () => void;
+}> = ({ syndic, onManageClick }) => {
+  const { t, tr, language } = useI18n();
+  const effectiveStatus = getEffectiveSubscriptionStatus(syndic);
+  const expiryMs = parseSubscriptionExpiryMs(syndic.subscriptionExpiry);
+  const daysLeft = Number.isFinite(expiryMs)
+    ? Math.max(0, Math.ceil((expiryMs - Date.now()) / 86_400_000))
+    : 0;
+  const planMeta = PLAN_CATALOG[syndic.subscriptionPlan];
+  const planName = planMeta
+    ? language === 'ar'
+      ? planMeta.nameAr
+      : planMeta.nameFr
+    : syndic.subscriptionPlan;
 
-  const totalDuration = 30;
+  if (effectiveStatus === 'expired' || effectiveStatus === 'cancelled') {
+    return (
+      <button
+        type="button"
+        onClick={onManageClick}
+        className="mt-auto px-4 py-3 bg-rose-950/70 hover:bg-rose-950/90 border border-rose-500/30 rounded-lg mx-3 mb-4 text-start transition-colors"
+      >
+        <div className="flex justify-between items-center">
+          <span className="text-xs font-semibold text-rose-200 uppercase tracking-wider">
+            {effectiveStatus === 'cancelled'
+              ? tr('Compte suspendu', 'حساب معلق')
+              : tr('Abonnement expiré', 'انتهى الاشتراك')}
+          </span>
+          <span className="text-[11px] font-bold text-rose-300">
+            {planName}
+          </span>
+        </div>
+        <p className="text-[11px] text-rose-200/80 mt-1">
+          {tr('Voir l’état du forfait →', 'عرض حالة الباقة ←')}
+        </p>
+      </button>
+    );
+  }
+
+  if (effectiveStatus === 'active') {
+    const isRenewSoon = daysLeft <= 15;
+    const progressPct = Math.max(8, Math.min(100, (daysLeft / 365) * 100));
+    return (
+      <button
+        type="button"
+        onClick={onManageClick}
+        className="mt-auto px-4 py-3.5 bg-slate-950/60 hover:bg-slate-950/80 border border-slate-800 rounded-lg mx-3 mb-4 text-start transition-colors"
+      >
+        <div className="flex justify-between items-center mb-1.5">
+          <span className="text-xs font-semibold text-teal-300 uppercase tracking-wider">
+            {tr('Forfait', 'باقة')} {planName}
+          </span>
+          <span className="text-xs font-mono font-bold text-white">
+            {daysLeft}
+            {tr('j', 'ي')}
+          </span>
+        </div>
+        <div className="w-full bg-slate-800 rounded-full h-1.5">
+          <div
+            className={`${isRenewSoon ? 'bg-amber-400' : 'bg-emerald-500'} h-1.5 rounded-full transition-all duration-500`}
+            style={{ width: `${progressPct}%` }}
+          />
+        </div>
+        <p className="text-[11px] text-slate-300 mt-1.5">
+          {t('subscription.expiresOn', {
+            date: Number.isFinite(expiryMs)
+              ? new Date(expiryMs).toLocaleDateString(
+                  language === 'ar' ? 'ar-MA' : 'fr-MA'
+                )
+              : '—',
+          })}
+        </p>
+      </button>
+    );
+  }
+
   const percentage = Math.max(
     0,
-    Math.min(100, (daysLeft / totalDuration) * 100)
+    Math.min(100, (daysLeft / SUBSCRIPTION_TRIAL_DAYS) * 100)
   );
-
-  let barColor = 'bg-green-500';
-  if (daysLeft <= 7) barColor = 'bg-red-500';
-  else if (daysLeft <= 14) barColor = 'bg-yellow-500';
-
-  if (daysLeft < 0) return null;
+  let barColor = 'bg-emerald-500';
+  if (daysLeft <= 7) barColor = 'bg-rose-500';
+  else if (daysLeft <= 14) barColor = 'bg-amber-400';
 
   return (
-    <div className="mt-auto px-4 py-3.5 bg-slate-950/60 rounded-lg mx-3 mb-4">
+    <button
+      type="button"
+      onClick={onManageClick}
+      className="mt-auto px-4 py-3.5 bg-slate-950/60 hover:bg-slate-950/80 border border-slate-800 rounded-lg mx-3 mb-4 text-start transition-colors"
+    >
       <div className="flex justify-between items-center mb-1.5">
         <span className="text-xs font-semibold text-primary-100 uppercase tracking-wider">
           {t('subscription.trial')}
         </span>
-        <span className="text-xs font-bold text-white">{daysLeft}d</span>
+        <span className="text-xs font-mono font-bold text-white">
+          {daysLeft}
+          {tr('j', 'ي')}
+        </span>
       </div>
       <div className="w-full bg-primary-900 rounded-full h-2">
         <div
           className={`${barColor} h-2 rounded-full transition-all duration-500`}
           style={{ width: `${percentage}%` }}
-        ></div>
+        />
       </div>
       <p className="text-[11px] text-primary-200 mt-1.5 text-center">
         {t('subscription.daysLeft', { count: String(daysLeft) })}
       </p>
-    </div>
+    </button>
   );
 };
 
@@ -286,7 +370,10 @@ const Sidebar: React.FC<SidebarProps> = ({
         ))}
       </nav>
 
-      <TrialProgressBar expiryDate={syndic.subscriptionExpiry} />
+      <SubscriptionFooterWidget
+        syndic={syndic}
+        onManageClick={() => handleSelectView('buildings')}
+      />
     </div>
   );
 

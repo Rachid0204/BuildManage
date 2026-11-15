@@ -1,8 +1,12 @@
 export const PLANS = {
-  starter: { price: 200, buildings: 4 },
-  professional: { price: 350, buildings: 8 },
-  enterprise: { price: 500, buildings: 9999 },
+  starter: { price: 190, buildings: 4 },
+  professional: { price: 390, buildings: 8 },
+  enterprise: { price: 790, buildings: 9999 },
 };
+/** Unlimited plan capacity threshold. */
+export function isUnlimitedPlan(limit: number): boolean {
+  return limit >= 9999;
+}
 /** Archives stay persisted for history; only active buildings consume subscription capacity. */
 export function countActiveBuildings(buildings?: readonly { id?: string; archivedAt?: unknown }[] | null): number {
   return (buildings || []).filter(building => !building.archivedAt).length;
