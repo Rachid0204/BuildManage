@@ -15,7 +15,9 @@ import type {
   PrestataireReview,
   Quittance,
   Resident,
+  SubscriptionPayment,
   SubscriptionPlan,
+  SubscriptionStatus,
   Syndic,
   Transaction,
 } from '../../types';
@@ -333,6 +335,8 @@ export interface CoordinatedMethods {
       monthlyFees: number;
     };
   }) => Promise<Syndic>;
+  adminArchiveCabinet: (syndicId: string) => Promise<Syndic>;
+  adminRestoreCabinet: (syndicId: string) => Promise<Syndic>;
   recordSubscriptionPayment: (input: {
     syndicId: string;
     plan: SubscriptionPlan;
@@ -342,11 +346,21 @@ export interface CoordinatedMethods {
   }) => Promise<{
     id: string;
     syndicId: string;
+    syndicName?: string;
+    syndicEmail?: string;
     plan: SubscriptionPlan;
     months: number;
     reference: string;
     amount: number;
+    recordedBy?: string;
+    createdAt?: string;
+    subscriptionExpiry?: string;
+    subscriptionStatus?: SubscriptionStatus;
   }>;
+  voidSubscriptionPayment: (
+    paymentId: string,
+    reason: string,
+  ) => Promise<SubscriptionPayment>;
 }
 // The server supplies createdAt; the transport must not manufacture a new retry identity.
 export type CommandMethods = Omit<BackendMethods, 'addMaintenanceRequest'> &

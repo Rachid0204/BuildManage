@@ -627,6 +627,25 @@ export interface Syndic {
   buildings: Building[];
 }
 
+export interface SubscriptionPayment {
+  id: string;
+  syndicId: string;
+  syndicName?: string;
+  syndicEmail?: string;
+  plan: SubscriptionPlan;
+  months: number;
+  reference: string;
+  amount: number;
+  recordedBy: string;
+  createdAt: string;
+  subscriptionExpiry?: string;
+  subscriptionStatus?: SubscriptionStatus;
+  voidedAt?: string;
+  voidReason?: string;
+  voidedBy?: string;
+}
+
+
 
 
 

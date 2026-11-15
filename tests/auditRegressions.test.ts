@@ -11,6 +11,7 @@ import { createSupportingService } from '../server/domain/supporting.service';
 import { buildingReport } from '../server/reports';
 import { generateScheduledMonthlyCharges } from '../server/operations';
 import { escapeCSVCell, numberToFrenchWords, sanitizePdfText } from '../services/pdfService';
+import { getEffectiveSubscriptionStatus, subscriptionCanWrite } from '../utils/subscriptionPolicy';
 import type { AGResolution, AssembleeGenerale } from '../types';
 
 const actor = { uid: 'owner-1', role: 'syndic', syndicId: 'cab-1' } as const;
@@ -979,3 +980,120 @@ test('CSV formula-injection & PDF control/bidi sanitization', () => {
   assert.equal(sanitizePdfText('Atlas\u0007\u202EMaroc\u2066'), 'Atlas Maroc');
   assert.equal(sanitizePdfText('دار السلام'), 'dar alslam');
 });
+
+test('Admin subscription policy & CRUD: effective status distinguishes trialing vs expired, 6-month payment extends cleanly, voidPayment frees reference, and archive/restore enforces write lock', async () => {
+  const fixedNow = Date.parse('2026-11-15T12:00:00.000Z');
+  assert.equal(
+    getEffectiveSubscriptionStatus({ subscriptionStatus: 'trialing', subscriptionExpiry: '2026-11-28T00:00:00.000Z' }, fixedNow),
+    'trialing',
+  );
+  assert.equal(
+    getEffectiveSubscriptionStatus({ subscriptionStatus: 'trialing', subscriptionExpiry: '2026-11-15' }, fixedNow),
+    'trialing',
+  );
+  assert.equal(
+    getEffectiveSubscriptionStatus({ subscriptionStatus: 'trialing', subscriptionExpiry: '2026-11-10T00:00:00.000Z' }, fixedNow),
+    'expired',
+  );
+  assert.equal(
+    getEffectiveSubscriptionStatus({ subscriptionStatus: 'active', subscriptionExpiry: '2027-05-15T23:59:59.999Z' }, fixedNow),
+    'active',
+  );
+  assert.equal(
+    getEffectiveSubscriptionStatus({ subscriptionStatus: 'cancelled', subscriptionExpiry: '2027-05-15T23:59:59.999Z' }, fixedNow),
+    'cancelled',
+  );
+  assert.equal(
+    subscriptionCanWrite({ subscriptionStatus: 'trialing', subscriptionExpiry: '2099-01-01T00:00:00.000Z' }),
+    true,
+  );
+  assert.equal(
+    subscriptionCanWrite({ subscriptionStatus: 'cancelled', subscriptionExpiry: '2099-01-01T00:00:00.000Z' }),
+    false,
+  );
+
+  const state = baseState();
+  const cab = state.syndik_prod_syndics_v1[0];
+  cab.subscriptionPlan = 'professional';
+  cab.subscriptionStatus = 'trialing';
+  cab.subscriptionExpiry = new Date(Date.now() + 14 * 86_400_000).toISOString();
+  (state as any).syndik_prod_subscription_payments_v1 = [];
+
+  const adminActor = { uid: 'admin-1', role: 'admin' } as const;
+  const cmd = createCommandService(state);
+
+  // Non-admin cannot record payment or archive cabinet
+  await assert.rejects(
+    cmd.runOperation(actor, 'recordSubscriptionPayment', [{
+      syndicId: 'cab-1', plan: 'professional', months: 6, reference: 'VIR-UNAUTH', amount: 2100,
+    }], 'op-sub-unauth'),
+    /Administration uniquement/i,
+  );
+  await assert.rejects(
+    cmd.runOperation(actor, 'adminArchiveCabinet', ['cab-1'], 'op-arch-unauth'),
+    /Administration uniquement/i,
+  );
+
+  // Admin records 6-month payment: status becomes active, expiry extends by 6 months, payment metadata populated
+  const payment = await cmd.runOperation(adminActor, 'recordSubscriptionPayment', [{
+    syndicId: 'cab-1', plan: 'professional', months: 6, reference: 'VIR-2026-6M', amount: 2100,
+  }], 'op-sub-6m');
+  assert.equal(payment.syndicId, 'cab-1');
+  assert.equal(payment.syndicName, cab.name);
+  assert.equal(payment.months, 6);
+  assert.equal(payment.amount, 2100);
+  assert.equal(payment.subscriptionStatus, 'active');
+  assert.equal(cab.subscriptionStatus, 'active');
+  assert.equal(getEffectiveSubscriptionStatus(cab), 'active');
+
+  // Admin can update cabinet profile + trialing/active status via saveSyndic
+  await cmd.runOperation(adminActor, 'saveSyndic', [{
+    id: 'cab-1',
+    name: 'Cabinet Test Modifié',
+    city: 'Rabat',
+    ice: '001234567000089',
+    subscriptionPlan: 'enterprise',
+    subscriptionStatus: 'trialing',
+    subscriptionExpiry: '2027-06-01T23:59:59.999Z',
+  }], 'op-save-cab-admin');
+  assert.equal(cab.name, 'Cabinet Test Modifié');
+  assert.equal(cab.city, 'Rabat');
+  assert.equal(cab.subscriptionPlan, 'enterprise');
+  assert.equal(cab.subscriptionStatus, 'trialing');
+
+  // Voiding requires >=3 char reason and frees reference for reuse
+  await assert.rejects(
+    cmd.runOperation(adminActor, 'voidSubscriptionPayment', [payment.id, 'no'], 'op-void-short'),
+    /motif/i,
+  );
+  const voided = await cmd.runOperation(adminActor, 'voidSubscriptionPayment', [payment.id, 'Virement rejeté par la banque'], 'op-void-ok');
+  assert.ok(voided.voidedAt);
+  assert.equal(voided.voidReason, 'Virement rejeté par la banque');
+
+  // Reusing same reference succeeds once previous payment is voided
+  const reentered = await cmd.runOperation(adminActor, 'recordSubscriptionPayment', [{
+    syndicId: 'cab-1', plan: 'enterprise', months: 6, reference: 'VIR-2026-6M', amount: 3000,
+  }], 'op-sub-reuse');
+  assert.equal(reentered.amount, 3000);
+  assert.equal((state as any).syndik_prod_subscription_payments_v1.length, 2);
+
+  // Archiving blocks syndic writes and payment recording; restoring re-enables
+  await cmd.runOperation(adminActor, 'adminArchiveCabinet', ['cab-1'], 'op-arch-cab');
+  assert.ok(cab.archivedAt);
+  await assert.rejects(
+    cmd.runOperation(actor, 'addAnnouncement', ['bld-1', { title: 'Test', content: 'Blocked' }], 'op-write-arch'),
+    /Cabinet archivé/i,
+  );
+  await assert.rejects(
+    cmd.runOperation(adminActor, 'recordSubscriptionPayment', [{
+      syndicId: 'cab-1', plan: 'enterprise', months: 1, reference: 'VIR-ARCH-BLOCK', amount: 500,
+    }], 'op-sub-arch'),
+    /Cabinet archivé/i,
+  );
+
+  await cmd.runOperation(adminActor, 'adminRestoreCabinet', ['cab-1'], 'op-rest-cab');
+  assert.equal(cab.archivedAt, undefined);
+  const ann = await cmd.runOperation(actor, 'addAnnouncement', ['bld-1', { title: 'Ouvert', content: 'Cabinet restauré' }], 'op-write-restored');
+  assert.equal(ann.title, 'Ouvert');
+});
+

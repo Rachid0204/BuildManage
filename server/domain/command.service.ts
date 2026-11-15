@@ -100,12 +100,15 @@ function canWrite(actor: Actor, b: any) {
     "Changez votre mot de passe initial avant de continuer.",
   );
   check(!b.archivedAt, "Immeuble archivé.", 409);
-  if (actor.role !== "admin")
+  if (actor.role !== "admin") {
+    const cab = cabinetFor(actor, b.syndicId);
+    check(!cab.archivedAt, "Cabinet archivé.", 409);
     check(
-      subscriptionCanWrite(cabinetFor(actor, b.syndicId)),
+      subscriptionCanWrite(cab),
       "Abonnement expiré : consultation et export disponibles.",
       402,
     );
+  }
 }
 function appendAudit(
   state: State,
@@ -279,8 +282,12 @@ async function runOperation(
     buildingId: string | undefined,
     changedCredentials: { kind: string; id: string } | undefined;
   if (operation === "adminCreateCabinet") return createCabinet(actor, args[0]);
+  if (operation === "adminArchiveCabinet") return archiveCabinet(actor, args[0]);
+  if (operation === "adminRestoreCabinet") return restoreCabinet(actor, args[0]);
   if (operation === "recordSubscriptionPayment")
     return subscriptionPayment(actor, args[0]);
+  if (operation === "voidSubscriptionPayment")
+    return voidSubscriptionPayment(actor, args[0], args[1]);
   if (operation === "saveSyndic") {
     manager(actor);
     const input = object(args[0]),
@@ -1242,7 +1249,7 @@ function disableAccount(id: string, field: string) {
 
 const dependencies: CommandDependencies = {issueChargeInvoices, check, object, str, cents, appendAudit, assertPeriod, cabinetFor, buildingFor, canWrite, record, actorIdentity, dispatch, emailAvailable, manager, nested, links, pick};
 const {financialOperation}=createFinanceCommands(transactionState,dependencies);
-const {createCabinet,subscriptionPayment,restoreArchived,archiveBuilding}=createBuildingCommands(transactionState,dependencies);
+const {createCabinet,archiveCabinet,restoreCabinet,subscriptionPayment,voidSubscriptionPayment,restoreArchived,archiveBuilding}=createBuildingCommands(transactionState,dependencies);
 const {recomputeMeeting,meetingOperation}=createAssemblyCommands(transactionState,dependencies);
 return {runOperation, cabinetFor, buildingFor, canWrite, appendAudit, actorIdentity, recomputeMeeting};
 }

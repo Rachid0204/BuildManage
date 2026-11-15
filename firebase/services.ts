@@ -27,6 +27,8 @@ import type {
   PrestataireReview,
   Quittance,
   Resident,
+  SubscriptionPayment,
+  SubscriptionPlan,
   Syndic,
   Transaction,
 } from '../types';
@@ -82,6 +84,65 @@ export const getSyndics = async (): Promise<Syndic[]> => {
 
 export const saveSyndic = async (syndic: Syndic): Promise<Syndic> => {
   return remoteMutation('saveSyndic', [syndic]);
+};
+
+export const getAllSyndicsForAdmin = async (): Promise<Syndic[]> => {
+  await syncAllSharedStateFromServer();
+  return readSnapshot<Syndic[]>(STORAGE_KEYS.SYNDICS, []).map((s) => ({
+    ...s,
+    logoUrl: s.logoUrl ?? '',
+    buildings: (s.buildings || [])
+      .filter((b) => !b.archivedAt)
+      .map((b) => ({
+        ...b,
+        residents: (b.residents || [])
+          .filter((r) => !r.archivedAt)
+          .map((r) => ({ ...r, ...ephemeralInvitation(r.id) })),
+        apartments: (b.apartments || []).filter((a) => !a.archivedAt),
+      })),
+  }));
+};
+
+export const getSubscriptionPayments = async (): Promise<
+  SubscriptionPayment[]
+> => {
+  await syncAllSharedStateFromServer();
+  const payments = readSnapshot<SubscriptionPayment[]>(
+    STORAGE_KEYS.SUBSCRIPTION_PAYMENTS,
+    [],
+  );
+  return [...payments].sort((a, b) =>
+    String(b.createdAt || '').localeCompare(String(a.createdAt || '')),
+  );
+};
+
+export const recordSubscriptionPayment = async (input: {
+  syndicId: string;
+  plan: SubscriptionPlan;
+  months: number;
+  reference: string;
+  amount: number;
+}) => {
+  return remoteMutation('recordSubscriptionPayment', [input]);
+};
+
+export const adminArchiveCabinet = async (
+  syndicId: string,
+): Promise<Syndic> => {
+  return remoteMutation('adminArchiveCabinet', [syndicId]);
+};
+
+export const adminRestoreCabinet = async (
+  syndicId: string,
+): Promise<Syndic> => {
+  return remoteMutation('adminRestoreCabinet', [syndicId]);
+};
+
+export const voidSubscriptionPayment = async (
+  paymentId: string,
+  reason: string,
+): Promise<SubscriptionPayment> => {
+  return remoteMutation('voidSubscriptionPayment', [paymentId, reason]);
 };
 
 export const getBuildingsForSyndic = async (

@@ -506,8 +506,9 @@ function subscriptionPayment(actor: Actor, input: any) {
   check(actor.role === "admin", "Administration uniquement.");
   const state = transactionState,
     data = object(input),
-    s = cabinetFor(actor, str(data.syndicId)),
-    plan = z.enum(["starter", "professional", "enterprise"]).parse(data.plan),
+    s = cabinetFor(actor, str(data.syndicId));
+  check(!s.archivedAt, "Cabinet archivé : restaurez-le avant d'enregistrer un paiement.", 409);
+  const plan = z.enum(["starter", "professional", "enterprise"]).parse(data.plan),
     months = z.number().int().min(1).max(12).parse(data.months),
     reference = str(data.reference, 200),
     amount = cents(data.amount);
@@ -518,7 +519,7 @@ function subscriptionPayment(actor: Actor, input: any) {
   );
   check(
     !(transactionState.syndik_prod_subscription_payments_v1 || []).some(
-      (p: any) => p.reference === reference,
+      (p: any) => !p.voidedAt && p.reference === reference,
     ),
     "Référence déjà utilisée.",
     409,
@@ -545,17 +546,58 @@ function subscriptionPayment(actor: Actor, input: any) {
   const payment = {
     id: randomUUID(),
     syndicId: s.id,
+    syndicName: s.name,
+    syndicEmail: s.email,
     plan,
     months,
     reference,
     amount: amount / 100,
     recordedBy: actor.uid,
     createdAt: new Date().toISOString(),
+    subscriptionExpiry: s.subscriptionExpiry,
+    subscriptionStatus: s.subscriptionStatus,
   };
   (transactionState.syndik_prod_subscription_payments_v1 ??= []).push(payment);
   appendAudit(transactionState, actor, "recordSubscriptionPayment", undefined, {
     paymentId: payment.id,
     syndicId: s.id,
+  });
+  return payment;
+}
+function archiveCabinet(actor: Actor, syndicId: any) {
+  check(actor.role === "admin", "Administration uniquement.");
+  const s = cabinetFor(actor, str(syndicId));
+  if (!s.archivedAt) {
+    s.archivedAt = new Date().toISOString();
+    appendAudit(transactionState, actor, "adminArchiveCabinet", undefined, { syndicId: s.id });
+  }
+  return s;
+}
+function restoreCabinet(actor: Actor, syndicId: any) {
+  check(actor.role === "admin", "Administration uniquement.");
+  const s = cabinetFor(actor, str(syndicId));
+  if (s.archivedAt) {
+    delete s.archivedAt;
+    appendAudit(transactionState, actor, "adminRestoreCabinet", undefined, { syndicId: s.id });
+  }
+  return s;
+}
+function voidSubscriptionPayment(actor: Actor, paymentId: any, reasonArg: any) {
+  check(actor.role === "admin", "Administration uniquement.");
+  const id = str(paymentId);
+  const reason = str(reasonArg, 1000).trim();
+  check(reason.length >= 3, "Indiquez un motif d'annulation (min. 3 caractères).", 400);
+  const payments = transactionState.syndik_prod_subscription_payments_v1 || [];
+  const payment = payments.find((p: any) => p.id === id);
+  check(payment, "Paiement introuvable.", 404);
+  check(!payment.voidedAt, "Paiement déjà annulé.", 409);
+  payment.voidedAt = new Date().toISOString();
+  payment.voidReason = reason;
+  payment.voidedBy = actor.uid;
+  appendAudit(transactionState, actor, "voidSubscriptionPayment", undefined, {
+    paymentId: payment.id,
+    syndicId: payment.syndicId,
+    reason,
   });
   return payment;
 }
@@ -663,6 +705,6 @@ function restoreArchived(actor: Actor,args:any[]) { const operation='restoreArch
 
 }
 function archiveBuilding(actor: Actor,b:any) { b.archivedAt=new Date().toISOString(); appendAudit(transactionState,actor,'deleteBuilding',b.id); return true; }
-return {createCabinet, subscriptionPayment, restoreArchived, archiveBuilding};
+return {createCabinet, archiveCabinet, restoreCabinet, subscriptionPayment, voidSubscriptionPayment, restoreArchived, archiveBuilding};
 }
 
