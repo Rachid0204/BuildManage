@@ -1,9 +1,5 @@
 import express from 'express';
 import { z } from 'zod';
-import {
-  installAiBodyParsers,
-  registerAiEndpoints,
-} from './server/aiEndpoints';
 import { projectAssemblyForRole } from './server/assemblyPrivacy';
 import { privateAttachments } from './server/attachments';
 import { DependencyError } from './server/dependencyErrors';
@@ -844,7 +840,6 @@ async function startServer() {
     ),
   );
 
-  installAiBodyParsers(app);
   app.use(express.json({ limit: "15mb" }));
 
   process.env.SYNDIK_SERVER_SECRET ||= LEGACY_SERVER_SECRET;
@@ -2086,8 +2081,6 @@ async function startServer() {
   api.post("/api/shared-state/reset", async (_req, res) =>
     res.status(403).json({ error: "La remise à zéro web est désactivée." }),
   );
-
-  registerAiEndpoints({ post: (route, handler) => app.post(route, wrap(handler, false)) }, repository, extractAndVerifyCaller);
 
   if (!process.env.NODE_ENV || process.env.NODE_ENV === "development") {
     const { createServer: createViteServer } = await import("vite");

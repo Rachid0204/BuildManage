@@ -190,7 +190,6 @@ async function start() {
         SYNDIK_DATA_DIR: directory,
         SYNDIK_SERVER_SECRET: secret,
         SYNDIK_SCHEDULER_SECRET: secret,
-        GEMINI_API_KEY: "",
         SENDGRID_API_KEY: "",
       },
       stdio: ["ignore", "pipe", "pipe"],

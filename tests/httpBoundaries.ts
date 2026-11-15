@@ -38,7 +38,7 @@ const port = await new Promise<number>((resolvePort) => { const server = createS
 }); });
 const child = spawn(process.execPath, ['--import', join(root, 'tests/helpers/networkGuard.mjs'), '--import', 'tsx', 'server.ts'], {
   cwd: root, env: { ...process.env, PORT: String(port), NODE_ENV: 'test', SYNDIK_STATE_BACKEND: 'file', SYNDIK_DATA_DIR: dataDir,
-    SYNDIK_SERVER_SECRET: 'synthetic-server-secret-12345678901234567890', GEMINI_API_KEY: '', FIREBASE_SERVICE_ACCOUNT_JSON: '' }, stdio: ['ignore', 'pipe', 'pipe'],
+    SYNDIK_SERVER_SECRET: 'synthetic-server-secret-12345678901234567890', FIREBASE_SERVICE_ACCOUNT_JSON: '' }, stdio: ['ignore', 'pipe', 'pipe'],
 });
 let logs = '';
 child.stderr.on('data', (d) => { logs += d; });

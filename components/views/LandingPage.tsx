@@ -5,10 +5,11 @@ import { useI18n } from '../../hooks/useI18n';
 import {
   AGIcon,
   BuildingsIcon,
+  ChatIcon,
   DocumentsIcon,
   FinancialsIcon,
+  MarketplaceIcon,
   PrestatairesIcon,
-  SparklesIcon,
 } from '../icons/IconComponents';
 import { PLAN_CATALOG, isUnlimitedPlan } from '../../utils/subscriptionPolicy';
 import type { SubscriptionPlan } from '../../types';
@@ -102,26 +103,26 @@ const LandingPage: React.FC<LandingPageProps> = ({
       labelAr: 'بوابة المالك والمكتري',
       audienceFr: 'Accès délivré exclusivement par le Syndic',
       audienceAr: 'ولوج مؤمّن يُسلَّم حصرياً من طرف السنديك',
-      titleFr: 'Transparence totale sur les charges, quittances et votes AG',
-      titleAr: 'شفافية كاملة في المساهمات والوصولات والتصويت الرقمي',
+      titleFr: 'Transparence financière et vraie vie de résidence entre voisins',
+      titleAr: 'شفافية مالية كاملة وحياة جماعية وتعاون بين الجيران',
       descFr:
-        'Chaque résident consulte son relevé détaillé (appelé vs réglé), dépose ses preuves de virement bancaire et vote aux résolutions depuis son mobile.',
+        'Chaque résident suit ses charges et quittances PDF, vote en AG, discute sur la messagerie interne d’entraide et échange librement sur Le Souk de la résidence.',
       descAr:
-        'يطلع كل ساكن على كشف حسابه المفصل، ويرفع إثباتات التحويل البنكي، ويصوّت على قرارات الجمع العام من هاتفه.',
+        'يتابع كل ساكن مساهماته ووصولاته PDF، ويصوّت في الجمع العام، ويتواصل مع جيرانه عبر المراسلة الداخلية وسوق الإقامة.',
       bulletsFr: [
         'Relevé de compte clair : charges courantes, travaux AG et solde dû',
-        'Téléchargement permanent des quittances PDF numérotées',
-        'Dépôt de justificatif bancaire et suivi de validation en direct',
-        'Signalement d’incidents techniques avec photos & vote AGO/AGE en ligne',
+        'Quittances PDF numérotées & dépôt de justificatif bancaire en direct',
+        'Messagerie interne (4 canaux) : dialogue Syndic, entraide & bon voisinage',
+        'Le Souk de la résidence : ventes, dons, prêts d’objets & services entre voisins',
       ],
       bulletsAr: [
         'كشف حساب شفاف: الواجبات الجارية وأشغال الجمع العام والرصيد',
-        'تحميل دائم لوصولات الأداء الرسمية المرقمة بصيغة PDF',
-        'إيداع إثبات التحويل البنكي وتتبع حالة المصادقة مباشرة',
-        'التبليغ عن الأعطاب بالصور والتصويت الإلكتروني في الجمع العام',
+        'وصولات PDF مرقمة وإيداع إثباتات التحويل البنكي مباشرة',
+        'مراسلة داخلية (4 قنوات): حوار مع السنديك، تعاون وحسن الجوار',
+        'سوق الإقامة: بيع، هبات، إعارة أدوات وخدمات بين الجيران',
       ],
-      metricLabelFr: 'Confiance & Recouvrement',
-      metricLabelAr: 'الثقة والتحصيل',
+      metricLabelFr: 'Confiance & Entraide',
+      metricLabelAr: 'الثقة والتعاون',
       metricValue: '24/7 Mobile',
     },
     provider: {
@@ -161,10 +162,16 @@ const LandingPage: React.FC<LandingPageProps> = ({
       aAr: 'لأسباب أمنية وتماشياً مع القانون 18-00، لا يوجد تسجيل مفتوح وعشوائي للسكان. من لوحة السنديك، تربط المالك أو المزود بشقته وتحمّل بنقرة واحدة بطاقة الولوج الرسمية PDF التي تتضمن بيانات الدخول.',
     },
     {
+      qFr: 'Comment la Messagerie interne et Le Souk favorisent-ils l’entraide entre résidents ?',
+      qAr: 'كيف تساعد المراسلة الداخلية وسوق الإقامة على التعارف والتعاون بين السكان؟',
+      aFr: 'Chaque immeuble dispose d’un espace communautaire privé réservé uniquement à ses résidents vérifiés : 4 canaux de discussion (Général, Bureau du Syndic, Entraide & Bon Voisinage pour prêt d’outils, covoiturage ou réception de colis, et Discussions du Souk) plus Le Souk de la résidence pour vendre en MAD, donner gratuitement, prêter ou proposer des services entre voisins.',
+      aAr: 'تتوفر كل عمارة على فضاء خاص محصور في سكانها المعتمدين: 4 قنوات للمناقشة (القناة العامة، مكتب السنديك، التعاون وحسن الجوار لإعارة الأدوات والنقل المشترك واستلام الطرود، ومناقشات السوق) إضافة إلى سوق الإقامة للبيع بالدرهم أو الهبة المجانية أو الإعارة وتبادل الخدمات بين الجيران.',
+    },
+    {
       qFr: 'Comment fonctionne la tarification et que se passe-t-il si j’archive un immeuble ?',
       qAr: 'كيف يتم احتساب الباقة وماذا يحدث عند أرشفة عمارة؟',
-      aFr: 'Toutes les fonctionnalités (comptabilité, CSV bancaire, AG, portails et IA) sont incluses dans les 3 forfaits. Seul le nombre d’immeubles actifs compte : Essentiel (190 MAD/mois jusqu’à 4 immeubles), Pro (390 MAD/mois jusqu’à 8 immeubles), Entreprise (790 MAD/mois illimité). Si vous archivez un immeuble, son historique financier est conservé intégralement et sa place est libérée.',
-      aAr: 'جميع الميزات مشمولة في الباقات الثلاث. يتم الاحتساب فقط حسب عدد العمارات النشطة: الأساسية (190 درهم حتى 4 عمارات)، الاحترافية (390 درهم حتى 8 عمارات)، المقاولات (790 درهم غير محدود). عند أرشفة عمارة، يُحفظ سجلها المالي بالكامل وتُحرَّر حصتها فوراً.',
+      aFr: 'Toutes les fonctionnalités (comptabilité, CSV bancaire, AG, portails, messagerie interne et Le Souk) sont incluses dans les 3 forfaits. Seul le nombre d’immeubles actifs compte : Essentiel (190 MAD/mois jusqu’à 4 immeubles), Pro (390 MAD/mois jusqu’à 8 immeubles), Entreprise (790 MAD/mois illimité). Si vous archivez un immeuble, son historique financier est conservé intégralement et sa place est libérée.',
+      aAr: 'جميع الميزات (المالية، كشف البنك CSV، الجموع العامة، البوابات، المراسلة الداخلية وسوق الإقامة) مشمولة في الباقات الثلاث. يتم الاحتساب فقط حسب عدد العمارات النشطة: الأساسية (190 درهم حتى 4 عمارات)، الاحترافية (390 درهم حتى 8 عمارات)، المقاولات (790 درهم غير محدود). عند أرشفة عمارة، يُحفظ سجلها المالي بالكامل وتُحرَّر حصتها فوراً.',
     },
     {
       qFr: 'Puis-je reprendre un immeuble déjà géré avec ses soldes et impayés existants ?',
@@ -231,8 +238,15 @@ const LandingPage: React.FC<LandingPageProps> = ({
       enterprise: '✓',
     },
     {
-      labelFr: 'Rédaction bilingue FR/AR assistée par IA Gemini',
-      labelAr: 'صياغة الإعلانات بالعربية والفرنسية بالذكاء الاصطناعي',
+      labelFr: 'Messagerie interne (4 canaux d’entraide & dialogue Syndic)',
+      labelAr: 'المراسلة الداخلية (4 قنوات للتعاون والتواصل مع السنديك)',
+      starter: '✓',
+      professional: '✓',
+      enterprise: '✓',
+    },
+    {
+      labelFr: 'Le Souk de la résidence (ventes, dons, prêts & services entre voisins)',
+      labelAr: 'سوق الإقامة (بيع، هبات، إعارة وخدمات بين الجيران)',
       starter: '✓',
       professional: '✓',
       enterprise: '✓',
@@ -376,6 +390,10 @@ const LandingPage: React.FC<LandingPageProps> = ({
                 <span className="inline-flex items-center gap-1.5">
                   <span className="text-teal-700 font-bold">✓</span>
                   {tr('Accès résidents via Fiche PDF', 'ولوج السكان عبر بطاقة PDF')}
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="text-teal-700 font-bold">✓</span>
+                  {tr('Messagerie interne & Le Souk entre voisins', 'المراسلة الداخلية وسوق الإقامة بين الجيران')}
                 </span>
               </div>
             </main>
@@ -748,7 +766,7 @@ const LandingPage: React.FC<LandingPageProps> = ({
             </h2>
           </div>
 
-          <div className="mt-10 grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="mt-10 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-2xs flex gap-4">
               <div className="flex-shrink-0 h-11 w-11 rounded-xl bg-teal-50 border border-teal-200 text-teal-700 flex items-center justify-center">
                 <FinancialsIcon />
@@ -811,19 +829,59 @@ const LandingPage: React.FC<LandingPageProps> = ({
 
             <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-2xs flex gap-4">
               <div className="flex-shrink-0 h-11 w-11 rounded-xl bg-teal-50 border border-teal-200 text-teal-700 flex items-center justify-center">
-                <SparklesIcon />
+                <ChatIcon />
               </div>
               <div>
                 <h3 className="text-lg font-bold text-slate-900">
                   {tr(
-                    'Communication Bilingue FR/AR & Prestataires',
-                    'تواصل ثنائي اللغة وتدبير المزودين',
+                    'Messagerie Interne & Entraide entre Voisins',
+                    'المراسلة الداخلية والتعاون بين الجيران',
                   )}
                 </h3>
                 <p className="mt-1.5 text-sm text-slate-600 leading-relaxed">
                   {tr(
-                    'Rédigez vos annonces officielles en français et en arabe avec l’assistant IA Gemini, partagez vos documents de copropriété et coordonnez vos prestataires agréés.',
-                    'صغ إعلاناتك الرسمية بالفرنسية والعربية عبر الذكاء الاصطناعي، شارك الوثائق القانونية ونسق تدخلات المزودين المعتمدين.',
+                    '4 canaux dédiés par immeuble (Général, Bureau du Syndic, Entraide & Bon Voisinage pour prêt d’outils, covoiturage ou colis, et Discussions du Souk), étiquettes thématiques et réactions entre résidents.',
+                    '4 قنوات مخصصة لكل عمارة (القناة العامة، مكتب السنديك، التعاون وحسن الجوار لإعارة الأدوات والنقل المشترك والطرود، ومناقشات السوق) لتعزيز التواصل بين الجيران.',
+                  )}
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-2xs flex gap-4">
+              <div className="flex-shrink-0 h-11 w-11 rounded-xl bg-teal-50 border border-teal-200 text-teal-700 flex items-center justify-center">
+                <MarketplaceIcon />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">
+                  {tr(
+                    'Le Souk de la Résidence (Marketplace)',
+                    'سوق الإقامة (البيع، الهبة والخدمات)',
+                  )}
+                </h3>
+                <p className="mt-1.5 text-sm text-slate-600 leading-relaxed">
+                  {tr(
+                    'Petites annonces privées et vérifiées entre voisins : ventes en MAD, dons gratuits, prêts d’objets ou services d’entraide avec photos, discussion intégrée et contact direct WhatsApp ou téléphone.',
+                    'إعلانات خاصة وموثوقة بين سكان نفس العمارة: بيع بالدرهم، هبات مجانية، إعارة أو تبادل خدمات مع الصور، دردشة مدمجة وتواصل مباشر عبر الهاتف أو واتساب.',
+                  )}
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-2xs flex gap-4">
+              <div className="flex-shrink-0 h-11 w-11 rounded-xl bg-teal-50 border border-teal-200 text-teal-700 flex items-center justify-center">
+                <PrestatairesIcon />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">
+                  {tr(
+                    'Prestataires Agréés & Annonces Bilingues FR/AR',
+                    'المزودون المعتمدون والإعلانات الثنائية',
+                  )}
+                </h3>
+                <p className="mt-1.5 text-sm text-slate-600 leading-relaxed">
+                  {tr(
+                    'Publiez vos avis officiels et documents de copropriété en français et en arabe, centralisez les fiches fournisseurs (ICE, RC, RIB) et suivez chaque intervention technique avec photos.',
+                    'انشر الإعلانات الرسمية ووثائق الملكية المشتركة بالعربية والفرنسية، نظّم ملفات الشركات (ICE/RC/RIB) وتابع أشغال الصيانة بالصور.',
                   )}
                 </p>
               </div>

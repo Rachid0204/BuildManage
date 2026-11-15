@@ -145,7 +145,7 @@ const child = spawn(process.execPath, ['--import', './tests/helpers/networkGuard
     ...process.env, PORT: String(port), NODE_ENV: 'test', SYNDIK_AUTH_PROVIDER: 'legacy',
     SYNDIK_STATE_BACKEND: 'file', SYNDIK_DATA_DIR: directory,
     SYNDIK_SERVER_SECRET: 'synthetic-opening-secret-12345678901234567890',
-    GEMINI_API_KEY: '', API_KEY: '', SENDGRID_API_KEY: '', FIREBASE_AUTH_EMULATOR_HOST: '',
+    SENDGRID_API_KEY: '', FIREBASE_AUTH_EMULATOR_HOST: '',
   }, stdio: ['ignore', 'pipe', 'pipe'],
 });
 const exited = once(child, 'exit');

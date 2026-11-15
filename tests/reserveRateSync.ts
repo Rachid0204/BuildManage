@@ -222,7 +222,7 @@ const port = (listener.address() as { port: number }).port; await new Promise<vo
 const child = spawn(process.execPath, ['--import', './tests/helpers/networkGuard.mjs', '--import', 'tsx', 'server.ts'], {
   env: { ...process.env, PORT: String(port), NODE_ENV: 'test', SYNDIK_AUTH_PROVIDER: 'legacy',
     SYNDIK_STATE_BACKEND: 'file', SYNDIK_DATA_DIR: directory, SYNDIK_SERVER_SECRET: 'synthetic-reserve-rate-secret-12345678901234567890',
-    GEMINI_API_KEY: '', API_KEY: '', SENDGRID_API_KEY: '', FIREBASE_AUTH_EMULATOR_HOST: '' }, stdio: ['ignore', 'pipe', 'pipe'],
+    SENDGRID_API_KEY: '', FIREBASE_AUTH_EMULATOR_HOST: '' }, stdio: ['ignore', 'pipe', 'pipe'],
 });
 const exited = once(child, 'exit'); let logs = '';
 child.stdout.on('data', data => { logs += data; }); child.stderr.on('data', data => { logs += data; });

@@ -75,7 +75,7 @@ async function start() {
       SYNDIK_STATE_BACKEND: backend, SYNDIK_DATA_DIR: directory, FIRESTORE_DATABASE_ID: '(default)',
       GOOGLE_CLOUD_PROJECT: 'demo-buildmanage', GCLOUD_PROJECT: 'demo-buildmanage',
       SYNDIK_SERVER_SECRET: secret, SYNDIK_SCHEDULER_SECRET: secret,
-      GEMINI_API_KEY: '', API_KEY: '', SENDGRID_API_KEY: '', FIREBASE_AUTH_EMULATOR_HOST: '' },
+      SENDGRID_API_KEY: '', FIREBASE_AUTH_EMULATOR_HOST: '' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   processes.push(child); exits.push(once(child, 'exit'));

@@ -85,9 +85,9 @@ export const translations = {
                 title: "Transparent Financials",
                 desc: "Track fees, expenses, and generate reports in MAD.",
             },
-            ai: {
-                title: "AI Assistance",
-                desc: "Draft announcements in Arabic and French instantly with Gemini AI.",
+            community: {
+                title: "Community Chat & Le Souk",
+                desc: "Help neighbors connect with 4 building chat channels and a private resident Marketplace.",
             },
         },
         pricing: {
@@ -347,10 +347,6 @@ export const translations = {
             announcementTitle: "Title",
             titlePlaceholder: "e.g., General Assembly",
             content: "Content",
-            generateWithAi: "Generate with AI (Gemini)",
-            aiPlaceholder: "Enter a topic, e.g., 'pool maintenance reminder'",
-            generating: "Generating...",
-            generationError: "Sorry, an error occurred while generating the text. Please try again or write it manually.",
             cancel: "Cancel",
             post: "Post Announcement",
         },
@@ -595,9 +591,9 @@ export const translations = {
                 title: "Finances Transparentes",
                 desc: "Suivez les cotisations, les dépenses et générez des rapports en MAD.",
             },
-            ai: {
-                title: "Assistance IA",
-                desc: "Rédigez des annonces en arabe et en français instantanément avec Gemini AI.",
+            community: {
+                title: "Messagerie & Le Souk de la Résidence",
+                desc: "4 canaux de discussion entre voisins et un Souk privé pour vendre, donner ou s'entraider.",
             },
         },
         pricing: {
@@ -857,10 +853,6 @@ export const translations = {
             announcementTitle: "Titre",
             titlePlaceholder: "ex: Assemblée Générale",
             content: "Contenu",
-            generateWithAi: "Générer avec l'IA (Gemini)",
-            aiPlaceholder: "Entrez un sujet, ex: 'rappel entretien piscine'",
-            generating: "Génération...",
-            generationError: "Désolé, une erreur est survenue lors de la génération du texte. Veuillez réessayer ou l'écrire manuellement.",
             cancel: "Annuler",
             post: "Publier l'annonce",
         },
@@ -1105,9 +1097,9 @@ export const translations = {
                 title: "مالية شفافة",
                 desc: "تتبع الرسوم والمصاريف وإنشاء تقارير بالدرهم المغربي.",
             },
-            ai: {
-                title: "مساعد ذكي",
-                desc: "قم بصياغة الإعلانات بالعربية والفرنسية فورًا باستخدام الذكاء الاصطناعي Gemini.",
+            community: {
+                title: "المراسلة الداخلية وسوق الإقامة",
+                desc: "4 قنوات للتواصل بين الجيران وسوق خاص للبيع والهبة والتعاون داخل الإقامة.",
             },
         },
         pricing: {
@@ -1367,10 +1359,6 @@ export const translations = {
             announcementTitle: "العنوان",
             titlePlaceholder: "مثال: الجمع العام",
             content: "المحتوى",
-            generateWithAi: "إنشاء بواسطة الذكاء الاصطناعي (Gemini)",
-            aiPlaceholder: "أدخل موضوعًا، مثال: 'تذكير بصيانة المسبح'",
-            generating: "جاري الإنشاء...",
-            generationError: "عذراً، حدث خطأ أثناء إنشاء النص. يرجى المحاولة مرة أخرى أو كتابته يدويًا.",
             cancel: "إلغاء",
             post: "نشر الإعلان",
         },

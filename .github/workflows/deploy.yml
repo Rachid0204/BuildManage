@@ -69,9 +69,6 @@ jobs:
       - name: Verify production startup contract
         run: npm run test:deployment-contract
 
-      - name: Verify AI capabilities, payloads, deadlines and shared consumption quotas
-        run: npm run test:ai-protection
-
       - name: Verify legacy and new assembly snapshot privacy
         run: npm run test:assembly-privacy
 

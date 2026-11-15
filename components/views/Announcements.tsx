@@ -4,11 +4,9 @@ import type { Building } from '../../types';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import Modal from '../common/Modal';
-import { PlusIcon, SparklesIcon } from '../icons/IconComponents';
-import { generateAnnouncementContent } from '../../services/geminiService';
+import { PlusIcon } from '../icons/IconComponents';
 import { addAnnouncement } from '../../firebase/services';
 import { useI18n } from '../../hooks/useI18n';
-import { AI_LIMITS } from '../../utils/aiPolicy';
 
 interface AnnouncementsProps {
   building: Building;
@@ -21,9 +19,6 @@ const Announcements: React.FC<AnnouncementsProps> = ({ building }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [newContent, setNewContent] = useState('');
-  const [aiTopic, setAiTopic] = useState('');
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [aiError, setAiError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
@@ -34,8 +29,6 @@ const Announcements: React.FC<AnnouncementsProps> = ({ building }) => {
       queryClient.invalidateQueries({ queryKey: ['syndics'] });
       setNewTitle('');
       setNewContent('');
-      setAiTopic('');
-      setAiError(null);
       setSaveError(null);
       setIsModalOpen(false);
     },
@@ -49,30 +42,6 @@ const Announcements: React.FC<AnnouncementsProps> = ({ building }) => {
       );
     },
   });
-
-  const handleGenerateContent = async () => {
-    if (!aiTopic.trim()) { setAiError(tr('Indiquez le sujet à rédiger.', 'أدخل موضوع الإعلان.')); return; }
-    setIsGenerating(true);
-    setAiError(null);
-    try {
-      const content = await generateAnnouncementContent(aiTopic, building.id);
-      setNewContent(content);
-      if (!newTitle.trim()) {
-        setNewTitle(aiTopic.charAt(0).toUpperCase() + aiTopic.slice(1));
-      }
-    } catch (error: any) {
-      // Audit Item 27: Never insert error messages into the announcement draft body
-      setAiError(
-        error?.message ||
-          tr(
-            "Le service d'IA est indisponible. Veuillez rédiger le contenu manuellement.",
-            'خدمة الذكاء الاصطناعي غير متوفرة حالياً. يرجى كتابة المحتوى يدوياً.'
-          )
-      );
-    } finally {
-      setIsGenerating(false);
-    }
-  };
 
   const handleAddAnnouncement = async () => {
     if (!newTitle.trim() || !newContent.trim()) throw new Error(tr('Le titre et le contenu sont obligatoires.', 'العنوان والمحتوى مطلوبان.'));
@@ -124,7 +93,6 @@ const Announcements: React.FC<AnnouncementsProps> = ({ building }) => {
         busy={addMutation.isPending}
         onClose={() => {
           setIsModalOpen(false);
-          setAiError(null);
           setSaveError(null);
         }}
         title={t('announcements.modal.title')}
@@ -165,38 +133,6 @@ const Announcements: React.FC<AnnouncementsProps> = ({ building }) => {
               className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-xs focus:outline-hidden focus:ring-primary focus:border-primary sm:text-sm"
               placeholder={t('announcements.modal.titlePlaceholder')}
             />
-          </div>
-
-          <div className="p-4 bg-slate-50 rounded-lg border border-slate-200 space-y-2">
-            <label htmlFor="ai-topic" className="block text-sm font-medium text-slate-700">
-              {t('announcements.modal.generateWithAi')}
-            </label>
-            <div className="flex flex-col sm:flex-row gap-2">
-              <input
-                type="text"
-                id="ai-topic"
-                maxLength={AI_LIMITS.topicCharacters}
-                value={aiTopic}
-                onChange={(e) => {
-                  setAiTopic(e.target.value);
-                  if (aiError) setAiError(null);
-                }}
-                className="grow block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-xs focus:outline-hidden focus:ring-primary focus:border-primary sm:text-sm"
-                placeholder={t('announcements.modal.aiPlaceholder')}
-              />
-              <Button
-                onClick={handleGenerateContent}
-                disabled={isGenerating}
-                icon={<SparklesIcon />}
-              >
-                {isGenerating ? t('announcements.modal.generating') : tr('Générer le texte', 'إنشاء النص')}
-              </Button>
-            </div>
-            {aiError && (
-              <p className="text-xs text-rose-600 font-medium mt-1" role="alert">
-                {aiError}
-              </p>
-            )}
           </div>
 
           <div>

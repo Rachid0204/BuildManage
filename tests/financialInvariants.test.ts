@@ -219,7 +219,7 @@ async function startHttpServer(directory: string) {
       SYNDIK_SERVER_SECRET: 'a4-server-secret-012345678901234567890',
       SYNDIK_SCHEDULER_SECRET: 'a4-scheduler-secret-012345678901234567890',
       FIREBASE_AUTH_EMULATOR_HOST: '', FIREBASE_SERVICE_ACCOUNT_JSON: '',
-      GEMINI_API_KEY: '', API_KEY: '', SENDGRID_API_KEY: '', SENDGRID_FROM_EMAIL: '',
+      SENDGRID_API_KEY: '', SENDGRID_FROM_EMAIL: '',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });

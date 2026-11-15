@@ -26,7 +26,6 @@ is needed only for `npm run test:emulator`.
 | `SYNDIK_BOOTSTRAP_ADMIN_EMAIL` | Backend | Optional exact email of a verified Google account allowed to bootstrap platform administration |
 | `SYNDIK_BACKUP_KEY` | Operator secret store | Separate backup encryption key, at least 32 random characters; required only for backup/restore |
 | `TRUST_PROXY_HOPS` | Backend | Exact trusted reverse-proxy hop count; zero by default |
-| `GEMINI_API_KEY` | Backend secret store | Optional AI drafting/OCR; OCR never confirms a bank payment |
 
 Use workload identity/application default credentials for the runtime service
 account. Grant access only to the intended Firestore database and private upload
