@@ -1544,33 +1544,6 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                 <Button
                   disabled={approvingBatch}
                   onClick={async () => {
-                    const eligibleProofs = paymentProofs.filter((proof) => {
-                      if (proof.status !== 'pending') return false;
-                      const charge = charges.find((c) => c.id === proof.chargeId);
-                      if (!charge) return false;
-                      const paid = charge.paidAmount ?? (charge.status === 'paid' ? charge.amount : 0);
-                      const remainingCents = Math.max(0, Math.round((charge.amount - paid) * 100));
-                      const proofCents = Math.round((proof.amount || 0) * 100);
-                      return proofCents > 0 && proofCents <= remainingCents;
-                    });
-                    if (eligibleProofs.length === 0) {
-                      showToast(
-                        tr('Aucun justificatif éligible à la validation groupée.', 'لا يوجد أي إثبات مؤهل للمصادقة الجماعية.'),
-                        'info'
-                      );
-                      return;
-                    }
-                    const eligibleTotalMad =
-                      eligibleProofs.reduce((sum, p) => sum + Math.round((p.amount || 0) * 100), 0) / 100;
-                    const confirmed = await confirmAction({
-                      title: tr('Valider les virements conformes', 'تأكيد التحويلات المطابقة'),
-                      message: tr(
-                        `Confirmer la validation de ${eligibleProofs.length} justificatif(s) pour un total de ${eligibleTotalMad.toFixed(2)} MAD ?`,
-                        `تأكيد المصادقة على ${eligibleProofs.length} إثباتات بمبلغ إجمالي ${eligibleTotalMad.toFixed(2)} درهم؟`
-                      ),
-                      confirmLabel: tr('Valider tout', 'تأكيد الكل'),
-                    });
-                    if (!confirmed) return;
                     setApprovingBatch(true);
                     try {
                       const res = await approvePaymentProofsBatch(building.id, undefined, bankPostingOptions);
