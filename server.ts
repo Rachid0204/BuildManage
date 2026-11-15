@@ -824,7 +824,6 @@ async function startServer() {
   if (process.env.SYNDIK_SERVER_SECRET.length < 32) {
     process.env.SYNDIK_SERVER_SECRET = LEGACY_SERVER_SECRET;
   }
-  process.env.SYNDIK_SESSION_SECRET ||= SESSION_HMAC_SECRET;
   process.env.SYNDIK_UPLOAD_BUCKET ||=
     firebaseConfig.storageBucket || "immogest-7faaf.firebasestorage.app";
   process.env.PUBLIC_APP_URL ||= "https://immogest.cloud.run";

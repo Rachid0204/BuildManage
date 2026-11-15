@@ -38,6 +38,7 @@ test('repository refuses production file override',async()=>{
  assert.equal(result.booted,false);assert.equal(result.code,1);assert.match(result.output,/PRODUCTION_CONFIG_INVALID.*SYNDIK_STATE_BACKEND/);
 });
 test('complete production environment boots',async()=>assert.equal((await probe({})).booted,true));
+test('production boots when optional SYNDIK_SESSION_SECRET is omitted',async()=>assert.equal((await probe({SYNDIK_SESSION_SECRET:undefined})).booted,true));
 test('Hosting and workflow use canonical production service',()=>{
  const firebase=JSON.parse(readFileSync('firebase.json','utf8'));
  assert.deepEqual(firebase.hosting.rewrites.find((r:any)=>r.source==='/api/**').run,{serviceId:'buildmanage',region:'europe-west1'});
