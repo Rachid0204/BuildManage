@@ -1,4 +1,18 @@
-import type { Building } from '../../types';
+import type { Building, Transaction } from '../../types';
+
+export function isIncomeTransaction(trx?: Pick<Transaction, 'amount' | 'type'> | null): boolean {
+  if (!trx) return false;
+  if (trx.type === 'expense') return false;
+  if (trx.type === 'income') return true;
+  return (Number(trx.amount) || 0) >= 0;
+}
+
+export function signedTransactionAmount(trx?: Pick<Transaction, 'amount' | 'type'> | null): number {
+  const magnitude = Math.abs(Number(trx?.amount) || 0);
+  if (magnitude === 0) return 0;
+  return isIncomeTransaction(trx) ? magnitude : -magnitude;
+}
+
 /**
  * Fund totals = one opening balance + signed ledger movements, in integer centimes.
  * Canonical openings (including zero) take precedence over the legacy working alias.
@@ -45,4 +59,5 @@ export function computeBuildingFinancialBalances(building?: Building | null): {
 }
 
 export const computeBuildingFundBalances = computeBuildingFinancialBalances;
+
 

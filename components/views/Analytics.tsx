@@ -21,6 +21,7 @@ import type { Building } from '../../types';
 import Card from '../common/Card';
 import { useI18n } from '../../hooks/useI18n';
 import { DashboardSkeleton } from '../common/Skeleton';
+import { isIncomeTransaction } from '../../utils/security';
 
 const currencyFormatter = new Intl.NumberFormat('fr-MA', {
   style: 'currency',
@@ -73,12 +74,19 @@ const Analytics: React.FC<{ building: Building }> = ({ building }) => {
   }, [charges, t]);
 
   const financialSummary = useMemo(() => {
-    const totalBilled = charges.reduce((sum, c) => sum + c.amount, 0);
-    const totalPaid = charges
-      .filter((c) => c.status === 'paid')
-      .reduce((sum, c) => sum + c.amount, 0);
-    const totalPending = totalBilled - totalPaid;
-    const collectionRate = totalBilled > 0 ? Math.round((totalPaid / totalBilled) * 100) : 0;
+    const totalBilledCents = charges.reduce(
+      (sum, c) => sum + Math.round((c.amount || 0) * 100),
+      0
+    );
+    const totalPaidCents = charges.reduce((sum, c) => {
+      const amountCents = Math.round((c.amount || 0) * 100);
+      const rawPaid = c.paidAmount ?? (c.status === 'paid' ? c.amount : 0);
+      return sum + Math.max(0, Math.min(amountCents, Math.round((rawPaid || 0) * 100)));
+    }, 0);
+    const totalBilled = totalBilledCents / 100;
+    const totalPaid = totalPaidCents / 100;
+    const totalPending = (totalBilledCents - totalPaidCents) / 100;
+    const collectionRate = totalBilledCents > 0 ? Math.round((totalPaidCents / totalBilledCents) * 100) : 0;
 
     return { totalBilled, totalPaid, totalPending, collectionRate };
   }, [charges]);
@@ -119,7 +127,7 @@ const Analytics: React.FC<{ building: Building }> = ({ building }) => {
     ledgerTransactions
       .filter(
         (tx: any) =>
-          (tx.amount < 0 || tx.type === 'expense') &&
+          !isIncomeTransaction(tx) &&
           !tx.reversalOf &&
           ['maintenance', 'elevator', 'cleaning', 'security'].includes(tx.category || '')
       )

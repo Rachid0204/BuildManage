@@ -12,3 +12,17 @@ export function privateAttachments(value: unknown): Set<string> {
   visit(value);
   return urls;
 }
+
+export function allAttachmentValues(value: unknown): string[] {
+  const urls: string[] = [];
+  function visit(item: unknown, field = '') {
+    if (typeof item === 'string') {
+      if (fields.has(field) && item.trim() !== '') urls.push(item);
+    } else if (Array.isArray(item)) item.forEach(child => visit(child, field));
+    else if (item && typeof item === 'object')
+      Object.entries(item).forEach(([key, child]) => visit(child, key));
+  }
+  visit(value);
+  return urls;
+}
+

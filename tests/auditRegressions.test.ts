@@ -9,7 +9,8 @@ import { evaluateResolutionStatus } from '../shared/domain/voting';
 import { createCommandService } from '../server/domain/command.service';
 import { createSupportingService } from '../server/domain/supporting.service';
 import { buildingReport } from '../server/reports';
-import { numberToFrenchWords } from '../services/pdfService';
+import { generateScheduledMonthlyCharges } from '../server/operations';
+import { escapeCSVCell, numberToFrenchWords, sanitizePdfText } from '../services/pdfService';
 import type { AGResolution, AssembleeGenerale } from '../types';
 
 const actor = { uid: 'owner-1', role: 'syndic', syndicId: 'cab-1' } as const;
@@ -267,6 +268,8 @@ test('C5: evaluateResolutionStatus resolves unapproved/tied/no-quorum items to r
 
 test('H7: assertPeriod rejects calendar-rollover dates and accepts valid leap day 2024-02-29', async () => {
   const state = baseState();
+  state.syndik_prod_syndics_v1[0].buildings[0].financials.openingWorkingBalance = 100;
+  state.syndik_prod_syndics_v1[0].buildings[0].financials.balance = 100;
   const cmd = createCommandService(state);
 
   for (const badDate of ['2026-02-31', '2026-04-31', '2026-13-01']) {
@@ -592,4 +595,387 @@ test('H17: numberToFrenchWords formats French numbers, millions, milliards, and 
   assert.equal(numberToFrenchWords(2_000_000), 'Deux millions dirhams');
   assert.equal(numberToFrenchWords(1_000_000_000), 'Un milliard dirhams');
   assert.equal(numberToFrenchWords(2_000_000_000), 'Deux milliards dirhams');
+});
+
+test('Rule #1 (worksFundTarget): AG extraordinary-works charges route payment splits per resolution', async () => {
+  const state = baseState();
+  const bld = state.syndik_prod_syndics_v1[0].buildings[0];
+  bld.reserveFundRate = 20;
+  bld.apartments[1].archivedAt = '2026-01-16T00:00:00.000Z';
+  bld.apartments[0].tantiemes = 1000;
+  const openMonth = new Date().toISOString().slice(0, 7);
+  const openDate = `${openMonth}-10`;
+
+  state.syndik_prod_ag_v1 = [
+    {
+      id: 'ag-works-1',
+      syndicId: 'cab-1',
+      buildingId: 'bld-1',
+      title: 'AG Extraordinaire Travaux',
+      type: 'extraordinaire',
+      date: openDate,
+      time: '18:00',
+      location: 'Hall',
+      status: 'completed',
+      quorumRequired: 501,
+      presentTantiemes: 1000,
+      quorumReached: true,
+      totalTantiemes: 1000,
+      isVotingOpen: false,
+      attendees: [
+        { residentId: 'res-1', residentName: 'Resident 1', apartmentNumber: 'A1', tantiemes: 1000, status: 'present' },
+      ],
+      resolutions: [
+        {
+          id: 'res-courant',
+          number: 1,
+          title: 'Ravalement courant',
+          description: 'Courant',
+          majorityType: 'simple',
+          votesFor: 1000,
+          votesAgainst: 0,
+          votesAbstain: 0,
+          status: 'approved',
+          voters: [],
+          budgetAmount: 1000,
+          generatesCharges: true,
+          worksFundTarget: 'courant',
+        },
+        {
+          id: 'res-reserve',
+          number: 2,
+          title: 'Étanchéité réserve',
+          description: 'Réserve',
+          majorityType: 'simple',
+          votesFor: 1000,
+          votesAgainst: 0,
+          votesAbstain: 0,
+          status: 'approved',
+          voters: [],
+          budgetAmount: 1000,
+          generatesCharges: true,
+          worksFundTarget: 'reserve',
+        },
+        {
+          id: 'res-default',
+          number: 3,
+          title: 'Travaux taux immeuble',
+          description: 'Défaut',
+          majorityType: 'simple',
+          votesFor: 1000,
+          votesAgainst: 0,
+          votesAbstain: 0,
+          status: 'approved',
+          voters: [],
+          budgetAmount: 1000,
+          generatesCharges: true,
+          worksFundTarget: 'default',
+        },
+      ],
+    },
+  ];
+
+  const cmd = createCommandService(state);
+  await cmd.runOperation(actor, 'generateChargesFromAGResolution', ['ag-works-1', 'res-courant'], 'op-ag-courant');
+  await cmd.runOperation(actor, 'generateChargesFromAGResolution', ['ag-works-1', 'res-reserve'], 'op-ag-reserve');
+  await cmd.runOperation(actor, 'generateChargesFromAGResolution', ['ag-works-1', 'res-default'], 'op-ag-default');
+
+  const chgCourant = state.syndik_prod_charges_v1.find((c: any) => c.id === 'chg-ag-ag-works-1-res-courant-apt-1');
+  const chgReserve = state.syndik_prod_charges_v1.find((c: any) => c.id === 'chg-ag-ag-works-1-res-reserve-apt-1');
+  const chgDefault = state.syndik_prod_charges_v1.find((c: any) => c.id === 'chg-ag-ag-works-1-res-default-apt-1');
+  assert.equal(chgCourant.worksFundTarget, 'courant');
+  assert.equal(chgReserve.worksFundTarget, 'reserve');
+  assert.equal(chgDefault.worksFundTarget, undefined);
+
+  const qCourant = await cmd.runOperation(actor, 'createQuittance', [{
+    buildingId: 'bld-1', syndicId: 'cab-1', chargeId: chgCourant.id, residentId: 'res-1', residentName: 'Resident 1',
+    apartmentId: 'apt-1', apartmentNumber: 'A1', buildingName: 'Résidence Test', syndicName: 'Cabinet Test',
+    amount: 1000, periodCovered: chgCourant.period, paymentDate: openDate, paymentMethod: 'virement', paymentId: 'pay-w-1',
+  }], 'op-pay-w-1');
+  assert.equal(qCourant.reserveRateApplied, 0);
+  assert.equal(qCourant.reserveFundAmount, 0);
+  assert.equal(qCourant.chargesCourantesAmount, 1000);
+
+  const qReserve = await cmd.runOperation(actor, 'createQuittance', [{
+    buildingId: 'bld-1', syndicId: 'cab-1', chargeId: chgReserve.id, residentId: 'res-1', residentName: 'Resident 1',
+    apartmentId: 'apt-1', apartmentNumber: 'A1', buildingName: 'Résidence Test', syndicName: 'Cabinet Test',
+    amount: 1000, periodCovered: chgReserve.period, paymentDate: openDate, paymentMethod: 'virement', paymentId: 'pay-w-2',
+  }], 'op-pay-w-2');
+  assert.equal(qReserve.reserveRateApplied, 100);
+  assert.equal(qReserve.reserveFundAmount, 1000);
+  assert.equal(qReserve.chargesCourantesAmount, 0);
+
+  const qDefault = await cmd.runOperation(actor, 'createQuittance', [{
+    buildingId: 'bld-1', syndicId: 'cab-1', chargeId: chgDefault.id, residentId: 'res-1', residentName: 'Resident 1',
+    apartmentId: 'apt-1', apartmentNumber: 'A1', buildingName: 'Résidence Test', syndicName: 'Cabinet Test',
+    amount: 1000, periodCovered: chgDefault.period, paymentDate: openDate, paymentMethod: 'virement', paymentId: 'pay-w-3',
+  }], 'op-pay-w-3');
+  assert.equal(qDefault.reserveRateApplied, 20);
+  assert.equal(qDefault.reserveFundAmount, 200);
+  assert.equal(qDefault.chargesCourantesAmount, 800);
+
+  assert.equal(state.syndik_prod_syndics_v1[0].buildings[0].financials.balance, 1800);
+  assert.equal(state.syndik_prod_syndics_v1[0].buildings[0].financials.reserveFundBalance, 1200);
+});
+
+test('Rule #2 (monthly billing): scheduled billing starts with owner assignment, rejects unlinked payer, allows open future month, and skips 0 MAD tantiemes lots', async () => {
+  // 1) Scheduled monthly billing rejects unlinked active lot with monthlyFees > 0
+  const sFail = baseState();
+  const dir1 = await mkdtemp(join(tmpdir(), 'rule2-fail-'));
+  try {
+    const repo1 = new FileRepository(dir1);
+    await repo1.transaction(async (repoState) => { Object.assign(repoState, sFail); });
+    const runFail = await generateScheduledMonthlyCharges(repo1, '2026-11');
+    assert.equal(runFail.failed, 1);
+    assert.equal(runFail.results[0].code, 'BILLING_PAYER_INVALID');
+    assert.equal(runFail.results[0].httpStatus, 400);
+  } finally {
+    await rm(dir1, { recursive: true, force: true });
+  }
+
+  // 2) Scheduled monthly billing bills owner (even when tenant also exists) and skips archived lots
+  const sOk = baseState();
+  const bldOk = sOk.syndik_prod_syndics_v1[0].buildings[0];
+  bldOk.residents.push({
+    id: 'res-tenant',
+    syndicId: 'cab-1',
+    buildingId: 'bld-1',
+    apartmentId: 'apt-1',
+    name: 'Tenant 1',
+    email: 'ten1@test.ma',
+    phone: '0600000010',
+    isOwner: false,
+    hasAccount: false,
+  });
+  bldOk.apartments[0].tenantId = 'res-tenant';
+  bldOk.apartments[1].archivedAt = '2026-01-20T00:00:00.000Z';
+
+  const dir2 = await mkdtemp(join(tmpdir(), 'rule2-ok-'));
+  try {
+    const repo2 = new FileRepository(dir2);
+    await repo2.transaction(async (repoState) => { Object.assign(repoState, sOk); });
+    const runOk = await generateScheduledMonthlyCharges(repo2, '2026-11');
+    assert.equal(runOk.succeeded, 1);
+    assert.equal(runOk.created, 1);
+    await repo2.transaction(async (after) => {
+      assert.equal(after.syndik_prod_charges_v1.length, 1);
+      assert.equal(after.syndik_prod_charges_v1[0].residentId, 'res-1');
+    });
+  } finally {
+    await rm(dir2, { recursive: true, force: true });
+  }
+
+  // 3) Manual generateMonthlyCharges allows open future period when current period is closed and skips 0 MAD tantiemes lots
+  const sManual = baseState();
+  const bldM = sManual.syndik_prod_syndics_v1[0].buildings[0];
+  bldM.residents.push({
+    id: 'res-2',
+    syndicId: 'cab-1',
+    buildingId: 'bld-1',
+    apartmentId: 'apt-2',
+    name: 'Resident 2',
+    email: 'res2@test.ma',
+    phone: '0600000003',
+    isOwner: true,
+    hasAccount: false,
+  });
+  bldM.apartments[1].ownerId = 'res-2';
+  bldM.apartments[1].tantiemes = 0;
+  bldM.apartments[0].tantiemes = 1000;
+  sManual.__closedPeriods = { 'bld-1:2026-03': { closedAt: '2026-04-01T00:00:00.000Z' } };
+
+  const cmd = createCommandService(sManual);
+  await assert.rejects(
+    cmd.runOperation(actor, 'generateMonthlyCharges', ['bld-1', 'cab-1', '2026-03'], 'op-closed-2026-03'),
+    /Période comptable clôturée/i,
+  );
+  const futureCharges = await cmd.runOperation(
+    actor,
+    'generateMonthlyCharges',
+    ['bld-1', 'cab-1', '2026-04', { useTantiemes: true, totalMonthlyBudget: 600 }],
+    'op-open-2026-04',
+  );
+  assert.equal(futureCharges.length, 1, 'zero-MAD lot with 0 tantiemes must be skipped in useTantiemes mode');
+  assert.equal(futureCharges[0].apartmentId, 'apt-1');
+  assert.equal(futureCharges[0].amount, 600);
+});
+
+test('Rule #3 (overdraft block & statement opening arrears): addTransaction enforces fund balance unless overridden with reason, and buildingReport exposes openingArrearsBilled & openingArrearsOutstanding', async () => {
+  const state = baseState();
+  const bld = state.syndik_prod_syndics_v1[0].buildings[0];
+  bld.financials.openingWorkingBalance = 100;
+  bld.financials.balance = 100;
+  const openDate = new Date().toISOString().slice(0, 10);
+  const cmd = createCommandService(state);
+
+  await assert.rejects(
+    cmd.runOperation(actor, 'addTransaction', ['bld-1', {
+      description: 'Dépense dépassant le solde',
+      amount: 150,
+      type: 'expense',
+      category: 'maintenance',
+      fundType: 'courant',
+      date: openDate,
+    }], 'op-overdraft-blocked'),
+    (err: any) => err?.code === 'INSUFFICIENT_FUND_BALANCE' && err?.status === 409,
+  );
+
+  const overridden = await cmd.runOperation(actor, 'addTransaction', ['bld-1', {
+    description: 'Réparation urgente ascenseur',
+    amount: 150,
+    type: 'expense',
+    category: 'elevator',
+    fundType: 'courant',
+    date: openDate,
+    overdraftOverrideReason: 'Avance urgence validée par le conseil syndical',
+  }], 'op-overdraft-allowed');
+  assert.equal(overridden.amount, -150);
+  assert.equal(overridden.overdraftOverrideReason, 'Avance urgence validée par le conseil syndical');
+  assert.equal(state.syndik_prod_syndics_v1[0].buildings[0].financials.balance, -50);
+  const overrideAudit = state.syndik_prod_audit_v1.find((a: any) => a.operation === 'overdraftExpenseOverride');
+  assert.ok(overrideAudit);
+  assert.equal(overrideAudit.detail.reason, 'Avance urgence validée par le conseil syndical');
+
+  // Opening arrears statement breakdown
+  state.syndik_prod_charges_v1.push(
+    {
+      id: 'open-1', buildingId: 'bld-1', syndicId: 'cab-1', apartmentId: 'apt-1', residentId: 'res-1',
+      period: '2025-12', periodKey: '2025-12', amount: 500, paidAmount: 200, status: 'unpaid',
+      dueDate: '2025-12-05', chargeType: 'opening_arrears', openingArrears: true,
+    },
+    {
+      id: 'curr-1', buildingId: 'bld-1', syndicId: 'cab-1', apartmentId: 'apt-1', residentId: 'res-1',
+      period: '2026-01', periodKey: '2026-01', amount: 300, paidAmount: 100, status: 'unpaid',
+      dueDate: '2026-01-05', chargeType: 'courante',
+    },
+  );
+  const dir = await mkdtemp(join(tmpdir(), 'audit-reg-r3-'));
+  let report: any;
+  try {
+    await new FileRepository(dir).transaction(async (repoState) => {
+      Object.assign(repoState, state);
+      report = buildingReport(repoState, actor, 'bld-1');
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+  const stmt = report.statements.find((s: any) => s.residentId === 'res-1');
+  assert.equal(stmt.billed, 800);
+  assert.equal(stmt.paid, 300);
+  assert.equal(stmt.outstanding, 500);
+  assert.equal(stmt.openingArrearsBilled, 500);
+  assert.equal(stmt.openingArrearsOutstanding, 300);
+});
+
+test('FIN-011/013/014: transferFunds, voidInvoice, and reverseExpense enforce invariants, closed periods, and tenant isolation', async () => {
+  const state = baseState();
+  const bld = state.syndik_prod_syndics_v1[0].buildings[0];
+  bld.financials.openingWorkingBalance = 500;
+  bld.financials.balance = 500;
+  bld.financials.openingReserveBalance = 300;
+  bld.financials.reserveFundBalance = 300;
+  const openDate = new Date().toISOString().slice(0, 10);
+  const foreignActor = { uid: 'owner-other', role: 'syndic', syndicId: 'cab-other' } as const;
+  const cmd = createCommandService(state);
+
+  // 1. transferFunds
+  const transferRes = await cmd.runOperation(actor, 'transferFunds', ['bld-1', {
+    fromFund: 'courant', toFund: 'reserve', amount: 250, date: openDate, reason: 'Dotation réserve votée AG',
+  }], 'op-trf-1');
+  assert.equal(state.syndik_prod_syndics_v1[0].buildings[0].financials.balance, 250);
+  assert.equal(state.syndik_prod_syndics_v1[0].buildings[0].financials.reserveFundBalance, 550);
+  assert.equal(transferRes.outTransaction.transferDirection, 'out');
+  assert.equal(transferRes.inTransaction.transferDirection, 'in');
+
+  await assert.rejects(
+    cmd.runOperation(actor, 'transferFunds', ['bld-1', {
+      fromFund: 'courant', toFund: 'reserve', amount: 300, date: openDate, reason: 'Dépassement fonds',
+    }], 'op-trf-over'),
+    (err: any) => err?.code === 'INSUFFICIENT_FUND_BALANCE' && err?.status === 409,
+  );
+  await assert.rejects(
+    cmd.runOperation(actor, 'transferFunds', ['bld-1', {
+      fromFund: 'courant', toFund: 'courant', amount: 10, date: openDate, reason: 'Même fonds',
+    }], 'op-trf-same'),
+    /identiques|invalides/i,
+  );
+  await assert.rejects(
+    cmd.runOperation(foreignActor, 'transferFunds', ['bld-1', {
+      fromFund: 'courant', toFund: 'reserve', amount: 10, date: openDate, reason: 'Cross-tenant',
+    }], 'op-trf-foreign'),
+    /autorisé/i,
+  );
+
+  // 2. reverseExpense
+  const exp = await cmd.runOperation(actor, 'addTransaction', ['bld-1', {
+    description: 'Facture étanchéité', amount: 120, type: 'expense', category: 'reserve',
+    fundType: 'reserve', date: openDate,
+  }], 'op-exp-res');
+  assert.equal(state.syndik_prod_syndics_v1[0].buildings[0].financials.reserveFundBalance, 430);
+
+  // Cannot reverse transfer entry or income entry
+  await assert.rejects(
+    cmd.runOperation(actor, 'reverseExpense', ['bld-1', transferRes.outTransaction.id, 'Interdit'], 'op-rev-trf'),
+    /virements internes/i,
+  );
+  await assert.rejects(
+    cmd.runOperation(foreignActor, 'reverseExpense', ['bld-1', exp.id, 'Cross-tenant'], 'op-rev-foreign'),
+    /autorisé/i,
+  );
+
+  const revExp = await cmd.runOperation(actor, 'reverseExpense', ['bld-1', exp.id, 'Avoir fournisseur'], 'op-rev-exp-1');
+  assert.equal(revExp.reversalOf, exp.id);
+  assert.equal(revExp.type, 'income');
+  assert.equal(state.syndik_prod_syndics_v1[0].buildings[0].financials.reserveFundBalance, 550);
+
+  // Double reversal blocked
+  await assert.rejects(
+    cmd.runOperation(actor, 'reverseExpense', ['bld-1', exp.id, 'Doublon'], 'op-rev-exp-2'),
+    /déjà contrepassée/i,
+  );
+
+  // 3. voidInvoice
+  state.syndik_prod_charges_v1.push({
+    id: 'chg-inv-1', syndicId: 'cab-1', buildingId: 'bld-1', apartmentId: 'apt-1', residentId: 'res-1',
+    amount: 300, paidAmount: 0, status: 'unpaid', period: '2026-05', periodKey: '2026-05', dueDate: '2026-05-05',
+  });
+  const invoice = await cmd.runOperation(actor, 'createInvoiceForResident', ['res-1', 'bld-1', 'cab-1'], 'op-inv-create');
+  assert.equal(state.syndik_prod_charges_v1[0].invoiceId, invoice.id);
+
+  await assert.rejects(
+    cmd.runOperation(foreignActor, 'voidInvoice', ['bld-1', invoice.id, 'Cross-tenant'], 'op-void-foreign'),
+    /autorisé/i,
+  );
+  const voided = await cmd.runOperation(actor, 'voidInvoice', ['bld-1', invoice.id, 'Erreur de facturation'], 'op-void-1');
+  assert.equal(voided, true);
+  assert.equal(state.syndik_prod_invoices_v1[0].status, 'cancelled');
+  assert.equal(state.syndik_prod_invoices_v1[0].voidReason, 'Erreur de facturation');
+  assert.ok(state.syndik_prod_invoices_v1[0].voidedAt);
+  assert.equal(state.syndik_prod_charges_v1[0].invoiceId, undefined);
+
+  await assert.rejects(
+    cmd.runOperation(actor, 'voidInvoice', ['bld-1', invoice.id, 'Deuxième annulation'], 'op-void-2'),
+    /déjà annulée/i,
+  );
+
+  // Closed period blocks transferFunds and reverseExpense
+  state.__closedPeriods = { [`bld-1:${openDate.slice(0, 7)}`]: { closedAt: new Date().toISOString() } };
+  await assert.rejects(
+    cmd.runOperation(actor, 'transferFunds', ['bld-1', {
+      fromFund: 'reserve', toFund: 'courant', amount: 50, date: openDate, reason: 'Période close',
+    }], 'op-trf-closed'),
+    /clôturée/i,
+  );
+});
+
+test('CSV formula-injection & PDF control/bidi sanitization', () => {
+  assert.equal(escapeCSVCell('=1+1'), `"'=1+1"`);
+  assert.equal(escapeCSVCell(' =cmd|" /C calc"!A0'), `"' =cmd|"" /C calc""!A0"`);
+  assert.equal(escapeCSVCell('\t@SUM(A1:A2)'), `"'	@SUM(A1:A2)"`);
+  assert.equal(escapeCSVCell('+100'), `"'+100"`);
+  assert.equal(escapeCSVCell('-50'), `"'${'-50'}"`);
+  assert.equal(escapeCSVCell('Résidence Atlas'), `"Résidence Atlas"`);
+
+  assert.equal(sanitizePdfText('Atlas\u0007\u202EMaroc\u2066'), 'Atlas Maroc');
+  assert.equal(sanitizePdfText('دار السلام'), 'dar alslam');
 });

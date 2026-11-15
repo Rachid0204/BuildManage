@@ -97,7 +97,7 @@ test('command framing rejects unknown operations, internal helpers and malformed
     parseBackendCommand('approvePaymentProofsBatch', ['building']),
     {
       operation: 'approvePaymentProofsBatch',
-      args: ['building', undefined],
+      args: ['building', undefined, undefined],
     },
   );
 });

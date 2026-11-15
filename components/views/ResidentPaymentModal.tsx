@@ -21,6 +21,7 @@ interface Props {
   building?: Building;
   resident?: Resident;
   apartment?: Apartment;
+  pendingProofAmount?: number;
 }
 
 const receiptTypes = [
@@ -38,6 +39,7 @@ export default function ResidentPaymentModal({
   building,
   resident,
   apartment,
+  pendingProofAmount = 0,
 }: Props) {
   const { tr } = useI18n();
   const formId = useId();
@@ -52,10 +54,13 @@ export default function ResidentPaymentModal({
   const [receipt, setReceipt] = useState<File | null>(null);
   const [receiptError, setReceiptError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const remaining = Math.max(
+  const remainingCents = Math.max(
     0,
-    Math.round(((charge?.amount || 0) - (charge?.paidAmount || 0)) * 100) / 100,
+    Math.round((charge?.amount || 0) * 100) -
+      Math.round((charge?.paidAmount || 0) * 100) -
+      Math.round((pendingProofAmount || 0) * 100),
   );
+  const remaining = remainingCents / 100;
 
   const submission = useMutation({
     mutationFn: async () => {

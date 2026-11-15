@@ -8,6 +8,7 @@ import {
   centimes,
   getBuildingReserveRate,
   getRecordedReserveSplit,
+  resolveChargeReserveRate,
   splitChargeReserveAndOperating,
 } from '../../shared/domain/money';
 import { bankDate } from '../../shared/domain/paymentDates';
@@ -189,6 +190,7 @@ export function createFinanceService(context: DomainContext) {
       const computedAmount = centimeAllocationMap
         ? (centimeAllocationMap.get(apt.id) ?? baseFee)
         : Math.round(baseFee * 100) / 100;
+      if (centimeAllocationMap && centimes(computedAmount) <= 0) return;
       const stableId = `chg-${buildingId}-${apt.id}-${normalizedPeriodKey.replace(/[^a-z0-9]/g, '_')}-${resolvedChargeType}`;
       const newCharge: Charge = {
         id: stableId,
@@ -296,16 +298,20 @@ export function createFinanceService(context: DomainContext) {
   const approvePaymentProofsBatch = async (
     buildingId: string,
     proofIds?: string[],
+    options: PaymentPostingOptions = {},
   ): Promise<{
     approvedCount: number;
     totalAmountMad: number;
     quittances: Quittance[];
   }> => {
+    if (Array.isArray(proofIds) && proofIds.length === 0) {
+      return { approvedCount: 0, totalAmountMad: 0, quittances: [] };
+    }
     const proofs = getLocalItem<PaymentProof[]>(STORAGE_KEYS.PROOFS, []);
     const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, []);
     const candidates = proofs.filter((p) => {
       if (p.buildingId !== buildingId || p.status !== 'pending') return false;
-      if (Array.isArray(proofIds) && proofIds.length > 0) {
+      if (Array.isArray(proofIds)) {
         return proofIds.includes(p.id);
       }
       if (
@@ -315,28 +321,43 @@ export function createFinanceService(context: DomainContext) {
         return true;
       const chg = charges.find((c) => c.id === p.chargeId);
       if (!chg) return false;
-      const remaining = Math.max(0, chg.amount - (chg.paidAmount || 0));
-      return Math.abs(p.amount - remaining) < 0.01;
+      const remainingCents = Math.max(
+        0,
+        centimes(chg.amount) - centimes(chg.paidAmount || 0),
+      );
+      return centimes(p.amount) === remainingCents;
     });
     let approvedCount = 0;
-    let totalAmountMad = 0;
+    let totalAmountCents = 0;
     const quittances: Quittance[] = [];
     for (const cand of candidates) {
       const currentChg = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, []).find(
         (c) => c.id === cand.chargeId,
       );
-      const rem = currentChg
-        ? Math.max(0, currentChg.amount - (currentChg.paidAmount || 0))
+      const remCents = currentChg
+        ? Math.max(
+            0,
+            centimes(currentChg.amount) - centimes(currentChg.paidAmount || 0),
+          )
         : 0;
-      if (cand.amount > rem + 0.005) continue;
-      const res = await reviewPaymentProof(cand.id, 'approved');
+      if (centimes(cand.amount) > remCents) continue;
+      const res = await reviewPaymentProof(
+        cand.id,
+        'approved',
+        undefined,
+        options,
+      );
       if (res.success) {
         approvedCount += 1;
-        totalAmountMad = Math.round((totalAmountMad + cand.amount) * 100) / 100;
+        totalAmountCents += centimes(cand.amount);
         if (res.quittance) quittances.push(res.quittance);
       }
     }
-    return { approvedCount, totalAmountMad, quittances };
+    return {
+      approvedCount,
+      totalAmountMad: totalAmountCents / 100,
+      quittances,
+    };
   };
 
   const reviewPaymentProof = async (
@@ -633,6 +654,8 @@ export function createFinanceService(context: DomainContext) {
           core,
         ),
       );
+    } else if (addTransactionToLedger) {
+      bankDate(core.paymentDate);
     }
     assertReceiptCapacity(receipts, building, charge);
     let split: ReturnType<typeof getRecordedReserveSplit>;
@@ -672,6 +695,7 @@ export function createFinanceService(context: DomainContext) {
         charge.invoiceId = invoice.id;
       }
       split = postIncome(building, core.amount, paymentId!, {
+        reserveRateOverride: resolveChargeReserveRate(building, charge),
         sourceChargeId: charge.id,
         sourceInvoiceId: invoice?.id,
         date: core.postingDate ?? core.paymentDate,
@@ -832,10 +856,25 @@ export function createFinanceService(context: DomainContext) {
       paymentId,
       details,
     });
-    const split = splitChargeReserveAndOperating(
-      amount,
-      getBuildingReserveRate(building),
-    );
+    const { reserveRateOverride, reserveSplitOverride, ...txDetails } = details;
+    const split = reserveSplitOverride
+      ? (() => {
+          const totalCents = centimes(amount);
+          const courantCents = centimes(reserveSplitOverride.chargesCourantesAmount);
+          const reserveCents = centimes(reserveSplitOverride.reserveFundAmount);
+          if (courantCents + reserveCents !== totalCents) {
+            throw new Error('Ventilation réserve / courant incohérente.');
+          }
+          return {
+            chargesCourantesAmount: courantCents / 100,
+            reserveFundAmount: reserveCents / 100,
+            reservePercentageUsed: reserveSplitOverride.reservePercentageUsed,
+          };
+        })()
+      : splitChargeReserveAndOperating(
+          amount,
+          reserveRateOverride ?? getBuildingReserveRate(building),
+        );
     building.financials.transactions ||= [];
     for (const [fundType, value] of [
       ['courant', split.chargesCourantesAmount],
@@ -843,12 +882,14 @@ export function createFinanceService(context: DomainContext) {
     ] as const) {
       if (value === 0) continue;
       building.financials.transactions.unshift({
-        ...details,
-        reserveRateApplied: split.reservePercentageUsed,
+        ...txDetails,
+        ...(split.reservePercentageUsed !== undefined
+          ? { reserveRateApplied: split.reservePercentageUsed }
+          : {}),
         id: `trx-${paymentId}-${fundType}`,
         paymentId,
-        date: details.date || new Date().toISOString(),
-        description: details.description || 'Encaissement',
+        date: txDetails.date || new Date().toISOString(),
+        description: txDetails.description || 'Encaissement',
         amount: value,
         type: 'income',
         category: 'fees',
@@ -946,17 +987,16 @@ export function createFinanceService(context: DomainContext) {
       throw new Error('Immeuble introuvable pour le rapprochement bancaire.');
     }
     const submittedAt = new Date().toISOString();
-    // Validate every target date before creating any proof or ledger entry.
-    const datedRows = rows.map((row) => ({
-      row,
-      dates: paymentDates(
-        context,
-        buildingId,
-        bankDate(row.date),
-        submittedAt,
-        options,
-      ),
-    }));
+    // Validate every row's bank date upfront; apply accounting-period checks only to posted credit rows.
+    const datedRows = rows.map((row) => {
+      const parsedBankDate = bankDate(row.date);
+      const rawAmt = Number(row.amount);
+      const isPositiveCredit = Number.isFinite(rawAmt) && Math.round(rawAmt * 100) > 0;
+      const dates = isPositiveCredit
+        ? paymentDates(context, buildingId, parsedBankDate, submittedAt, options)
+        : { bankTransactionDate: parsedBankDate, submissionDate: submittedAt };
+      return { row, dates };
+    });
     const preview = datedRows.map(({ row, dates }) => ({
       bankTransactionDate: dates.bankTransactionDate,
       postingDate: dates.postingDate,
@@ -977,16 +1017,31 @@ export function createFinanceService(context: DomainContext) {
     const existingProofs = getLocalItem<PaymentProof[]>(
       STORAGE_KEYS.PROOFS,
       [],
-    ).filter((p) => p.buildingId === buildingId);
-    const seenBankEventKeys = new Set<string>(
-      existingProofs
+    ).filter((p) => p.buildingId === buildingId && p.status !== 'rejected');
+    const reversedPaymentIds = new Set(
+      (targetBuilding.financials?.transactions || [])
+        .map((t) => t.reversalOf)
+        .filter((id): id is string => Boolean(id)),
+    );
+    const seenBankEventKeys = new Set<string>([
+      ...existingProofs
         .map((p) => (p.referenceNumber || '').trim().toUpperCase())
         .filter(Boolean),
-    );
+      ...(targetBuilding.financials?.transactions || [])
+        .filter(
+          (t) =>
+            t.type === 'income' &&
+            t.reference &&
+            (!t.paymentId || !reversedPaymentIds.has(t.paymentId)),
+        )
+        .map((t) => t.reference!.trim().toUpperCase())
+        .filter(Boolean),
+    ]);
     let matchedCount = 0;
     let unmatchedCount = 0;
     let totalReconciledMad = 0;
     const generatedQuittances: Quittance[] = [];
+    const batchKeyOccurrences = new Map<string, number>();
     for (const { row, dates } of datedRows) {
       const rawAmt = Number(row.amount);
       // Reject non-positive (debit/zero/NaN) rows — never Math.abs() a bank debit into an income receipt
@@ -1001,9 +1056,15 @@ export function createFinanceService(context: DomainContext) {
       }
       const upperLabel = (row.label || '').trim().toUpperCase();
       const cleanRef = (row.reference || '').trim().toUpperCase();
-      const bankEventKey = cleanRef
-        ? cleanRef
-        : `CSV-${buildingId}-${dates.bankTransactionDate}-${cleanAmt.toFixed(2)}-${upperLabel.replace(/[^A-Z0-9]/g, '_').slice(0, 48)}`;
+      let bankEventKey: string;
+      if (cleanRef) {
+        bankEventKey = cleanRef;
+      } else {
+        const baseKey = `CSV-${buildingId}-${dates.bankTransactionDate}-${cleanAmt.toFixed(2)}-${upperLabel.replace(/[^A-Z0-9]/g, '_').slice(0, 48)}`;
+        const count = (batchKeyOccurrences.get(baseKey) || 0) + 1;
+        batchKeyOccurrences.set(baseKey, count);
+        bankEventKey = count === 1 ? baseKey : `${baseKey}#${count}`;
+      }
       // Bank-event idempotency: never reconcile the same bank row twice across repeated imports or within the same file
       if (seenBankEventKeys.has(bankEventKey)) {
         unmatchedCount += 1;
@@ -1022,6 +1083,21 @@ export function createFinanceService(context: DomainContext) {
           ).test(label)
         );
       };
+      const lotMatch = (label: string, aptNumber: string) => {
+        const clean = aptNumber.trim().toUpperCase();
+        if (!clean) return false;
+        const escaped = clean.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        if (/^\d{1,2}$/.test(clean)) {
+          return (
+            label.trim() === clean ||
+            new RegExp(
+              `(^|[^\\p{L}\\p{N}])(?:LOT|APT|APP(?:ARTEMENT)?|STUDIO|VILLA|BOX|PARKING|N°|NO|#)\\s*0*${escaped}($|[^\\p{L}\\p{N}])`,
+              'u',
+            ).test(label)
+          );
+        }
+        return tokenMatch(label, clean);
+      };
       const eligible = charges.filter(
         (c) =>
           c.status !== 'paid' &&
@@ -1029,7 +1105,7 @@ export function createFinanceService(context: DomainContext) {
             Math.round(cleanAmt * 100),
       );
       const lots = eligible.filter((c) =>
-        tokenMatch(
+        lotMatch(
           upperLabel,
           targetBuilding!.apartments.find((a) => a.id === c.apartmentId)
             ?.number || '',
@@ -1145,7 +1221,7 @@ export function createFinanceService(context: DomainContext) {
           ? Math.abs(transaction.amount)
           : transaction.amount;
     const newTrx: Transaction = {
-      id: `trx-${crypto.randomUUID()}`,
+      id: `trx-${randomUUID()}`,
       ...transaction,
       amount: Math.round(signedAmount * 100) / 100,
       type: signedAmount >= 0 ? 'income' : 'expense',
@@ -1155,9 +1231,48 @@ export function createFinanceService(context: DomainContext) {
       const bld = s.buildings.find((b) => b.id === buildingId);
       if (bld) {
         bld.financials.transactions = bld.financials.transactions || [];
+        const balances = computeBuildingFinancialBalances(bld);
+        const targetFund =
+          transaction.fundType === 'reserve' ? 'reserve' : 'courant';
+        const currentFundBalance =
+          targetFund === 'reserve'
+            ? balances.reserveBalance
+            : balances.workingBalance;
+        const projectedCents =
+          Math.round(currentFundBalance * 100) + Math.round(newTrx.amount * 100);
+        if (newTrx.type === 'expense' && projectedCents < 0) {
+          const overrideReason = transaction.overdraftOverrideReason?.trim();
+          if (!overrideReason || overrideReason.length < 3) {
+            throw new OperationError(
+              'Solde du fonds insuffisant pour cette dépense. Fournissez un motif de dérogation explicite.',
+              409,
+              'INSUFFICIENT_FUND_BALANCE',
+            );
+          }
+          newTrx.overdraftOverrideReason = overrideReason;
+          (context.state.syndik_prod_audit_v1 ??= []).push({
+            id: randomUUID(),
+            actorUid: context.actor.uid,
+            actorRole: context.actor.role,
+            syndicId: bld.syndicId,
+            buildingId: bld.id,
+            operation: 'overdraftExpenseOverride',
+            createdAt: new Date().toISOString(),
+            detail: {
+              transactionId: newTrx.id,
+              fundType: targetFund,
+              amount: Math.abs(newTrx.amount),
+              availableBalance: currentFundBalance,
+              projectedBalance: projectedCents / 100,
+              reason: overrideReason,
+            },
+          });
+        } else {
+          delete newTrx.overdraftOverrideReason;
+        }
         bld.financials.transactions.unshift(newTrx);
         // Separate operating fund vs mandatory reserve fund (Law 106-12)
-        if (transaction.fundType === 'reserve') {
+        if (targetFund === 'reserve') {
           bld.financials.reserveFundBalance =
             Math.round(
               ((bld.financials.reserveFundBalance ?? 0) + newTrx.amount) * 100,
@@ -1264,6 +1379,7 @@ export function createFinanceService(context: DomainContext) {
     amount: number,
     method: string,
     paymentReference?: string,
+    options: PaymentPostingOptions = {},
   ) => {
     const cents = centimes(amount);
     if (cents <= 0) throw new Error('Montant invalide.');
@@ -1290,6 +1406,18 @@ export function createFinanceService(context: DomainContext) {
         throw new Error('Référence déjà utilisée.');
       return true;
     }
+    const dates =
+      options &&
+      (options.bankTransactionDate !== undefined ||
+        options.postingDate !== undefined)
+        ? paymentDates(
+            context,
+            building.id,
+            options.bankTransactionDate,
+            options.submissionDate ?? new Date().toISOString(),
+            options,
+          )
+        : undefined;
     if (
       cents >
       centimes(current.totalAmount) - centimes(current.paidAmount ?? 0)
@@ -1334,12 +1462,48 @@ export function createFinanceService(context: DomainContext) {
         : 'unpaid';
     current.paymentIds = [...(current.paymentIds || []), paymentId];
     const receipts = getLocalItem<Quittance[]>(STORAGE_KEYS.QUITTANCES, []);
-    const split = postIncome(building, cents / 100, paymentId, {
+    const allocationSplits = paymentAllocations.map((allocation) => {
+      const charge = linked.find((c) => c.id === allocation.chargeId)!;
+      const rate = resolveChargeReserveRate(building, charge);
+      const chargeSplit = splitChargeReserveAndOperating(
+        allocation.amount,
+        rate,
+      );
+      return { allocation, charge, rate, chargeSplit };
+    });
+    const totalCourantCents = allocationSplits.reduce(
+      (sum, item) => sum + centimes(item.chargeSplit.chargesCourantesAmount),
+      0,
+    );
+    const totalReserveCents = allocationSplits.reduce(
+      (sum, item) => sum + centimes(item.chargeSplit.reserveFundAmount),
+      0,
+    );
+    const distinctRates = new Set(allocationSplits.map((item) => item.rate));
+    const commonRate =
+      distinctRates.size === 1 ? [...distinctRates][0] : undefined;
+    postIncome(building, cents / 100, paymentId, {
       sourceInvoiceId: current.id,
+      ...(dates
+        ? {
+            date: dates.postingDate,
+            bankTransactionDate: dates.bankTransactionDate,
+            postingDate: dates.postingDate,
+            submissionDate: dates.submissionDate,
+            priorPeriodAdjustmentReason: dates.priorPeriodAdjustmentReason,
+          }
+        : {}),
       paymentMethod: method,
       description: `Paiement facture ${current.invoiceNumber}`,
       invoiceNumber: current.invoiceNumber,
       paymentAllocations,
+      reserveSplitOverride: {
+        chargesCourantesAmount: totalCourantCents / 100,
+        reserveFundAmount: totalReserveCents / 100,
+        ...(commonRate !== undefined
+          ? { reservePercentageUsed: commonRate }
+          : {}),
+      },
     });
     for (const allocation of paymentAllocations) {
       assertReceiptCapacity(
@@ -1349,16 +1513,8 @@ export function createFinanceService(context: DomainContext) {
         centimes(allocation.amount),
       );
     }
-    const reserves = allocateBudgetInCentimes(
-      split.reserveFundAmount,
-      paymentAllocations.map((a) => ({
-        id: a.chargeId,
-        tantiemes: centimes(a.amount),
-      })),
-    );
     const snapshots: Quittance[] = [];
-    for (const allocation of paymentAllocations) {
-      const charge = linked.find((c) => c.id === allocation.chargeId)!;
+    for (const { allocation, charge, chargeSplit } of allocationSplits) {
       const apartment = building.apartments.find(
         (a) => a.id === charge.apartmentId,
       );
@@ -1367,9 +1523,16 @@ export function createFinanceService(context: DomainContext) {
       );
       if (!apartment || !resident)
         throw new Error('Lot ou résident non lié au paiement.');
-      const reserve = reserves.get(charge.id) || 0;
       const receipt = numberedReceipt(
         {
+          ...(dates
+            ? {
+                bankTransactionDate: dates.bankTransactionDate,
+                postingDate: dates.postingDate,
+                submissionDate: dates.submissionDate,
+                priorPeriodAdjustmentReason: dates.priorPeriodAdjustmentReason,
+              }
+            : {}),
           paymentId,
           chargeId: charge.id,
           syndicId: current.syndicId,
@@ -1383,16 +1546,11 @@ export function createFinanceService(context: DomainContext) {
           apartmentNumber: apartment.number,
           amount: allocation.amount,
           periodCovered: charge.period || '',
-          paymentDate: new Date().toISOString(),
+          paymentDate: dates?.bankTransactionDate ?? new Date().toISOString(),
           paymentMethod: method,
           referenceNumber: paymentReference,
         },
-        {
-          reserveFundAmount: reserve,
-          chargesCourantesAmount:
-            (centimes(allocation.amount) - centimes(reserve)) / 100,
-          reservePercentageUsed: split.reservePercentageUsed,
-        },
+        chargeSplit,
         receipts,
         syndics,
       );
@@ -1402,6 +1560,23 @@ export function createFinanceService(context: DomainContext) {
     building.financials.transactions.find(
       (t) => t.paymentId === paymentId,
     )!.receiptSnapshots = snapshots;
+    if (dates?.priorPeriodAdjustmentReason) {
+      (context.state.syndik_prod_audit_v1 ??= []).push({
+        id: randomUUID(),
+        actorUid: context.actor.uid,
+        actorRole: context.actor.role,
+        syndicId: current.syndicId,
+        buildingId: building.id,
+        operation: 'priorPeriodPaymentAdjustment',
+        createdAt: new Date().toISOString(),
+        detail: {
+          paymentId,
+          bankTransactionDate: dates.bankTransactionDate,
+          postingDate: dates.postingDate,
+          reason: dates.priorPeriodAdjustmentReason,
+        },
+      });
+    }
     setLocalItem(STORAGE_KEYS.INVOICES, invoices);
     setLocalItem(STORAGE_KEYS.CHARGES, charges);
     setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
@@ -1661,19 +1836,21 @@ function financialOperation(
     }
     for (const t of original) {
       const { receiptSnapshots: _rs, ...txRest } = t;
+      const originalAbsCents = Math.abs(cents(t.amount));
       const inverse = {
         ...txRest,
         id: randomUUID(),
         paymentId: `reversal:${operationId}`,
         reversalOf: paymentId,
         type: "expense",
+        amount: -originalAbsCents / 100,
         description: `Contrepassation : ${reason}`,
         date: new Date().toISOString(),
       };
       journal.unshift(inverse);
       const field = t.fundType === "reserve" ? "reserveFundBalance" : "balance";
       b.financials[field] =
-        (cents(b.financials[field] || 0) - cents(t.amount)) / 100;
+        (cents(b.financials[field] || 0) - originalAbsCents) / 100;
     }
     for (const receipt of transactionState.syndik_prod_quittances_v1 || [])
       if (
@@ -1691,6 +1868,171 @@ function financialOperation(
       total: total / 100,
     });
     return true;
+  }
+  if (operation === "transferFunds") {
+    check(
+      b.financials?.openingBalancesRecordedAt,
+      "Confirmez les soldes initiaux dans les outils financiers.",
+      409,
+    );
+    const input = object(args[1]);
+    const fromFund = input.fromFund === "reserve" ? "reserve" : input.fromFund === "courant" ? "courant" : null;
+    const toFund = input.toFund === "reserve" ? "reserve" : input.toFund === "courant" ? "courant" : null;
+    check(fromFund && toFund && fromFund !== toFund, "Fonds source et destination invalides ou identiques.", 400);
+    const amountCents = cents(input.amount);
+    check(amountCents > 0, "Montant du virement invalide.", 400);
+    const reason = str(input.reason, 1000).trim();
+    check(reason.length >= 3, "Motif du virement requis (min 3 caractères).", 400);
+    const dateStr = str(input.date, 40);
+    assertPeriod(b, dateStr);
+    const balances = computeBuildingFinancialBalances(b);
+    const sourceBalCents = Math.round(
+      (fromFund === "reserve" ? balances.reserveBalance : balances.workingBalance) * 100,
+    );
+    if (sourceBalCents < amountCents) {
+      throw new OperationError(
+        "Solde du fonds source insuffisant pour effectuer ce virement.",
+        409,
+        "INSUFFICIENT_FUND_BALANCE",
+      );
+    }
+    const transferId = `trf-${operationId}`;
+    const labelFrom = fromFund === "reserve" ? "Fonds de Réserve" : "Compte Courant";
+    const labelTo = toFund === "reserve" ? "Fonds de Réserve" : "Compte Courant";
+    const description = `Virement interne (${labelFrom} -> ${labelTo}) : ${reason}`;
+    const outTransaction: Transaction = {
+      id: `trx-${transferId}-out`,
+      transferId,
+      transferDirection: "out",
+      paymentId: `${transferId}:out`,
+      date: dateStr,
+      description,
+      amount: -amountCents / 100,
+      type: "expense",
+      category: "reserve",
+      fundType: fromFund,
+      notes: reason,
+    };
+    const inTransaction: Transaction = {
+      id: `trx-${transferId}-in`,
+      transferId,
+      transferDirection: "in",
+      paymentId: `${transferId}:in`,
+      date: dateStr,
+      description,
+      amount: amountCents / 100,
+      type: "income",
+      category: "reserve",
+      fundType: toFund,
+      notes: reason,
+    };
+    b.financials.transactions = b.financials.transactions || [];
+    b.financials.transactions.unshift(inTransaction, outTransaction);
+    const nextBalances = computeBuildingFinancialBalances(b);
+    b.financials.balance = nextBalances.workingBalance;
+    b.financials.reserveFundBalance = nextBalances.reserveBalance;
+    appendAudit(transactionState, actor, operation, b.id, {
+      transferId,
+      fromFund,
+      toFund,
+      amount: amountCents / 100,
+      date: dateStr,
+      reason,
+    });
+    return {
+      transferId,
+      outTransaction,
+      inTransaction,
+      financials: b.financials,
+    };
+  }
+  if (operation === "voidInvoice") {
+    const invoiceId = str(args[1]);
+    const reason = str(args[2], 1000).trim();
+    check(reason.length >= 3, "Motif d'annulation requis (min 3 caractères).", 400);
+    const invoices = (transactionState.syndik_prod_invoices_v1 ??= []);
+    const invoice = invoices.find(
+      (i: any) => i.id === invoiceId && i.buildingId === b.id && i.syndicId === b.syndicId,
+    );
+    check(invoice, "Facture introuvable.", 404);
+    check(invoice.status !== "cancelled", "Facture déjà annulée.", 409);
+    check(
+      cents(invoice.paidAmount ?? 0) === 0 && !(Array.isArray(invoice.paymentIds) && invoice.paymentIds.length > 0),
+      "Impossible d'annuler une facture ayant des règlements enregistrés. Contrepassez d'abord les paiements.",
+      409,
+    );
+    invoice.status = "cancelled";
+    invoice.voidedAt = new Date().toISOString();
+    invoice.voidReason = reason;
+    for (const charge of transactionState.syndik_prod_charges_v1 || []) {
+      if (charge.buildingId === b.id && charge.syndicId === b.syndicId && charge.invoiceId === invoice.id) {
+        delete charge.invoiceId;
+      }
+    }
+    appendAudit(transactionState, actor, operation, b.id, {
+      invoiceId: invoice.id,
+      invoiceNumber: invoice.invoiceNumber,
+      reason,
+    });
+    return true;
+  }
+  if (operation === "reverseExpense") {
+    check(
+      b.financials?.openingBalancesRecordedAt,
+      "Confirmez les soldes initiaux dans les outils financiers.",
+      409,
+    );
+    const transactionId = str(args[1]);
+    const reason = str(args[2], 1000).trim();
+    check(reason.length >= 3, "Motif de contrepassation requis (min 3 caractères).", 400);
+    const nowIso = new Date().toISOString();
+    assertPeriod(b, nowIso);
+    const journal: Transaction[] = (b.financials.transactions ??= []);
+    const original = journal.find((t) => t.id === transactionId);
+    check(original, "Écriture comptable introuvable.", 404);
+    check(!original.reversalOf, "Impossible de contrepasser une contrepassation.", 409);
+    check(!original.transferId, "Les virements internes ne peuvent pas être contrepassés individuellement.", 409);
+    const originalCents = cents(original.amount);
+    const isExpense = original.type === "expense" || (!original.type && originalCents < 0);
+    check(isExpense && Math.abs(originalCents) > 0, "Seules les dépenses peuvent être contrepassées via cette opération.", 409);
+    check(
+      !journal.some((t) => t.reversalOf === original.id),
+      "Dépense déjà contrepassée.",
+      409,
+    );
+    assertPeriod(b, original.date);
+    const absCents = Math.abs(originalCents);
+    const fund: "courant" | "reserve" = original.fundType === "reserve" ? "reserve" : "courant";
+    const reversalTx: Transaction = {
+      id: `trx-rev-${randomUUID()}`,
+      date: nowIso,
+      description: `Contrepassation dépense (${original.description}) : ${reason}`,
+      amount: absCents / 100,
+      type: "income",
+      category: original.category || "other",
+      fundType: fund,
+      paymentMethod: original.paymentMethod,
+      reference: original.reference,
+      documentType: original.documentType,
+      invoiceNumber: original.invoiceNumber,
+      thirdPartyName: original.thirdPartyName,
+      thirdPartyIce: original.thirdPartyIce,
+      bankName: original.bankName,
+      notes: reason,
+      reversalOf: original.id,
+      paymentId: `expense-reversal:${operationId}`,
+    };
+    journal.unshift(reversalTx);
+    const field = fund === "reserve" ? "reserveFundBalance" : "balance";
+    b.financials[field] = (cents(b.financials[field] || 0) + absCents) / 100;
+    appendAudit(transactionState, actor, operation, b.id, {
+      transactionId: original.id,
+      reversalId: reversalTx.id,
+      fundType: fund,
+      amount: absCents / 100,
+      reason,
+    });
+    return reversalTx;
   }
 }
 return {financialOperation};

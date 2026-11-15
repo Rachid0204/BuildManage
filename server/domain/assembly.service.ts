@@ -69,9 +69,22 @@ export function createAssemblyService(context: DomainContext) {
         'Aucun lot configuré dans cet immeuble pour répartir le budget voté.',
       );
     }
-    const targets = targetBuilding.apartments
-      .filter((a: any) => !a.archivedAt)
-      .map((apt) => ({ apt, residentId: billingPayer(targetBuilding!, apt) }));
+    const snapshotLots = ag.votingSnapshot?.apartments?.length
+      ? ag.votingSnapshot.apartments.filter((a: any) => !a.archivedAt)
+      : targetBuilding.apartments.filter((a: any) => !a.archivedAt);
+    const targets = snapshotLots.map((snapApt: any) => {
+      const liveApt = targetBuilding!.apartments.find(
+        (a) => a.id === snapApt.id && !(a as any).archivedAt,
+      );
+      const payerLot = liveApt ?? snapApt;
+      return {
+        apt: {
+          ...payerLot,
+          tantiemes: snapApt.tantiemes ?? liveApt?.tantiemes ?? 100,
+        },
+        residentId: billingPayer(targetBuilding!, payerLot),
+      };
+    });
     targets.forEach(({ apt, residentId }) =>
       requireBudgetPayer(apt, residentId),
     );
@@ -79,10 +92,15 @@ export function createAssemblyService(context: DomainContext) {
       id: a.id,
       tantiemes: a.tantiemes ?? 100,
     }));
+    const effectiveTotalTantiemes = ag.votingSnapshot?.apartments?.length
+      ? (ag.totalTantiemes ??
+          lots.reduce((sum, lot) => sum + (lot.tantiemes || 0), 0)) ||
+        1000
+      : (targetBuilding.totalTantiemes ?? 1000);
     const allocations = allocateBudgetInCentimes(
       budgetMad,
       lots,
-      targetBuilding.totalTantiemes ?? 1000,
+      effectiveTotalTantiemes,
     );
     const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, []);
     const nowIso = new Date().toISOString();
@@ -118,6 +136,9 @@ export function createAssemblyService(context: DomainContext) {
         period: `AG ${new Date(ag.date).getFullYear()} - Rés. #${res.number}`,
         description: `Appel de fonds AG (${ag.title}) — Résolution #${res.number}: ${res.title}`,
         chargeType: 'exceptionnelle_travaux',
+        ...(res.worksFundTarget && res.worksFundTarget !== 'default'
+          ? { worksFundTarget: res.worksFundTarget }
+          : {}),
         tantiemesApplied: apt.tantiemes ?? 100,
         createdAt: nowIso,
       };
@@ -154,6 +175,7 @@ export function createAssemblyService(context: DomainContext) {
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
+import { bankDate } from '../../shared/domain/paymentDates';
 import {
   canonicalQuorum,
   presentVotingWeight,
@@ -274,6 +296,13 @@ async function meetingOperation(actor: Actor, operation: string, args: any[]) {
       "agendaItems",
       "pvSummary",
     ]);
+    if (metadata.date !== undefined && String(metadata.date).trim() !== "") {
+      try {
+        metadata.date = bankDate(String(metadata.date));
+      } catch {
+        check(false, "Date d'assemblée invalide.", 400);
+      }
+    }
     if (old?.votingSnapshot) {
       check(
         isDeepStrictEqual(
@@ -284,6 +313,7 @@ async function meetingOperation(actor: Actor, operation: string, args: any[]) {
             r.majorityType,
             r.budgetAmount,
             r.generatesCharges,
+            r.worksFundTarget ?? 'default',
           ]),
           old.resolutions.map((r: any) => [
             r.id,
@@ -292,6 +322,7 @@ async function meetingOperation(actor: Actor, operation: string, args: any[]) {
             r.majorityType,
             r.budgetAmount,
             r.generatesCharges,
+            r.worksFundTarget ?? 'default',
           ]),
         ),
         "Résolutions figées après ouverture.",
@@ -337,6 +368,13 @@ async function meetingOperation(actor: Actor, operation: string, args: any[]) {
             ])
             .parse(r.majorityType),
           ...(r.generatesCharges !== undefined ? { generatesCharges: z.boolean().parse(r.generatesCharges) } : {}),
+          ...(r.worksFundTarget !== undefined
+            ? {
+                worksFundTarget: z
+                  .enum(["default", "courant", "reserve"])
+                  .parse(r.worksFundTarget),
+              }
+            : {}),
           budgetAmount:
             r.budgetAmount === undefined
               ? undefined

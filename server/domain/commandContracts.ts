@@ -41,6 +41,14 @@ const backendArguments = {
       (value) => (value === null ? undefined : value),
       z.array(z.string()).optional(),
     ),
+    z.preprocess(
+      (value) => (value === null ? undefined : value),
+      z
+        .custom<Parameters<BackendMethods['approvePaymentProofsBatch']>[2]>(
+          isRecord,
+        )
+        .optional(),
+    ),
   ]),
   reviewPaymentProof: z.tuple([
     z.string(),
@@ -112,6 +120,12 @@ const backendArguments = {
     z.preprocess(
       (value) => (value === null ? undefined : value),
       z.string().optional(),
+    ),
+    z.preprocess(
+      (value) => (value === null ? undefined : value),
+      z
+        .custom<Parameters<BackendMethods['recordPayment']>[4]>(isRecord)
+        .optional(),
     ),
   ]),
   addBuilding: z.tuple([
@@ -281,6 +295,9 @@ export const CommandEnvelopeSchema = CommandIdentitySchema.extend({
     'closeFinancialPeriod',
     'reopenFinancialPeriod',
     'reversePayment',
+    'transferFunds',
+    'voidInvoice',
+    'reverseExpense',
     'importOpeningArrears',
     'restoreArchived',
     'adminCreateCabinet',

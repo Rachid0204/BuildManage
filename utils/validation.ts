@@ -111,6 +111,52 @@ export const TransactionSchema = z.object({
   bankName: z.string().optional(),
   lotNumber: z.string().optional(),
   notes: z.string().optional(),
+  overdraftOverrideReason: z.string().trim().min(3, "Motif de dépassement requis (min 3 caractères)").max(1000).optional(),
+});
+
+export const PrestataireSchema = z.object({
+  id: z.string().min(1).max(120).optional(),
+  syndicId: z.string().max(120).optional(),
+  buildingId: z.string().min(1).max(120),
+  name: z.string().trim().min(1).max(200),
+  contactPerson: z.string().max(200).optional(),
+  category: z.enum([
+    'plumbing',
+    'electrical',
+    'elevator',
+    'security',
+    'cleaning',
+    'gardener',
+    'locksmith',
+    'painting',
+    'air_conditioning',
+    'insurance',
+    'other',
+  ]),
+  phone: z.string().trim().min(4).max(40),
+  whatsapp: z.string().max(40).optional(),
+  email: z.string().max(200).optional().default(''),
+  city: z.string().max(120).optional(),
+  address: z.string().max(300).optional(),
+  ice: z.string().max(60).optional(),
+  rc: z.string().max(60).optional(),
+  ifNumber: z.string().max(60).optional(),
+  rib: z.string().max(60).optional(),
+  bankName: z.string().max(120).optional(),
+  contractRef: z.string().max(120).optional(),
+  contractType: z.enum(['mensuel', 'annuel', 'ponctuel']).optional(),
+  monthlyRetainer: z.number().finite().nonnegative().max(1e9).optional(),
+  hourlyRate: z.union([z.number().finite().nonnegative().max(1e7), z.string().max(60)]).optional(),
+  availability: z.enum(['24/7', 'business_hours', 'on_call']).optional(),
+  verified: z.boolean().optional(),
+  isVerifiedBySyndic: z.boolean().optional(),
+  isEmergency247: z.boolean().optional(),
+  active: z.boolean().optional(),
+  responseTimeHours: z.number().finite().nonnegative().max(10000).optional(),
+  description: z.string().max(2000).optional(),
+  notes: z.string().max(5000).optional(),
+  specialties: z.array(z.string().max(100)).max(30).optional(),
+  status: z.enum(['active', 'inactive']).optional(),
 });
 
 export type ValidResident = z.infer<typeof ResidentSchema>;
@@ -118,3 +164,5 @@ export type ValidApartment = z.infer<typeof ApartmentSchema>;
 export type ValidBuilding = z.infer<typeof BuildingSchema>;
 export type ValidSyndic = z.infer<typeof SyndicSchema>;
 export type ValidTransaction = z.infer<typeof TransactionSchema>;
+export type ValidPrestataire = z.infer<typeof PrestataireSchema>;
+

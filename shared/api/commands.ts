@@ -54,6 +54,7 @@ export interface BackendMethods {
   approvePaymentProofsBatch: (
     buildingId: string,
     proofIds?: string[],
+    options?: PaymentPostingOptions,
   ) => Promise<{
     approvedCount: number;
     totalAmountMad: number;
@@ -106,6 +107,7 @@ export interface BackendMethods {
     amount: number,
     method: string,
     paymentReference?: string,
+    options?: PaymentPostingOptions,
   ) => Promise<boolean>;
   addBuilding: (
     syndicId: string,
@@ -277,6 +279,31 @@ export interface CoordinatedMethods {
     paymentId: string,
     reason: string,
   ) => Promise<boolean>;
+  transferFunds: (
+    buildingId: string,
+    input: {
+      fromFund: 'courant' | 'reserve';
+      toFund: 'courant' | 'reserve';
+      amount: number;
+      date: string;
+      reason: string;
+    },
+  ) => Promise<{
+    transferId: string;
+    outTransaction: Transaction;
+    inTransaction: Transaction;
+    financials: Building['financials'];
+  }>;
+  voidInvoice: (
+    buildingId: string,
+    invoiceId: string,
+    reason: string,
+  ) => Promise<boolean>;
+  reverseExpense: (
+    buildingId: string,
+    transactionId: string,
+    reason: string,
+  ) => Promise<Transaction>;
   importOpeningArrears: (
     buildingId: string,
     rows: Array<{

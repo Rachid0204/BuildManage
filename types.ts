@@ -126,6 +126,7 @@ export interface Charge {
   description?: string;
   invoiceId?: string | null;
   chargeType?: 'courante' | 'exceptionnelle_travaux' | 'fonds_reserve' | 'opening_arrears';
+  worksFundTarget?: 'default' | 'courant' | 'reserve';
   tantiemesApplied?: number;
   createdAt: string;
 }
@@ -137,6 +138,8 @@ export interface PaymentDates {
   priorPeriodAdjustmentReason?: string;
 }
 export interface PaymentPostingOptions {
+  bankTransactionDate?: string;
+  submissionDate?: string;
   postingDate?: string;
   priorPeriodAdjustmentReason?: string;
 }
@@ -213,6 +216,8 @@ export interface Invoice {
   dueDate: string;
   chargeIds: string[];
   pdfUrl?: string | null;
+  voidedAt?: string;
+  voidReason?: string;
 }
 
 export interface Transaction extends PaymentDates {
@@ -221,6 +226,9 @@ export interface Transaction extends PaymentDates {
   reserveRateApplied?: number;
   paymentAllocations?: Array<{ chargeId: string; amount: number }>;
   reversalOf?: string;
+  overdraftOverrideReason?: string;
+  transferId?: string;
+  transferDirection?: 'out' | 'in';
   paymentId?: string;
   sourceChargeId?: string;
   sourceInvoiceId?: string;
@@ -365,6 +373,7 @@ export interface AGResolution {
   /** Requires a positive budget before voting opens. */
   generatesCharges?: boolean;
   budgetAmount?: number;
+  worksFundTarget?: 'default' | 'courant' | 'reserve';
   chargesGeneratedAt?: string;
   generatedChargesCount?: number;
   votesFor: number;

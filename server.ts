@@ -659,7 +659,9 @@ function filterStoreForCaller(store: ServerStore, caller: AuthCallerContext) {
         ...s,
         buildings: (s.buildings || [])
           .filter(
-            (b: any) => scope.isAdmin || scope.authorizedBuildingIds.has(b.id),
+            (b: any) =>
+              (scope.isAdmin || scope.authorizedBuildingIds.has(b.id)) &&
+              (managed || !b.archivedAt),
           )
           .map((stored: any) => {
             const { reserveFundPercentage: _legacyRate, ...canonical } = stored;
@@ -670,25 +672,49 @@ function filterStoreForCaller(store: ServerStore, caller: AuthCallerContext) {
           .map((b: any) =>
             managed
               ? b
-              : {
-                  ...b,
-                  financials: {
-                    balance: 0,
-                    reserveFundBalance: 0,
-                    transactions: [],
+              : caller.role === "provider"
+                ? {
+                    ...b,
+                    bankName: undefined,
+                    bankRib: undefined,
+                    ice: undefined,
+                    rc: undefined,
+                    monthlySyndicFees: 0,
+                    reserveFundRate: 0,
+                    financials: {
+                      balance: 0,
+                      reserveFundBalance: 0,
+                      transactions: [],
+                    },
+                    residents: [],
+                    apartments: (b.apartments || []).map((a: any) => ({
+                      id: a.id,
+                      buildingId: a.buildingId,
+                      number: a.number,
+                      floor: a.floor,
+                      coproType: a.coproType,
+                    })),
+                    announcements: [],
+                  }
+                : {
+                    ...b,
+                    financials: {
+                      balance: 0,
+                      reserveFundBalance: 0,
+                      transactions: [],
+                    },
+                    residents: (b.residents || []).map((r: any) =>
+                      r.id === scope.callerResId
+                        ? r
+                        : {
+                            id: r.id,
+                            name: r.name,
+                            isOwner: r.isOwner,
+                            apartmentId: r.apartmentId,
+                          },
+                    ),
+                    apartments: (b.apartments || []).map((a: any) => ({ ...a })),
                   },
-                  residents: (b.residents || []).map((r: any) =>
-                    r.id === scope.callerResId
-                      ? r
-                      : {
-                          id: r.id,
-                          name: r.name,
-                          isOwner: r.isOwner,
-                          apartmentId: r.apartmentId,
-                        },
-                  ),
-                  apartments: (b.apartments || []).map((a: any) => ({ ...a })),
-                },
           ),
       }));
       continue;
@@ -798,7 +824,8 @@ function filterStoreForCaller(store: ServerStore, caller: AuthCallerContext) {
     );
   if (Array.isArray(result.syndik_prod_ag_v1))
     result.syndik_prod_ag_v1 = result.syndik_prod_ag_v1.map(
-      (assembly: AssembleeGenerale) => projectAssemblyForRole(assembly, caller.role),
+      (assembly: AssembleeGenerale) =>
+        projectAssemblyForRole(assembly, caller.role),
     );
   return clean(result);
 }
@@ -1774,12 +1801,14 @@ async function startServer() {
       publicDocument = (b.documents || []).some(
         (d: any) => d.url === `/api/uploads/${id}`,
       ),
-      marketImage = (sharedStore.syndik_prod_marketplace_v1 || []).some(
-        (m: any) =>
-          m.buildingId === b.id &&
-          (m.imageUrl === `/api/uploads/${id}` ||
-            m.images?.includes(`/api/uploads/${id}`)),
-      ),
+      marketImage =
+        caller.role !== "provider" &&
+        (sharedStore.syndik_prod_marketplace_v1 || []).some(
+          (m: any) =>
+            m.buildingId === b.id &&
+            (m.imageUrl === `/api/uploads/${id}` ||
+              m.images?.includes(`/api/uploads/${id}`)),
+        ),
       assigned = (sharedStore.syndik_prod_maintenance_v1 || []).some(
         (m: any) =>
           m.buildingId === b.id &&
@@ -2013,14 +2042,39 @@ async function startServer() {
   api.post("/api/jobs/overdue", async (req, res) => {
     if (!scheduler(req))
       return res.status(403).json({ error: "Ordonnanceur non autorisé." });
-    for (const i of sharedStore.syndik_prod_invoices_v1 || [])
+    const todayCasablanca = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Africa/Casablanca",
+    }).format(new Date());
+    let updatedInvoices = 0;
+    let updatedCharges = 0;
+    for (const i of sharedStore.syndik_prod_invoices_v1 || []) {
+      const due = typeof i.dueDate === "string" ? i.dueDate.slice(0, 10) : "";
       if (
         i.status !== "paid" &&
         i.status !== "cancelled" &&
-        Date.parse(i.dueDate) < Date.now()
-      )
+        /^\d{4}-\d{2}-\d{2}$/.test(due) &&
+        due < todayCasablanca
+      ) {
+        if (i.status !== "overdue") updatedInvoices++;
         i.status = "overdue";
-    return res.json({ ok: true });
+      }
+    }
+    for (const c of sharedStore.syndik_prod_charges_v1 || []) {
+      const due = typeof c.dueDate === "string" ? c.dueDate.slice(0, 10) : "";
+      const remainingCents =
+        Math.round((Number(c.amount) || 0) * 100) -
+        Math.round((Number(c.paidAmount) || 0) * 100);
+      if (
+        c.status !== "paid" &&
+        remainingCents > 0 &&
+        /^\d{4}-\d{2}-\d{2}$/.test(due) &&
+        due < todayCasablanca
+      ) {
+        if (c.status !== "overdue") updatedCharges++;
+        c.status = "overdue";
+      }
+    }
+    return res.json({ ok: true, updatedInvoices, updatedCharges });
   });
 
   api.post("/api/shared-state", async (_req, res) =>

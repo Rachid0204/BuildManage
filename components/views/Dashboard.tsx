@@ -20,7 +20,7 @@ import {
   getQuittancesForBuilding,
 } from '../../firebase/services';
 import { exportBuildingSummaryReportPDF } from '../../services/pdfOnDemand';
-import { computeBuildingFundBalances } from '../../utils/security';
+import { computeBuildingFundBalances, isIncomeTransaction } from '../../utils/security';
 import { useI18n } from '../../hooks/useI18n';
 import { useToast } from '../common/Toast';
 import { useBuilding } from '../../contexts/BuildingContext';
@@ -119,12 +119,20 @@ const Dashboard: React.FC<DashboardProps> = ({ building, syndic }) => {
     const { operatingBalance: workingBalance, reserveBalance } =
       computeBuildingFundBalances(building);
 
-    const totalChargesAmount = charges.reduce((s, c) => s + c.amount, 0);
-    const paidChargesAmount = charges
-      .filter((c) => c.status === 'paid')
-      .reduce((s, c) => s + c.amount, 0);
+    const totalChargesCents = charges.reduce(
+      (s, c) => s + Math.round((c.amount || 0) * 100),
+      0
+    );
+    const paidChargesCents = charges.reduce((s, c) => {
+      const amountCents = Math.round((c.amount || 0) * 100);
+      const rawPaid = c.paidAmount ?? (c.status === 'paid' ? c.amount : 0);
+      const paidCents = Math.max(0, Math.min(amountCents, Math.round((rawPaid || 0) * 100)));
+      return s + paidCents;
+    }, 0);
+    const totalChargesAmount = totalChargesCents / 100;
+    const paidChargesAmount = paidChargesCents / 100;
     const collectionRate =
-      totalChargesAmount > 0 ? Math.round((paidChargesAmount / totalChargesAmount) * 100) : 0;
+      totalChargesCents > 0 ? Math.round((paidChargesCents / totalChargesCents) * 100) : 0;
 
     const pendingProofsCount = proofs.filter(
       (p) => p.status === 'pending' || (p.status as string) === 'pending_review'
@@ -442,7 +450,7 @@ const Dashboard: React.FC<DashboardProps> = ({ building, syndic }) => {
             <div className="divide-y divide-slate-100">
               {recentTransactions.length > 0 ? (
                 recentTransactions.map((trx: any) => {
-                  const isIncome = trx.type === 'income' || (trx.type !== 'expense' && trx.amount >= 0);
+                  const isIncome = isIncomeTransaction(trx);
                   return (
                     <div key={trx.id} className="py-3 flex justify-between items-center gap-3">
                       <div className="min-w-0">

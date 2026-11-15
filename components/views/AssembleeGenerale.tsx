@@ -25,19 +25,39 @@ interface AssembleeGeneraleProps {
 }
 
 function ResolutionBudgetEditor({ resolution, onSave }: {
-  resolution: AGResolution; onSave: (enabled: boolean, budget?: number) => Promise<void>;
+  resolution: AGResolution;
+  onSave: (enabled: boolean, budget?: number, worksFundTarget?: AGResolution['worksFundTarget']) => Promise<void>;
 }) {
   const { tr } = useI18n();
   const { showToast } = useToast();
   const [enabled, setEnabled] = useState(resolution.generatesCharges === true || resolution.budgetAmount !== undefined);
   const [budget, setBudget] = useState(String(resolution.budgetAmount ?? ''));
+  const [worksFundTarget, setWorksFundTarget] = useState<NonNullable<AGResolution['worksFundTarget']>>(
+    resolution.worksFundTarget ?? 'default'
+  );
   const [saving, setSaving] = useState(false);
   return <div className="text-xs space-y-2 border rounded p-2">
     <label><input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} /> {tr('Génère des charges exceptionnelles', 'يُصدر رسوماً استثنائية')}</label>
-    {enabled && <label>{tr('Budget voté (MAD)', 'الميزانية للتصويت (درهم)')}<input type="number" min="0.01" step="0.01" value={budget} onChange={e => setBudget(e.target.value)} className="border rounded p-1 mx-2" /></label>}
+    {enabled && (
+      <div className="flex flex-wrap items-center gap-2">
+        <label>{tr('Budget voté (MAD)', 'الميزانية للتصويت (درهم)')}<input type="number" min="0.01" step="0.01" value={budget} onChange={e => setBudget(e.target.value)} className="border rounded p-1 mx-2" /></label>
+        <label className="inline-flex items-center gap-1.5">
+          <span>{tr('Affectation encaissement', 'تخصيص التحصيل')}</span>
+          <select
+            value={worksFundTarget}
+            onChange={e => setWorksFundTarget(e.target.value as NonNullable<AGResolution['worksFundTarget']>)}
+            className="border rounded p-1 bg-white"
+          >
+            <option value="default">{tr('Taux de l’immeuble (défaut)', 'نسبة العمارة (افتراضي)')}</option>
+            <option value="courant">{tr('Compte Courant (100%)', 'الحساب الجاري (100%)')}</option>
+            <option value="reserve">{tr('Fonds de Réserve (100%)', 'صندوق الاحتياط (100%)')}</option>
+          </select>
+        </label>
+      </div>
+    )}
     <Button disabled={saving || (enabled && (!Number.isFinite(Number(budget)) || Number(budget) <= 0))} onClick={async () => {
       setSaving(true);
-      try { await onSave(enabled, enabled ? Number(budget) : undefined); }
+      try { await onSave(enabled, enabled ? Number(budget) : undefined, enabled ? worksFundTarget : undefined); }
       catch (error: any) { showToast(error.message, 'error'); }
       finally { setSaving(false); }
     }}>{tr('Enregistrer le budget avant vote', 'حفظ الميزانية قبل التصويت')}</Button>
@@ -60,6 +80,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
   );
 
   const [newBudgets, setNewBudgets] = useState<Record<number, string>>({});
+  const [newWorksFundTargets, setNewWorksFundTargets] = useState<Record<number, NonNullable<AGResolution['worksFundTarget']>>>({});
   const [issuingResolution, setIssuingResolution] = useState<string | null>(null);
 
   // In-session vote casting state
@@ -91,6 +112,8 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['ag', building.id] });
       setIsCreateModalOpen(false);
+      setNewBudgets({});
+      setNewWorksFundTargets({});
     },
   });
 
@@ -207,7 +230,15 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
         `مداولة وتصويت الجمعية العامة حول: ${item}`
       ),
       majorityType: idx === 0 || idx === 1 ? 'simple' : idx === 4 ? 'absolute' : 'simple',
-      ...(newBudgets[idx] !== undefined ? { generatesCharges: true, budgetAmount: Number(newBudgets[idx]) } : {}),
+      ...(newBudgets[idx] !== undefined
+        ? {
+            generatesCharges: true,
+            budgetAmount: Number(newBudgets[idx]),
+            ...(newWorksFundTargets[idx] && newWorksFundTargets[idx] !== 'default'
+              ? { worksFundTarget: newWorksFundTargets[idx] }
+              : {}),
+          }
+        : {}),
       votesFor: 0,
       votesAgainst: 0,
       votesAbstain: 0,
@@ -675,13 +706,26 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                       </div>
 
                       {!activeAG.votingSnapshot && activeAG.status === 'planned' && <ResolutionBudgetEditor
-                        key={`${res.id}-${res.budgetAmount}-${res.generatesCharges}`} resolution={res}
-                        onSave={async (enabled, budget) => {
+                        key={`${res.id}-${res.budgetAmount}-${res.generatesCharges}-${res.worksFundTarget ?? 'default'}`} resolution={res}
+                        onSave={async (enabled, budget, worksFundTarget) => {
                           await saveAssembleeGenerale({ ...activeAG, resolutions: activeAG.resolutions.map(r =>
-                            r.id === res.id ? { ...r, generatesCharges: enabled, budgetAmount: budget } : r) });
+                            r.id === res.id
+                              ? { ...r, generatesCharges: enabled, budgetAmount: budget, worksFundTarget }
+                              : r) });
                           await queryClient.invalidateQueries({ queryKey: ['ag', building.id] });
                         }} />}
-                      {res.budgetAmount !== undefined && <p className="text-xs">{tr('Budget voté', 'الميزانية المصوت عليها')}: {res.budgetAmount} MAD</p>}
+                      {res.budgetAmount !== undefined && (
+                        <p className="text-xs flex flex-wrap items-center gap-2">
+                          <span>{tr('Budget voté', 'الميزانية المصوت عليها')}: {res.budgetAmount} MAD</span>
+                          {(res.worksFundTarget === 'courant' || res.worksFundTarget === 'reserve') && (
+                            <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-medium">
+                              {res.worksFundTarget === 'reserve'
+                                ? tr('Fonds de Réserve (100%)', 'صندوق الاحتياط (100%)')
+                                : tr('Compte Courant (100%)', 'الحساب الجاري (100%)')}
+                            </span>
+                          )}
+                        </p>
+                      )}
                       {/* Vote tally bar weighted by tantièmes */}
                       <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 space-y-1.5">
                         <div className="flex flex-wrap justify-between items-center text-xs font-mono">
@@ -881,15 +925,31 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
             <textarea
               rows={5}
               value={agendaInput}
-              onChange={(e) => { setAgendaInput(e.target.value); setNewBudgets({}); }}
+              onChange={(e) => { setAgendaInput(e.target.value); setNewBudgets({}); setNewWorksFundTargets({}); }}
               className="w-full px-3 py-2 border border-slate-300 rounded text-xs font-mono"
             />
           </div>
-          {agendaInput.split('\n').map(line => line.trim()).filter(Boolean).map((line, index) => <div key={index} className="border rounded p-2 text-xs space-y-1">
+          {agendaInput.split('\n').map(line => line.trim()).filter(Boolean).map((line, index) => <div key={index} className="border rounded p-2 text-xs space-y-1.5">
             <label><input type="checkbox" checked={newBudgets[index] !== undefined} onChange={e => setNewBudgets(old => {
               const next = { ...old }; if (e.target.checked) next[index] = ''; else delete next[index]; return next;
             })} /> {line} — {tr('Appel de fonds', 'طلب مساهمة')}</label>
-            {newBudgets[index] !== undefined && <label>{tr('Budget (MAD)', 'الميزانية (درهم)')}<input type="number" min="0.01" step="0.01" value={newBudgets[index]} onChange={e => setNewBudgets(old => ({ ...old, [index]: e.target.value }))} className="border rounded p-1 mx-2" /></label>}
+            {newBudgets[index] !== undefined && (
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <label>{tr('Budget (MAD)', 'الميزانية (درهم)')}<input type="number" min="0.01" step="0.01" value={newBudgets[index]} onChange={e => setNewBudgets(old => ({ ...old, [index]: e.target.value }))} className="border rounded p-1 mx-2" /></label>
+                <label className="inline-flex items-center gap-1.5">
+                  <span>{tr('Affectation', 'التخصيص')}</span>
+                  <select
+                    value={newWorksFundTargets[index] ?? 'default'}
+                    onChange={e => setNewWorksFundTargets(old => ({ ...old, [index]: e.target.value as NonNullable<AGResolution['worksFundTarget']> }))}
+                    className="border rounded p-1 bg-white"
+                  >
+                    <option value="default">{tr('Taux de l’immeuble (défaut)', 'نسبة العمارة (افتراضي)')}</option>
+                    <option value="courant">{tr('Compte Courant (100%)', 'الحساب الجاري (100%)')}</option>
+                    <option value="reserve">{tr('Fonds de Réserve (100%)', 'صندوق الاحتياط (100%)')}</option>
+                  </select>
+                </label>
+              </div>
+            )}
           </div>)}
         </div>
       </Modal>

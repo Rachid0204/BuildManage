@@ -4,11 +4,12 @@ import { getBuildingCapacity,PLANS,subscriptionCanWrite } from "../../utils/subs
 import {
 ApartmentSchema,
 BuildingSchema,
+PrestataireSchema,
 ResidentSchema,
 SyndicSchema,
 TransactionSchema,
 } from "../../utils/validation";
-import { privateAttachments } from '../attachments';
+import { allAttachmentValues, privateAttachments } from '../attachments';
 import { mailIsConfigured,queueMail } from "../mailer";
 import { type State } from "../repository";
 import { firebaseLinkedResidentIds,LINKED_RESIDENT_EMAIL_CODE,LINKED_RESIDENT_EMAIL_MESSAGE } from '../residentIdentity';
@@ -90,7 +91,8 @@ function canWrite(actor: Actor, b: any) {
     (u: any) => u.uid === actor.uid,
   );
   check(
-    user?.profile?.emailVerified !== false,
+    (actor as any).emailVerified !== false &&
+      user?.profile?.emailVerified !== false,
     "Vérifiez votre adresse email.",
   );
   check(
@@ -265,7 +267,8 @@ async function runOperation(
     (u: any) => u.uid === actor.uid,
   );
   check(
-    user?.profile?.emailVerified !== false,
+    (actor as any).emailVerified !== false &&
+      user?.profile?.emailVerified !== false,
     "Vérifiez votre adresse email.",
   );
   check(
@@ -372,6 +375,9 @@ async function runOperation(
       "reopenFinancialPeriod",
       "importOpeningArrears",
       "reversePayment",
+      "transferFunds",
+      "voidInvoice",
+      "reverseExpense",
       "attachDocument",
     ].includes(operation)
   ) {
@@ -461,6 +467,9 @@ async function runOperation(
         "reopenFinancialPeriod",
         "importOpeningArrears",
         "reversePayment",
+        "transferFunds",
+        "voidInvoice",
+        "reverseExpense",
         "attachDocument",
       ].includes(operation)
     )
@@ -471,13 +480,17 @@ async function runOperation(
     buildingId = b.id;
     canWrite(actor, b);
     links(b, apt);
-    if (operation === "updateApartment")
-      check(
-        b.apartments.some((a: any) => a.id === apt.id && !a.archivedAt),
-        "Lot introuvable.",
-        404,
+    if (operation === "updateApartment") {
+      const existingApt = b.apartments.find(
+        (a: any) => a.id === apt.id && !a.archivedAt,
       );
-    else delete apt.id;
+      check(existingApt, "Lot introuvable.", 404);
+      check(
+        (existingApt.ownerId || null) === (apt.ownerId || null),
+        "Utilisez la procédure explicite de transfert de copropriétaire (assignApartmentOwner).",
+        409,
+      );
+    } else delete apt.id;
     args[0] = apt;
   } else if (operation === "deleteApartment") {
     const row = nested(actor, "apartments", str(args[0]));
@@ -584,12 +597,24 @@ async function runOperation(
       return true;
     }
   } else if (operation === "savePrestataire") {
-    const p = object(args[0]);
-    b = buildingFor(actor, str(p.buildingId));
+    const raw = object(args[0]);
+    b = buildingFor(actor, str(raw.buildingId));
     buildingId = b.id;
     canWrite(actor, b);
-    p.name = str(p.name, 200).trim();
-    p.category = str(p.category, 100).trim();
+    const cleaned = { ...raw };
+    for (const field of [
+      ...secretFields,
+      "hasAccount",
+      "rating",
+      "reviews",
+      "reviewsCount",
+      "archivedAt",
+      "completedJobsCount",
+      "interventionsCount",
+      "totalPaid",
+    ])
+      delete cleaned[field];
+    const p = PrestataireSchema.parse(cleaned);
     const old = (transactionState.syndik_prod_prestataires_v1 || []).find(
       (x: any) => x.id === p.id,
     );
@@ -603,7 +628,6 @@ async function runOperation(
         "Email déjà lié.",
         409,
       );
-    for (const field of [...secretFields, "hasAccount", "rating", "reviews", "reviewsCount"]) delete p[field];
     if (old?.hasAccount && old.email.toLowerCase() !== p.email)
       changedCredentials = { kind: "Prestataire", id: String(p.id) };
     args[0] = { ...p, syndicId: b.syndicId };
@@ -666,11 +690,18 @@ async function runOperation(
     );
     if (actor.role === "resident") {
       check(charge.residentId === actorIdentity(actor), "Charge non liée.");
-      const meta = transactionState.__files?.[String(proof.receiptUrl).split("/").at(-1)!];
+      const rawUrl = String(proof.receiptUrl || "");
+      check(rawUrl.startsWith("/api/uploads/"), "Justificatif non lié.");
+      const meta = transactionState.__files?.[rawUrl.slice("/api/uploads/".length)];
       check(
         meta?.uploadedBy === actor.uid && meta.buildingId === b.id,
         "Justificatif non lié.",
       );
+    } else if (proof.receiptUrl !== undefined && proof.receiptUrl !== "") {
+      const rawUrl = String(proof.receiptUrl);
+      check(rawUrl.startsWith("/api/uploads/"), "Justificatif non lié.", 400);
+      const meta = transactionState.__files?.[rawUrl.slice("/api/uploads/".length)];
+      check(meta?.buildingId === b.id, "Justificatif non lié à cet immeuble.");
     }
     check(
       cents(proof.amount) > 0 &&
@@ -721,7 +752,12 @@ async function runOperation(
     args[0] = {
       ...args[0],
       syndicId: b.syndicId,
-      paymentId: args[0].paymentId || (args[0].addTransactionToLedger === false ? undefined : operationId),
+      paymentId:
+        args[0].paymentId ||
+        (args[0].addTransactionToLedger === false ||
+        String(args[0].referenceNumber || "").trim()
+          ? undefined
+          : operationId),
     };
   } else if (operation === "generateQuittanceForCharge") {
     const row = record(
@@ -1069,7 +1105,6 @@ async function runOperation(
       "reviewPaymentProof",
       "approvePaymentProofsBatch",
       "reconcileBankStatementCSV",
-      "generateMonthlyCharges",
     ].includes(operation)
   )
     if (
@@ -1080,9 +1115,11 @@ async function runOperation(
         b,
         operation === "createQuittance"
           ? (args[0].postingDate ?? args[0].paymentDate)
-          : operation === "addTransaction"
-            ? args[1].date
-            : new Date().toISOString(),
+          : operation === "recordPayment"
+            ? (args[4]?.postingDate ?? args[4]?.bankTransactionDate ?? new Date().toISOString())
+            : operation === "addTransaction"
+              ? args[1].date
+              : new Date().toISOString(),
       );
   const oldJournalIds = new Set(
     (b?.financials?.transactions || []).map((t: any) => t.id),
@@ -1100,7 +1137,11 @@ async function runOperation(
   try {
     result = await dispatch(actor, operation, args, {cabinetId:b?.syndicId,buildingId:b?.id});
   } catch (e: any) {
-    throw new OperationError(e.message, e instanceof OperationError ? e.status : 400);
+    throw new OperationError(
+      e.message,
+      e instanceof OperationError ? e.status : 400,
+      e instanceof OperationError ? e.code : undefined,
+    );
   }
   if (operation === "reconcileBankStatementCSV" && args[2]?.preview === true) return result;
   if (

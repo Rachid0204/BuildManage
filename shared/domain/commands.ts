@@ -10,7 +10,14 @@ export interface PostIncomeCommand {
   buildingId: string;
   amount: number;
   paymentId: string;
-  details: Partial<Transaction>;
+  details: Partial<Transaction> & {
+    reserveRateOverride?: number;
+    reserveSplitOverride?: {
+      chargesCourantesAmount: number;
+      reserveFundAmount: number;
+      reservePercentageUsed?: number;
+    };
+  };
 }
 export type CreateQuittanceCommand = Omit<Quittance, 'id' | 'quittanceNumber' | 'createdAt'> & {
   quittanceNumber?: string;

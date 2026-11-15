@@ -24,15 +24,32 @@ export function buildingReport(state: State, actor: Actor, id: string) {
     .filter((r: any) => managed || r.id === actorIdentity(actor))
     .map((r: any) => {
       const entries = charges.filter((c: any) => c.residentId === r.id);
+      const openingEntries = entries.filter((c: any) => c.openingArrears);
+      const openingArrearsBilled =
+        openingEntries.reduce(
+          (s: number, c: any) => s + Math.round(c.amount * 100),
+          0,
+        ) / 100;
+      const openingArrearsOutstanding =
+        openingEntries.reduce(
+          (s: number, c: any) =>
+            s +
+            Math.max(
+              0,
+              Math.round(
+                (c.amount -
+                  (c.paidAmount ?? (c.status === "paid" ? c.amount : 0))) *
+                  100,
+              ),
+            ),
+          0,
+        ) / 100;
       return {
         residentId: r.id,
         name: r.name,
-        openingArrears: entries
-          .filter((c: any) => c.openingArrears)
-          .reduce(
-            (s: number, c: any) => Math.round(s * 100 + c.amount * 100) / 100,
-            0,
-          ),
+        openingArrears: openingArrearsOutstanding,
+        openingArrearsBilled,
+        openingArrearsOutstanding,
         billed:
           entries.reduce(
             (s: number, c: any) => s + Math.round(c.amount * 100),

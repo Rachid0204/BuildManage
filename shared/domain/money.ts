@@ -1,4 +1,4 @@
-import type { Building, Quittance } from '../../types';
+import type { Building, Charge, Quittance } from '../../types';
 /**
  * Centime-accurate budget allocation using largest-remainder method (Audit Item 16).
  * Guarantees that the sum of allocated amounts across lots equals totalBudgetMad to the exact centime.
@@ -61,6 +61,19 @@ export const allocateBudgetCentimes = allocateBudgetInCentimes;
 export function getBuildingReserveRate(building?: Pick<Building, 'reserveFundRate' | 'reserveFundPercentage'>): number {
   const rate = building?.reserveFundRate ?? building?.reserveFundPercentage ?? 5;
   return Number.isFinite(rate) && rate >= 0 && rate <= 100 ? rate : 5;
+}
+
+/** Resolve the reserve-fund allocation percentage for a charge, honoring per-resolution AG works routing. */
+export function resolveChargeReserveRate(
+  building?: Pick<Building, 'reserveFundRate' | 'reserveFundPercentage'>,
+  charge?: Pick<Charge, 'chargeType' | 'worksFundTarget'>,
+): number {
+  if (charge?.chargeType === 'fonds_reserve') return 100;
+  if (charge?.chargeType === 'exceptionnelle_travaux') {
+    if (charge.worksFundTarget === 'reserve') return 100;
+    if (charge.worksFundTarget === 'courant') return 0;
+  }
+  return getBuildingReserveRate(building);
 }
 
 /** Historical display must use recorded MAD amounts or the payment's own captured rate. */

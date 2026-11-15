@@ -11,7 +11,7 @@ import {
   exportResidentsCSV,
   exportResidentCredentialsPDF,
 } from '../../services/pdfOnDemand';
-import { recordResidentCredentialShare, updateApartment } from '../../firebase/services';
+import { recordResidentCredentialShare, updateApartment, assignApartmentOwner } from '../../firebase/services';
 import { useToast } from '../common/Toast';
 
 function formatAuditTimestamp(iso?: string, lang?: string): string {
@@ -643,6 +643,7 @@ const Residents: React.FC<{
   const [selectedResident, setSelectedResident] = useState<Resident | null>(null);
   const [assigningResident, setAssigningResident] = useState<Resident | null>(null);
   const [assignLotId, setAssignLotId] = useState<string>('');
+  const [assignTransferReason, setAssignTransferReason] = useState<string>('');
   const [isAssigningLot, setIsAssigningLot] = useState(false);
   const [credentialResidentId, setCredentialResidentId] = useState<string | null>(
     null
@@ -692,20 +693,40 @@ const Residents: React.FC<{
     );
     setAssigningResident(resident);
     setAssignLotId(firstAvailable?.id || building.apartments[0]?.id || '');
+    setAssignTransferReason('');
   };
 
   const handleConfirmAssignLot = async () => {
     if (!assigningResident || !assignLotId) return;
     const targetApt = building.apartments.find((a) => a.id === assignLotId);
     if (!targetApt) return;
+    if (assigningResident.isOwner && assignTransferReason.trim().length < 3) {
+      showToast(
+        tr(
+          'Indiquez le motif de l’attribution de propriété (min. 3 caractères).',
+          'يرجى إدخال سبب تعيين الملكية (3 أحرف على الأقل).'
+        ),
+        'error'
+      );
+      return;
+    }
     setIsAssigningLot(true);
     try {
-      await updateApartment({
-        ...targetApt,
-        ...(assigningResident.isOwner
-          ? { ownerId: assigningResident.id }
-          : { tenantId: assigningResident.id }),
-      });
+      if (assigningResident.isOwner) {
+        await assignApartmentOwner({
+          buildingId: building.id,
+          apartmentId: targetApt.id,
+          residentId: assigningResident.id,
+          expectedOwnerId: targetApt.ownerId || null,
+          reason: assignTransferReason.trim(),
+        });
+        await queryClient.invalidateQueries({ queryKey: ['financialReport', building.id] });
+      } else {
+        await updateApartment({
+          ...targetApt,
+          tenantId: assigningResident.id,
+        });
+      }
       await queryClient.invalidateQueries({ queryKey: ['syndics'] });
       showToast(
         tr(
@@ -715,6 +736,7 @@ const Residents: React.FC<{
         'success'
       );
       setAssigningResident(null);
+      setAssignTransferReason('');
     } catch (err: unknown) {
       showToast(
         err instanceof Error
@@ -805,7 +827,15 @@ const Residents: React.FC<{
             <Button variant="secondary" onClick={() => setAssigningResident(null)} disabled={isAssigningLot}>
               {tr('Annuler', 'إلغاء')}
             </Button>
-            <Button type="submit" disabled={!assignLotId || isAssigningLot} className="ms-3">
+            <Button
+              type="submit"
+              disabled={
+                !assignLotId ||
+                isAssigningLot ||
+                (Boolean(assigningResident?.isOwner) && assignTransferReason.trim().length < 3)
+              }
+              className="ms-3"
+            >
               {tr('Assigner le lot', 'تعيين الشقة')}
             </Button>
           </>
@@ -841,6 +871,20 @@ const Residents: React.FC<{
               );
             })}
           </select>
+          {assigningResident?.isOwner && (
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                {tr("Motif de l'attribution *", 'سبب تعيين الملكية *')}
+              </label>
+              <input
+                type="text"
+                value={assignTransferReason}
+                onChange={(e) => setAssignTransferReason(e.target.value)}
+                placeholder={tr('Ex: Acte d’achat, mise à jour registre...', 'مثال: عقد شراء، تحديث السجل...')}
+                className="block w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
+              />
+            </div>
+          )}
         </div>
       </Modal>
 

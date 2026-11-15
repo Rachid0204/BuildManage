@@ -300,15 +300,24 @@ const ResidentDashboard: React.FC = () => {
     }
   };
 
-  const pendingCharges = myCharges.filter(
-    (c) => c.status !== 'paid' && c.amount > (c.paidAmount || 0)
+  const getPendingProofCents = (chargeId: string) =>
+    myProofs
+      .filter((p) => p.chargeId === chargeId && p.status === 'pending')
+      .reduce((sum, p) => sum + Math.max(0, Math.round((p.amount || 0) * 100)), 0);
+  const getChargeRemainingCents = (charge: { amount: number; paidAmount?: number; status?: string }) =>
+    charge.status === 'paid'
+      ? 0
+      : Math.max(0, Math.round((charge.amount || 0) * 100) - Math.round((charge.paidAmount || 0) * 100));
+  const pendingCharges = myCharges.filter((c) => getChargeRemainingCents(c) > 0);
+  const payableCharges = pendingCharges.filter(
+    (c) => getChargeRemainingCents(c) - getPendingProofCents(c.id) > 0
   );
-  const payableCharges = pendingCharges.filter(c => !myProofs.some(p => p.chargeId === c.id && p.status === 'pending'));
   const selectedPaymentCharge = myCharges.find(c => c.id === selectedChargeId);
-  const totalPendingAmount = pendingCharges.reduce(
-    (sum, c) => sum + Math.max(0, c.amount - (c.paidAmount || 0)),
-    0
-  );
+  const selectedChargePendingAmount = selectedPaymentCharge
+    ? getPendingProofCents(selectedPaymentCharge.id) / 100
+    : 0;
+  const totalPendingAmount =
+    pendingCharges.reduce((sum, c) => sum + getChargeRemainingCents(c), 0) / 100;
 
   if (userProfile && userProfile.role !== 'resident') {
     return <Navigate to={getHomeRouteForRole(userProfile.role)} replace />;
@@ -783,8 +792,22 @@ const ResidentDashboard: React.FC = () => {
 
                   <div className="divide-y divide-slate-100 mt-3">
                     {myCharges.map((charge) => {
-                      const proof = myProofs.find((p) => p.chargeId === charge.id && p.status === 'pending');
+                      const pendingProofsForCharge = myProofs.filter(
+                        (p) => p.chargeId === charge.id && p.status === 'pending'
+                      );
+                      const pendingProofCents = pendingProofsForCharge.reduce(
+                        (s, p) => s + Math.max(0, Math.round((p.amount || 0) * 100)),
+                        0
+                      );
+                      const proof = pendingProofsForCharge[0];
                       const rejectedProof = myProofs.find((p) => p.chargeId === charge.id && p.status === 'rejected');
+                      const paidCents = Math.round((charge.paidAmount || 0) * 100);
+                      const remainingCents = getChargeRemainingCents(charge);
+                      const submittableCents = Math.max(0, remainingCents - pendingProofCents);
+                      const isPartial = charge.status !== 'paid' && paidCents > 0 && remainingCents > 0;
+                      const activeChargeReceipts = myQuittances.filter(
+                        (q) => q.chargeId === charge.id && !q.voidedAt
+                      );
 
                       return (
                         <div
@@ -798,12 +821,23 @@ const ResidentDashboard: React.FC = () => {
                                 {tr('Échéance :', 'تاريخ الاستحقاق :')}{' '}
                                 {new Date(charge.dueDate).toLocaleDateString(dateLocale)}
                               </span>
-                              {proof && (
+                              {isPartial && (
+                                <span className="text-sky-700 bg-sky-50 px-2 py-0.5 rounded font-medium">
+                                  {tr('Partiellement payée', 'مؤدى جزئياً')} ·{' '}
+                                  {tr('Réglé :', 'المؤدى:')} {currencyFormatter.format(paidCents / 100)} / {currencyFormatter.format(charge.amount)}
+                                </span>
+                              )}
+                              {pendingProofsForCharge.length > 0 && (
                                 <span className="text-amber-700 bg-amber-50 px-2 py-0.5 rounded font-medium">
-                                  {tr(
-                                    `Virement en cours de validation (Réf: ${proof.referenceNumber})`,
-                                    `تحويل قيد التحقق (مرجع: ${proof.referenceNumber})`
-                                  )}
+                                  {pendingProofsForCharge.length === 1
+                                    ? tr(
+                                        `Virement en cours de validation (Réf: ${proof.referenceNumber})`,
+                                        `تحويل قيد التحقق (مرجع: ${proof.referenceNumber})`
+                                      )
+                                    : tr(
+                                        `${pendingProofsForCharge.length} virements en validation (${currencyFormatter.format(pendingProofCents / 100)})`,
+                                        `${pendingProofsForCharge.length} تحويلات قيد التحقق (${currencyFormatter.format(pendingProofCents / 100)})`
+                                      )}
                                 </span>
                               )}
                               {!proof && rejectedProof && charge.status !== 'paid' && (
@@ -812,9 +846,9 @@ const ResidentDashboard: React.FC = () => {
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-3 shrink-0">
+                          <div className="flex items-center gap-2 sm:gap-3 shrink-0 flex-wrap justify-end">
                             <span className="font-mono font-bold text-slate-900">
-                              {currencyFormatter.format(charge.status === 'paid' ? charge.amount : Math.max(0, charge.amount - (charge.paidAmount || 0)))}
+                              {currencyFormatter.format(charge.status === 'paid' ? charge.amount : remainingCents / 100)}
                             </span>
 
                             {charge.status === 'paid' ? (
@@ -826,9 +860,7 @@ const ResidentDashboard: React.FC = () => {
                                   onClick={async () => {
                                     try {
                                       setIsDownloadingChargeQuit(charge.id);
-                                      const matchingQuit = myQuittances.find(
-                                        (q) => q.chargeId === charge.id
-                                      );
+                                      const matchingQuit = activeChargeReceipts[0];
                                       if (matchingQuit) {
                                         await generateQuittancePDF(
                                           matchingQuit,
@@ -872,21 +904,42 @@ const ResidentDashboard: React.FC = () => {
                                   </span>
                                 </button>
                               </div>
-                            ) : proof ? (
-                              <span className="text-xs font-semibold text-amber-700 bg-amber-50 px-2 py-1 rounded">
-                                {tr('Vérification en cours', 'قيد التحقق')}
-                              </span>
                             ) : (
-                              <button
-                                onClick={() => {
-                                  setPaymentNotice('');
-                                  setSelectedChargeId(charge.id);
-                                  setIsProofModalOpen(true);
-                                }}
-                                className="px-3 py-1 bg-teal-600 hover:bg-teal-700 text-white font-medium rounded text-xs transition-colors"
-                              >
-                                {tr('Transmettre Justificatif', 'إرسال إثبات الأداء')}
-                              </button>
+                              <div className="flex items-center gap-2">
+                                {activeChargeReceipts.length > 0 && (
+                                  <button
+                                    onClick={() =>
+                                      generateQuittancePDF(
+                                        activeChargeReceipts[0],
+                                        activeBuilding!,
+                                        activeSyndic,
+                                        currentApartment,
+                                        currentResident
+                                      )
+                                    }
+                                    className="px-2.5 py-1 text-xs bg-teal-50 hover:bg-teal-100 text-teal-700 font-semibold rounded transition-colors flex items-center gap-1"
+                                  >
+                                    <QuittanceIcon />
+                                    <span>{tr('Quittance PDF', 'وصل PDF')}</span>
+                                  </button>
+                                )}
+                                {submittableCents > 0 ? (
+                                  <button
+                                    onClick={() => {
+                                      setPaymentNotice('');
+                                      setSelectedChargeId(charge.id);
+                                      setIsProofModalOpen(true);
+                                    }}
+                                    className="px-3 py-1 bg-teal-600 hover:bg-teal-700 text-white font-medium rounded text-xs transition-colors"
+                                  >
+                                    {tr('Transmettre Justificatif', 'إرسال إثبات الأداء')}
+                                  </button>
+                                ) : (
+                                  <span className="text-xs font-semibold text-amber-700 bg-amber-50 px-2 py-1 rounded">
+                                    {tr('Vérification en cours', 'قيد التحقق')}
+                                  </span>
+                                )}
+                              </div>
                             )}
                           </div>
                         </div>
@@ -1251,6 +1304,7 @@ const ResidentDashboard: React.FC = () => {
         isOpen={isProofModalOpen}
         onClose={() => setIsProofModalOpen(false)}
         charge={selectedPaymentCharge}
+        pendingProofAmount={selectedChargePendingAmount}
         building={activeBuilding}
         resident={currentResident}
         apartment={activeBuilding?.apartments.find(a => a.id === selectedPaymentCharge?.apartmentId)}
@@ -1744,7 +1798,7 @@ const ResidentDashboard: React.FC = () => {
             <span className="text-base leading-none">🗳️</span>
             <span className="truncate max-w-[54px]">{t('residentPortal.mobileAg')}</span>
             {unvotedResolutionsCount > 0 && (
-              <span className="absolute top-1.5 right-2.5 w-2 h-2 rounded-full bg-emerald-500"></span>
+              <span className="absolute top-1.5 end-2.5 w-2 h-2 rounded-full bg-emerald-500"></span>
             )}
           </button>
 

@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import type { Building, Apartment, Resident } from '../../types';
 import Card from '../common/Card';
 import Button from '../common/Button';
@@ -6,11 +7,15 @@ import Modal from '../common/Modal';
 import { useI18n } from '../../hooks/useI18n';
 import { PlusIcon, PencilIcon, TrashIcon, DocumentsIcon } from '../icons/IconComponents';
 import { exportApartmentsPDF, exportApartmentsCSV } from '../../services/pdfOnDemand';
+import { assignApartmentOwner } from '../../firebase/services';
 
 type ApartmentModalProps = {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (apartment: Omit<Apartment, 'id' | 'buildingId'> | Apartment) => Promise<unknown> | void;
+  onSave: (
+    apartment: Omit<Apartment, 'id' | 'buildingId'> | Apartment,
+    ownerTransferReason?: string
+  ) => Promise<unknown> | void;
   existingApartment?: Apartment | null;
   residents: Resident[];
   apartments: Apartment[];
@@ -35,6 +40,7 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
   const [coproType, setCoproType] = useState<Apartment['coproType']>('apartment');
   const [ownerId, setOwnerId] = useState<string | null>(null);
   const [tenantId, setTenantId] = useState<string | null>(null);
+  const [transferReason, setTransferReason] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
@@ -57,8 +63,13 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
       setOwnerId(null);
       setTenantId(null);
     }
+    setTransferReason('');
     setErrors({});
   }, [existingApartment?.id, isOpen]);
+
+  const ownerChangedOnExisting = Boolean(
+    existingApartment && (ownerId || null) !== (existingApartment.ownerId || null)
+  );
 
   const handleAreaChange = (val: string) => {
     setArea(val);
@@ -89,6 +100,12 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
       newErrors.tantiemes = tr('Les tantièmes doivent être un nombre positif ou nul.', 'يجب أن تكون الحصص رقماً موجباً أو صفراً.');
     if (!monthlyFees.trim() || !Number.isFinite(Number(monthlyFees)) || Number(monthlyFees) < 0)
       newErrors.monthlyFees = tr('Les frais mensuels doivent être un montant positif ou nul.', 'يجب أن تكون المساهمة الشهرية مبلغاً موجباً أو صفراً.');
+    if (ownerChangedOnExisting && transferReason.trim().length < 3) {
+      newErrors.transferReason = tr(
+        'Indiquez le motif du changement de copropriétaire (min. 3 caractères).',
+        'يرجى إدخال سبب تغيير المالك المشترك (3 أحرف على الأقل).'
+      );
+    }
     setErrors(newErrors);
     if (Object.keys(newErrors).length) throw new Error(Object.values(newErrors).join("\n"));
     return true;
@@ -107,7 +124,7 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
       tenantId: tenantId || null,
     };
     if (existingApartment) {
-      await onSave({ ...existingApartment, ...apartmentData });
+      await onSave({ ...existingApartment, ...apartmentData }, transferReason.trim() || undefined);
     } else {
       await onSave(apartmentData);
     }
@@ -264,6 +281,23 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
               'يمكنكم أيضاً تعيين شقة مباشرة من بطاقة الساكن.'
             )}
           </p>
+          {ownerChangedOnExisting && (
+            <div className="mt-2 p-2.5 rounded bg-amber-50 border border-amber-200">
+              <label className="block text-xs font-semibold text-amber-900 mb-1">
+                {tr('Motif du changement de copropriétaire *', 'سبب تغيير المالك المشترك *')}
+              </label>
+              <input
+                type="text"
+                value={transferReason}
+                onChange={(e) => setTransferReason(e.target.value)}
+                placeholder={tr('Ex: Acte de vente notarié, succession...', 'مثال: عقد بيع، إرث...')}
+                className="w-full px-2.5 py-1.5 border border-amber-300 rounded text-sm bg-white"
+              />
+              {errors.transferReason && (
+                <p className="text-red-500 text-xs mt-1">{errors.transferReason}</p>
+              )}
+            </div>
+          )}
         </div>
 
         <div>
@@ -778,6 +812,7 @@ const Apartments: React.FC<ApartmentsProps> = ({
   onDeleteApartment,
 }) => {
   const { tr } = useI18n();
+  const queryClient = useQueryClient();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
   const [selectedApartment, setSelectedApartment] = useState<Apartment | null>(null);
@@ -823,9 +858,40 @@ const Apartments: React.FC<ApartmentsProps> = ({
       <ApartmentModal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
-        onSave={async apartment => {
-          if ('id' in apartment) await onUpdateApartment(apartment);
-          else await onAddApartment(apartment);
+        onSave={async (apartment, ownerTransferReason) => {
+          if ('id' in apartment) {
+            const prevApt = building.apartments.find((a) => a.id === apartment.id);
+            const prevOwner = prevApt?.ownerId || null;
+            const nextOwner = apartment.ownerId || null;
+            let ownerAfterTransfer = nextOwner;
+            if (prevApt && prevOwner !== nextOwner) {
+              const updatedApt = await assignApartmentOwner({
+                buildingId: building.id,
+                apartmentId: apartment.id,
+                residentId: nextOwner,
+                expectedOwnerId: prevOwner,
+                reason: (ownerTransferReason || '').trim(),
+              });
+              ownerAfterTransfer = updatedApt.ownerId ?? nextOwner;
+              await queryClient.invalidateQueries({ queryKey: ['syndics'] });
+              await queryClient.invalidateQueries({ queryKey: ['financialReport', building.id] });
+            }
+            const nonOwnerChanged =
+              !prevApt ||
+              prevApt.number !== apartment.number ||
+              prevApt.floor !== apartment.floor ||
+              prevApt.area !== apartment.area ||
+              (prevApt.tantiemes ?? 100) !== (apartment.tantiemes ?? 100) ||
+              (prevApt.monthlyFees ?? building.monthlySyndicFees) !==
+                (apartment.monthlyFees ?? building.monthlySyndicFees) ||
+              (prevApt.coproType || 'apartment') !== (apartment.coproType || 'apartment') ||
+              (prevApt.tenantId || null) !== (apartment.tenantId || null);
+            if (nonOwnerChanged) {
+              await onUpdateApartment({ ...apartment, ownerId: ownerAfterTransfer });
+            }
+          } else {
+            await onAddApartment(apartment);
+          }
         }}
         existingApartment={selectedApartment}
         residents={residents}

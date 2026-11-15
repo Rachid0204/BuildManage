@@ -151,6 +151,16 @@ export const updateApartment = async (apartment: Apartment) => {
   return remoteMutation('updateApartment', [apartment]);
 };
 
+export const assignApartmentOwner = async (input: {
+  buildingId: string;
+  apartmentId: string;
+  residentId: string | null;
+  expectedOwnerId: string | null;
+  reason: string;
+}): Promise<Apartment> => {
+  return remoteMutation('assignApartmentOwner', [input]);
+};
+
 export const deleteApartment = async (apartmentId: string) => {
   return remoteMutation('deleteApartment', [apartmentId]);
 };
@@ -253,12 +263,16 @@ export const submitPaymentProof = async (
 export const approvePaymentProofsBatch = async (
   buildingId: string,
   proofIds?: string[],
+  options?: PaymentPostingOptions,
 ): Promise<{
   approvedCount: number;
   totalAmountMad: number;
   quittances: Quittance[];
 }> => {
-  return remoteMutation('approvePaymentProofsBatch', [buildingId, proofIds]);
+  return remoteMutation(
+    'approvePaymentProofsBatch',
+    options === undefined ? [buildingId, proofIds] : [buildingId, proofIds, options],
+  );
 };
 
 export const reconcileBankStatementCSV = async (
@@ -522,6 +536,35 @@ export const addTransaction = async (
   return remoteMutation('addTransaction', [buildingId, transaction]);
 };
 
+export const transferFunds = async (
+  buildingId: string,
+  input: {
+    fromFund: 'courant' | 'reserve';
+    toFund: 'courant' | 'reserve';
+    amount: number;
+    date: string;
+    reason: string;
+  },
+) => {
+  return remoteMutation('transferFunds', [buildingId, input]);
+};
+
+export const voidInvoice = async (
+  buildingId: string,
+  invoiceId: string,
+  reason: string,
+): Promise<boolean> => {
+  return remoteMutation('voidInvoice', [buildingId, invoiceId, reason]);
+};
+
+export const reverseExpense = async (
+  buildingId: string,
+  transactionId: string,
+  reason: string,
+): Promise<Transaction> => {
+  return remoteMutation('reverseExpense', [buildingId, transactionId, reason]);
+};
+
 export const getInvoicesForBuilding = async (
   buildingId: string,
 ): Promise<Invoice[]> => {
@@ -547,13 +590,14 @@ export const recordPayment = async (
   amount: number,
   method: string,
   paymentReference?: string,
+  options?: PaymentPostingOptions,
 ) => {
-  return remoteMutation('recordPayment', [
-    invoice,
-    amount,
-    method,
-    paymentReference,
-  ]);
+  return remoteMutation(
+    'recordPayment',
+    options === undefined
+      ? [invoice, amount, method, paymentReference]
+      : [invoice, amount, method, paymentReference, options],
+  );
 };
 
 export const getMaintenanceRequestsForBuilding = async (

@@ -1,6 +1,6 @@
 import { normalFont,boldFont } from '../assets/pdfFonts';
 import { jsPDF } from "jspdf";
-import { getRecordedReserveSplit, getRecordedReserveTotal } from '../utils/security';
+import { getRecordedReserveSplit, getRecordedReserveTotal, isIncomeTransaction } from '../utils/security';
 import type {
   Invoice,
   Building,
@@ -87,12 +87,12 @@ export function numberToFrenchWords(amount: number): string {
 // 1. GENERATE INVOICE PDF
 export const generateInvoicePDF = (invoice: Invoice, building: Building, resident: Resident, syndic?: Syndic) => {
   const doc=new jsPDF(),recipient=invoice.issuedTo||resident;
-  const header=()=>{doc.setFillColor(15,118,110);doc.rect(0,0,210,32,'F');doc.setTextColor(255,255,255);doc.setFont('helvetica','bold');doc.setFontSize(16);doc.text('AVIS DE CHARGES',14,19);doc.setFontSize(9);doc.text(invoice.invoiceNumber,196,19,{align:'right'});doc.setTextColor(30,41,59);doc.setFont('helvetica','normal');doc.setFontSize(10);};
+  const header=()=>{doc.setFillColor(15,118,110);doc.rect(0,0,210,32,'F');doc.setTextColor(255,255,255);doc.setFont('helvetica','bold');doc.setFontSize(16);doc.text('AVIS DE CHARGES',14,19);doc.setFontSize(9);doc.text(sanitizePdfText(invoice.invoiceNumber),196,19,{align:'right'});doc.setTextColor(30,41,59);doc.setFont('helvetica','normal');doc.setFontSize(10);};
   header();doc.setFont('helvetica','normal');doc.setFontSize(10);let y=44;
-  const write=(value:string,width=180)=>{const lines=doc.splitTextToSize(value,width);for(const line of lines){if(y>267){doc.addPage();header();y=44;}doc.text(line,14,y);y+=5;}y+=2;};
+  const write=(value:string,width=180)=>{const lines=doc.splitTextToSize(sanitizePdfText(value),width);for(const line of lines){if(y>267){doc.addPage();header();y=44;}doc.text(line,14,y);y+=5;}y+=2;};
   write(`${syndic?.name||'Syndic'} · ${building.name}`);write(`${building.address||'Adresse à renseigner'} · ${building.city||''}`);write(`Destinataire : ${recipient.name}`);write(`Émis le ${new Date(invoice.createdAt).toLocaleDateString('fr-MA')} · Échéance ${new Date(invoice.dueDate).toLocaleDateString('fr-MA')}`);y+=4;
   const items=invoice.items?.length?invoice.items:[{description:'Charges de copropriété',period:'',amount:invoice.totalAmount}];
-  for(const item of items){const lines=doc.splitTextToSize(`${item.description}${item.period?' · '+item.period:''}`,135);if(y+lines.length*5>247){doc.addPage();header();y=44;}for(const [index,line] of lines.entries()){if(y>247){doc.addPage();header();y=44;}doc.text(line,14,y);if(index===0)doc.text(currencyFormatter.format(item.amount),196,y,{align:'right'});y+=5;}y+=3;}
+  for(const item of items){const lines=doc.splitTextToSize(sanitizePdfText(`${item.description}${item.period?' · '+item.period:''}`),135);if(y+lines.length*5>247){doc.addPage();header();y=44;}for(const [index,line] of lines.entries()){if(y>247){doc.addPage();header();y=44;}doc.text(line,14,y);if(index===0)doc.text(currencyFormatter.format(item.amount),196,y,{align:'right'});y+=5;}y+=3;}
   y+=5;write(`Montant facturé : ${currencyFormatter.format(invoice.totalAmount)}`);write(`Déjà réglé : ${currencyFormatter.format(invoice.paidAmount||0)}`);doc.setFont('helvetica','bold');write(`Reste à payer : ${currencyFormatter.format(Math.max(0,invoice.totalAmount-(invoice.paidAmount||0)))}`);doc.setFont('helvetica','normal');y+=6;write(`Banque : ${building.bankName||syndic?.bankName||'Non renseignée - contacter le syndic'}`);write(`RIB : ${building.bankRib||syndic?.rib||'Non renseigné - contacter le syndic'}`);write(`Référence du virement : ${invoice.invoiceNumber}`);
   for(let page=1;page<=doc.getNumberOfPages();page++){doc.setPage(page);doc.setFontSize(8);doc.text(`${page} / ${doc.getNumberOfPages()}`,196,285,{align:'right'});}
   doc.save(`Avis_Charges_${invoice.invoiceNumber}.pdf`);return doc;
@@ -108,8 +108,8 @@ export const generateQuittancePDF = (
   options: { autoDownload?: boolean } = { autoDownload: true }
 ) => {
   const doc=new jsPDF(),q=quittance as any;
-  doc.setFillColor(15,118,110);doc.rect(0,0,210,34,'F');doc.setTextColor(255,255,255);doc.setFont('helvetica','bold');doc.setFontSize(18);doc.text(q.voidedAt?'QUITTANCE ANNULÉE':'QUITTANCE DE PAIEMENT',14,18);doc.setFontSize(10);doc.text(String(quittance.quittanceNumber),14,27);doc.setTextColor(30,41,59);doc.setFont('helvetica','normal');doc.setFontSize(10);let y=48;
-  const write=(label:string,value:any)=>{const lines=doc.splitTextToSize(`${label} : ${value||'Non renseigné'}`,180);if(y+lines.length*6>265){doc.addPage();y=24;}doc.text(lines,14,y);y+=lines.length*6+5;};
+  doc.setFillColor(15,118,110);doc.rect(0,0,210,34,'F');doc.setTextColor(255,255,255);doc.setFont('helvetica','bold');doc.setFontSize(18);doc.text(q.voidedAt?'QUITTANCE ANNULÉE':'QUITTANCE DE PAIEMENT',14,18);doc.setFontSize(10);doc.text(sanitizePdfText(String(quittance.quittanceNumber)),14,27);doc.setTextColor(30,41,59);doc.setFont('helvetica','normal');doc.setFontSize(10);let y=48;
+  const write=(label:string,value:any)=>{const lines=doc.splitTextToSize(`${label} : ${sanitizePdfText(value!=null?String(value):'')||'Non renseigné'}`,180);if(y+lines.length*6>265){doc.addPage();y=24;}doc.text(lines,14,y);y+=lines.length*6+5;};
   write('Syndic',syndic?.name||building.managerName);write('Immeuble',`${building.name} · ${building.address||''} · ${building.city||''}`);write('Résident',resident?.name||quittance.residentName);write('Lot',apartment?.number||quittance.apartmentNumber);write('Période couverte',quittance.periodCovered);write('Date du paiement',new Date(quittance.paymentDate).toLocaleDateString('fr-MA'));write('Date bancaire',quittance.bankTransactionDate || 'Non renseignée');write('Date de comptabilisation',quittance.postingDate || quittance.paymentDate);write('Date de soumission',quittance.submissionDate || 'Non renseignée');write('Mode de règlement',quittance.paymentMethod);write('Référence du règlement',quittance.referenceNumber||q.paymentId);write('Identifiant du reçu',quittance.id);
   const allocation = getRecordedReserveSplit(quittance);
   doc.setFont('helvetica','bold');write('Montant enregistré',currencyFormatter.format(quittance.amount));doc.setFont('helvetica','normal');write('Fonds courant',allocation ? currencyFormatter.format(allocation.chargesCourantesAmount) : 'Non documenté');write('Fonds de réserve',allocation ? currencyFormatter.format(allocation.reserveFundAmount) : 'Non documenté');
@@ -132,22 +132,22 @@ export const generateMiseEnDemeurePDF = (resident: Resident, apartment: Apartmen
   doc.setFontSize(10);
   doc.setTextColor(15, 23, 42);
   doc.setFont("helvetica", "bold");
-  doc.text(syndic?.name || "Le Syndic de Copropriété", 14, 38);
+  doc.text(sanitizePdfText(syndic?.name || "Le Syndic de Copropriété"), 14, 38);
   doc.setFont("helvetica", "normal");
-  doc.text(`Immeuble ${building.name}`, 14, 43);
-  doc.text(building.address, 14, 48);
-  doc.text(building.city, 14, 53);
+  doc.text(sanitizePdfText(`Immeuble ${building.name}`), 14, 43);
+  doc.text(sanitizePdfText(building.address), 14, 48);
+  doc.text(sanitizePdfText(building.city), 14, 53);
 
   // Recipient
   doc.setFont("helvetica", "bold");
-  doc.text(`À l'attention de M./Mme ${resident.name}`, 120, 50);
+  doc.text(sanitizePdfText(`À l'attention de M./Mme ${resident.name}`), 120, 50);
   doc.setFont("helvetica", "normal");
-  doc.text(`Copropriétaire de l'appartement N° ${apartment.number}`, 120, 56);
-  doc.text(`Immeuble ${building.name}`, 120, 61);
-  doc.text(building.city, 120, 66);
+  doc.text(sanitizePdfText(`Copropriétaire de l'appartement N° ${apartment.number}`), 120, 56);
+  doc.text(sanitizePdfText(`Immeuble ${building.name}`), 120, 61);
+  doc.text(sanitizePdfText(building.city), 120, 66);
 
   // City & Date
-  doc.text(`Fait à ${building.city}, le ${new Date().toLocaleDateString('fr-MA')}`, 14, 78);
+  doc.text(sanitizePdfText(`Fait à ${building.city}, le ${new Date().toLocaleDateString('fr-MA')}`), 14, 78);
 
   // Subject line
   doc.setFont("helvetica", "bold");
@@ -160,7 +160,7 @@ export const generateMiseEnDemeurePDF = (resident: Resident, apartment: Apartmen
   doc.text("Madame, Monsieur,", 14, y);
 
   y += 10;
-  const paragraph1 = `En votre qualité de copropriétaire du lot N° ${apartment.number} au sein de la résidence ${building.name}, nous constatons qu'en dépit de nos précédents rappels amiables, votre compte de charges présente à ce jour un solde débiteur impayé de :`;
+  const paragraph1 = sanitizePdfText(`En votre qualité de copropriétaire du lot N° ${apartment.number} au sein de la résidence ${building.name}, nous constatons qu'en dépit de nos précédents rappels amiables, votre compte de charges présente à ce jour un solde débiteur impayé de :`);
   const splitP1 = doc.splitTextToSize(paragraph1, 182);
   doc.text(splitP1, 14, y);
 
@@ -184,7 +184,7 @@ export const generateMiseEnDemeurePDF = (resident: Resident, apartment: Apartmen
   doc.text(splitP3, 14, y);
 
   y += 24;
-  const paragraph4 = `Tous les frais de procédure, dépens et intérêts de retard seront intégralement mis à votre charge. Vous pouvez vous libérer par virement sur le compte bancaire de la copropriété : ${building.bankRib || "compte bancaire habituel du syndicat"}.`;
+  const paragraph4 = sanitizePdfText(`Tous les frais de procédure, dépens et intérêts de retard seront intégralement mis à votre charge. Vous pouvez vous libérer par virement sur le compte bancaire de la copropriété : ${building.bankRib || "compte bancaire habituel du syndicat"}.`);
   const splitP4 = doc.splitTextToSize(paragraph4, 182);
   doc.text(splitP4, 14, y);
 
@@ -210,19 +210,19 @@ export const generatePvAgPDF = (ag: AssembleeGenerale, building: Building, syndi
   doc.setTextColor(255, 255, 255);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(16);
-  doc.text(`PROCÈS-VERBAL D'ASSEMBLÉE GÉNÉRALE (${ag.type})`, 105, 18, { align: 'center' });
+  doc.text(sanitizePdfText(`PROCÈS-VERBAL D'ASSEMBLÉE GÉNÉRALE (${ag.type})`), 105, 18, { align: 'center' });
   doc.setFontSize(10);
   doc.setFont("helvetica", "normal");
-  doc.text(`Copropriété : ${building.name} - ${building.city}`, 105, 26, { align: 'center' });
+  doc.text(sanitizePdfText(`Copropriété : ${building.name} - ${building.city}`), 105, 26, { align: 'center' });
 
   let y = 44;
   doc.setTextColor(15, 23, 42);
   doc.setFontSize(10);
   doc.setFont("helvetica", "bold");
-  doc.text(`Date et heure : Le ${ag.date} à ${ag.time}`, 14, y);
-  doc.text(`Lieu de réunion : ${ag.location}`, 14, y + 6);
-  doc.text(`Président de séance : ${ag.presidentName || "Élu en séance"}`, 14, y + 12);
-  doc.text(`Secrétaire de séance : ${ag.secretaryName || syndic?.name || "Le Syndic"}`, 14, y + 18);
+  doc.text(sanitizePdfText(`Date et heure : Le ${ag.date} à ${ag.time}`), 14, y);
+  doc.text(sanitizePdfText(`Lieu de réunion : ${ag.location}`), 14, y + 6);
+  doc.text(sanitizePdfText(`Président de séance : ${ag.presidentName || "Élu en séance"}`), 14, y + 12);
+  doc.text(sanitizePdfText(`Secrétaire de séance : ${ag.secretaryName || syndic?.name || "Le Syndic"}`), 14, y + 18);
 
   // Quorum section
   y += 28;
@@ -246,7 +246,7 @@ export const generatePvAgPDF = (ag: AssembleeGenerale, building: Building, syndi
   doc.setFont("helvetica", "normal");
   y += 6;
   (ag.agendaItems ?? []).forEach((item, index) => {
-    const agendaLines = doc.splitTextToSize(`${index + 1}. ${item}`, 174);
+    const agendaLines = doc.splitTextToSize(sanitizePdfText(`${index + 1}. ${item}`), 174);
     if (y + agendaLines.length * 5 > 268) {
       doc.addPage();
       y = 20;
@@ -267,9 +267,9 @@ export const generatePvAgPDF = (ag: AssembleeGenerale, building: Building, syndi
 
   ag.resolutions.forEach((res) => {
     doc.setFontSize(9.5);
-    const titleLines = doc.splitTextToSize(`Résolution N° ${res.number} : ${res.title}`, 174);
+    const titleLines = doc.splitTextToSize(sanitizePdfText(`Résolution N° ${res.number} : ${res.title}`), 174);
     doc.setFontSize(8.5);
-    const descLines = doc.splitTextToSize(res.description || '', 174);
+    const descLines = doc.splitTextToSize(sanitizePdfText(res.description || ''), 174);
     const boxHeight = 14 + titleLines.length * 4.5 + descLines.length * 4.2;
     if (y + boxHeight > 270) {
       doc.addPage();
@@ -321,7 +321,7 @@ export const generateTransactionVoucherPDF = (
   syndic?: Syndic
 ) => {
   const doc = new jsPDF();
-  const isIncome = trx.amount >= 0 || trx.type === 'income';
+  const isIncome = isIncomeTransaction(trx);
   const absAmount = Math.abs(trx.amount);
 
   // Top header banner
@@ -342,7 +342,7 @@ export const generateTransactionVoucherPDF = (
 
   doc.setFontSize(9);
   doc.setFont("helvetica", "bold");
-  doc.text(`Réf Écriture : ${trx.id}`, 145, 16);
+  doc.text(sanitizePdfText(`Réf Écriture : ${trx.id}`), 145, 16);
   doc.setFont("helvetica", "normal");
   doc.text(`Date : ${new Date(trx.date).toLocaleDateString('fr-MA')}`, 145, 22);
   doc.text(`Fonds : ${trx.fundType === 'reserve' ? 'FONDS DE RÉSERVE (Loi 106-12)' : 'COMPTE COURANT'}`, 145, 28);
@@ -361,10 +361,10 @@ export const generateTransactionVoucherPDF = (
   doc.text("SYNDICAT DES COPROPRIÉTAIRES :", 18, y + 7);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8.5);
-  doc.text(`Résidence : ${building.name}`, 18, y + 14);
-  doc.text(`Adresse : ${building.address}, ${building.city}`, 18, y + 20);
-  doc.text(`Gestionnaire : ${syndic?.name || building.managerName || 'Syndic'}`, 18, y + 26);
-  if (building.bankName) doc.text(`Banque : ${building.bankName}`, 18, y + 32);
+  doc.text(sanitizePdfText(`Résidence : ${building.name}`), 18, y + 14);
+  doc.text(sanitizePdfText(`Adresse : ${building.address}, ${building.city}`), 18, y + 20);
+  doc.text(sanitizePdfText(`Gestionnaire : ${syndic?.name || building.managerName || 'Syndic'}`), 18, y + 26);
+  if (building.bankName) doc.text(sanitizePdfText(`Banque : ${building.bankName}`), 18, y + 32);
 
   // Third party box (Prestataire ou Copropriétaire)
   doc.rect(108, y, 88, 38, 'FD');
@@ -373,15 +373,15 @@ export const generateTransactionVoucherPDF = (
   doc.text(isIncome ? "PAYEUR / COPROPRIÉTAIRE :" : "BÉNÉFICIAIRE / PRESTATAIRE :", 112, y + 7);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8.5);
-  doc.text(`Nom : ${trx.thirdPartyName || (isIncome ? 'Copropriétaire' : 'Fournisseur')}`, 112, y + 14);
+  doc.text(sanitizePdfText(`Nom : ${trx.thirdPartyName || (isIncome ? 'Copropriétaire' : 'Fournisseur')}`), 112, y + 14);
   if (trx.thirdPartyIce) {
-    doc.text(`ICE (Entr.) : ${trx.thirdPartyIce}`, 112, y + 20);
+    doc.text(sanitizePdfText(`ICE (Entr.) : ${trx.thirdPartyIce}`), 112, y + 20);
   } else if (trx.lotNumber) {
-    doc.text(`Lot / Apt : ${trx.lotNumber}`, 112, y + 20);
+    doc.text(sanitizePdfText(`Lot / Apt : ${trx.lotNumber}`), 112, y + 20);
   }
-  doc.text(`Mode : ${trx.paymentMethod ? trx.paymentMethod.toUpperCase() : 'VIREMENT'}`, 112, y + 26);
+  doc.text(sanitizePdfText(`Mode : ${trx.paymentMethod ? trx.paymentMethod.toUpperCase() : 'VIREMENT'}`), 112, y + 26);
   if (trx.reference) {
-    doc.text(`Réf / Chèque N° : ${trx.reference}`, 112, y + 32);
+    doc.text(sanitizePdfText(`Réf / Chèque N° : ${trx.reference}`), 112, y + 32);
   }
 
   // Voucher details box
@@ -396,7 +396,7 @@ export const generateTransactionVoucherPDF = (
   y += 18;
   doc.setFont("helvetica", "bold");
   doc.setFontSize(10);
-  doc.text(trx.description, 18, y);
+  doc.text(sanitizePdfText(trx.description), 18, y);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(11);
   doc.text(currencyFormatter.format(absAmount), 155, y);
@@ -405,19 +405,19 @@ export const generateTransactionVoucherPDF = (
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8.5);
   doc.setTextColor(71, 85, 105);
-  doc.text(`Catégorie comptable : ${trx.category || 'Général'}`, 18, y);
+  doc.text(sanitizePdfText(`Catégorie comptable : ${trx.category || 'Général'}`), 18, y);
   if (trx.documentType || trx.invoiceNumber) {
     doc.text(
-      `Pièce justificative : ${trx.documentType ? trx.documentType.toUpperCase() : 'PIÈCE'} ${
+      sanitizePdfText(`Pièce justificative : ${trx.documentType ? trx.documentType.toUpperCase() : 'PIÈCE'} ${
         trx.invoiceNumber ? 'N° ' + trx.invoiceNumber : ''
-      }`,
+      }`),
       18,
       y + 6
     );
     y += 6;
   }
   if (trx.notes) {
-    doc.text(`Observations / Résolution : ${trx.notes}`, 18, y + 6);
+    doc.text(sanitizePdfText(`Observations / Résolution : ${trx.notes}`), 18, y + 6);
     y += 6;
   }
 
@@ -488,9 +488,11 @@ const downloadCSVFile = (csvContent: string, fileName: string) => {
   URL.revokeObjectURL(url);
 };
 
-const escapeCSVCell = (value: string | number | undefined | null): string => {
+export const escapeCSVCell = (value: string | number | undefined | null): string => {
   if (value === null || value === undefined) return '""';
-  const str = String(value).replace(/"/g, '""');
+  const str = String(value)
+    .replace(/^(?=[\s\t\r]*[=+\-@]|[\t\r])/, "'")
+    .replace(/"/g, '""');
   return `"${str}"`;
 };
 
@@ -597,12 +599,12 @@ export const exportResidentsPDF = (building: Building, syndic?: Syndic) => {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9);
     doc.text(
-      `Copropriété : ${building.name} — ${building.address}, ${building.city}`,
+      `Copropriété : ${sanitizePdfText(building.name)} — ${sanitizePdfText(building.address)}, ${sanitizePdfText(building.city)}`,
       14,
       19
     );
     doc.text(
-      `Syndic : ${syndic?.name || building.managerName || 'Syndicat des Copropriétaires'}`,
+      `Syndic : ${sanitizePdfText(syndic?.name || building.managerName || 'Syndicat des Copropriétaires')}`,
       14,
       24
     );
@@ -674,10 +676,10 @@ export const exportResidentsPDF = (building: Building, syndic?: Syndic) => {
     doc.text(String(idx + 1), 17, y + 5.5);
 
     doc.setFont('helvetica', 'bold');
-    doc.text(res.name.slice(0, 30), 28, y + 5.5);
+    doc.text(sanitizePdfText(res.name).slice(0, 30), 28, y + 5.5);
 
     doc.setFont('helvetica', 'normal');
-    doc.text(res.cin || '-', 86, y + 5.5);
+    doc.text(sanitizePdfText(res.cin) || '-', 86, y + 5.5);
 
     doc.setTextColor(res.isOwner ? 15 : 3, res.isOwner ? 118 : 105, res.isOwner ? 110 : 161);
     doc.setFont('helvetica', 'bold');
@@ -685,12 +687,12 @@ export const exportResidentsPDF = (building: Building, syndic?: Syndic) => {
 
     doc.setTextColor(30, 41, 59);
     doc.setFont('helvetica', 'bold');
-    doc.text(apt ? `Lot ${apt.number} (Ét. ${apt.floor})` : 'Non assigné', 142, y + 5.5);
+    doc.text(apt ? `Lot ${sanitizePdfText(apt.number)} (Ét. ${apt.floor})` : 'Non assigné', 142, y + 5.5);
 
     doc.setFont('helvetica', 'normal');
     doc.text(apt ? `${apt.tantiemes || 100} / 1000` : '-', 176, y + 5.5);
-    doc.text(res.phone || '-', 204, y + 5.5);
-    doc.text((res.email || '-').slice(0, 28), 238, y + 5.5);
+    doc.text(sanitizePdfText(res.phone) || '-', 204, y + 5.5);
+    doc.text((sanitizePdfText(res.email) || '-').slice(0, 28), 238, y + 5.5);
 
     y += 8;
   });
@@ -699,7 +701,7 @@ export const exportResidentsPDF = (building: Building, syndic?: Syndic) => {
   doc.setFontSize(7.5);
   doc.setTextColor(100, 116, 139);
   doc.text(
-    `Document officiel généré pour le reporting syndic — ${building.name} (${building.city}) — Loi n° 18-00 & 106-12`,
+    `Document officiel généré pour le reporting syndic — ${sanitizePdfText(building.name)} (${sanitizePdfText(building.city)}) — Loi n° 18-00 & 106-12`,
     pageWidth / 2,
     pageHeight - 8,
     { align: 'center' }
@@ -830,12 +832,12 @@ export const exportApartmentsPDF = (
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9);
     doc.text(
-      `Copropriété : ${building.name} — ${building.address}, ${building.city}`,
+      `Copropriété : ${sanitizePdfText(building.name)} — ${sanitizePdfText(building.address)}, ${sanitizePdfText(building.city)}`,
       14,
       19
     );
     doc.text(
-      `Syndic : ${syndic?.name || building.managerName || 'Syndicat des Copropriétaires'}`,
+      `Syndic : ${sanitizePdfText(syndic?.name || building.managerName || 'Syndicat des Copropriétaires')}`,
       14,
       24
     );
@@ -910,7 +912,7 @@ export const exportApartmentsPDF = (
     doc.setTextColor(15, 118, 110);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8.5);
-    doc.text(`Lot ${apt.number}`, 17, y + 5.5);
+    doc.text(`Lot ${sanitizePdfText(apt.number)}`, 17, y + 5.5);
 
     doc.setTextColor(30, 41, 59);
     doc.setFont('helvetica', 'normal');
@@ -929,11 +931,11 @@ export const exportApartmentsPDF = (
 
     doc.setFont('helvetica', owner ? 'bold' : 'normal');
     doc.setTextColor(owner ? 15 : 148, owner ? 23 : 163, owner ? 42 : 184);
-    doc.text(owner ? owner.name.slice(0, 25) : 'Non assigné', 188, y + 5.5);
+    doc.text(owner ? sanitizePdfText(owner.name).slice(0, 25) : 'Non assigné', 188, y + 5.5);
 
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(71, 85, 105);
-    doc.text(tenant ? tenant.name.slice(0, 22) : '---', 240, y + 5.5);
+    doc.text(tenant ? sanitizePdfText(tenant.name).slice(0, 22) : '---', 240, y + 5.5);
 
     y += 8;
   });
@@ -965,7 +967,7 @@ export const exportApartmentsPDF = (
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(100, 116, 139);
   doc.text(
-    `Inventaire officiel des lots et quotes-parts d'indivision — ${building.name} (${building.city}) — Conforme Loi n° 18-00`,
+    `Inventaire officiel des lots et quotes-parts d'indivision — ${sanitizePdfText(building.name)} (${sanitizePdfText(building.city)}) — Conforme Loi n° 18-00`,
     pageWidth / 2,
     pageHeight - 8,
     { align: 'center' }
@@ -1041,18 +1043,18 @@ export const exportResidentCredentialsPDF = (
 
   doc.setTextColor(15, 23, 42);
   doc.setFontSize(9.5);
-  doc.text(`Résidence / Immeuble : ${building.name}`, 18, y + 14);
+  doc.text(`Résidence / Immeuble : ${sanitizePdfText(building.name)}`, 18, y + 14);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8.5);
-  doc.text(`Adresse : ${building.address}, ${building.city}`, 18, y + 20);
+  doc.text(`Adresse : ${sanitizePdfText(building.address)}, ${sanitizePdfText(building.city)}`, 18, y + 20);
   doc.text(
-    `Cabinet Syndic : ${syndic?.name || building.managerName || 'Syndic de la Copropriété'}`,
+    `Cabinet Syndic : ${sanitizePdfText(syndic?.name || building.managerName || 'Syndic de la Copropriété')}`,
     18,
     y + 26
   );
   if (syndic?.phone || building.managerPhone) {
     doc.text(
-      `Contact Syndic : ${syndic?.phone || building.managerPhone}`,
+      `Contact Syndic : ${sanitizePdfText(syndic?.phone || building.managerPhone)}`,
       120,
       y + 26
     );
@@ -1074,7 +1076,7 @@ export const exportResidentCredentialsPDF = (
 
   doc.setTextColor(15, 23, 42);
   doc.setFontSize(10);
-  doc.text(`Nom & Prénom : ${resident.name}`, 18, y + 15);
+  doc.text(`Nom & Prénom : ${sanitizePdfText(resident.name)}`, 18, y + 15);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
   doc.text(
@@ -1082,17 +1084,17 @@ export const exportResidentCredentialsPDF = (
     18,
     y + 22
   );
-  doc.text(`Téléphone GSM : ${resident.phone || 'Non renseigné'}`, 18, y + 29);
+  doc.text(`Téléphone GSM : ${sanitizePdfText(resident.phone) || 'Non renseigné'}`, 18, y + 29);
 
   doc.setFont('helvetica', 'bold');
   doc.text(
-    `Lot / Appartement : ${apartmentNumber ? `Lot ${apartmentNumber}` : 'Rattaché à la résidence'}`,
+    `Lot / Appartement : ${apartmentNumber ? `Lot ${sanitizePdfText(apartmentNumber)}` : 'Rattaché à la résidence'}`,
     115,
     y + 15
   );
   doc.setFont('helvetica', 'normal');
-  doc.text(`N° CIN : ${resident.cin || 'Non renseigné'}`, 115, y + 22);
-  doc.text(`Email : ${resident.email}`, 115, y + 29);
+  doc.text(`N° CIN : ${sanitizePdfText(resident.cin) || 'Non renseigné'}`, 115, y + 22);
+  doc.text(`Email : ${sanitizePdfText(resident.email)}`, 115, y + 29);
 
   y += 44;
 
@@ -1124,7 +1126,7 @@ export const exportResidentCredentialsPDF = (
   doc.setFont('courier', 'bold');
   doc.setFontSize(10.5);
   doc.text(
-    `${resident.email}${resident.cin ? `  (ou CIN : ${resident.cin})` : ''}`,
+    `${sanitizePdfText(resident.email)}${resident.cin ? `  (ou CIN : ${sanitizePdfText(resident.cin)})` : ''}`,
     78,
     y + 27
   );
@@ -1200,7 +1202,7 @@ export const exportResidentCredentialsPDF = (
   doc.setFontSize(7.5);
   doc.setTextColor(100, 116, 139);
   doc.text(
-    `Fiche d'accès individuelle générée par le Syndic — ${building.name} (${building.city}) — Syndik Maroc`,
+    `Fiche d'accès individuelle générée par le Syndic — ${sanitizePdfText(building.name)} (${sanitizePdfText(building.city)}) — Syndik Maroc`,
     105,
     286,
     { align: 'center' }
@@ -1275,12 +1277,12 @@ export const exportPrestataireCredentialsPDF = (
 
   doc.setTextColor(15, 23, 42);
   doc.setFontSize(9.5);
-  doc.text(`Résidence / Immeuble : ${building.name} (${building.city})`, 18, y + 14);
+  doc.text(`Résidence / Immeuble : ${sanitizePdfText(building.name)} (${sanitizePdfText(building.city)})`, 18, y + 14);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8.5);
-  doc.text(`Adresse du site : ${building.address}, ${building.city}`, 18, y + 20);
+  doc.text(`Adresse du site : ${sanitizePdfText(building.address)}, ${sanitizePdfText(building.city)}`, 18, y + 20);
   doc.text(
-    `Syndic Gestionnaire : ${syndic?.name || building.managerName || 'Bureau du Syndic'}`,
+    `Syndic Gestionnaire : ${sanitizePdfText(syndic?.name || building.managerName || 'Bureau du Syndic')}`,
     18,
     y + 26
   );
@@ -1301,17 +1303,17 @@ export const exportPrestataireCredentialsPDF = (
 
   doc.setTextColor(15, 23, 42);
   doc.setFontSize(10);
-  doc.text(`Raison Sociale : ${prestataire.name}`, 18, y + 15);
+  doc.text(`Raison Sociale : ${sanitizePdfText(prestataire.name)}`, 18, y + 15);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
-  doc.text(`Responsable Technique : ${prestataire.contactPerson || 'Non spécifié'}`, 18, y + 22);
-  doc.text(`Téléphone / Astreinte : ${prestataire.phone}`, 18, y + 29);
+  doc.text(`Responsable Technique : ${sanitizePdfText(prestataire.contactPerson) || 'Non spécifié'}`, 18, y + 22);
+  doc.text(`Téléphone / Astreinte : ${sanitizePdfText(prestataire.phone)}`, 18, y + 29);
 
   doc.setFont('helvetica', 'bold');
-  doc.text(`Spécialité : ${prestataire.category.toUpperCase()}`, 115, y + 15);
+  doc.text(`Spécialité : ${sanitizePdfText(prestataire.category).toUpperCase()}`, 115, y + 15);
   doc.setFont('helvetica', 'normal');
-  doc.text(`N° ICE : ${prestataire.ice || 'Enregistré'}`, 115, y + 22);
-  doc.text(`N° RC : ${prestataire.rc || 'Enregistré'}`, 115, y + 29);
+  doc.text(`N° ICE : ${sanitizePdfText(prestataire.ice) || 'Enregistré'}`, 115, y + 22);
+  doc.text(`N° RC : ${sanitizePdfText(prestataire.rc) || 'Enregistré'}`, 115, y + 29);
 
   y += 44;
 
@@ -1342,7 +1344,7 @@ export const exportPrestataireCredentialsPDF = (
   doc.setTextColor(253, 224, 71);
   doc.setFont('courier', 'bold');
   doc.setFontSize(10.5);
-  doc.text(prestataire.email || 'contact@prestataire.ma', 78, y + 27);
+  doc.text(sanitizePdfText(prestataire.email) || 'contact@prestataire.ma', 78, y + 27);
 
   doc.setTextColor(203, 213, 225);
   doc.setFont('helvetica', 'normal');
@@ -1397,7 +1399,7 @@ export const exportPrestataireCredentialsPDF = (
   doc.setFontSize(7.5);
   doc.setTextColor(100, 116, 139);
   doc.text(
-    `Accréditation Prestataire émise par le Syndic — ${building.name} — Syndik Maroc`,
+    `Accréditation Prestataire émise par le Syndic — ${sanitizePdfText(building.name)} — Syndik Maroc`,
     105,
     286,
     { align: 'center' }
@@ -1479,13 +1481,13 @@ export const exportBuildingSummaryReportPDF = (
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9.5);
   doc.text(
-    `Résidence : ${building.name} — ${building.address}, ${building.city || 'Maroc'}`,
+    `Résidence : ${sanitizePdfText(building.name)} — ${sanitizePdfText(building.address)}, ${sanitizePdfText(building.city) || 'Maroc'}`,
     14,
     30
   );
   doc.setFontSize(8.5);
   doc.text(
-    `Édité le ${issueDate} · Gestionnaire : ${syndic?.name || building.managerName || 'Cabinet Syndic'}`,
+    `Édité le ${issueDate} · Gestionnaire : ${sanitizePdfText(syndic?.name || building.managerName) || 'Cabinet Syndic'}`,
     14,
     35.5
   );
@@ -1631,13 +1633,14 @@ export const exportBuildingSummaryReportPDF = (
       const statusLabel = req.status === 'in_progress' ? 'En cours' : 'En attente';
       const priorityLabel =
         req.priority === 'high' ? 'Urgente' : req.priority === 'medium' ? 'Moyenne' : 'Basse';
+      const rawDesc = sanitizePdfText(req.description || '') || '-';
       const descShort =
-        (req.description || '').length > 38
-          ? `${req.description.substring(0, 38)}...`
-          : req.description || '-';
+        rawDesc.length > 38
+          ? `${rawDesc.substring(0, 38)}...`
+          : rawDesc;
 
       doc.text(reqDate, 17, y + 6);
-      doc.text(String(req.category || 'Général').toUpperCase(), 40, y + 6);
+      doc.text(sanitizePdfText(String(req.category || 'Général')).toUpperCase(), 40, y + 6);
       doc.text(priorityLabel, 72, y + 6);
       doc.text(statusLabel, 96, y + 6);
       doc.text(descShort, 124, y + 6);
@@ -1649,7 +1652,7 @@ export const exportBuildingSummaryReportPDF = (
   doc.setFontSize(7.5);
   doc.setTextColor(100, 116, 139);
   doc.text(
-    `Rapport de Synthèse Copropriété généré via Syndik Maroc — ${building.name} (${issueDate})`,
+    `Rapport de Synthèse Copropriété généré via Syndik Maroc — ${sanitizePdfText(building.name)} (${issueDate})`,
     105,
     287,
     { align: 'center' }
@@ -1685,11 +1688,11 @@ function buildArchiveDocumentJsPDF(docItem: BuildingDocument, building: Building
   doc.text('ARCHIVES LÉGALES DE LA COPROPRIÉTÉ · LOI N° 18-00 & 106-12', 14, 13);
 
   doc.setFontSize(14);
-  doc.text(docItem.name, 14, 23);
+  doc.text(sanitizePdfText(docItem.name), 14, 23);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
-  doc.text(`Résidence : ${building.name} (${building.address}, ${building.city || 'Maroc'})`, 14, 31);
+  doc.text(`Résidence : ${sanitizePdfText(building.name)} (${sanitizePdfText(building.address)}, ${sanitizePdfText(building.city) || 'Maroc'})`, 14, 31);
 
   let y = 48;
   doc.setFillColor(248, 250, 252);
@@ -1703,9 +1706,9 @@ function buildArchiveDocumentJsPDF(docItem: BuildingDocument, building: Building
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
-  doc.text(`Nom du fichier : ${docItem.name}`, 18, y + 17);
-  doc.text(`Taille : ${docItem.size || '0.4 MB'} · Date de dépôt : ${uploadDate}`, 18, y + 24);
-  doc.text(`Référence Archive : ${docItem.id}`, 18, y + 30);
+  doc.text(`Nom du fichier : ${sanitizePdfText(docItem.name)}`, 18, y + 17);
+  doc.text(`Taille : ${sanitizePdfText(docItem.size) || '0.4 MB'} · Date de dépôt : ${uploadDate}`, 18, y + 24);
+  doc.text(`Référence Archive : ${sanitizePdfText(docItem.id)}`, 18, y + 30);
 
   y += 44;
   doc.setTextColor(30, 41, 59);
@@ -1717,7 +1720,7 @@ function buildArchiveDocumentJsPDF(docItem: BuildingDocument, building: Building
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9.5);
   const lines = doc.splitTextToSize(
-    `Ce document officiel (« ${docItem.name} ») fait partie intégrante du registre d'archives numériques de la copropriété ${building.name}, sise à ${building.address}, ${building.city || 'Maroc'}, conformément aux dispositions de la Loi n° 18-00 relative au statut de la copropriété des immeubles bâtis telle que modifiée et complétée par la Loi n° 106-12.\n\nIl est mis à la disposition des copropriétaires et du syndic pour consultation directe en ligne et conservation légale.`,
+    `Ce document officiel (« ${sanitizePdfText(docItem.name)} ») fait partie intégrante du registre d'archives numériques de la copropriété ${sanitizePdfText(building.name)}, sise à ${sanitizePdfText(building.address)}, ${sanitizePdfText(building.city) || 'Maroc'}, conformément aux dispositions de la Loi n° 18-00 relative au statut de la copropriété des immeubles bâtis telle que modifiée et complétée par la Loi n° 106-12.\n\nIl est mis à la disposition des copropriétaires et du syndic pour consultation directe en ligne et conservation légale.`,
     180
   );
   doc.text(lines, 14, y);
@@ -1725,7 +1728,7 @@ function buildArchiveDocumentJsPDF(docItem: BuildingDocument, building: Building
   doc.setFontSize(8);
   doc.setTextColor(100, 116, 139);
   doc.text(
-    `Archive Numérique Certifiée — ${building.name} — Consultation Directe Syndik`,
+    `Archive Numérique Certifiée — ${sanitizePdfText(building.name)} — Consultation Directe Syndik`,
     105,
     285,
     { align: 'center' }
@@ -1763,8 +1766,10 @@ const ARABIC_TRANSLIT_MAP: Record<string, string> = {
 
 export function sanitizePdfText(input?: string | null): string {
   if (!input) return '';
-  if (!/[\u0600-\u06FF]/.test(input)) return input;
-  return Array.from(input)
+  const cleaned = String(input)
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\u202A-\u202E\u2066-\u2069]/g, ' ');
+  if (!/[\u0600-\u06FF]/.test(cleaned)) return cleaned.replace(/\s+/g, ' ').trim();
+  return Array.from(cleaned)
     .map((ch) => (ch in ARABIC_TRANSLIT_MAP ? ARABIC_TRANSLIT_MAP[ch] : ch))
     .join('')
     .replace(/\s+/g, ' ')

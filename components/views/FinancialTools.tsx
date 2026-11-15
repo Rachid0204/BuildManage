@@ -20,7 +20,7 @@ const csv = (rows: any[]) => {
     cell = (v: any) =>
       '"' +
       String(v ?? "")
-        .replace(/^[=+@-]/, "'$&")
+        .replace(/^(?=[\s\t\r]*[=+\-@]|[\t\r])/, "'")
         .replaceAll('"', '""') +
       '"';
   return (
@@ -41,7 +41,7 @@ export default function FinancialTools({ building }: { building: Building }) {
   const queryClient = useQueryClient();
   const detailsRef = useRef<HTMLDetailsElement>(null);
   const openingRef = useRef<HTMLFieldSetElement>(null);
-  const { showToast } = useToast();
+  const { showToast, confirmAction } = useToast();
   const { tr } = useI18n(),
     { userProfile } = useAuth(),
     managed = ["admin", "syndic"].includes(userProfile?.role || ""),
@@ -50,7 +50,9 @@ export default function FinancialTools({ building }: { building: Building }) {
     [working, setWorking] = useState("0"),
     [reserve, setReserve] = useState("0"),
     [openingReason, setOpeningReason] = useState(""),
-    [reason, setReason] = useState(""),
+    [periodReason, setPeriodReason] = useState(""),
+    [reversalReason, setReversalReason] = useState(""),
+    [arrearsDescription, setArrearsDescription] = useState(""),
     [period, setPeriod] = useState(new Date().toISOString().slice(0, 7)),
     [payment, setPayment] = useState(""),
     [lot, setLot] = useState(""),
@@ -91,10 +93,14 @@ export default function FinancialTools({ building }: { building: Building }) {
   const op = async <K extends CommandName,>(operation: K, args: CommandArgs<K>) => {
     const result = await remoteMutation(operation, args);
     await queryClient.invalidateQueries({ queryKey: ['syndics'] });
+    await queryClient.invalidateQueries({ queryKey: ['charges', building.id] });
+    await queryClient.invalidateQueries({ queryKey: ['quittances', building.id] });
+    await queryClient.invalidateQueries({ queryKey: ['proofs', building.id] });
     return result;
   };
   const button =
     "border border-slate-300 rounded-lg px-3 py-2 text-sm disabled:opacity-50";
+  const closedPeriodsEntries = Object.entries(report?.closedPeriods || {});
   return (
     <section className="space-y-3">
       {openingRequired && <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 space-y-2" role="note">
@@ -170,37 +176,35 @@ export default function FinancialTools({ building }: { building: Building }) {
             <table className="w-full text-sm" aria-label={tr('Relevés des résidents', 'كشوف السكان')}>
               <thead>
                 <tr>
-                  <th>{tr("Résident", "الساكن")}</th>
-                  <th>{tr("Facturé", "المفوتر")}</th>
-                  <th>{tr("Réglé", "المدفوع")}</th>
-                  <th>{tr("Solde dû", "الرصيد المستحق")}</th>
-                  <th>{tr("Plus de 90 jours", "أكثر من 90 يوماً")}</th>
+                  <th className="text-start">{tr("Résident", "الساكن")}</th>
+                  <th className="text-end">{tr("Facturé", "المفوتر")}</th>
+                  <th className="text-end">{tr("Réglé", "المدفوع")}</th>
+                  <th className="text-end">{tr("Arriérés initiaux (facturé / dû)", "المتأخرات الافتتاحية (مفوتر / مستحق)")}</th>
+                  <th className="text-end">{tr("Solde dû", "الرصيد المستحق")}</th>
+                  <th className="text-end">{tr("Plus de 90 jours", "أكثر من 90 يوماً")}</th>
                 </tr>
               </thead>
               <tbody>
-                {report.statements.map((s: any) => (
-                  <tr key={s.residentId}>
-                    <td>{s.name}</td>
-                    <td>{s.billed} MAD</td>
-                    <td>{s.paid} MAD</td>
-                    <td>{s.outstanding} MAD</td>
-                    <td>{s.over90Days} MAD</td>
-                  </tr>
-                ))}
+                {report.statements.map((s: any) => {
+                  const arrearsBilled = s.openingArrearsBilled ?? s.openingArrears ?? 0;
+                  const arrearsDue = s.openingArrearsOutstanding ?? s.openingArrears ?? 0;
+                  return (
+                    <tr key={s.residentId}>
+                      <td>{s.name}</td>
+                      <td className="text-end">{s.billed} MAD</td>
+                      <td className="text-end">{s.paid} MAD</td>
+                      <td className="text-end font-mono text-xs">{arrearsBilled} / {arrearsDue} MAD</td>
+                      <td className="text-end font-semibold">{s.outstanding} MAD</td>
+                      <td className="text-end">{s.over90Days} MAD</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
         {managed && (
           <>
-            <label className="block text-sm">
-              {tr("Motif de correction ou clôture", "سبب التصحيح أو الإقفال")}
-              <input
-                className="border rounded p-2 w-full"
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-              />
-            </label>
             {openingRequired && (
               <fieldset ref={openingRef} className="border rounded p-3 flex flex-wrap items-end gap-3">
                 <legend>
@@ -253,50 +257,95 @@ export default function FinancialTools({ building }: { building: Building }) {
                 </button>
               </fieldset>
             )}
-            <div className="flex flex-wrap items-end gap-3">
-              <label>
-                {tr("Période", "الفترة")}
-                <input
-                  className="border rounded p-2 block"
-                  type="month"
-                  value={period}
-                  onChange={(e) => setPeriod(e.target.value)}
-                />
-              </label>
-              <button
-                className={button}
-                disabled={busy || !reason.trim()}
-                onClick={() =>
-                  void run(() =>
-                    op("closeFinancialPeriod", [building.id, period, reason]),
-                  )
-                }
-              >
-                {tr("Clôturer", "إقفال")}
-              </button>
-              {userProfile?.role === "admin" && (
+            <fieldset className="border rounded p-3 space-y-3">
+              <legend className="text-xs font-semibold px-1">
+                {tr("Clôture / Réouverture de période comptable", "إقفال / إعادة فتح الفترة المحاسبية")}
+              </legend>
+              <div className="flex flex-wrap items-end gap-3">
+                <label className="text-xs">
+                  {tr("Période", "الفترة")}
+                  <input
+                    className="border rounded p-2 block text-sm"
+                    type="month"
+                    value={period}
+                    onChange={(e) => setPeriod(e.target.value)}
+                  />
+                </label>
+                <label className="flex-1 min-w-[200px] text-xs">
+                  {tr("Motif de clôture / réouverture", "سبب الإقفال / إعادة الفتح")}
+                  <input
+                    className="border rounded p-2 block w-full text-sm"
+                    value={periodReason}
+                    onChange={(e) => setPeriodReason(e.target.value)}
+                  />
+                </label>
                 <button
                   className={button}
-                  disabled={busy || !reason.trim()}
-                  onClick={() =>
-                    void run(() =>
-                      op("reopenFinancialPeriod", [
-                        building.id,
-                        period,
-                        reason,
-                      ]),
-                    )
-                  }
+                  disabled={busy || !periodReason.trim()}
+                  onClick={async () => {
+                    const ok = await confirmAction({
+                      title: tr("Clôturer la période", "إقفال الفترة"),
+                      message: tr(
+                        `Confirmer la clôture comptable de ${period} ? Motif : ${periodReason.trim()}`,
+                        `تأكيد الإقفال المحاسبي للفترة ${period}؟ السبب: ${periodReason.trim()}`
+                      ),
+                      confirmLabel: tr("Clôturer", "إقفال"),
+                    });
+                    if (!ok) return;
+                    await run(async () => {
+                      await op("closeFinancialPeriod", [building.id, period, periodReason.trim()]);
+                      setPeriodReason("");
+                    });
+                  }}
                 >
-                  {tr("Réouvrir", "إعادة فتح")}
+                  {tr("Clôturer", "إقفال")}
                 </button>
+                {userProfile?.role === "admin" && (
+                  <button
+                    className={button}
+                    disabled={busy || !periodReason.trim()}
+                    onClick={async () => {
+                      const ok = await confirmAction({
+                        title: tr("Réouvrir la période", "إعادة فتح الفترة"),
+                        message: tr(
+                          `Confirmer la réouverture de ${period} ? Motif : ${periodReason.trim()}`,
+                          `تأكيد إعادة فتح الفترة ${period}؟ السبب: ${periodReason.trim()}`
+                        ),
+                        confirmLabel: tr("Réouvrir", "إعادة فتح"),
+                      });
+                      if (!ok) return;
+                      await run(async () => {
+                        await op("reopenFinancialPeriod", [building.id, period, periodReason.trim()]);
+                        setPeriodReason("");
+                      });
+                    }}
+                  >
+                    {tr("Réouvrir", "إعادة فتح")}
+                  </button>
+                )}
+              </div>
+              {closedPeriodsEntries.length > 0 && (
+                <div className="flex flex-wrap gap-2 text-xs text-slate-600">
+                  <span className="font-semibold">{tr("Périodes clôturées :", "الفترات المغلقة:")}</span>
+                  {closedPeriodsEntries.map(([key, meta]: [string, any]) => {
+                    const p = key.split(":").pop() || key;
+                    return (
+                      <span key={key} className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200 font-mono" title={meta?.reason || ""}>
+                        {p}{meta?.reason ? ` (${meta.reason})` : ""}
+                      </span>
+                    );
+                  })}
+                </div>
               )}
-            </div>
-            <div className="flex flex-wrap items-end gap-3">
-              <label>
+            </fieldset>
+            <fieldset className="border rounded p-3 flex flex-wrap items-end gap-3">
+              <legend className="text-xs font-semibold px-1">
+                {tr("Contrepassation d’encaissement", "عكس دفعة محصلة")}
+              </legend>
+              <label className="text-xs">
                 {tr("Encaissement à contrepasser", "دفعة لعكسها")}
                 <select
-                  className="border rounded p-2 block max-w-sm"
+                  className="border rounded p-2 block max-w-sm text-sm"
                   value={payment}
                   onChange={(e) => setPayment(e.target.value)}
                 >
@@ -327,21 +376,40 @@ export default function FinancialTools({ building }: { building: Building }) {
                   ))}
                 </select>
               </label>
+              <label className="flex-1 min-w-[200px] text-xs">
+                {tr("Motif de contrepassation", "سبب العكس")}
+                <input
+                  className="border rounded p-2 block w-full text-sm"
+                  value={reversalReason}
+                  onChange={(e) => setReversalReason(e.target.value)}
+                />
+              </label>
               <button
                 className={button}
-                disabled={busy || !payment || !reason.trim()}
-                onClick={() =>
-                  void run(() =>
-                    op("reversePayment", [building.id, payment, reason]),
-                  )
-                }
+                disabled={busy || !payment || !reversalReason.trim()}
+                onClick={async () => {
+                  const ok = await confirmAction({
+                    title: tr("Contrepasser l'encaissement", "تأكيد عكس الدفعة"),
+                    message: tr(
+                      `Contrepasser l'encaissement ${payment} et annuler la quittance associée ? Motif : ${reversalReason.trim()}`,
+                      `هل تؤكد عكس الدفعة ${payment} وإلغاء الوصل المرتبط بها؟ السبب: ${reversalReason.trim()}`
+                    ),
+                    confirmLabel: tr("Contrepasser", "عكس الدفعة"),
+                  });
+                  if (!ok) return;
+                  await run(async () => {
+                    await op("reversePayment", [building.id, payment, reversalReason.trim()]);
+                    setPayment("");
+                    setReversalReason("");
+                  });
+                }}
               >
                 {tr(
                   "Contrepasser sans effacer l’original",
                   "عكس الدفعة مع الاحتفاظ بالأصل",
                 )}
               </button>
-            </div>
+            </fieldset>
             <fieldset className="border rounded p-3 flex flex-wrap items-end gap-3">
               <legend>
                 {tr("Reprise d’un arriéré initial", "ترحيل متأخرات افتتاحية")}
@@ -374,15 +442,24 @@ export default function FinancialTools({ building }: { building: Building }) {
                   onChange={(e) => setArrears(e.target.value)}
                 />
               </label>
+              <label className="flex-1 min-w-[180px]">
+                {tr("Libellé (optionnel)", "البيان (اختياري)")}
+                <input
+                  className="border rounded p-2 block w-full"
+                  value={arrearsDescription}
+                  onChange={(e) => setArrearsDescription(e.target.value)}
+                  placeholder={tr("Arriéré initial", "متأخرات افتتاحية")}
+                />
+              </label>
               <button
                 className={button}
                 disabled={busy || !lot || Number(arrears) <= 0}
                 onClick={() =>
-                  void run(() => {
+                  void run(async () => {
                     const a = building.apartments.find((a) => a.id === lot);
                     const residentId = a?.ownerId || a?.tenantId;
                     if (!residentId) throw new Error(tr('Affectez un résident à ce lot.', 'يرجى ربط ساكن بهذا العقار.'));
-                    return op("importOpeningArrears", [
+                    await op("importOpeningArrears", [
                       building.id,
                       [
                         {
@@ -391,10 +468,12 @@ export default function FinancialTools({ building }: { building: Building }) {
                           period,
                           amount: Number(arrears),
                           description:
-                            reason || tr("Arriéré initial", "متأخرات افتتاحية"),
+                            arrearsDescription.trim() || tr("Arriéré initial", "متأخرات افتتاحية"),
                         },
                       ],
                     ]);
+                    setArrears("");
+                    setArrearsDescription("");
                   })
                 }
               >
