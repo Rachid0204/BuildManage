@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Card from '../common/Card';
@@ -10,11 +10,17 @@ import { useI18n } from '../../hooks/useI18n';
 import {
   adminArchiveCabinet,
   adminRestoreCabinet,
+  getAdminBillingConfig,
   getAllSyndicsForAdmin,
+  getSubscriptionBankTransferRequests,
   getSubscriptionPayments,
+  openAuthenticatedUpload,
   recordSubscriptionPayment,
   remoteMutation,
+  reviewSubscriptionBankTransfer,
+  saveAdminBillingConfig,
   saveSyndic,
+  testPayPalBillingConnection,
   voidSubscriptionPayment,
 } from '../../firebase/services';
 import { generateSecureRandomDigits } from '../../utils/security';
@@ -25,10 +31,17 @@ import {
   getEffectiveSubscriptionStatus,
 } from '../../utils/subscriptionPolicy';
 import type {
-  Syndic,
+  AdminBillingConfigUpdateInput,
+  AdminPlatformBillingConfig,
+  PayPalCheckoutMode,
+  PayPalCurrency,
+  PayPalEnv,
+  SubscriptionBankTransferRequest,
   SubscriptionPayment,
+  SubscriptionPaymentMethod,
   SubscriptionPlan,
   SubscriptionStatus,
+  Syndic,
 } from '../../types';
 import {
   BuildingsIcon,
@@ -38,7 +51,7 @@ import {
   TrashIcon,
 } from '../icons/IconComponents';
 
-type AdminTab = 'cabinets' | 'reports';
+type AdminTab = 'cabinets' | 'reports' | 'billing';
 type StatusFilter = 'all' | SubscriptionStatus | 'archived';
 type PlanFilter = 'all' | SubscriptionPlan;
 
@@ -70,6 +83,44 @@ function getDaysRemaining(raw?: string): number | null {
   const ms = parseExpiryMs(raw);
   if (!Number.isFinite(ms)) return null;
   return Math.ceil((ms - Date.now()) / 86_400_000);
+}
+
+function normalizeRibDigits(raw: string): string {
+  return raw.replace(/\s+/g, '');
+}
+
+function formatRibMoroccan(raw: string): string {
+  const digits = normalizeRibDigits(raw);
+  if (!/^\d{24}$/.test(digits)) return raw.trim();
+  return digits.replace(/^(\d{3})(\d{3})(\d{16})(\d{2})$/, '$1 $2 $3 $4');
+}
+
+function getMethodBadgeMeta(
+  method: SubscriptionPaymentMethod | undefined,
+  tr: (fr: string, ar: string) => string,
+) {
+  switch (method) {
+    case 'card':
+      return {
+        label: tr('Carte (PayPal)', 'بطاقة بنكية (PayPal)'),
+        badgeClass: 'bg-indigo-100 text-indigo-800',
+      };
+    case 'paypal':
+      return {
+        label: 'PayPal',
+        badgeClass: 'bg-sky-100 text-sky-800',
+      };
+    case 'virement':
+      return {
+        label: tr('Virement Maroc', 'تحويل بنكي'),
+        badgeClass: 'bg-emerald-100 text-emerald-800',
+      };
+    default:
+      return {
+        label: tr('Manuel', 'يدوي'),
+        badgeClass: 'bg-slate-100 text-slate-700',
+      };
+  }
 }
 
 const AdminDashboard: React.FC = () => {
@@ -108,6 +159,53 @@ const AdminDashboard: React.FC = () => {
   const [voidTarget, setVoidTarget] = useState<SubscriptionPayment | null>(null);
   const [voidReason, setVoidReason] = useState('');
   const [voidError, setVoidError] = useState('');
+
+  // Bank Transfer Requests Review State
+  const [busyRequestId, setBusyRequestId] = useState<string | null>(null);
+  const [rejectTarget, setRejectTarget] =
+    useState<SubscriptionBankTransferRequest | null>(null);
+  const [rejectReason, setRejectReason] = useState('');
+  const [rejectError, setRejectError] = useState('');
+  const [requestActionMessage, setRequestActionMessage] = useState('');
+  const [requestActionError, setRequestActionError] = useState('');
+  const [showReviewedRequests, setShowReviewedRequests] = useState(false);
+
+  // Platform Billing Config Form State (PayPal + Virement Maroc)
+  const [billingDirty, setBillingDirty] = useState(false);
+  const [ppEnabled, setPpEnabled] = useState(false);
+  const [ppEnv, setPpEnv] = useState<PayPalEnv>('sandbox');
+  const [ppCheckoutMode, setPpCheckoutMode] =
+    useState<PayPalCheckoutMode>('expanded');
+  const [ppClientId, setPpClientId] = useState('');
+  const [ppClientSecret, setPpClientSecret] = useState('');
+  const [ppClearSecret, setPpClearSecret] = useState(false);
+  const [ppWebhookId, setPpWebhookId] = useState('');
+  const [ppClearWebhook, setPpClearWebhook] = useState(false);
+  const [ppCurrency, setPpCurrency] = useState<PayPalCurrency>('EUR');
+  const [ppMadPerUnit, setPpMadPerUnit] = useState('10');
+  const [ppStarterPrice, setPpStarterPrice] = useState('');
+  const [ppProPrice, setPpProPrice] = useState('');
+  const [ppEnterprisePrice, setPpEnterprisePrice] = useState('');
+
+  const [bankEnabled, setBankEnabled] = useState(false);
+  const [bankName, setBankName] = useState('');
+  const [bankHolder, setBankHolder] = useState('');
+  const [bankRib, setBankRib] = useState('');
+  const [bankIban, setBankIban] = useState('');
+  const [bankSwift, setBankSwift] = useState('');
+  const [bankIce, setBankIce] = useState('');
+  const [bankInstructionsFr, setBankInstructionsFr] = useState('');
+  const [bankInstructionsAr, setBankInstructionsAr] = useState('');
+  const [billingSaving, setBillingSaving] = useState(false);
+  const [billingTesting, setBillingTesting] = useState(false);
+  const [billingMessage, setBillingMessage] = useState('');
+  const [billingError, setBillingError] = useState('');
+  const [paypalTestResult, setPaypalTestResult] = useState<{
+    ok: boolean;
+    message: string;
+  } | null>(null);
+  const [confirmResetEnv, setConfirmResetEnv] = useState(false);
+  const [copiedWebhookUrl, setCopiedWebhookUrl] = useState(false);
 
   // Create New Syndic Cabinet Modal State
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -152,9 +250,86 @@ const AdminDashboard: React.FC = () => {
     refetchInterval: 4000,
   });
 
-  const isFetching = isFetchingSyndics || isFetchingPayments;
+  const {
+    data: transferRequests = [],
+    isFetching: isFetchingRequests,
+    refetch: refetchRequests,
+  } = useQuery({
+    queryKey: ['subscriptionBankRequests'],
+    queryFn: () => getSubscriptionBankTransferRequests(),
+    staleTime: 0,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: true,
+    refetchInterval: 4000,
+  });
+
+  const {
+    data: adminBillingConfig,
+    isFetching: isFetchingBillingConfig,
+    refetch: refetchBillingConfig,
+  } = useQuery({
+    queryKey: ['adminBillingConfig'],
+    queryFn: getAdminBillingConfig,
+    staleTime: 10_000,
+  });
+
+  const applyBillingConfigToForm = (cfg: AdminPlatformBillingConfig) => {
+    setPpEnabled(cfg.paypal.enabled);
+    setPpEnv(cfg.paypal.env);
+    setPpCheckoutMode(cfg.paypal.checkoutMode);
+    setPpClientId(cfg.paypal.clientId || '');
+    setPpClientSecret('');
+    setPpClearSecret(false);
+    setPpWebhookId('');
+    setPpClearWebhook(false);
+    setPpCurrency(cfg.paypal.currency);
+    setPpMadPerUnit(String(cfg.paypal.madPerUnit || 10));
+    setPpStarterPrice(
+      cfg.paypal.planPrices?.starter !== undefined
+        ? String(cfg.paypal.planPrices.starter)
+        : '',
+    );
+    setPpProPrice(
+      cfg.paypal.planPrices?.professional !== undefined
+        ? String(cfg.paypal.planPrices.professional)
+        : '',
+    );
+    setPpEnterprisePrice(
+      cfg.paypal.planPrices?.enterprise !== undefined
+        ? String(cfg.paypal.planPrices.enterprise)
+        : '',
+    );
+
+    setBankEnabled(cfg.bankTransfer.enabled);
+    setBankName(cfg.bankTransfer.bankName || '');
+    setBankHolder(cfg.bankTransfer.accountHolder || '');
+    setBankRib(cfg.bankTransfer.rib || '');
+    setBankIban(cfg.bankTransfer.iban || '');
+    setBankSwift(cfg.bankTransfer.swift || '');
+    setBankIce(cfg.bankTransfer.ice || '');
+    setBankInstructionsFr(cfg.bankTransfer.instructionsFr || '');
+    setBankInstructionsAr(cfg.bankTransfer.instructionsAr || '');
+    setBillingDirty(false);
+  };
+
+  useEffect(() => {
+    if (adminBillingConfig && !billingDirty) {
+      applyBillingConfigToForm(adminBillingConfig);
+    }
+  }, [adminBillingConfig, billingDirty]);
+
+  const isFetching =
+    isFetchingSyndics ||
+    isFetchingPayments ||
+    isFetchingRequests ||
+    isFetchingBillingConfig;
   const refetchAll = async () => {
-    await Promise.all([refetchSyndics(), refetchPayments()]);
+    await Promise.all([
+      refetchSyndics(),
+      refetchPayments(),
+      refetchRequests(),
+      refetchBillingConfig(),
+    ]);
   };
 
   const updateSyndicMutation = useMutation({
@@ -434,6 +609,16 @@ const AdminDashboard: React.FC = () => {
     [selectedSyndic, subscriptionPayments],
   );
 
+  const pendingTransferRequests = useMemo(
+    () => transferRequests.filter((r) => r.status === 'pending'),
+    [transferRequests],
+  );
+
+  const reviewedTransferRequests = useMemo(
+    () => transferRequests.filter((r) => r.status !== 'pending'),
+    [transferRequests],
+  );
+
   const handleOpenManage = (syndic: Syndic) => {
     setSelectedSyndic(syndic);
     setEditName(syndic.name || '');
@@ -578,6 +763,284 @@ const AdminDashboard: React.FC = () => {
     }
   };
 
+  const handlePreviewProof = async (proofUrl: string) => {
+    setRequestActionError('');
+    try {
+      await openAuthenticatedUpload(proofUrl);
+    } catch (err: unknown) {
+      setRequestActionError(
+        err instanceof Error
+          ? err.message
+          : tr(
+              'Impossible d’ouvrir le justificatif.',
+              'تعذر فتح وصل التحويل.',
+            ),
+      );
+    }
+  };
+
+  const handleApproveTransferRequest = async (
+    req: SubscriptionBankTransferRequest,
+  ) => {
+    setBusyRequestId(req.id);
+    setRequestActionError('');
+    setRequestActionMessage('');
+    try {
+      await reviewSubscriptionBankTransfer({
+        requestId: req.id,
+        action: 'approve',
+      });
+      setRequestActionMessage(
+        tr(
+          `Virement ${req.transferReference} validé — abonnement de ${req.syndicName} activé (+${req.months} mois).`,
+          `تم تأكيد التحويل ${req.transferReference} وتفعيل اشتراك ${req.syndicName}.`,
+        ),
+      );
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['subscriptionBankRequests'] }),
+        queryClient.invalidateQueries({ queryKey: ['syndics'] }),
+        queryClient.invalidateQueries({ queryKey: ['subscriptionPayments'] }),
+      ]);
+    } catch (err: unknown) {
+      setRequestActionError(
+        err instanceof Error
+          ? err.message
+          : tr(
+              'Impossible de valider ce virement.',
+              'تعذر تأكيد هذا التحويل.',
+            ),
+      );
+    } finally {
+      setBusyRequestId(null);
+    }
+  };
+
+  const handleConfirmRejectTransfer = async () => {
+    if (!rejectTarget) return;
+    if (rejectReason.trim().length < 3) {
+      const msg = tr(
+        'Indiquez un motif de rejet (min. 3 caractères).',
+        'أدخل سبب الرفض (3 أحرف على الأقل).',
+      );
+      setRejectError(msg);
+      throw new Error(msg);
+    }
+    setBusyRequestId(rejectTarget.id);
+    setRequestActionError('');
+    setRequestActionMessage('');
+    try {
+      await reviewSubscriptionBankTransfer({
+        requestId: rejectTarget.id,
+        action: 'reject',
+        rejectionReason: rejectReason.trim(),
+      });
+      setRequestActionMessage(
+        tr(
+          `Demande ${rejectTarget.transferReference} rejetée.`,
+          `تم رفض الطلب ${rejectTarget.transferReference}.`,
+        ),
+      );
+      setRejectTarget(null);
+      setRejectReason('');
+      setRejectError('');
+      await queryClient.invalidateQueries({
+        queryKey: ['subscriptionBankRequests'],
+      });
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : tr('Impossible de rejeter la demande.', 'تعذر رفض الطلب.');
+      setRejectError(msg);
+      throw err;
+    } finally {
+      setBusyRequestId(null);
+    }
+  };
+
+  const handleSaveBillingConfig = async () => {
+    setBillingError('');
+    setBillingMessage('');
+    const parsedMadRate = Number(ppMadPerUnit);
+    if (!Number.isFinite(parsedMadRate) || parsedMadRate < 0.01) {
+      setBillingError(
+        tr(
+          'Indiquez un taux de conversion MAD valide (> 0).',
+          'أدخل سعر تحويل صالحاً من الدرهم (> 0).',
+        ),
+      );
+      return;
+    }
+    const planPrices: Partial<Record<SubscriptionPlan, number>> = {};
+    const priceInputs: Array<[SubscriptionPlan, string]> = [
+      ['starter', ppStarterPrice],
+      ['professional', ppProPrice],
+      ['enterprise', ppEnterprisePrice],
+    ];
+    for (const [planKey, rawVal] of priceInputs) {
+      if (rawVal.trim()) {
+        const parsed = Number(rawVal);
+        if (!Number.isFinite(parsed) || parsed <= 0) {
+          setBillingError(
+            tr(
+              `Tarif PayPal invalide pour le forfait ${planKey}.`,
+              `سعر PayPal غير صالح للباقة ${planKey}.`,
+            ),
+          );
+          return;
+        }
+        planPrices[planKey] = Number(parsed.toFixed(2));
+      }
+    }
+    const cleanRib = normalizeRibDigits(bankRib);
+    if (cleanRib && !/^\d{24}$/.test(cleanRib)) {
+      setBillingError(
+        tr(
+          'Le RIB marocain doit comporter exactement 24 chiffres.',
+          'يجب أن يتكون رقم RIB المغربي من 24 رقماً بالضبط.',
+        ),
+      );
+      return;
+    }
+
+    setBillingSaving(true);
+    try {
+      const payload: AdminBillingConfigUpdateInput = {
+        paypal: {
+          enabled: ppEnabled,
+          env: ppEnv,
+          checkoutMode: ppCheckoutMode,
+          clientId: ppClientId.trim(),
+          ...(ppClientSecret.trim()
+            ? { clientSecret: ppClientSecret.trim() }
+            : ppClearSecret
+              ? { clearClientSecret: true }
+              : {}),
+          ...(ppWebhookId.trim()
+            ? { webhookId: ppWebhookId.trim() }
+            : ppClearWebhook
+              ? { clearWebhookId: true }
+              : {}),
+          currency: ppCurrency,
+          madPerUnit: parsedMadRate,
+          planPrices,
+        },
+        bankTransfer: {
+          enabled: bankEnabled,
+          bankName: bankName.trim(),
+          accountHolder: bankHolder.trim(),
+          rib: cleanRib ? formatRibMoroccan(cleanRib) : '',
+          iban: bankIban.trim().toUpperCase(),
+          swift: bankSwift.trim().toUpperCase(),
+          ice: bankIce.trim(),
+          instructionsFr: bankInstructionsFr.trim(),
+          instructionsAr: bankInstructionsAr.trim(),
+        },
+      };
+      const updated = await saveAdminBillingConfig(payload);
+      queryClient.setQueryData(['adminBillingConfig'], updated);
+      applyBillingConfigToForm(updated);
+      setBillingMessage(
+        tr(
+          'Configuration des paiements enregistrée et chiffrée sur le serveur.',
+          'تم حفظ إعدادات الدفع وتشفيرها على الخادم.',
+        ),
+      );
+      await queryClient.invalidateQueries({
+        queryKey: ['subscriptionBillingConfig'],
+      });
+    } catch (err: unknown) {
+      setBillingError(
+        err instanceof Error
+          ? err.message
+          : tr(
+              'Erreur lors de l’enregistrement de la configuration.',
+              'حدث خطأ أثناء حفظ الإعدادات.',
+            ),
+      );
+    } finally {
+      setBillingSaving(false);
+    }
+  };
+
+  const handleTestPayPalConnection = async () => {
+    setBillingTesting(true);
+    setPaypalTestResult(null);
+    setBillingError('');
+    try {
+      const result = await testPayPalBillingConnection({
+        env: ppEnv,
+        ...(ppClientId.trim() ? { clientId: ppClientId.trim() } : {}),
+        ...(ppClientSecret.trim()
+          ? { clientSecret: ppClientSecret.trim() }
+          : {}),
+      });
+      setPaypalTestResult({ ok: true, message: result.message });
+    } catch (err: unknown) {
+      setPaypalTestResult({
+        ok: false,
+        message:
+          err instanceof Error
+            ? err.message
+            : tr(
+                'Échec du test de connexion PayPal.',
+                'فشل اختبار الاتصال مع PayPal.',
+              ),
+      });
+    } finally {
+      setBillingTesting(false);
+    }
+  };
+
+  const handleResetBillingToEnv = async () => {
+    setBillingSaving(true);
+    setBillingError('');
+    setBillingMessage('');
+    setConfirmResetEnv(false);
+    try {
+      const updated = await saveAdminBillingConfig({
+        resetToEnv: true,
+        paypal: {
+          enabled: false,
+          env: 'sandbox',
+          checkoutMode: 'expanded',
+          clientId: '',
+          currency: 'EUR',
+          madPerUnit: 10,
+        },
+        bankTransfer: {
+          enabled: false,
+          bankName: '',
+          accountHolder: '',
+          rib: '',
+        },
+      });
+      queryClient.setQueryData(['adminBillingConfig'], updated);
+      applyBillingConfigToForm(updated);
+      setPaypalTestResult(null);
+      setBillingMessage(
+        tr(
+          'Surcharge Admin supprimée : la configuration utilise désormais les variables d’environnement.',
+          'تمت إزالة تخصيص المدير: تعتمد الإعدادات الآن على متغيرات البيئة.',
+        ),
+      );
+      await queryClient.invalidateQueries({
+        queryKey: ['subscriptionBillingConfig'],
+      });
+    } catch (err: unknown) {
+      setBillingError(
+        err instanceof Error
+          ? err.message
+          : tr(
+              'Impossible de réinitialiser la configuration.',
+              'تعذر إعادة تعيين الإعدادات.',
+            ),
+      );
+    } finally {
+      setBillingSaving(false);
+    }
+  };
+
   const handleExportPaymentsCsv = () => {
     const headers = [
       'Date',
@@ -585,7 +1048,10 @@ const AdminDashboard: React.FC = () => {
       'Email',
       'Forfait',
       'Duree (mois)',
+      'Mode',
       'Montant (MAD)',
+      'Montant facture',
+      'Devise',
       'Reference',
       'Echeance resultante',
       'Statut',
@@ -593,13 +1059,17 @@ const AdminDashboard: React.FC = () => {
     ];
     const rows = filteredPayments.map((p) => {
       const cab = syndicMap.get(p.syndicId);
+      const methodLabel = getMethodBadgeMeta(p.method, tr).label;
       return [
         p.createdAt ? new Date(p.createdAt).toLocaleDateString('fr-MA') : '',
         p.syndicName || cab?.name || p.syndicId,
         p.syndicEmail || cab?.email || '',
         p.plan,
         p.months,
+        methodLabel,
         p.amount,
+        p.chargedAmount ?? p.amount,
+        p.currency || 'MAD',
         p.reference,
         p.subscriptionExpiry
           ? new Date(p.subscriptionExpiry).toLocaleDateString('fr-MA')
@@ -817,6 +1287,24 @@ const AdminDashboard: React.FC = () => {
           </Card>
         </div>
 
+        {pendingTransferRequests.length > 0 && activeTab !== 'reports' && (
+          <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-xl bg-amber-50 border border-amber-300 text-amber-950 text-xs">
+            <div className="font-semibold">
+              {tr(
+                `${pendingTransferRequests.length} virement(s) bancaire(s) Maroc en attente de validation`,
+                `${pendingTransferRequests.length} طلب(ات) تحويل بنكي في انتظار التحقق`,
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setActiveTab('reports')}
+              className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold transition-colors"
+            >
+              {tr('Examiner maintenant →', 'مراجعة الآن ←')}
+            </button>
+          </div>
+        )}
+
         {/* Navigation Tabs */}
         <div
           className="flex flex-wrap items-center gap-2 border-b border-slate-200"
@@ -841,18 +1329,40 @@ const AdminDashboard: React.FC = () => {
             role="tab"
             aria-selected={activeTab === 'reports'}
             onClick={() => setActiveTab('reports')}
-            className={`px-4 py-2.5 text-xs sm:text-sm font-bold rounded-t-xl border-b-2 transition-colors ${
+            className={`px-4 py-2.5 text-xs sm:text-sm font-bold rounded-t-xl border-b-2 transition-colors inline-flex items-center gap-2 ${
               activeTab === 'reports'
                 ? 'border-teal-700 text-teal-800 bg-white'
                 : 'border-transparent text-slate-500 hover:text-slate-800'
             }`}
           >
-            {tr('Paiements & Rapports SaaS', 'المدفوعات وتقارير المنصة')} (
-            {activePayments.length})
+            <span>
+              {tr('Paiements & Rapports SaaS', 'المدفوعات وتقارير المنصة')} (
+              {activePayments.length})
+            </span>
+            {pendingTransferRequests.length > 0 && (
+              <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-500 text-white">
+                {pendingTransferRequests.length}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'billing'}
+            onClick={() => setActiveTab('billing')}
+            className={`px-4 py-2.5 text-xs sm:text-sm font-bold rounded-t-xl border-b-2 transition-colors inline-flex items-center gap-2 ${
+              activeTab === 'billing'
+                ? 'border-teal-700 text-teal-800 bg-white'
+                : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <span>
+              {tr('Configuration Paiements', 'إعدادات الدفع والمنصة')}
+            </span>
           </button>
         </div>
 
-        {activeTab === 'cabinets' ? (
+        {activeTab === 'cabinets' && (
           <Card className="p-5 border border-slate-200 space-y-4">
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
               <div>
@@ -1137,8 +1647,225 @@ const AdminDashboard: React.FC = () => {
               </div>
             )}
           </Card>
-        ) : (
+        )}
+
+        {activeTab === 'reports' && (
           <div className="space-y-6">
+            {/* Moroccan Bank Transfer Validation Queue */}
+            <Card className="p-5 border border-slate-200 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-base font-bold text-slate-900">
+                    {tr(
+                      'Demandes de virement bancaire Maroc',
+                      'طلبات التحويل البنكي المغربي',
+                    )}{' '}
+                    ({pendingTransferRequests.length}{' '}
+                    {tr('en attente', 'في الانتظار')})
+                  </h2>
+                  <p className="text-xs text-slate-500">
+                    {tr(
+                      'Vérifiez le reçu bancaire ou le relevé avant de valider l’activation de l’abonnement.',
+                      'تحقق من وصل التحويل البنكي أو كشف الحساب قبل تأكيد تفعيل الاشتراك.',
+                    )}
+                  </p>
+                </div>
+                {reviewedTransferRequests.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowReviewedRequests((prev) => !prev)}
+                    className="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-bold text-slate-700"
+                  >
+                    {showReviewedRequests
+                      ? tr('Masquer l’historique traité', 'إخفاء الطلبات المعالجة')
+                      : tr(
+                          `Voir l’historique traité (${reviewedTransferRequests.length})`,
+                          `عرض السجل المعالج (${reviewedTransferRequests.length})`,
+                        )}
+                  </button>
+                )}
+              </div>
+
+              {requestActionError && (
+                <div
+                  role="alert"
+                  className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold"
+                >
+                  {requestActionError}
+                </div>
+              )}
+              {requestActionMessage && (
+                <div
+                  role="status"
+                  className="p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-semibold"
+                >
+                  {requestActionMessage}
+                </div>
+              )}
+
+              {pendingTransferRequests.length === 0 ? (
+                <p className="text-xs text-slate-500 py-2">
+                  {tr(
+                    'Aucune demande de virement en attente de validation.',
+                    'لا يوجد أي طلب تحويل بنكي في انتظار التحقق حالياً.',
+                  )}
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {pendingTransferRequests.map((req) => {
+                    const isBusy = busyRequestId === req.id;
+                    const planEntry = PLAN_CATALOG[req.plan];
+                    return (
+                      <div
+                        key={req.id}
+                        className="p-4 rounded-xl border border-amber-200 bg-amber-50/60 flex flex-col lg:flex-row lg:items-center justify-between gap-4 text-xs"
+                      >
+                        <div className="space-y-1.5">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-bold text-sm text-slate-900">
+                              {req.syndicName}
+                            </span>
+                            {req.syndicEmail && (
+                              <span className="text-slate-500">
+                                ({req.syndicEmail})
+                              </span>
+                            )}
+                            <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 font-bold">
+                              {tr('En attente', 'قيد المراجعة')}
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-slate-700">
+                            <span>
+                              <strong>{tr('Forfait :', 'الباقة :')}</strong>{' '}
+                              {planEntry
+                                ? language === 'ar'
+                                  ? planEntry.nameAr
+                                  : planEntry.nameFr
+                                : req.plan}{' '}
+                              · {req.months} {tr('mois', 'أشهر')}
+                            </span>
+                            <span className="font-mono font-bold text-teal-900">
+                              {Number(req.amount || 0).toLocaleString('fr-MA')}{' '}
+                              MAD
+                            </span>
+                            <span>
+                              <strong>{tr('Banque :', 'البنك :')}</strong>{' '}
+                              {req.bankName}
+                            </span>
+                            <span className="font-mono">
+                              <strong>{tr('Réf. :', 'المرجع :')}</strong>{' '}
+                              {req.transferReference}
+                            </span>
+                            <span>
+                              <strong>{tr('Date virement :', 'تاريخ التحويل :')}</strong>{' '}
+                              {req.transferDate}
+                            </span>
+                          </div>
+                          {req.notes && (
+                            <div className="text-slate-600 italic">
+                              {tr('Note :', 'ملاحظة :')} {req.notes}
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 shrink-0">
+                          {req.proofUrl && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void handlePreviewProof(req.proofUrl as string)
+                              }
+                              className="px-3 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 font-bold"
+                            >
+                              {tr('Voir justificatif', 'عرض الوصل')}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => {
+                              setRejectTarget(req);
+                              setRejectReason('');
+                              setRejectError('');
+                            }}
+                            className="px-3 py-2 rounded-lg border border-rose-300 bg-white hover:bg-rose-50 text-rose-700 font-bold disabled:opacity-50"
+                          >
+                            {tr('Rejeter', 'رفض')}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => void handleApproveTransferRequest(req)}
+                            className="px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold disabled:opacity-50"
+                          >
+                            {isBusy
+                              ? tr('Validation...', 'جاري التأكيد...')
+                              : tr('Valider & Activer', 'تأكيد وتفعيل')}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {showReviewedRequests && reviewedTransferRequests.length > 0 && (
+                <div className="pt-3 border-t border-slate-200 space-y-2">
+                  <div className="text-xs font-bold text-slate-700">
+                    {tr('Historique des demandes traitées', 'سجل الطلبات المعالجة')}
+                  </div>
+                  <div className="space-y-2 max-h-60 overflow-y-auto">
+                    {reviewedTransferRequests.slice(0, 20).map((req) => (
+                      <div
+                        key={req.id}
+                        className="flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-lg border border-slate-200 bg-slate-50 text-xs"
+                      >
+                        <div>
+                          <span className="font-bold text-slate-900">
+                            {req.syndicName}
+                          </span>{' '}
+                          ·{' '}
+                          <span className="font-mono font-semibold">
+                            {Number(req.amount || 0).toLocaleString('fr-MA')} MAD
+                          </span>{' '}
+                          · {req.months} {tr('mois', 'أشهر')} ({req.plan}) ·{' '}
+                          <span className="font-mono">{req.transferReference}</span>
+                          {req.rejectionReason && (
+                            <span className="text-rose-700 ms-2">
+                              — {req.rejectionReason}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {req.proofUrl && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void handlePreviewProof(req.proofUrl as string)
+                              }
+                              className="px-2 py-1 rounded border border-slate-300 bg-white text-slate-700 font-semibold"
+                            >
+                              {tr('Justificatif', 'الوصل')}
+                            </button>
+                          )}
+                          <span
+                            className={`px-2 py-0.5 rounded-full font-bold ${
+                              req.status === 'approved'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-rose-100 text-rose-800'
+                            }`}
+                          >
+                            {req.status === 'approved'
+                              ? tr('Validé', 'مقبول')
+                              : tr('Rejeté', 'مرفوض')}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </Card>
+
             {/* Reports Summary Breakdown */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
               <Card className="p-5 border border-slate-200 space-y-3">
@@ -1277,8 +2004,8 @@ const AdminDashboard: React.FC = () => {
                   </h2>
                   <p className="text-xs text-slate-500">
                     {tr(
-                      'Historique complet des encaissements plateforme par cabinet et référence bancaire',
-                      'السجل الكامل لتحصيلات اشتراكات المنصة حسب المكتب والمرجع البنكي',
+                      'Historique complet des encaissements plateforme (PayPal, Carte, Virement Maroc et Manuel)',
+                      'السجل الكامل لتحصيلات اشتراكات المنصة (PayPal، بطاقة بنكية، تحويل بنكي، يدوي)',
                     )}
                   </p>
                 </div>
@@ -1327,7 +2054,10 @@ const AdminDashboard: React.FC = () => {
                         {tr('Forfait / Durée', 'الباقة / المدة')}
                       </th>
                       <th className="px-4 py-3 text-start font-bold text-slate-500 uppercase text-xs">
-                        {tr('Référence bancaire', 'المرجع البنكي')}
+                        {tr('Mode', 'طريقة الدفع')}
+                      </th>
+                      <th className="px-4 py-3 text-start font-bold text-slate-500 uppercase text-xs">
+                        {tr('Référence', 'المرجع')}
                       </th>
                       <th className="px-4 py-3 text-end font-bold text-slate-500 uppercase text-xs">
                         {tr('Montant', 'المبلغ')}
@@ -1345,6 +2075,7 @@ const AdminDashboard: React.FC = () => {
                       const cab = syndicMap.get(p.syndicId);
                       const cabName = p.syndicName || cab?.name || p.syndicId;
                       const cabEmail = p.syndicEmail || cab?.email || '';
+                      const methodBadge = getMethodBadgeMeta(p.method, tr);
                       return (
                         <tr
                           key={p.id}
@@ -1377,11 +2108,38 @@ const AdminDashboard: React.FC = () => {
                               · {p.months} {tr('mois', 'أشهر')}
                             </span>
                           </td>
+                          <td className="px-4 py-3 whitespace-nowrap">
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-xs font-bold ${methodBadge.badgeClass}`}
+                            >
+                              {methodBadge.label}
+                            </span>
+                          </td>
                           <td className="px-4 py-3 whitespace-nowrap font-mono text-xs text-slate-700">
-                            {p.reference}
+                            <div>{p.reference}</div>
+                            {p.proofUrl && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void handlePreviewProof(p.proofUrl as string)
+                                }
+                                className="text-[11px] font-sans font-semibold text-teal-700 hover:underline mt-0.5"
+                              >
+                                {tr('Voir justificatif', 'عرض الوصل')}
+                              </button>
+                            )}
                           </td>
                           <td className="px-4 py-3 whitespace-nowrap text-end font-mono font-bold text-slate-900">
-                            {Number(p.amount || 0).toLocaleString('fr-MA')} MAD
+                            <div>
+                              {Number(p.amount || 0).toLocaleString('fr-MA')} MAD
+                            </div>
+                            {p.currency &&
+                              p.currency !== 'MAD' &&
+                              p.chargedAmount !== undefined && (
+                                <div className="text-[11px] font-normal text-slate-500">
+                                  ({p.chargedAmount} {p.currency})
+                                </div>
+                              )}
                           </td>
                           <td className="px-4 py-3 whitespace-nowrap">
                             {p.voidedAt ? (
@@ -1442,6 +2200,667 @@ const AdminDashboard: React.FC = () => {
                   )}
                 </div>
               )}
+            </Card>
+          </div>
+        )}
+
+        {activeTab === 'billing' && (
+          <div className="space-y-6">
+            <Card className="p-5 border border-slate-200 space-y-5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-4">
+                <div>
+                  <h2 className="text-base font-bold text-slate-900">
+                    {tr(
+                      'Configuration des passerelles de paiement (PayPal & Virement Maroc)',
+                      'إعدادات بوابات الدفع (PayPal والتحويل البنكي المغربي)',
+                    )}
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    {tr(
+                      'Priorité : les paramètres enregistrés ici sont chiffrés sur le serveur (AES-256) et remplacent les variables d’environnement (.env / Cloud Run).',
+                      'الأولوية: الإعدادات المحفوظة هنا تُشفّر على الخادم (AES-256) وتحل محل متغيرات البيئة.',
+                    )}
+                  </p>
+                </div>
+                {adminBillingConfig?.updatedAt && (
+                  <div className="text-[11px] text-slate-500 font-mono text-end">
+                    {tr('Dernière modif. :', 'آخر تعديل :')}{' '}
+                    {new Date(adminBillingConfig.updatedAt).toLocaleString(
+                      language === 'ar' ? 'ar-MA' : 'fr-MA',
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Section 1: PayPal Expanded Checkout */}
+              <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 sm:p-5 space-y-4 text-xs">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900">
+                      {tr(
+                        '1. PayPal Standard & Expanded Checkout (Cartes 3D Secure)',
+                        '1. PayPal Standard و Expanded Checkout (البطاقات البنكية 3DS)',
+                      )}
+                    </h3>
+                    <p className="text-slate-500 mt-0.5">
+                      {tr(
+                        'Acceptez les paiements par compte PayPal ou carte bancaire internationale (Visa/Mastercard) avec conversion MAD automatique.',
+                        'اقبل الدفع عبر حساب PayPal أو البطاقات الدولية مع التحويل التلقائي من الدرهم.',
+                      )}
+                    </p>
+                  </div>
+                  <label className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-slate-300 bg-white font-bold text-slate-800 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={ppEnabled}
+                      onChange={(e) => {
+                        setPpEnabled(e.target.checked);
+                        setBillingDirty(true);
+                      }}
+                    />
+                    <span>
+                      {ppEnabled
+                        ? tr('PayPal activé', 'PayPal مفعل')
+                        : tr('PayPal désactivé', 'PayPal معطل')}
+                    </span>
+                  </label>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+                  <label className="block">
+                    <span className="font-bold text-slate-700">
+                      {tr('Environnement', 'البيئة')}
+                    </span>
+                    <select
+                      value={ppEnv}
+                      onChange={(e) => {
+                        setPpEnv(e.target.value as PayPalEnv);
+                        setBillingDirty(true);
+                      }}
+                      className="mt-1 w-full p-2 rounded-lg border border-slate-300 bg-white font-semibold"
+                    >
+                      <option value="sandbox">
+                        {tr('Sandbox (Test développeur)', 'Sandbox (تجريبي)')}
+                      </option>
+                      <option value="live">
+                        {tr('Live (Production réelle)', 'Live (الإنتاج الفعلي)')}
+                      </option>
+                    </select>
+                  </label>
+
+                  <label className="block">
+                    <span className="font-bold text-slate-700">
+                      {tr('Mode Checkout', 'وضع الدفع')}
+                    </span>
+                    <select
+                      value={ppCheckoutMode}
+                      onChange={(e) => {
+                        setPpCheckoutMode(e.target.value as PayPalCheckoutMode);
+                        setBillingDirty(true);
+                      }}
+                      className="mt-1 w-full p-2 rounded-lg border border-slate-300 bg-white font-semibold"
+                    >
+                      <option value="expanded">
+                        {tr(
+                          'Expanded Checkout (Boutons + Carte 3DS)',
+                          'Expanded Checkout (PayPal + حقول البطاقة)',
+                        )}
+                      </option>
+                      <option value="standard">
+                        {tr(
+                          'Standard (Boutons PayPal uniquement)',
+                          'Standard (أزرار PayPal فقط)',
+                        )}
+                      </option>
+                    </select>
+                  </label>
+
+                  <label className="block">
+                    <span className="font-bold text-slate-700">
+                      {tr('Devise PayPal', 'عملة PayPal')}
+                    </span>
+                    <select
+                      value={ppCurrency}
+                      onChange={(e) => {
+                        setPpCurrency(e.target.value as PayPalCurrency);
+                        setBillingDirty(true);
+                      }}
+                      className="mt-1 w-full p-2 rounded-lg border border-slate-300 bg-white font-semibold font-mono"
+                    >
+                      <option value="EUR">EUR (€)</option>
+                      <option value="USD">USD ($)</option>
+                    </select>
+                  </label>
+
+                  <label className="block">
+                    <span className="font-bold text-slate-700">
+                      {tr(
+                        `Taux : 1 ${ppCurrency} = X MAD`,
+                        `سعر الصرف : 1 ${ppCurrency} = X درهم`,
+                      )}
+                    </span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      value={ppMadPerUnit}
+                      onChange={(e) => {
+                        setPpMadPerUnit(e.target.value);
+                        setBillingDirty(true);
+                      }}
+                      className="mt-1 w-full p-2 rounded-lg border border-slate-300 bg-white font-mono"
+                    />
+                  </label>
+                </div>
+
+                <div className="p-2.5 rounded-lg bg-sky-50 border border-sky-200 text-sky-900">
+                  {tr(
+                    'Note Expanded Checkout : PayPal active automatiquement les champs carte bancaire 3D Secure si votre compte PayPal Business est éligible à « Advanced Credit and Debit Card Payments ». Sinon, l’interface bascule sans erreur vers les boutons PayPal + paiement carte standard.',
+                    'ملاحظة: يظهر نموذج البطاقة المدمج تلقائياً إذا كان حساب PayPal Business مؤهلاً لخدمة Expanded Checkout، وإلا تنتقل الواجهة تلقائياً إلى أزرار PayPal القياسية.',
+                  )}
+                </div>
+
+                {/* Optional fixed monthly prices per plan */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  {(
+                    [
+                      ['starter', ppStarterPrice, setPpStarterPrice],
+                      ['professional', ppProPrice, setPpProPrice],
+                      ['enterprise', ppEnterprisePrice, setPpEnterprisePrice],
+                    ] as const
+                  ).map(([planKey, rawVal, setter]) => {
+                    const mad = PLANS[planKey].price;
+                    const rate = Number(ppMadPerUnit) > 0 ? Number(ppMadPerUnit) : 10;
+                    const autoVal = Math.max(1, mad / rate).toFixed(2);
+                    const entry = PLAN_CATALOG[planKey];
+                    return (
+                      <label key={planKey} className="block">
+                        <span className="font-bold text-slate-700">
+                          {language === 'ar' ? entry.nameAr : entry.nameFr} (
+                          {mad} MAD →{' '}
+                          {rawVal.trim() ? rawVal.trim() : autoVal}{' '}
+                          {ppCurrency}/mois)
+                        </span>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="1"
+                          placeholder={tr(
+                            `Auto (${autoVal} ${ppCurrency})`,
+                            `تلقائي (${autoVal} ${ppCurrency})`,
+                          )}
+                          value={rawVal}
+                          onChange={(e) => {
+                            setter(e.target.value);
+                            setBillingDirty(true);
+                          }}
+                          className="mt-1 w-full p-2 rounded-lg border border-slate-300 bg-white font-mono"
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+
+                {/* PayPal Credentials & Webhook */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <label className="block">
+                    <span className="font-bold text-slate-700">
+                      PayPal Client ID
+                    </span>
+                    <input
+                      type="text"
+                      value={ppClientId}
+                      onChange={(e) => {
+                        setPpClientId(e.target.value);
+                        setBillingDirty(true);
+                      }}
+                      placeholder="A..."
+                      className="mt-1 w-full p-2 rounded-lg border border-slate-300 bg-white font-mono"
+                    />
+                  </label>
+
+                  <div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold text-slate-700">
+                        PayPal Client Secret
+                      </span>
+                      <span className="text-[11px] font-mono text-slate-500">
+                        {ppClearSecret
+                          ? tr('Sera effacé', 'سيتم الحذف')
+                          : adminBillingConfig?.paypal.clientSecretSource ===
+                              'admin'
+                            ? tr('Chiffré (Admin)', 'مشفر (المدير)')
+                            : adminBillingConfig?.paypal.clientSecretSource ===
+                                'env'
+                              ? tr('Variable ENV', 'متغير البيئة')
+                              : tr('Non défini', 'غير محدد')}
+                      </span>
+                    </div>
+                    <div className="mt-1 flex gap-1.5">
+                      <input
+                        type="password"
+                        autoComplete="new-password"
+                        value={ppClientSecret}
+                        onChange={(e) => {
+                          setPpClientSecret(e.target.value);
+                          if (e.target.value.trim()) setPpClearSecret(false);
+                          setBillingDirty(true);
+                        }}
+                        placeholder={
+                          adminBillingConfig?.paypal.hasClientSecret &&
+                          !ppClearSecret
+                            ? tr(
+                                '•••••••• (laisser vide pour conserver)',
+                                '•••••••• (اتركه فارغاً للإبقاء)',
+                              )
+                            : tr('Saisir le Client Secret', 'أدخل المفتاح السري')
+                        }
+                        className="w-full p-2 rounded-lg border border-slate-300 bg-white font-mono"
+                      />
+                      {(adminBillingConfig?.paypal.hasClientSecret ||
+                        ppClearSecret) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPpClearSecret((prev) => !prev);
+                            setPpClientSecret('');
+                            setBillingDirty(true);
+                          }}
+                          className="px-2.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 font-semibold shrink-0"
+                        >
+                          {ppClearSecret
+                            ? tr('Annuler', 'تراجع')
+                            : tr('Effacer', 'حذف')}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold text-slate-700">
+                        {tr(
+                          'Webhook ID PayPal (recommandé en production)',
+                          'معرف Webhook PayPal (موصى به للإنتاج)',
+                        )}
+                      </span>
+                      <span className="text-[11px] font-mono text-slate-500">
+                        {ppClearWebhook
+                          ? tr('Sera effacé', 'سيتم الحذف')
+                          : adminBillingConfig?.paypal.webhookIdSource === 'admin'
+                            ? tr('Chiffré (Admin)', 'مشفر (المدير)')
+                            : adminBillingConfig?.paypal.webhookIdSource === 'env'
+                              ? tr('Variable ENV', 'متغير البيئة')
+                              : tr('Non défini', 'غير محدد')}
+                      </span>
+                    </div>
+                    <div className="mt-1 flex gap-1.5">
+                      <input
+                        type="text"
+                        value={ppWebhookId}
+                        onChange={(e) => {
+                          setPpWebhookId(e.target.value);
+                          if (e.target.value.trim()) setPpClearWebhook(false);
+                          setBillingDirty(true);
+                        }}
+                        placeholder={
+                          adminBillingConfig?.paypal.hasWebhookId &&
+                          !ppClearWebhook
+                            ? tr(
+                                'Configuré (laisser vide pour conserver)',
+                                'مضبوط (اتركه فارغاً للإبقاء)',
+                              )
+                            : 'WH-...'
+                        }
+                        className="w-full p-2 rounded-lg border border-slate-300 bg-white font-mono"
+                      />
+                      {(adminBillingConfig?.paypal.hasWebhookId ||
+                        ppClearWebhook) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPpClearWebhook((prev) => !prev);
+                            setPpWebhookId('');
+                            setBillingDirty(true);
+                          }}
+                          className="px-2.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 font-semibold shrink-0"
+                        >
+                          {ppClearWebhook
+                            ? tr('Annuler', 'تراجع')
+                            : tr('Effacer', 'حذف')}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div>
+                    <span className="font-bold text-slate-700 block">
+                      {tr(
+                        'URL Webhook à déclarer dans PayPal',
+                        'رابط Webhook للتسجيل في PayPal',
+                      )}
+                    </span>
+                    <div className="mt-1 flex gap-1.5">
+                      <input
+                        type="text"
+                        readOnly
+                        value={`${window.location.origin}/api/webhooks/paypal`}
+                        className="w-full p-2 rounded-lg border border-slate-200 bg-slate-100 font-mono text-slate-700"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void navigator.clipboard?.writeText(
+                            `${window.location.origin}/api/webhooks/paypal`,
+                          );
+                          setCopiedWebhookUrl(true);
+                          window.setTimeout(() => setCopiedWebhookUrl(false), 2000);
+                        }}
+                        className="px-3 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 font-bold text-slate-800 shrink-0"
+                      >
+                        {copiedWebhookUrl
+                          ? tr('Copié ✓', 'تم النسخ ✓')
+                          : tr('Copier', 'نسخ')}
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      {tr(
+                        'Événement à abonner : PAYMENT.CAPTURE.COMPLETED',
+                        'الحدث المطلوب تفعيله: PAYMENT.CAPTURE.COMPLETED',
+                      )}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                  <button
+                    type="button"
+                    disabled={billingTesting}
+                    onClick={() => void handleTestPayPalConnection()}
+                    className="px-3.5 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-800 font-bold disabled:opacity-50"
+                  >
+                    {billingTesting
+                      ? tr('Test OAuth en cours...', 'جاري الاختبار...')
+                      : tr('Tester la connexion PayPal', 'اختبار اتصال PayPal')}
+                  </button>
+                  {paypalTestResult && (
+                    <span
+                      className={`px-3 py-1.5 rounded-lg font-semibold ${
+                        paypalTestResult.ok
+                          ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
+                          : 'bg-rose-50 border border-rose-200 text-rose-800'
+                      }`}
+                    >
+                      {paypalTestResult.message}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Section 2: Moroccan Bank Transfer */}
+              <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 sm:p-5 space-y-4 text-xs">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900">
+                      {tr(
+                        '2. Virement Bancaire Maroc (RIB 24 chiffres)',
+                        '2. التحويل البنكي المغربي (RIB من 24 رقماً)',
+                      )}
+                    </h3>
+                    <p className="text-slate-500 mt-0.5">
+                      {tr(
+                        'Coordonnées bancaires affichées aux syndics dans la fenêtre de renouvellement · Source :',
+                        'البيانات البنكية المعروضة للسنديك عند تجديد الاشتراك · المصدر :',
+                      )}{' '}
+                      <span className="font-mono font-semibold">
+                        {adminBillingConfig?.bankTransfer.source || 'default'}
+                      </span>
+                    </p>
+                  </div>
+                  <label className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-slate-300 bg-white font-bold text-slate-800 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={bankEnabled}
+                      onChange={(e) => {
+                        setBankEnabled(e.target.checked);
+                        setBillingDirty(true);
+                      }}
+                    />
+                    <span>
+                      {bankEnabled
+                        ? tr('Virement activé', 'التحويل البنكي مفعل')
+                        : tr('Virement désactivé', 'التحويل البنكي معطل')}
+                    </span>
+                  </label>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <label className="block">
+                    <span className="font-bold text-slate-700">
+                      {tr('Nom de la banque *', 'اسم البنك *')}
+                    </span>
+                    <input
+                      type="text"
+                      value={bankName}
+                      onChange={(e) => {
+                        setBankName(e.target.value);
+                        setBillingDirty(true);
+                      }}
+                      placeholder="Ex: Attijariwafa Bank / CIH Bank"
+                      className="mt-1 w-full p-2 rounded-lg border border-slate-300 bg-white"
+                    />
+                  </label>
+
+                  <label className="block">
+                    <span className="font-bold text-slate-700">
+                      {tr(
+                        'Titulaire du compte (Bénéficiaire) *',
+                        'صاحب الحساب (المستفيد) *',
+                      )}
+                    </span>
+                    <input
+                      type="text"
+                      value={bankHolder}
+                      onChange={(e) => {
+                        setBankHolder(e.target.value);
+                        setBillingDirty(true);
+                      }}
+                      placeholder="Ex: IMMOGEST SARL"
+                      className="mt-1 w-full p-2 rounded-lg border border-slate-300 bg-white"
+                    />
+                  </label>
+
+                  <div className="md:col-span-2">
+                    <div className="flex items-center justify-between">
+                      <label className="font-bold text-slate-700">
+                        {tr(
+                          'RIB Marocain (24 chiffres exacts) *',
+                          'رقم الحساب البنكي RIB (24 رقماً) *',
+                        )}
+                      </label>
+                      <span
+                        className={`font-mono text-[11px] font-bold ${
+                          /^\d{24}$/.test(normalizeRibDigits(bankRib))
+                            ? 'text-emerald-700'
+                            : 'text-slate-500'
+                        }`}
+                      >
+                        {normalizeRibDigits(bankRib).replace(/\D/g, '').length}{' '}
+                        / 24 {tr('chiffres', 'رقم')}
+                      </span>
+                    </div>
+                    <input
+                      type="text"
+                      value={bankRib}
+                      onChange={(e) => {
+                        setBankRib(e.target.value);
+                        setBillingDirty(true);
+                      }}
+                      onBlur={() => {
+                        const clean = normalizeRibDigits(bankRib);
+                        if (/^\d{24}$/.test(clean)) {
+                          setBankRib(formatRibMoroccan(clean));
+                        }
+                      }}
+                      placeholder="007 780 0001234567890123 45"
+                      className="mt-1 w-full p-2 rounded-lg border border-slate-300 bg-white font-mono"
+                    />
+                  </div>
+
+                  <label className="block">
+                    <span className="font-bold text-slate-700">
+                      {tr('IBAN (optionnel)', 'IBAN (اختياري)')}
+                    </span>
+                    <input
+                      type="text"
+                      value={bankIban}
+                      onChange={(e) => {
+                        setBankIban(e.target.value);
+                        setBillingDirty(true);
+                      }}
+                      placeholder="MA64..."
+                      className="mt-1 w-full p-2 rounded-lg border border-slate-300 bg-white font-mono"
+                    />
+                  </label>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="block">
+                      <span className="font-bold text-slate-700">
+                        {tr('SWIFT / BIC', 'SWIFT / BIC')}
+                      </span>
+                      <input
+                        type="text"
+                        value={bankSwift}
+                        onChange={(e) => {
+                          setBankSwift(e.target.value);
+                          setBillingDirty(true);
+                        }}
+                        placeholder="BCMAMAMC"
+                        className="mt-1 w-full p-2 rounded-lg border border-slate-300 bg-white font-mono"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="font-bold text-slate-700">ICE</span>
+                      <input
+                        type="text"
+                        value={bankIce}
+                        onChange={(e) => {
+                          setBankIce(e.target.value);
+                          setBillingDirty(true);
+                        }}
+                        placeholder="001234567000089"
+                        className="mt-1 w-full p-2 rounded-lg border border-slate-300 bg-white font-mono"
+                      />
+                    </label>
+                  </div>
+
+                  <label className="block">
+                    <span className="font-bold text-slate-700">
+                      {tr(
+                        'Instructions affichées au syndic (FR)',
+                        'تعليمات الدفع المعروضة للسنديك (فرنسي)',
+                      )}
+                    </span>
+                    <textarea
+                      rows={3}
+                      value={bankInstructionsFr}
+                      onChange={(e) => {
+                        setBankInstructionsFr(e.target.value);
+                        setBillingDirty(true);
+                      }}
+                      className="mt-1 w-full p-2 rounded-lg border border-slate-300 bg-white"
+                    />
+                  </label>
+
+                  <label className="block">
+                    <span className="font-bold text-slate-700">
+                      {tr(
+                        'Instructions affichées au syndic (AR)',
+                        'تعليمات الدفع المعروضة للسنديك (عربي)',
+                      )}
+                    </span>
+                    <textarea
+                      rows={3}
+                      dir="rtl"
+                      value={bankInstructionsAr}
+                      onChange={(e) => {
+                        setBankInstructionsAr(e.target.value);
+                        setBillingDirty(true);
+                      }}
+                      className="mt-1 w-full p-2 rounded-lg border border-slate-300 bg-white"
+                    />
+                  </label>
+                </div>
+              </div>
+
+              {billingError && (
+                <div
+                  role="alert"
+                  className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold"
+                >
+                  {billingError}
+                </div>
+              )}
+              {billingMessage && (
+                <div
+                  role="status"
+                  className="p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-semibold"
+                >
+                  {billingMessage}
+                </div>
+              )}
+
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-200 text-xs">
+                <div>
+                  {confirmResetEnv ? (
+                    <div className="inline-flex items-center gap-2">
+                      <span className="text-amber-800 font-semibold">
+                        {tr(
+                          'Supprimer la surcharge Admin et revenir aux variables .env ?',
+                          'حذف إعدادات المدير والعودة إلى متغيرات البيئة؟',
+                        )}
+                      </span>
+                      <button
+                        type="button"
+                        disabled={billingSaving}
+                        onClick={() => void handleResetBillingToEnv()}
+                        className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold"
+                      >
+                        {tr('Confirmer', 'تأكيد')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmResetEnv(false)}
+                        className="px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-700"
+                      >
+                        {tr('Annuler', 'إلغاء')}
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmResetEnv(true)}
+                      className="px-3 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 font-bold"
+                    >
+                      {tr(
+                        'Réinitialiser aux variables d’environnement',
+                        'إعادة التعيين لمتغيرات البيئة',
+                      )}
+                    </button>
+                  )}
+                </div>
+
+                <Button
+                  type="button"
+                  disabled={billingSaving}
+                  onClick={() => void handleSaveBillingConfig()}
+                  className="bg-teal-700 hover:bg-teal-800 text-white font-bold"
+                >
+                  {billingSaving
+                    ? tr('Enregistrement...', 'جاري الحفظ...')
+                    : tr('Enregistrer la configuration', 'حفظ الإعدادات')}
+                </Button>
+              </div>
             </Card>
           </div>
         )}
@@ -2018,43 +3437,71 @@ const AdminDashboard: React.FC = () => {
                 </p>
               ) : (
                 <div className="space-y-1.5 max-h-40 overflow-y-auto">
-                  {selectedSyndicPayments.map((p) => (
-                    <div
-                      key={p.id}
-                      className={`flex flex-wrap items-center justify-between gap-2 p-2 rounded-lg border text-[11px] ${
-                        p.voidedAt
-                          ? 'bg-slate-50 border-slate-200 text-slate-500'
-                          : 'bg-slate-50/50 border-slate-200'
-                      }`}
-                    >
-                      <div>
-                        <span className="font-mono font-bold text-slate-800">
-                          {p.amount} MAD
-                        </span>{' '}
-                        · {p.months} {tr('mois', 'أشهر')} ({p.plan}) ·{' '}
-                        <span className="font-mono">{p.reference}</span>
-                        <div className="text-slate-400">
-                          {new Date(p.createdAt).toLocaleDateString('fr-MA')}
-                          {p.voidedAt && p.voidReason
-                            ? ` · ${tr('Annulé', 'ملغى')}: ${p.voidReason}`
-                            : ''}
+                  {selectedSyndicPayments.map((p) => {
+                    const methodBadge = getMethodBadgeMeta(p.method, tr);
+                    return (
+                      <div
+                        key={p.id}
+                        className={`flex flex-wrap items-center justify-between gap-2 p-2 rounded-lg border text-[11px] ${
+                          p.voidedAt
+                            ? 'bg-slate-50 border-slate-200 text-slate-500'
+                            : 'bg-slate-50/50 border-slate-200'
+                        }`}
+                      >
+                        <div>
+                          <span className="font-mono font-bold text-slate-800">
+                            {p.amount} MAD
+                          </span>
+                          {p.currency &&
+                            p.currency !== 'MAD' &&
+                            p.chargedAmount !== undefined && (
+                              <span className="text-slate-500 ms-1">
+                                ({p.chargedAmount} {p.currency})
+                              </span>
+                            )}{' '}
+                          · {p.months} {tr('mois', 'أشهر')} ({p.plan}) ·{' '}
+                          <span
+                            className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${methodBadge.badgeClass}`}
+                          >
+                            {methodBadge.label}
+                          </span>{' '}
+                          · <span className="font-mono">{p.reference}</span>
+                          <div className="text-slate-400">
+                            {new Date(p.createdAt).toLocaleDateString('fr-MA')}
+                            {p.voidedAt && p.voidReason
+                              ? ` · ${tr('Annulé', 'ملغى')}: ${p.voidReason}`
+                              : ''}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          {p.proofUrl && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void handlePreviewProof(p.proofUrl as string)
+                              }
+                              className="px-2 py-1 rounded border border-slate-300 text-slate-700 hover:bg-slate-100 font-semibold"
+                            >
+                              {tr('Justificatif', 'الوصل')}
+                            </button>
+                          )}
+                          {!p.voidedAt && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setVoidTarget(p);
+                                setVoidReason('');
+                                setVoidError('');
+                              }}
+                              className="px-2 py-1 rounded border border-rose-200 text-rose-700 hover:bg-rose-50 font-semibold"
+                            >
+                              {tr('Annuler', 'إلغاء')}
+                            </button>
+                          )}
                         </div>
                       </div>
-                      {!p.voidedAt && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setVoidTarget(p);
-                            setVoidReason('');
-                            setVoidError('');
-                          }}
-                          className="px-2 py-1 rounded border border-rose-200 text-rose-700 hover:bg-rose-50 font-semibold"
-                        >
-                          {tr('Annuler', 'إلغاء')}
-                        </button>
-                      )}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -2157,6 +3604,69 @@ const AdminDashboard: React.FC = () => {
                 placeholder={tr(
                   'Ex: Erreur de saisie, virement rejeté...',
                   'مثال: خطأ في الإدخال، رفض التحويل...',
+                )}
+                className="w-full p-2.5 rounded-lg border border-slate-300"
+              />
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Reject Moroccan Bank Transfer Modal */}
+      {rejectTarget && (
+        <Modal
+          isOpen={!!rejectTarget}
+          onClose={() => setRejectTarget(null)}
+          busy={busyRequestId === rejectTarget.id}
+          title={tr(
+            'Rejeter une demande de virement bancaire',
+            'رفض طلب التحويل البنكي',
+          )}
+          onSubmit={handleConfirmRejectTransfer}
+          footer={
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="secondary"
+                onClick={() => setRejectTarget(null)}
+              >
+                {tr('Fermer', 'إغلاق')}
+              </Button>
+              <Button
+                type="submit"
+                variant="danger"
+                disabled={busyRequestId === rejectTarget.id}
+              >
+                {tr('Confirmer le rejet', 'تأكيد الرفض')}
+              </Button>
+            </div>
+          }
+        >
+          <div className="space-y-3 text-xs">
+            {rejectError && (
+              <div
+                role="alert"
+                className="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 font-semibold"
+              >
+                {rejectError}
+              </div>
+            )}
+            <p className="text-slate-700">
+              {tr(
+                `Cabinet ${rejectTarget.syndicName} — Virement ${rejectTarget.amount} MAD (réf. ${rejectTarget.transferReference}). Le cabinet restera au statut actuel et la référence sera libérée.`,
+                `المكتب ${rejectTarget.syndicName} — تحويل بمبلغ ${rejectTarget.amount} درهم (مرجع ${rejectTarget.transferReference}). سيبقى الاشتراك في حالته الحالية.`,
+              )}
+            </p>
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">
+                {tr('Motif du rejet *', 'سبب الرفض *')}
+              </label>
+              <textarea
+                rows={3}
+                value={rejectReason}
+                onChange={(e) => setRejectReason(e.target.value)}
+                placeholder={tr(
+                  'Ex: Virement non reçu sur le relevé, justificatif illisible, montant incomplet...',
+                  'مثال: لم يصل التحويل في كشف الحساب، الوصل غير واضح، المبلغ ناقص...',
                 )}
                 className="w-full p-2.5 rounded-lg border border-slate-300"
               />

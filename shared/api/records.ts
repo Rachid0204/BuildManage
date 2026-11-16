@@ -20,6 +20,7 @@ export const STORAGE_KEYS = {
   PRESTATAIRE_ACCOUNTS: 'syndik_prod_prestataire_accounts_v1',
   REGISTERED_USERS: 'syndik_prod_registered_users_v1',
   SUBSCRIPTION_PAYMENTS: 'syndik_prod_subscription_payments_v1',
+  SUBSCRIPTION_REQUESTS: 'syndik_prod_subscription_requests_v1',
 };
 export interface ResidentAccountRecord {
   residentId: string;

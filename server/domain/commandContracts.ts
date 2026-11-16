@@ -305,6 +305,8 @@ export const CommandEnvelopeSchema = CommandIdentitySchema.extend({
     'adminRestoreCabinet',
     'recordSubscriptionPayment',
     'voidSubscriptionPayment',
+    'submitSubscriptionBankTransfer',
+    'reviewSubscriptionBankTransfer',
   ]),
   args: z.array(z.unknown()).max(10),
   operationId: z.string().regex(/^[a-zA-Z0-9:_-]{16,150}$/),

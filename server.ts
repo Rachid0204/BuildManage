@@ -87,7 +87,23 @@ import {
   sendFirebaseVerification,
   usesFirebaseAuth,
 } from './server/firebaseIdentity';
-import type { AssembleeGenerale, Building } from './types';
+import { activatePlatformSubscription } from './server/domain/building.service';
+import {
+  capturePayPalOrder,
+  computeSubscriptionPricing,
+  createPayPalOrder,
+  getPayPalAccessToken,
+  resolvePlatformBillingConfig,
+  updatePlatformBillingConfig,
+  verifyPayPalWebhookSignature,
+} from './server/paypalBilling';
+import { PLANS } from './shared/domain/subscription';
+import type {
+  AdminBillingConfigUpdateInput,
+  AssembleeGenerale,
+  Building,
+  SubscriptionPlan,
+} from './types';
 import { applyResidentVote } from './utils/agVoting';
 import {
   getBuildingReserveRate,
@@ -743,6 +759,12 @@ function filterStoreForCaller(store: ServerStore, caller: AuthCallerContext) {
         (p: any) =>
           scope.isAdmin ||
           (managed && scope.authorizedSyndicIds.has(p.syndicId)),
+      );
+    else if (key === "syndik_prod_subscription_requests_v1")
+      result[key] = value.filter(
+        (r: any) =>
+          scope.isAdmin ||
+          (managed && scope.authorizedSyndicIds.has(r.syndicId)),
       );
     else if (key === "syndik_prod_audit_v1")
       result[key] = managed
@@ -1727,22 +1749,16 @@ async function startServer() {
     });
   });
 
-  // Binary Document & Receipt Offload Endpoints (/api/uploads) with building-scoped auth (Audit P1-5)
-  api.post("/api/uploads", async (req, res) => {
-    const caller = await extractAndVerifyCaller(req, sharedStore);
-    if (!caller)
-      return res.status(401).json({ error: "Authentification requise." });
-    const buildingId = String(req.body?.buildingId || caller.buildingId || ""),
-      b = buildingFor(caller, buildingId, false);
-    canWrite(caller, b);
-    const match = String(req.body?.dataUrl || "").match(
+  const decodeValidatedUploadBytes = (dataUrlRaw: unknown) => {
+    const match = String(dataUrlRaw || "").match(
       /^data:([^;]+);base64,([A-Za-z0-9+/=\s]+)$/,
     );
-    if (!match) return res.status(400).json({ error: "Fichier invalide." });
+    if (!match) return null;
     const bytes = Buffer.from(match[2], "base64"),
       mime = match[1];
-    if (bytes.length > 5 * 1048576)
-      return res.status(413).json({ error: "Fichier limité à 5 Mo." });
+    if (bytes.length > 5 * 1048576) {
+      throw new OperationError("Fichier limité à 5 Mo.", 413);
+    }
     const valid =
       mime === "application/pdf"
         ? bytes.subarray(0, 5).toString() === "%PDF-"
@@ -1754,10 +1770,26 @@ async function startServer() {
               ? bytes.subarray(0, 4).toString() === "RIFF" &&
                 bytes.subarray(8, 12).toString() === "WEBP"
               : false;
-    if (!valid)
-      return res
-        .status(400)
-        .json({ error: "Format accepté : PDF, PNG, JPEG ou WebP." });
+    if (!valid) {
+      throw new OperationError(
+        "Format accepté : PDF, PNG, JPEG ou WebP.",
+        400,
+      );
+    }
+    return { bytes, mime };
+  };
+
+  // Binary Document & Receipt Offload Endpoints (/api/uploads) with building-scoped auth (Audit P1-5)
+  api.post("/api/uploads", async (req, res) => {
+    const caller = await extractAndVerifyCaller(req, sharedStore);
+    if (!caller)
+      return res.status(401).json({ error: "Authentification requise." });
+    const buildingId = String(req.body?.buildingId || caller.buildingId || ""),
+      b = buildingFor(caller, buildingId, false);
+    canWrite(caller, b);
+    const decoded = decodeValidatedUploadBytes(req.body?.dataUrl);
+    if (!decoded) return res.status(400).json({ error: "Fichier invalide." });
+    const { bytes, mime } = decoded;
     const fileId = crypto
         .createHash("sha256")
         .update(`${buildingId}:${caller.uid}:`)
@@ -1785,6 +1817,96 @@ async function startServer() {
       sizeBytes: bytes.length,
     });
   });
+
+  api.post("/api/subscription/upload-proof", async (req, res) => {
+    const caller = await extractAndVerifyCaller(req, sharedStore);
+    if (!caller)
+      return res.status(401).json({ error: "Authentification requise." });
+    if (!["admin", "syndic"].includes(caller.role))
+      return res.status(403).json({ error: "Opération réservée au syndic." });
+    const callerUser = (sharedStore.syndik_prod_registered_users_v1 || []).find(
+      (u: any) => u.uid === caller.uid,
+    );
+    if (
+      (caller as any).emailVerified === false ||
+      callerUser?.profile?.emailVerified === false
+    ) {
+      return res.status(403).json({ error: "Vérifiez votre adresse email." });
+    }
+    if (
+      callerUser?.profile?.mustChangePassword ||
+      (caller as any).mustChangePassword
+    ) {
+      return res.status(403).json({
+        error: "Changez votre mot de passe initial avant de continuer.",
+      });
+    }
+
+    const requestedSyndicId = String(
+      req.body?.syndicId || caller.syndicId || "",
+    ).trim();
+    const syndics = sharedStore.syndik_prod_syndics_v1 || [];
+    const s = syndics.find((cab: any) =>
+      requestedSyndicId
+        ? cab.id === requestedSyndicId
+        : cab.createdBy === caller.uid || caller.syndicId === cab.id,
+    );
+    if (
+      !s ||
+      (caller.role !== "admin" &&
+        s.createdBy !== caller.uid &&
+        caller.syndicId !== s.id)
+    ) {
+      return res.status(403).json({ error: "Cabinet non autorisé." });
+    }
+    if (s.archivedAt) {
+      return res.status(409).json({
+        error: "Cabinet archivé : impossible de téléverser un justificatif.",
+      });
+    }
+    if (caller.role !== "admin" && s.subscriptionStatus === "cancelled") {
+      return res.status(403).json({
+        error: "Votre compte est suspendu. Contactez l'administration.",
+      });
+    }
+
+    const decoded = decodeValidatedUploadBytes(req.body?.dataUrl);
+    if (!decoded) return res.status(400).json({ error: "Fichier invalide." });
+    const { bytes, mime } = decoded;
+    const fileId = crypto
+        .createHash("sha256")
+        .update(`sub:${s.id}:${caller.uid}:`)
+        .update(bytes)
+        .digest("hex"),
+      key = `private/subscription-${s.id}/${fileId}`;
+    if (sharedStore.__files?.[fileId]?.lifecycle === "deleting")
+      throw new OperationError(
+        "Fichier en cours de suppression. Réessayez dans un instant.",
+        409,
+      );
+    await savePrivateFile(UPLOADS_DIR, fileId, key, bytes, mime);
+    (sharedStore.__files ??= {})[fileId] = {
+      fileId,
+      key,
+      mimeType: mime,
+      scope: "subscription",
+      syndicId: s.id,
+      uploadedBy: caller.uid,
+      name: String(req.body?.name || "justificatif-virement").slice(0, 200),
+      sizeBytes: bytes.length,
+      createdAt:
+        sharedStore.__files?.[fileId]?.createdAt || new Date().toISOString(),
+      lastUploadedAt: new Date().toISOString(),
+    };
+    return res.json({
+      ok: true,
+      fileId,
+      url: `/api/uploads/${fileId}`,
+      mimeType: mime,
+      sizeBytes: bytes.length,
+    });
+  });
+
   api.get("/api/uploads/:fileId", async (req, res) => {
     const caller = await extractAndVerifyCaller(req, sharedStore);
     if (!caller)
@@ -1792,6 +1914,27 @@ async function startServer() {
     const id = String(req.params.fileId),
       meta = sharedStore.__files?.[id];
     if (!meta) return res.status(404).json({ error: "Fichier introuvable." });
+    if (meta.scope === "subscription") {
+      const ownerSyndic =
+        caller.role === "syndic" &&
+        (sharedStore.syndik_prod_syndics_v1 || []).some(
+          (s: any) =>
+            s.id === meta.syndicId &&
+            (s.createdBy === caller.uid || caller.syndicId === s.id),
+        );
+      if (
+        caller.role !== "admin" &&
+        meta.uploadedBy !== caller.uid &&
+        !ownerSyndic
+      ) {
+        return res.status(403).json({ error: "Fichier privé." });
+      }
+      const bytes = await readPrivateFile(UPLOADS_DIR, id, meta.key);
+      res.setHeader("Content-Type", meta.mimeType);
+      res.setHeader("Content-Security-Policy", "sandbox; default-src 'none'");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      return res.send(bytes);
+    }
     const b = buildingFor(caller, meta.buildingId, false),
       publicDocument = (b.documents || []).some(
         (d: any) => d.url === `/api/uploads/${id}`,
@@ -1830,6 +1973,590 @@ async function startServer() {
     res.setHeader("X-Content-Type-Options", "nosniff");
     return res.send(bytes);
   });
+
+  // Platform Subscription Billing Configuration & PayPal Checkout / Webhook Routes
+  const AdminBillingConfigPaypalSchema = z.object({
+    enabled: z.boolean(),
+    env: z.enum(["sandbox", "live"]),
+    checkoutMode: z.enum(["standard", "expanded"]),
+    clientId: z.string().max(300),
+    clientSecret: z.string().max(300).optional(),
+    clearClientSecret: z.boolean().optional(),
+    webhookId: z.string().max(200).optional(),
+    clearWebhookId: z.boolean().optional(),
+    currency: z.enum(["EUR", "USD"]),
+    madPerUnit: z.number().positive().max(1_000_000),
+    planPrices: z
+      .object({
+        starter: z.number().positive().max(1_000_000).optional(),
+        professional: z.number().positive().max(1_000_000).optional(),
+        enterprise: z.number().positive().max(1_000_000).optional(),
+      })
+      .optional(),
+  });
+  const AdminBillingConfigBankSchema = z.object({
+    enabled: z.boolean(),
+    bankName: z.string().max(120),
+    accountHolder: z.string().max(160),
+    rib: z.string().max(64),
+    iban: z.string().max(64).optional(),
+    swift: z.string().max(32).optional(),
+    ice: z.string().max(40).optional(),
+    instructionsFr: z.string().max(1500).optional(),
+    instructionsAr: z.string().max(1500).optional(),
+  });
+  const AdminBillingConfigSchema = z.union([
+    z.object({
+      resetToEnv: z.literal(true),
+      paypal: AdminBillingConfigPaypalSchema.optional(),
+      bankTransfer: AdminBillingConfigBankSchema.optional(),
+    }),
+    z.object({
+      resetToEnv: z.literal(false).optional(),
+      paypal: AdminBillingConfigPaypalSchema,
+      bankTransfer: AdminBillingConfigBankSchema,
+    }),
+  ]);
+
+  api.get("/api/subscription/billing-config", async (req, res) => {
+    const caller = await extractAndVerifyCaller(req, sharedStore);
+    if (!caller)
+      return res.status(401).json({ error: "Authentification requise." });
+    if (!["admin", "syndic"].includes(caller.role))
+      return res.status(403).json({ error: "Opération réservée au syndic." });
+    const resolved = resolvePlatformBillingConfig(sharedStore);
+    return res.json({ ok: true, config: resolved.publicConfig });
+  });
+
+  api.get("/api/admin/billing-config", async (req, res) => {
+    const caller = await extractAndVerifyCaller(req, sharedStore);
+    if (!caller)
+      return res.status(401).json({ error: "Authentification requise." });
+    if (caller.role !== "admin")
+      return res.status(403).json({ error: "Administration uniquement." });
+    const resolved = resolvePlatformBillingConfig(sharedStore);
+    return res.json({ ok: true, config: resolved.adminConfig });
+  });
+
+  app.put(
+    "/api/admin/billing-config",
+    wrap(async (req, res) => {
+      const caller = await extractAndVerifyCaller(req, sharedStore);
+      if (!caller)
+        return res.status(401).json({ error: "Authentification requise." });
+      if (caller.role !== "admin")
+        return res.status(403).json({ error: "Administration uniquement." });
+      const parsed = AdminBillingConfigSchema.parse(
+        req.body,
+      ) as AdminBillingConfigUpdateInput;
+      const updated = updatePlatformBillingConfig(
+        sharedStore,
+        caller.uid,
+        parsed,
+      );
+      appendAudit(
+        sharedStore,
+        caller,
+        "updatePlatformBillingConfig",
+        undefined,
+        {
+          paypalEnabled: updated.paypal.enabled,
+          paypalEnv: updated.paypal.env,
+          paypalCheckoutMode: updated.paypal.checkoutMode,
+          paypalCurrency: updated.paypal.currency,
+          bankTransferEnabled: updated.bankTransfer.enabled,
+        },
+      );
+      return res.json({ ok: true, config: updated });
+    }, true),
+  );
+
+  app.post(
+    "/api/admin/billing-config/test-paypal",
+    wrap(async (req, res) => {
+      const preflight = await repository.transaction(async (state) => {
+        const caller = await extractAndVerifyCaller(req, state);
+        if (!caller) throw new OperationError("Authentification requise.", 401);
+        if (caller.role !== "admin")
+          throw new OperationError("Administration uniquement.", 403);
+        const resolved = resolvePlatformBillingConfig(state).paypalSecrets;
+        const bodyEnv =
+          req.body?.env === "live" || req.body?.env === "sandbox"
+            ? req.body.env
+            : resolved.env;
+        const clientId =
+          typeof req.body?.clientId === "string" && req.body.clientId.trim()
+            ? req.body.clientId.trim()
+            : resolved.clientId;
+        const clientSecret =
+          typeof req.body?.clientSecret === "string" &&
+          req.body.clientSecret.trim()
+            ? req.body.clientSecret.trim()
+            : resolved.clientSecret;
+        return { env: bodyEnv, clientId, clientSecret };
+      });
+      await getPayPalAccessToken(preflight);
+      return res.json({
+        ok: true,
+        env: preflight.env,
+        message: "Connexion OAuth PayPal vérifiée avec succès.",
+      });
+    }, false),
+  );
+
+  const CreatePayPalOrderSchema = z.object({
+    syndicId: z.string().min(1).max(200),
+    plan: z.enum(["starter", "professional", "enterprise"]),
+    months: z.number().int().min(1).max(12),
+    paymentSourceHint: z.enum(["paypal", "card"]).optional(),
+  });
+
+  app.post(
+    "/api/subscription/paypal/create-order",
+    wrap(async (req, res) => {
+      const body = CreatePayPalOrderSchema.parse(req.body);
+      const prepared = await repository.transaction(async (state) => {
+        const caller = await extractAndVerifyCaller(req, state);
+        if (!caller) throw new OperationError("Authentification requise.", 401);
+        if (!["admin", "syndic"].includes(caller.role))
+          throw new OperationError("Opération réservée au syndic.", 403);
+        const user = (state.syndik_prod_registered_users_v1 || []).find(
+          (u: any) => u.uid === caller.uid,
+        );
+        if (
+          (caller as any).emailVerified === false ||
+          user?.profile?.emailVerified === false
+        ) {
+          throw new OperationError("Vérifiez votre adresse email.", 403);
+        }
+        if (user?.profile?.mustChangePassword || (caller as any).mustChangePassword) {
+          throw new OperationError(
+            "Changez votre mot de passe initial avant de continuer.",
+            403,
+          );
+        }
+        const s = (state.syndik_prod_syndics_v1 || []).find(
+          (cab: any) => cab.id === body.syndicId,
+        );
+        if (
+          !s ||
+          (caller.role !== "admin" &&
+            s.createdBy !== caller.uid &&
+            caller.syndicId !== s.id)
+        ) {
+          throw new OperationError("Cabinet non autorisé.", 403);
+        }
+        if (s.archivedAt) {
+          throw new OperationError(
+            "Cabinet archivé : impossible de renouveler l'abonnement.",
+            409,
+          );
+        }
+        if (caller.role !== "admin" && s.subscriptionStatus === "cancelled") {
+          throw new OperationError(
+            "Votre compte est suspendu. Contactez l'administration.",
+            403,
+          );
+        }
+        const billing = resolvePlatformBillingConfig(state);
+        if (!billing.paypalSecrets.enabled) {
+          throw new OperationError(
+            "Le paiement en ligne PayPal n'est pas configuré.",
+            400,
+          );
+        }
+        const pricing = computeSubscriptionPricing(
+          billing.publicConfig,
+          body.plan as SubscriptionPlan,
+          body.months,
+        );
+        const intentId = `sub-${crypto.randomUUID()}`;
+        const intents = (state.__paypalIntents ??= {});
+        // Prune completed or expired intents older than 30 days
+        const cutoff = Date.now() - 30 * 86_400_000;
+        for (const [k, v] of Object.entries(intents) as [string, any][]) {
+          if (v?.createdAt && Date.parse(v.createdAt) < cutoff) {
+            delete intents[k];
+          }
+        }
+        intents[intentId] = {
+          intentId,
+          syndicId: s.id,
+          actorUid: caller.uid,
+          plan: body.plan,
+          months: body.months,
+          amountMad: pricing.amountMad,
+          paypalCurrency: pricing.paypalCurrency,
+          paypalCents: pricing.paypalCents,
+          ...(body.paymentSourceHint
+            ? { paymentSourceHint: body.paymentSourceHint }
+            : {}),
+          status: "created",
+          createdAt: new Date().toISOString(),
+        };
+        return {
+          intentId,
+          cabinetName: String(s.name || "ImmoGest"),
+          pricing,
+          creds: {
+            env: billing.paypalSecrets.env,
+            clientId: billing.paypalSecrets.clientId,
+            clientSecret: billing.paypalSecrets.clientSecret,
+          },
+          paymentSourceHint: body.paymentSourceHint,
+        };
+      });
+
+      const order = await createPayPalOrder(prepared.creds, {
+        currency: prepared.pricing.paypalCurrency,
+        amountValue: prepared.pricing.paypalAmountString,
+        customId: prepared.intentId,
+        requestId: prepared.intentId,
+        description: `ImmoGest ${body.plan} (${body.months} mois) - ${prepared.cabinetName}`,
+        paymentSourceHint: prepared.paymentSourceHint,
+      });
+
+      await repository.transaction(async (state) => {
+        (state.__paypalOrders ??= {})[order.orderId] = prepared.intentId;
+        if (state.__paypalIntents?.[prepared.intentId]) {
+          state.__paypalIntents[prepared.intentId].orderId = order.orderId;
+        }
+      });
+
+      return res.json({
+        ok: true,
+        orderId: order.orderId,
+        currency: prepared.pricing.paypalCurrency,
+        amount: prepared.pricing.paypalAmount,
+        amountMad: prepared.pricing.amountMad,
+      });
+    }, false),
+  );
+
+  const CapturePayPalOrderSchema = z.object({
+    orderId: z.string().min(4).max(120),
+    syndicId: z.string().min(1).max(200),
+    methodHint: z.enum(["paypal", "card"]).optional(),
+  });
+
+  app.post(
+    "/api/subscription/paypal/capture-order",
+    wrap(async (req, res) => {
+      const body = CapturePayPalOrderSchema.parse(req.body);
+      const preflight = await repository.transaction(async (state) => {
+        const caller = await extractAndVerifyCaller(req, state);
+        if (!caller) throw new OperationError("Authentification requise.", 401);
+        if (!["admin", "syndic"].includes(caller.role))
+          throw new OperationError("Opération réservée au syndic.", 403);
+        const s = (state.syndik_prod_syndics_v1 || []).find(
+          (cab: any) => cab.id === body.syndicId,
+        );
+        if (
+          !s ||
+          (caller.role !== "admin" &&
+            s.createdBy !== caller.uid &&
+            caller.syndicId !== s.id)
+        ) {
+          throw new OperationError("Cabinet non autorisé.", 403);
+        }
+        if (s.archivedAt) {
+          throw new OperationError("Cabinet archivé.", 409);
+        }
+        if (caller.role !== "admin" && s.subscriptionStatus === "cancelled") {
+          throw new OperationError(
+            "Votre compte est suspendu. Contactez l'administration.",
+            403,
+          );
+        }
+        const existing = (
+          state.syndik_prod_subscription_payments_v1 || []
+        ).find(
+          (p: any) => !p.voidedAt && p.externalOrderId === body.orderId,
+        );
+        if (existing) {
+          if (existing.syndicId !== body.syndicId) {
+            throw new OperationError(
+              "Cette commande appartient à un autre cabinet.",
+              403,
+            );
+          }
+          return {
+            alreadyCaptured: true as const,
+            payment: existing,
+            store: filterStoreForCaller(state, caller),
+            revision: state.__revision || 0,
+          };
+        }
+        const mappedIntentId = state.__paypalOrders?.[body.orderId];
+        const mappedIntent = mappedIntentId
+          ? state.__paypalIntents?.[mappedIntentId]
+          : undefined;
+        if (mappedIntent && mappedIntent.syndicId !== body.syndicId) {
+          throw new OperationError(
+            "Commande PayPal associée à un autre cabinet.",
+            403,
+          );
+        }
+        const billing = resolvePlatformBillingConfig(state);
+        if (!billing.paypalSecrets.enabled) {
+          throw new OperationError(
+            "Le paiement en ligne PayPal n'est pas configuré.",
+            400,
+          );
+        }
+        return {
+          alreadyCaptured: false as const,
+          caller,
+          creds: {
+            env: billing.paypalSecrets.env,
+            clientId: billing.paypalSecrets.clientId,
+            clientSecret: billing.paypalSecrets.clientSecret,
+          },
+        };
+      });
+
+      if (preflight.alreadyCaptured) {
+        return res.json({
+          ok: true,
+          alreadyCaptured: true,
+          payment: preflight.payment,
+          store: preflight.store,
+          revision: preflight.revision,
+        });
+      }
+
+      const capture = await capturePayPalOrder(preflight.creds, body.orderId);
+
+      const finalized = await repository.transaction(async (state) => {
+        const caller = preflight.caller;
+        const payments = (state.syndik_prod_subscription_payments_v1 ??= []);
+        const existing = payments.find(
+          (p: any) => !p.voidedAt && p.externalOrderId === body.orderId,
+        );
+        if (existing) {
+          if (existing.syndicId !== body.syndicId) {
+            throw new OperationError(
+              "Commande PayPal associée à un autre cabinet.",
+              403,
+            );
+          }
+          return {
+            alreadyCaptured: true,
+            payment: existing,
+            store: filterStoreForCaller(state, caller),
+            revision: state.__revision || 0,
+          };
+        }
+
+        const intentKey = state.__paypalOrders?.[body.orderId] || capture.customId;
+        const intent = intentKey ? state.__paypalIntents?.[intentKey] : undefined;
+        if (!intent || intent.syndicId !== body.syndicId) {
+          throw new OperationError(
+            "Commande PayPal introuvable ou non autorisée pour ce cabinet.",
+            403,
+          );
+        }
+        if (
+          capture.status !== "COMPLETED" ||
+          (capture.captureStatus && capture.captureStatus !== "COMPLETED")
+        ) {
+          throw new OperationError(
+            "Paiement PayPal non finalisé (statut : " + capture.status + ").",
+            402,
+          );
+        }
+        if (
+          capture.currency !== intent.paypalCurrency ||
+          capture.amountCents !== intent.paypalCents
+        ) {
+          throw new OperationError(
+            "Montant ou devise PayPal incohérent avec la commande.",
+            409,
+          );
+        }
+
+        const method =
+          capture.hasCardPaymentSource ||
+          body.methodHint === "card" ||
+          intent.paymentSourceHint === "card"
+            ? ("card" as const)
+            : ("paypal" as const);
+
+        const payment = activatePlatformSubscription(state, caller, {
+          syndicId: intent.syndicId,
+          plan: intent.plan as SubscriptionPlan,
+          months: Number(intent.months),
+          reference: capture.captureId || capture.orderId,
+          amountMad: Number(intent.amountMad),
+          method,
+          currency: intent.paypalCurrency,
+          chargedAmount: Number(intent.paypalCents) / 100,
+          externalOrderId: capture.orderId,
+          ...(capture.captureId ? { externalCaptureId: capture.captureId } : {}),
+          auditOperation: "paypalCaptureSubscription",
+        });
+
+        intent.status = "completed";
+        intent.orderId = capture.orderId;
+        intent.paymentId = payment.id;
+        (state.__paypalOrders ??= {})[capture.orderId] = intentKey;
+
+        return {
+          alreadyCaptured: false,
+          payment,
+          store: filterStoreForCaller(state, caller),
+          revision: (state.__revision || 0) + 1,
+        };
+      });
+
+      return res.json({
+        ok: true,
+        alreadyCaptured: finalized.alreadyCaptured,
+        payment: finalized.payment,
+        store: finalized.store,
+        revision: finalized.revision,
+      });
+    }, false),
+  );
+
+  app.post(
+    "/api/webhooks/paypal",
+    wrap(async (req, res) => {
+      const authAlgo = String(req.headers["paypal-auth-algo"] || "").trim();
+      const certUrl = String(req.headers["paypal-cert-url"] || "").trim();
+      const transmissionId = String(
+        req.headers["paypal-transmission-id"] || "",
+      ).trim();
+      const transmissionSig = String(
+        req.headers["paypal-transmission-sig"] || "",
+      ).trim();
+      const transmissionTime = String(
+        req.headers["paypal-transmission-time"] || "",
+      ).trim();
+
+      if (
+        !authAlgo ||
+        !certUrl ||
+        !transmissionId ||
+        !transmissionSig ||
+        !transmissionTime
+      ) {
+        return res
+          .status(400)
+          .json({ error: "En-têtes de signature PayPal manquants." });
+      }
+
+      const webhookCreds = await repository.transaction(async (state) => {
+        const secrets = resolvePlatformBillingConfig(state).paypalSecrets;
+        return {
+          env: secrets.env,
+          clientId: secrets.clientId,
+          clientSecret: secrets.clientSecret,
+          webhookId: secrets.webhookId,
+        };
+      });
+
+      if (
+        !webhookCreds.clientId ||
+        !webhookCreds.clientSecret ||
+        !webhookCreds.webhookId
+      ) {
+        return res
+          .status(503)
+          .json({ error: "Webhook PayPal non configuré sur ce serveur." });
+      }
+
+      const verified = await verifyPayPalWebhookSignature(
+        {
+          env: webhookCreds.env,
+          clientId: webhookCreds.clientId,
+          clientSecret: webhookCreds.clientSecret,
+        },
+        {
+          authAlgo,
+          certUrl,
+          transmissionId,
+          transmissionSig,
+          transmissionTime,
+          webhookId: webhookCreds.webhookId,
+          webhookEvent: req.body,
+        },
+      );
+      if (!verified) {
+        return res
+          .status(401)
+          .json({ error: "Signature webhook PayPal invalide." });
+      }
+
+      const eventType = String(req.body?.event_type || "");
+      if (eventType !== "PAYMENT.CAPTURE.COMPLETED") {
+        return res.json({ ok: true, ignored: true, eventType });
+      }
+
+      const resource = (req.body?.resource || {}) as Record<string, any>;
+      const captureStatus = String(resource.status || "");
+      const captureId = String(resource.id || "").trim();
+      const relatedOrderId = String(
+        resource.supplementary_data?.related_ids?.order_id || "",
+      ).trim();
+      const customId = String(resource.custom_id || "").trim();
+      const currency = String(resource.amount?.currency_code || "").toUpperCase();
+      const parsedAmount = Number(resource.amount?.value);
+      const amountCents = Number.isFinite(parsedAmount)
+        ? Math.round(parsedAmount * 100)
+        : -1;
+
+      if (captureStatus !== "COMPLETED" || (!customId && !relatedOrderId)) {
+        return res.json({ ok: true, ignored: true });
+      }
+
+      const outcome = await repository.transaction(async (state) => {
+        const intentKey =
+          customId || (relatedOrderId && state.__paypalOrders?.[relatedOrderId]);
+        const intent = intentKey
+          ? state.__paypalIntents?.[intentKey]
+          : undefined;
+        if (!intent) {
+          return { ignored: true, reason: "unknown_intent" };
+        }
+        if (
+          currency !== intent.paypalCurrency ||
+          amountCents !== intent.paypalCents
+        ) {
+          throw new OperationError(
+            "Montant ou devise webhook PayPal incohérent.",
+            400,
+          );
+        }
+        const payment = activatePlatformSubscription(
+          state,
+          { uid: "paypal:webhook", role: "admin" },
+          {
+            syndicId: intent.syndicId,
+            plan: intent.plan as SubscriptionPlan,
+            months: Number(intent.months),
+            reference: captureId || relatedOrderId || intent.intentId,
+            amountMad: Number(intent.amountMad),
+            method: intent.paymentSourceHint === "card" ? "card" : "paypal",
+            currency: intent.paypalCurrency,
+            chargedAmount: Number(intent.paypalCents) / 100,
+            externalOrderId: relatedOrderId || intent.orderId || captureId,
+            ...(captureId ? { externalCaptureId: captureId } : {}),
+            auditOperation: "paypalWebhookSubscription",
+          },
+        );
+        intent.status = "completed";
+        if (relatedOrderId) {
+          intent.orderId = relatedOrderId;
+          (state.__paypalOrders ??= {})[relatedOrderId] = intentKey;
+        }
+        intent.paymentId = payment.id;
+        return { ignored: false, paymentId: payment.id };
+      });
+
+      return res.json({ ok: true, ...outcome });
+    }, false),
+  );
 
   api.post('/api/operations/status', async (req, res) => {
     const caller = await extractAndVerifyCaller(req, sharedStore);

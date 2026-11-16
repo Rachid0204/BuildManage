@@ -102,6 +102,14 @@ export function reencryptDurableState(state: State) {
   for (const message of Object.values(state.__outbox || {}) as any[]) {
     if (message.status !== "sent") rotate(message, "encryptedText", "queuedMail");
   }
+  const paypalConfig = state.__platformBillingConfig?.paypal;
+  if (paypalConfig) {
+    for (const field of ["encryptedClientSecret", "encryptedWebhookId"]) {
+      if (typeof paypalConfig[field] === "string" && needsEncryptionRotation(paypalConfig[field])) {
+        paypalConfig[field] = encrypt(decrypt(paypalConfig[field]));
+      }
+    }
+  }
   return changed;
 }
 

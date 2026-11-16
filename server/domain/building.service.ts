@@ -409,12 +409,173 @@ export function createBuildingService(context: DomainContext) {
 
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import type {
+  SubscriptionPayment,
+  SubscriptionPaymentMethod,
+  SubscriptionPlan,
+} from '../../types';
 import { PLANS } from '../../shared/domain/subscription';
 import { subscriptionCanWrite } from '../../utils/subscriptionPolicy';
+import { resolvePlatformBillingConfig } from '../paypalBilling';
 import type { State } from '../repository';
 import type { CommandDependencies } from './dependencies';
-import type { Actor } from './errors';
+import { OperationError, type Actor } from './errors';
 
+export interface ActivatePlatformSubscriptionInput {
+  syndicId: string;
+  plan: SubscriptionPlan;
+  months: number;
+  reference: string;
+  amountMad: number;
+  method?: SubscriptionPaymentMethod;
+  currency?: 'MAD' | 'EUR' | 'USD';
+  chargedAmount?: number;
+  externalOrderId?: string;
+  externalCaptureId?: string;
+  proofUrl?: string;
+  requestId?: string;
+  auditOperation?: string;
+}
+
+type CheckFn = (
+  condition: unknown,
+  message: string,
+  status?: number,
+) => asserts condition;
+
+export function activatePlatformSubscription(
+  state: State,
+  actor: Actor,
+  input: ActivatePlatformSubscriptionInput,
+): SubscriptionPayment {
+  const check: CheckFn = (condition, message, status = 403) => {
+    if (!condition) throw new OperationError(message, status);
+  };
+  const syndicId = z.string().min(1).max(200).parse(input.syndicId);
+  const cabinets = state.syndik_prod_syndics_v1 || [];
+  const s = cabinets.find((cab: Syndic) => cab.id === syndicId);
+  check(
+    s &&
+      (actor.role === 'admin' ||
+        s.createdBy === actor.uid ||
+        actor.syndicId === syndicId),
+    'Cabinet non autorisé.',
+    403,
+  );
+  check(
+    !s.archivedAt,
+    "Cabinet archivé : restaurez-le avant d'enregistrer un paiement.",
+    409,
+  );
+  check(
+    actor.role === 'admin' || s.subscriptionStatus !== 'cancelled',
+    "Votre compte est suspendu. Contactez l'administration pour le réactiver.",
+    403,
+  );
+
+  const payments: SubscriptionPayment[] = (state.syndik_prod_subscription_payments_v1 ??=
+    []);
+
+  if (input.externalOrderId) {
+    const existingByOrder = payments.find(
+      (p) => !p.voidedAt && p.externalOrderId === input.externalOrderId,
+    );
+    if (existingByOrder) return existingByOrder;
+  }
+  if (input.externalCaptureId) {
+    const existingByCapture = payments.find(
+      (p) => !p.voidedAt && p.externalCaptureId === input.externalCaptureId,
+    );
+    if (existingByCapture) return existingByCapture;
+  }
+  if (input.requestId) {
+    const existingByRequest = payments.find(
+      (p) => !p.voidedAt && p.requestId === input.requestId,
+    );
+    if (existingByRequest) return existingByRequest;
+  }
+
+  const plan = z
+    .enum(['starter', 'professional', 'enterprise'])
+    .parse(input.plan);
+  const months = z.number().int().min(1).max(12).parse(input.months);
+  const reference = z.string().min(1).max(200).parse(input.reference).trim();
+  const amountCents = Math.round(Number(input.amountMad) * 100);
+  check(
+    Number.isFinite(input.amountMad) &&
+      amountCents === PLANS[plan].price * months * 100,
+    'Montant incompatible avec le forfait.',
+    400,
+  );
+  check(
+    !payments.some((p) => !p.voidedAt && p.reference === reference),
+    'Référence déjà utilisée.',
+    409,
+  );
+
+  const expiry = new Date(
+    Math.max(Date.now(), Date.parse(s.subscriptionExpiry) || 0),
+  );
+  const originalDay = expiry.getUTCDate();
+  expiry.setUTCDate(1);
+  expiry.setUTCMonth(expiry.getUTCMonth() + months);
+  expiry.setUTCDate(
+    Math.min(
+      originalDay,
+      new Date(
+        Date.UTC(expiry.getUTCFullYear(), expiry.getUTCMonth() + 1, 0),
+      ).getUTCDate(),
+    ),
+  );
+  Object.assign(s, {
+    subscriptionPlan: plan,
+    subscriptionStatus: 'active',
+    subscriptionExpiry: expiry.toISOString(),
+  });
+
+  const payment: SubscriptionPayment = {
+    id: randomUUID(),
+    syndicId: s.id,
+    ...(s.name ? { syndicName: s.name } : {}),
+    ...(s.email ? { syndicEmail: s.email } : {}),
+    plan,
+    months,
+    reference,
+    amount: amountCents / 100,
+    ...(input.method ? { method: input.method } : {}),
+    ...(input.currency ? { currency: input.currency } : {}),
+    ...(input.chargedAmount !== undefined
+      ? { chargedAmount: Number(input.chargedAmount.toFixed(2)) }
+      : {}),
+    ...(input.externalOrderId ? { externalOrderId: input.externalOrderId } : {}),
+    ...(input.externalCaptureId
+      ? { externalCaptureId: input.externalCaptureId }
+      : {}),
+    ...(input.proofUrl ? { proofUrl: input.proofUrl } : {}),
+    ...(input.requestId ? { requestId: input.requestId } : {}),
+    recordedBy: actor.uid,
+    createdAt: new Date().toISOString(),
+    subscriptionExpiry: s.subscriptionExpiry,
+    subscriptionStatus: s.subscriptionStatus,
+  };
+  payments.push(payment);
+  (state.syndik_prod_audit_v1 ??= []).push({
+    id: randomUUID(),
+    actorUid: actor.uid,
+    actorRole: actor.role,
+    syndicId: s.id,
+    operation: input.auditOperation || 'recordSubscriptionPayment',
+    detail: {
+      paymentId: payment.id,
+      syndicId: s.id,
+      method: input.method || 'manual',
+      ...(input.externalOrderId ? { externalOrderId: input.externalOrderId } : {}),
+      ...(input.requestId ? { requestId: input.requestId } : {}),
+    },
+    createdAt: new Date().toISOString(),
+  });
+  return payment;
+}
 
 export function createBuildingCommands(transactionState: State, dependencies: CommandDependencies) {
 const state=transactionState;
@@ -504,65 +665,206 @@ async function createCabinet(actor: Actor, input: any) {
 
 function subscriptionPayment(actor: Actor, input: any) {
   check(actor.role === "admin", "Administration uniquement.");
-  const state = transactionState,
-    data = object(input),
-    s = cabinetFor(actor, str(data.syndicId));
-  check(!s.archivedAt, "Cabinet archivé : restaurez-le avant d'enregistrer un paiement.", 409);
-  const plan = z.enum(["starter", "professional", "enterprise"]).parse(data.plan),
-    months = z.number().int().min(1).max(12).parse(data.months),
-    reference = str(data.reference, 200),
-    amount = cents(data.amount);
+  const data = object(input);
+  return activatePlatformSubscription(transactionState, actor, {
+    syndicId: str(data.syndicId),
+    plan: z.enum(["starter", "professional", "enterprise"]).parse(data.plan),
+    months: z.number().int().min(1).max(12).parse(data.months),
+    reference: str(data.reference, 200),
+    amountMad: cents(data.amount) / 100,
+    method: "manual",
+    currency: "MAD",
+    chargedAmount: cents(data.amount) / 100,
+    auditOperation: "recordSubscriptionPayment",
+  });
+}
+
+function submitSubscriptionBankTransfer(actor: Actor, input: any) {
+  manager(actor);
+  const data = object(input);
+  const s = cabinetFor(actor, str(data.syndicId));
   check(
-    amount === PLANS[plan].price * months * 100,
-    "Montant incompatible avec le forfait.",
-    400,
-  );
-  check(
-    !(transactionState.syndik_prod_subscription_payments_v1 || []).some(
-      (p: any) => !p.voidedAt && p.reference === reference,
-    ),
-    "Référence déjà utilisée.",
+    !s.archivedAt,
+    "Cabinet archivé : impossible de soumettre un virement.",
     409,
   );
-  const expiry = new Date(
-    Math.max(Date.now(), Date.parse(s.subscriptionExpiry) || 0),
+  check(
+    s.subscriptionStatus !== "cancelled",
+    "Votre compte est suspendu. Contactez l'administration pour le réactiver.",
+    403,
   );
-  const originalDay = expiry.getUTCDate();
-  expiry.setUTCDate(1);
-  expiry.setUTCMonth(expiry.getUTCMonth() + months);
-  expiry.setUTCDate(
-    Math.min(
-      originalDay,
-      new Date(
-        Date.UTC(expiry.getUTCFullYear(), expiry.getUTCMonth() + 1, 0),
-      ).getUTCDate(),
-    ),
+
+  const billing = resolvePlatformBillingConfig(transactionState).publicConfig;
+  check(
+    billing.bankTransfer.enabled,
+    "Le paiement par virement bancaire n'est pas activé.",
+    400,
   );
-  Object.assign(s, {
-    subscriptionPlan: plan,
-    subscriptionStatus: "active",
-    subscriptionExpiry: expiry.toISOString(),
-  });
-  const payment = {
+
+  const plan = z
+    .enum(["starter", "professional", "enterprise"])
+    .parse(data.plan);
+  const months = z.number().int().min(1).max(12).parse(data.months);
+  const transferReference = str(data.transferReference, 120).trim();
+  check(
+    transferReference.length >= 3,
+    "Référence de virement invalide (min. 3 caractères).",
+    400,
+  );
+  const bankName = str(data.bankName, 120).trim();
+  check(bankName.length >= 2, "Indiquez la banque émettrice.", 400);
+
+  const transferDate = str(data.transferDate, 32).trim();
+  check(
+    /^\d{4}-\d{2}-\d{2}$/.test(transferDate),
+    "Date de virement invalide (AAAA-MM-JJ).",
+    400,
+  );
+  const [yr, mo, dy] = transferDate.split("-").map(Number);
+  const utc = new Date(Date.UTC(yr, mo - 1, dy));
+  check(
+    utc.getUTCFullYear() === yr &&
+      utc.getUTCMonth() === mo - 1 &&
+      utc.getUTCDate() === dy &&
+      utc.getTime() <= Date.now() + 2 * 86_400_000,
+    "Date de virement invalide.",
+    400,
+  );
+
+  let proofUrl: string | undefined;
+  if (typeof data.proofUrl === "string" && data.proofUrl.trim()) {
+    const rawProof = data.proofUrl.trim();
+    const match = /^\/api\/uploads\/([A-Za-z0-9_-]+)$/.exec(rawProof);
+    check(match, "Lien de justificatif invalide.", 400);
+    const meta = transactionState.__files?.[match[1]];
+    check(
+      meta && meta.lifecycle !== "deleting",
+      "Justificatif introuvable ou expiré. Téléversez-le à nouveau.",
+      400,
+    );
+    check(
+      meta.scope === "subscription" && meta.syndicId === s.id,
+      "Justificatif non autorisé pour ce cabinet.",
+      403,
+    );
+    proofUrl = rawProof;
+  }
+
+  const notes =
+    typeof data.notes === "string" && data.notes.trim()
+      ? data.notes.trim().slice(0, 500)
+      : undefined;
+
+  const refKey = transferReference.toLowerCase();
+  const payments = transactionState.syndik_prod_subscription_payments_v1 || [];
+  const requests = (transactionState.syndik_prod_subscription_requests_v1 ??= []);
+  check(
+    !payments.some(
+      (p: any) =>
+        !p.voidedAt && String(p.reference || "").toLowerCase() === refKey,
+    ) &&
+      !requests.some(
+        (r: any) =>
+          r.status !== "rejected" &&
+          String(r.transferReference || "").toLowerCase() === refKey,
+      ),
+    "Cette référence de virement est déjà enregistrée ou en attente de validation.",
+    409,
+  );
+
+  const amount = PLANS[plan].price * months;
+  const reqRecord = {
     id: randomUUID(),
     syndicId: s.id,
     syndicName: s.name,
-    syndicEmail: s.email,
+    ...(s.email ? { syndicEmail: s.email } : {}),
     plan,
     months,
-    reference,
-    amount: amount / 100,
-    recordedBy: actor.uid,
+    amount,
+    transferReference,
+    bankName,
+    transferDate,
+    ...(proofUrl ? { proofUrl } : {}),
+    ...(notes ? { notes } : {}),
+    status: "pending" as const,
+    submittedBy: actor.uid,
     createdAt: new Date().toISOString(),
-    subscriptionExpiry: s.subscriptionExpiry,
-    subscriptionStatus: s.subscriptionStatus,
   };
-  (transactionState.syndik_prod_subscription_payments_v1 ??= []).push(payment);
-  appendAudit(transactionState, actor, "recordSubscriptionPayment", undefined, {
-    paymentId: payment.id,
-    syndicId: s.id,
+  requests.push(reqRecord);
+  appendAudit(
+    transactionState,
+    actor,
+    "submitSubscriptionBankTransfer",
+    undefined,
+    {
+      requestId: reqRecord.id,
+      syndicId: s.id,
+      plan,
+      months,
+      amount,
+    },
+  );
+  return reqRecord;
+}
+
+function reviewSubscriptionBankTransfer(actor: Actor, input: any) {
+  check(actor.role === "admin", "Administration uniquement.");
+  const data = object(input);
+  const requestId = str(data.requestId, 120);
+  const action = z.enum(["approve", "reject"]).parse(data.action);
+  const requests = transactionState.syndik_prod_subscription_requests_v1 || [];
+  const reqRecord = requests.find((r: any) => r.id === requestId);
+  check(reqRecord, "Demande de virement introuvable.", 404);
+  check(
+    reqRecord.status === "pending",
+    "Cette demande a déjà été traitée.",
+    409,
+  );
+
+  if (action === "reject") {
+    const reason = str(data.rejectionReason, 1000).trim();
+    check(
+      reason.length >= 3,
+      "Indiquez un motif de refus (min. 3 caractères).",
+      400,
+    );
+    reqRecord.status = "rejected";
+    reqRecord.rejectionReason = reason;
+    reqRecord.reviewedAt = new Date().toISOString();
+    reqRecord.reviewedBy = actor.uid;
+    appendAudit(
+      transactionState,
+      actor,
+      "reviewSubscriptionBankTransfer",
+      undefined,
+      {
+        requestId: reqRecord.id,
+        syndicId: reqRecord.syndicId,
+        action: "reject",
+        reason,
+      },
+    );
+    return { request: reqRecord };
+  }
+
+  const payment = activatePlatformSubscription(transactionState, actor, {
+    syndicId: reqRecord.syndicId,
+    plan: reqRecord.plan,
+    months: reqRecord.months,
+    reference: reqRecord.transferReference,
+    amountMad: reqRecord.amount,
+    method: "virement",
+    currency: "MAD",
+    chargedAmount: reqRecord.amount,
+    ...(reqRecord.proofUrl ? { proofUrl: reqRecord.proofUrl } : {}),
+    requestId: reqRecord.id,
+    auditOperation: "reviewSubscriptionBankTransfer",
   });
-  return payment;
+  reqRecord.status = "approved";
+  reqRecord.paymentId = payment.id;
+  reqRecord.reviewedAt = new Date().toISOString();
+  reqRecord.reviewedBy = actor.uid;
+  return { request: reqRecord, payment };
 }
 function archiveCabinet(actor: Actor, syndicId: any) {
   check(actor.role === "admin", "Administration uniquement.");
@@ -705,6 +1007,6 @@ function restoreArchived(actor: Actor,args:any[]) { const operation='restoreArch
 
 }
 function archiveBuilding(actor: Actor,b:any) { b.archivedAt=new Date().toISOString(); appendAudit(transactionState,actor,'deleteBuilding',b.id); return true; }
-return {createCabinet, archiveCabinet, restoreCabinet, subscriptionPayment, voidSubscriptionPayment, restoreArchived, archiveBuilding};
+return {createCabinet, archiveCabinet, restoreCabinet, subscriptionPayment, voidSubscriptionPayment, submitSubscriptionBankTransfer, reviewSubscriptionBankTransfer, restoreArchived, archiveBuilding};
 }
 

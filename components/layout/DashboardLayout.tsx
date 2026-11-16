@@ -1,6 +1,9 @@
 import SetupChecklist from '../views/SetupChecklist';
-import { subscriptionCanWrite } from '../../utils/subscriptionPolicy';
-import React, { useState } from 'react';
+import {
+  getEffectiveSubscriptionStatus,
+  subscriptionCanWrite,
+} from '../../utils/subscriptionPolicy';
+import React, { Suspense, useEffect, useState } from 'react';
 import { Outlet, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import Sidebar from '../Sidebar';
 import Header from '../Header';
@@ -14,6 +17,10 @@ import {
     AGIcon,
 } from '../icons/IconComponents';
 import { Wrench } from 'lucide-react';
+
+const SubscriptionRenewalModal = React.lazy(
+  () => import('../views/SubscriptionRenewalModal'),
+);
 
 // Map routes to View types for Sidebar highlighting
 const getActiveView = (pathname: string): any => {
@@ -29,6 +36,14 @@ const DashboardLayout: React.FC = () => {
     const location = useLocation();
     const navigate = useNavigate();
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+    const [isRenewalOpen, setIsRenewalOpen] = useState(false);
+
+    useEffect(() => {
+        const handleOpen = () => setIsRenewalOpen(true);
+        window.addEventListener('syndik-open-renewal', handleOpen);
+        return () =>
+            window.removeEventListener('syndik-open-renewal', handleOpen);
+    }, []);
 
     const handleLogout = async () => {
         await logout();
@@ -54,6 +69,9 @@ const DashboardLayout: React.FC = () => {
         setIsMobileMenuOpen(false);
     };
 
+    const effectiveStatus = getEffectiveSubscriptionStatus(syndic);
+    const canRenew = effectiveStatus !== 'cancelled';
+
     return (
         <div
             className="flex h-screen bg-slate-100 flex-col overflow-hidden"
@@ -77,9 +95,52 @@ const DashboardLayout: React.FC = () => {
                         onOpenMobileMenu={() => setIsMobileMenuOpen(true)}
                     />
                     <main className="flex-1 overflow-x-hidden overflow-y-auto bg-slate-100 p-3 sm:p-6 pb-24 lg:pb-6">
-                        {syndic && <p role="status" className="text-sm p-3 bg-slate-100 rounded mb-3">{subscriptionCanWrite(syndic) ? tr(`Abonnement : ${syndic.subscriptionStatus} · Échéance ${new Date(syndic.subscriptionExpiry).toLocaleDateString('fr-MA')}`, `الاشتراك: ${syndic.subscriptionStatus} · الانتهاء ${new Date(syndic.subscriptionExpiry).toLocaleDateString('ar-MA')}`) : tr('Abonnement expiré : consultation et export disponibles.', 'انتهى الاشتراك: الاطلاع والتصدير متاحان.')}</p>}
-                {selectedBuilding && <SetupChecklist building={selectedBuilding} />}
-                <Outlet />
+                        {syndic && (
+                            <div
+                                role="status"
+                                className={`text-sm p-3 rounded-lg mb-3 flex flex-wrap items-center justify-between gap-2 border ${
+                                    subscriptionCanWrite(syndic)
+                                        ? 'bg-slate-100 border-slate-200 text-slate-700'
+                                        : 'bg-rose-50 border-rose-200 text-rose-900 font-semibold'
+                                }`}
+                            >
+                                <span>
+                                    {subscriptionCanWrite(syndic)
+                                        ? tr(
+                                              `Abonnement : ${syndic.subscriptionStatus} · Échéance ${new Date(syndic.subscriptionExpiry).toLocaleDateString('fr-MA')}`,
+                                              `الاشتراك: ${syndic.subscriptionStatus} · الانتهاء ${new Date(syndic.subscriptionExpiry).toLocaleDateString('ar-MA')}`,
+                                          )
+                                        : tr(
+                                              'Abonnement expiré : consultation et export disponibles.',
+                                              'انتهى الاشتراك: الاطلاع والتصدير متاحان.',
+                                          )}
+                                </span>
+                                {canRenew && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setIsRenewalOpen(true)}
+                                        className={`px-3 py-1 rounded-md text-xs font-bold transition-colors ${
+                                            subscriptionCanWrite(syndic)
+                                                ? 'bg-white border border-slate-300 text-slate-800 hover:bg-slate-50'
+                                                : 'bg-rose-700 text-white hover:bg-rose-800'
+                                        }`}
+                                    >
+                                        {tr('Renouveler / Payer →', 'تجديد / دفع ←')}
+                                    </button>
+                                )}
+                            </div>
+                        )}
+                        {selectedBuilding && <SetupChecklist building={selectedBuilding} />}
+                        <Outlet />
+                        {isRenewalOpen && (
+                            <Suspense fallback={null}>
+                                <SubscriptionRenewalModal
+                                    isOpen={isRenewalOpen}
+                                    onClose={() => setIsRenewalOpen(false)}
+                                    syndic={syndic}
+                                />
+                            </Suspense>
+                        )}
                     </main>
                 </div>
             </div>

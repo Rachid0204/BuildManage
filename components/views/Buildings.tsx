@@ -529,14 +529,31 @@ const SubscriptionStatusCard: React.FC<{ syndic: Syndic }> = ({ syndic }) => {
   return (
     <Card className="mb-8 border-t-4 border-primary-500">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-lg font-semibold text-gray-800">
-          {t('subscription.status')}
-        </h3>
-        <span className="text-xs font-mono font-semibold text-slate-500">
-          {currentPlanMeta
-            ? `${language === 'ar' ? currentPlanMeta.nameAr : currentPlanMeta.nameFr} · ${currentPlanMeta.priceMad} MAD/${tr('mois', 'شهر')}`
-            : ''}
-        </span>
+        <div className="flex flex-wrap items-center gap-3">
+          <h3 className="text-lg font-semibold text-gray-800">
+            {t('subscription.status')}
+          </h3>
+          <span className="text-xs font-mono font-semibold text-slate-500">
+            {currentPlanMeta
+              ? `${language === 'ar' ? currentPlanMeta.nameAr : currentPlanMeta.nameFr} · ${currentPlanMeta.priceMad} MAD/${tr('mois', 'شهر')}`
+              : ''}
+          </span>
+        </div>
+        {!isCancelled && (
+          <Button
+            type="button"
+            variant={isExpired ? 'primary' : 'secondary'}
+            onClick={() => {
+              if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('syndik-open-renewal'));
+              }
+            }}
+          >
+            {isExpired
+              ? tr('Renouveler / Payer maintenant', 'تجديد / الدفع الآن')
+              : tr('Renouveler ou changer de forfait', 'تجديد أو ترقية الباقة')}
+          </Button>
+        )}
       </div>
       <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-6">
         <div>

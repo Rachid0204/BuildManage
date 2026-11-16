@@ -84,6 +84,9 @@ jobs:
       - name: Verify active building subscription capacity and restoration
         run: npm run test:subscription-capacity
 
+      - name: Verify PayPal billing config, checkout idempotency and Moroccan bank transfers
+        run: npm run test:subscription-billing
+
       - name: Verify isolated monthly billing and retry idempotency
         run: npm run test:monthly-billing
 

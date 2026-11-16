@@ -16,6 +16,7 @@ import type {
   Quittance,
   Resident,
   SubscriptionPayment,
+  SubscriptionBankTransferRequest,
   SubscriptionPlan,
   SubscriptionStatus,
   Syndic,
@@ -361,6 +362,24 @@ export interface CoordinatedMethods {
     paymentId: string,
     reason: string,
   ) => Promise<SubscriptionPayment>;
+  submitSubscriptionBankTransfer: (input: {
+    syndicId: string;
+    plan: SubscriptionPlan;
+    months: number;
+    transferReference: string;
+    bankName: string;
+    transferDate: string;
+    proofUrl?: string;
+    notes?: string;
+  }) => Promise<SubscriptionBankTransferRequest>;
+  reviewSubscriptionBankTransfer: (input: {
+    requestId: string;
+    action: 'approve' | 'reject';
+    rejectionReason?: string;
+  }) => Promise<{
+    request: SubscriptionBankTransferRequest;
+    payment?: SubscriptionPayment;
+  }>;
 }
 // The server supplies createdAt; the transport must not manufacture a new retry identity.
 export type CommandMethods = Omit<BackendMethods, 'addMaintenanceRequest'> &

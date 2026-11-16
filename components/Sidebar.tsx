@@ -117,8 +117,10 @@ const SubscriptionFooterWidget: React.FC<{
             {planName}
           </span>
         </div>
-        <p className="text-[11px] text-rose-200/80 mt-1">
-          {tr('Voir l’état du forfait →', 'عرض حالة الباقة ←')}
+        <p className="text-[11px] text-rose-200/90 font-semibold mt-1">
+          {effectiveStatus === 'cancelled'
+            ? tr('Contacter le support →', 'التواصل مع الدعم ←')
+            : tr('Renouveler / Payer →', 'تجديد / دفع الاشتراك ←')}
         </p>
       </button>
     );
@@ -372,7 +374,12 @@ const Sidebar: React.FC<SidebarProps> = ({
 
       <SubscriptionFooterWidget
         syndic={syndic}
-        onManageClick={() => handleSelectView('buildings')}
+        onManageClick={() => {
+          handleSelectView('buildings');
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('syndik-open-renewal'));
+          }
+        }}
       />
     </div>
   );

@@ -288,6 +288,10 @@ async function runOperation(
     return subscriptionPayment(actor, args[0]);
   if (operation === "voidSubscriptionPayment")
     return voidSubscriptionPayment(actor, args[0], args[1]);
+  if (operation === "submitSubscriptionBankTransfer")
+    return submitSubscriptionBankTransfer(actor, args[0]);
+  if (operation === "reviewSubscriptionBankTransfer")
+    return reviewSubscriptionBankTransfer(actor, args[0]);
   if (operation === "saveSyndic") {
     manager(actor);
     const input = object(args[0]),
@@ -1249,7 +1253,7 @@ function disableAccount(id: string, field: string) {
 
 const dependencies: CommandDependencies = {issueChargeInvoices, check, object, str, cents, appendAudit, assertPeriod, cabinetFor, buildingFor, canWrite, record, actorIdentity, dispatch, emailAvailable, manager, nested, links, pick};
 const {financialOperation}=createFinanceCommands(transactionState,dependencies);
-const {createCabinet,archiveCabinet,restoreCabinet,subscriptionPayment,voidSubscriptionPayment,restoreArchived,archiveBuilding}=createBuildingCommands(transactionState,dependencies);
+const {createCabinet,archiveCabinet,restoreCabinet,subscriptionPayment,voidSubscriptionPayment,submitSubscriptionBankTransfer,reviewSubscriptionBankTransfer,restoreArchived,archiveBuilding}=createBuildingCommands(transactionState,dependencies);
 const {recomputeMeeting,meetingOperation}=createAssemblyCommands(transactionState,dependencies);
 return {runOperation, cabinetFor, buildingFor, canWrite, appendAudit, actorIdentity, recomputeMeeting};
 }

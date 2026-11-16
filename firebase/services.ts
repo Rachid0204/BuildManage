@@ -10,6 +10,8 @@ import type {
   ToggleAGVotingCommand,
 } from '../shared/domain/commands';
 import type {
+  AdminBillingConfigUpdateInput,
+  AdminPlatformBillingConfig,
   Announcement,
   Apartment,
   AssembleeGenerale,
@@ -21,12 +23,15 @@ import type {
   MaintenanceRequest,
   MarketplaceItem,
   Notification,
+  PayPalCurrency,
   PaymentPostingOptions,
   PaymentProof,
   Prestataire,
   PrestataireReview,
+  PublicPlatformBillingConfig,
   Quittance,
   Resident,
+  SubscriptionBankTransferRequest,
   SubscriptionPayment,
   SubscriptionPlan,
   Syndic,
@@ -143,6 +148,223 @@ export const voidSubscriptionPayment = async (
   reason: string,
 ): Promise<SubscriptionPayment> => {
   return remoteMutation('voidSubscriptionPayment', [paymentId, reason]);
+};
+
+export const getSubscriptionBankTransferRequests = async (
+  syndicId?: string,
+): Promise<SubscriptionBankTransferRequest[]> => {
+  await syncAllSharedStateFromServer();
+  const requests = readSnapshot<SubscriptionBankTransferRequest[]>(
+    STORAGE_KEYS.SUBSCRIPTION_REQUESTS,
+    [],
+  );
+  const filtered = syndicId
+    ? requests.filter((r) => r.syndicId === syndicId)
+    : requests;
+  return [...filtered].sort((a, b) =>
+    String(b.createdAt || '').localeCompare(String(a.createdAt || '')),
+  );
+};
+
+export const submitSubscriptionBankTransfer = async (input: {
+  syndicId: string;
+  plan: SubscriptionPlan;
+  months: number;
+  transferReference: string;
+  bankName: string;
+  transferDate: string;
+  proofUrl?: string;
+  notes?: string;
+}): Promise<SubscriptionBankTransferRequest> => {
+  return remoteMutation('submitSubscriptionBankTransfer', [input]);
+};
+
+export const reviewSubscriptionBankTransfer = async (input: {
+  requestId: string;
+  action: 'approve' | 'reject';
+  rejectionReason?: string;
+}): Promise<{
+  request: SubscriptionBankTransferRequest;
+  payment?: SubscriptionPayment;
+}> => {
+  return remoteMutation('reviewSubscriptionBankTransfer', [input]);
+};
+
+async function billingJsonRequest<T>(
+  url: string,
+  init: RequestInit,
+): Promise<T> {
+  const response = await fetch(url, init);
+  let parsed: Record<string, unknown> = {};
+  try {
+    const json: unknown = await response.json();
+    if (isRecord(json)) parsed = json;
+  } catch {
+    // Non-JSON response handled below
+  }
+  if (!response.ok || parsed.ok === false) {
+    const message =
+      typeof parsed.error === 'string' && parsed.error
+        ? parsed.error
+        : response.status === 401
+          ? 'Authentification requise.'
+          : response.status === 403
+            ? 'Accès refusé.'
+            : 'Erreur lors de l’opération de facturation.';
+    throw new Error(message);
+  }
+  return parsed as T;
+}
+
+export const getSubscriptionBillingConfig =
+  async (): Promise<PublicPlatformBillingConfig> => {
+    const data = await billingJsonRequest<{
+      ok: boolean;
+      config: PublicPlatformBillingConfig;
+    }>('/api/subscription/billing-config', {
+      method: 'GET',
+      headers: getAuthenticatedRequestHeaders(),
+      cache: 'no-store',
+    });
+    return data.config;
+  };
+
+export const getAdminBillingConfig =
+  async (): Promise<AdminPlatformBillingConfig> => {
+    const data = await billingJsonRequest<{
+      ok: boolean;
+      config: AdminPlatformBillingConfig;
+    }>('/api/admin/billing-config', {
+      method: 'GET',
+      headers: getAuthenticatedRequestHeaders(),
+      cache: 'no-store',
+    });
+    return data.config;
+  };
+
+export const saveAdminBillingConfig = async (
+  input: AdminBillingConfigUpdateInput,
+): Promise<AdminPlatformBillingConfig> => {
+  const data = await billingJsonRequest<{
+    ok: boolean;
+    config: AdminPlatformBillingConfig;
+  }>('/api/admin/billing-config', {
+    method: 'PUT',
+    headers: getAuthenticatedRequestHeaders(),
+    body: JSON.stringify(input),
+  });
+  return data.config;
+};
+
+export const testPayPalBillingConnection = async (overrides?: {
+  env?: 'sandbox' | 'live';
+  clientId?: string;
+  clientSecret?: string;
+}): Promise<{ ok: boolean; env: string; message: string }> => {
+  return billingJsonRequest<{ ok: boolean; env: string; message: string }>(
+    '/api/admin/billing-config/test-paypal',
+    {
+      method: 'POST',
+      headers: getAuthenticatedRequestHeaders(),
+      body: JSON.stringify(overrides || {}),
+    },
+  );
+};
+
+export const createPayPalSubscriptionOrder = async (input: {
+  syndicId: string;
+  plan: SubscriptionPlan;
+  months: number;
+  paymentSourceHint?: 'paypal' | 'card';
+}): Promise<{
+  ok: boolean;
+  orderId: string;
+  currency: PayPalCurrency;
+  amount: number;
+  amountMad: number;
+}> => {
+  return billingJsonRequest<{
+    ok: boolean;
+    orderId: string;
+    currency: PayPalCurrency;
+    amount: number;
+    amountMad: number;
+  }>('/api/subscription/paypal/create-order', {
+    method: 'POST',
+    headers: getAuthenticatedRequestHeaders(),
+    body: JSON.stringify(input),
+  });
+};
+
+export const capturePayPalSubscriptionOrder = async (input: {
+  orderId: string;
+  syndicId: string;
+  methodHint?: 'paypal' | 'card';
+}): Promise<{
+  ok: boolean;
+  alreadyCaptured?: boolean;
+  payment: SubscriptionPayment;
+}> => {
+  const data = await billingJsonRequest<{
+    ok: boolean;
+    alreadyCaptured?: boolean;
+    payment: SubscriptionPayment;
+  }>('/api/subscription/paypal/capture-order', {
+    method: 'POST',
+    headers: getAuthenticatedRequestHeaders(),
+    body: JSON.stringify(input),
+  });
+  await syncAllSharedStateFromServer(true);
+  notifyStateUpdated(STORAGE_KEYS.SYNDICS);
+  notifyStateUpdated(STORAGE_KEYS.SUBSCRIPTION_PAYMENTS);
+  return data;
+};
+
+export const uploadSubscriptionProof = async (
+  syndicId: string,
+  file: File,
+): Promise<{
+  url: string;
+  fileId: string;
+  mimeType: string;
+  sizeBytes: number;
+}> => {
+  const dataUrl = await readFileAsDurableDataUrl(file);
+  const { response, data } = await commandRequest(
+    '/api/subscription/upload-proof',
+    {
+      method: 'POST',
+      headers: getAuthenticatedRequestHeaders(),
+      body: JSON.stringify({
+        syndicId,
+        name: file.name,
+        dataUrl,
+      }),
+    },
+  );
+  if (!response.ok || !data.ok || typeof data.url !== 'string') {
+    throw new Error(data.error || 'Échec du téléversement du justificatif.');
+  }
+  return {
+    url: data.url,
+    fileId: data.url.split('/').pop() || '',
+    mimeType: file.type || 'application/pdf',
+    sizeBytes: file.size,
+  };
+};
+
+export const openAuthenticatedUpload = async (url: string): Promise<void> => {
+  const headers = getAuthenticatedRequestHeaders();
+  delete headers['Content-Type'];
+  delete headers['Accept'];
+  const response = await fetch(url, { method: 'GET', headers });
+  if (!response.ok) {
+    throw new Error('Impossible d’ouvrir le justificatif.');
+  }
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  window.open(objectUrl, '_blank', 'noopener,noreferrer');
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
 };
 
 export const getBuildingsForSyndic = async (

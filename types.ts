@@ -627,6 +627,17 @@ export interface Syndic {
   buildings: Building[];
 }
 
+export type SubscriptionPaymentMethod =
+  | 'manual'
+  | 'virement'
+  | 'paypal'
+  | 'card';
+
+export type PayPalCheckoutMode = 'standard' | 'expanded';
+export type PayPalEnv = 'sandbox' | 'live';
+export type PayPalCurrency = 'EUR' | 'USD';
+export type BillingConfigSource = 'admin' | 'env' | 'default' | 'none';
+
 export interface SubscriptionPayment {
   id: string;
   syndicId: string;
@@ -636,6 +647,13 @@ export interface SubscriptionPayment {
   months: number;
   reference: string;
   amount: number;
+  method?: SubscriptionPaymentMethod;
+  currency?: 'MAD' | 'EUR' | 'USD';
+  chargedAmount?: number;
+  externalOrderId?: string;
+  externalCaptureId?: string;
+  proofUrl?: string;
+  requestId?: string;
   recordedBy: string;
   createdAt: string;
   subscriptionExpiry?: string;
@@ -645,7 +663,128 @@ export interface SubscriptionPayment {
   voidedBy?: string;
 }
 
+export interface SubscriptionBankTransferRequest {
+  id: string;
+  syndicId: string;
+  syndicName: string;
+  syndicEmail?: string;
+  plan: SubscriptionPlan;
+  months: number;
+  amount: number;
+  transferReference: string;
+  bankName: string;
+  transferDate: string;
+  proofUrl?: string;
+  notes?: string;
+  status: 'pending' | 'approved' | 'rejected';
+  submittedBy: string;
+  createdAt: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
+  rejectionReason?: string;
+  paymentId?: string;
+}
 
+export interface PublicPlatformBillingConfig {
+  paypal: {
+    enabled: boolean;
+    env: PayPalEnv;
+    checkoutMode: PayPalCheckoutMode;
+    clientId: string;
+    currency: PayPalCurrency;
+    madPerUnit: number;
+    planPrices: Partial<Record<SubscriptionPlan, number>>;
+  };
+  bankTransfer: {
+    enabled: boolean;
+    bankName: string;
+    accountHolder: string;
+    rib: string;
+    iban: string;
+    swift: string;
+    ice: string;
+    instructionsFr: string;
+    instructionsAr: string;
+  };
+}
 
+export interface AdminPlatformBillingConfig extends PublicPlatformBillingConfig {
+  paypal: PublicPlatformBillingConfig['paypal'] & {
+    hasClientSecret: boolean;
+    clientSecretSource: BillingConfigSource;
+    hasWebhookId: boolean;
+    webhookIdSource: BillingConfigSource;
+    envDefaults: {
+      enabled: boolean;
+      env: PayPalEnv;
+      checkoutMode: PayPalCheckoutMode;
+      clientId: string;
+      hasClientSecret: boolean;
+      hasWebhookId: boolean;
+      currency: PayPalCurrency;
+      madPerUnit: number;
+    };
+  };
+  bankTransfer: PublicPlatformBillingConfig['bankTransfer'] & {
+    source: 'admin' | 'env' | 'default';
+  };
+  updatedAt?: string;
+  updatedBy?: string;
+}
 
+export type AdminBillingConfigUpdateInput =
+  | {
+      resetToEnv: true;
+      paypal?: {
+        enabled: boolean;
+        env: PayPalEnv;
+        checkoutMode: PayPalCheckoutMode;
+        clientId: string;
+        clientSecret?: string;
+        clearClientSecret?: boolean;
+        webhookId?: string;
+        clearWebhookId?: boolean;
+        currency: PayPalCurrency;
+        madPerUnit: number;
+        planPrices?: Partial<Record<SubscriptionPlan, number>>;
+      };
+      bankTransfer?: {
+        enabled: boolean;
+        bankName: string;
+        accountHolder: string;
+        rib: string;
+        iban?: string;
+        swift?: string;
+        ice?: string;
+        instructionsFr?: string;
+        instructionsAr?: string;
+      };
+    }
+  | {
+      resetToEnv?: false;
+      paypal: {
+        enabled: boolean;
+        env: PayPalEnv;
+        checkoutMode: PayPalCheckoutMode;
+        clientId: string;
+        clientSecret?: string;
+        clearClientSecret?: boolean;
+        webhookId?: string;
+        clearWebhookId?: boolean;
+        currency: PayPalCurrency;
+        madPerUnit: number;
+        planPrices?: Partial<Record<SubscriptionPlan, number>>;
+      };
+      bankTransfer: {
+        enabled: boolean;
+        bankName: string;
+        accountHolder: string;
+        rib: string;
+        iban?: string;
+        swift?: string;
+        ice?: string;
+        instructionsFr?: string;
+        instructionsAr?: string;
+      };
+    };
 

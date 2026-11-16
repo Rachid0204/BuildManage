@@ -26,6 +26,8 @@ export const sharedState = new Proxy({} as State, {
     currentState()[key] = value;
     return true;
   },
+  deleteProperty: (_, key: string) => delete currentState()[key],
+  has: (_, key: string) => key in currentState(),
   ownKeys: () => Reflect.ownKeys(currentState()),
   getOwnPropertyDescriptor: (_, key) => ({
     enumerable: true,
