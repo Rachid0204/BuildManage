@@ -65,6 +65,7 @@ export {
   readSnapshot,
   remoteMutation,
   resetAllProductionData,
+  SyncHttpError,
   syncAllSharedStateFromServer,
 } from './transport';
 

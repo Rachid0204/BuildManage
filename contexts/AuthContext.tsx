@@ -232,6 +232,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (!response.ok || !data.profile || !data.token)
       throw Object.assign(new Error(data.error || 'Connexion au serveur impossible.'), { status: response.status });
     persistSession(data.profile, firebaseUser, data.token);
+    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('syndik-session-restored'));
+    }
     await syncAllSharedStateFromServer(true);
     return data.profile;
   }, [persistSession]);
@@ -266,6 +269,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         if (!data.profile || !data.token) throw new Error('Incomplete session response');
         if (current()) {
           persistSession(data.profile, undefined, data.token);
+          if (typeof window !== 'undefined' && typeof CustomEvent !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('syndik-session-restored'));
+          }
           void syncAllSharedStateFromServer(true);
         }
         return 'authenticated';
@@ -340,7 +346,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     let timer: ReturnType<typeof setTimeout>;
     const run = async () => {
       if (!active) return;
-      if (navigator.onLine !== false) await retrySession();
+      await retrySession();
       if (active) timer = setTimeout(run, Math.min(1000 * 2 ** ++attempt, 30000));
     };
     const wake = () => { clearTimeout(timer); void run(); };

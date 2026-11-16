@@ -31,12 +31,14 @@ export function registerLiveUpdates(app: Express, repository: StateRepository,
       };
       res.on('close', stop);
       unsubscribe = repository.watchRevision(revision => {
-        if (stopped || revision <= lastRevision) return;
+        if (stopped || res.destroyed || res.writableEnded || revision <= lastRevision) return;
         lastRevision = revision;
-        if (!res.write(`event: revision\ndata: ${JSON.stringify({ revision })}\n\n`)) stop();
+        res.write(`event: revision\ndata: ${JSON.stringify({ revision })}\n\n`);
       }, () => stop());
       // Reconnect periodically to recheck account/session validity across instances.
-      heartbeat = setInterval(() => { if (!stopped) res.write(': heartbeat\n\n'); }, 15000);
+      heartbeat = setInterval(() => {
+        if (!stopped && !res.destroyed && !res.writableEnded) res.write(': heartbeat\n\n');
+      }, 15000);
       expiry = setTimeout(stop, 60000);
       if (stopped) { unsubscribe(); clearInterval(heartbeat); clearTimeout(expiry); }
     } catch (error: any) {

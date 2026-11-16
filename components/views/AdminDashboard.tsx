@@ -20,6 +20,7 @@ import {
   reviewSubscriptionBankTransfer,
   saveAdminBillingConfig,
   saveSyndic,
+  syncAllSharedStateFromServer,
   testPayPalBillingConnection,
   voidSubscriptionPayment,
 } from '../../firebase/services';
@@ -231,10 +232,10 @@ const AdminDashboard: React.FC = () => {
   } = useQuery({
     queryKey: ['syndics'],
     queryFn: getAllSyndicsForAdmin,
-    staleTime: 0,
+    staleTime: 1000,
     refetchOnMount: 'always',
     refetchOnWindowFocus: true,
-    refetchInterval: 4000,
+    refetchInterval: 15_000,
   });
 
   const {
@@ -244,10 +245,10 @@ const AdminDashboard: React.FC = () => {
   } = useQuery({
     queryKey: ['subscriptionPayments'],
     queryFn: getSubscriptionPayments,
-    staleTime: 0,
+    staleTime: 1000,
     refetchOnMount: 'always',
     refetchOnWindowFocus: true,
-    refetchInterval: 4000,
+    refetchInterval: 15_000,
   });
 
   const {
@@ -257,10 +258,10 @@ const AdminDashboard: React.FC = () => {
   } = useQuery({
     queryKey: ['subscriptionBankRequests'],
     queryFn: () => getSubscriptionBankTransferRequests(),
-    staleTime: 0,
+    staleTime: 1000,
     refetchOnMount: 'always',
     refetchOnWindowFocus: true,
-    refetchInterval: 4000,
+    refetchInterval: 15_000,
   });
 
   const {
@@ -324,6 +325,7 @@ const AdminDashboard: React.FC = () => {
     isFetchingRequests ||
     isFetchingBillingConfig;
   const refetchAll = async () => {
+    await syncAllSharedStateFromServer(true).catch(() => {});
     await Promise.all([
       refetchSyndics(),
       refetchPayments(),

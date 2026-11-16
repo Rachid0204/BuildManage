@@ -25,7 +25,7 @@
     "test:monthly-billing": "node --import ./tests/helpers/networkGuard.mjs --import tsx tests/monthlyBillingIsolation.ts",
     "test:budget-allocation": "node --import ./tests/helpers/networkGuard.mjs --import tsx tests/budgetAllocation.test.ts",
     "test:audit-regressions": "node --import ./tests/helpers/networkGuard.mjs --import tsx --test tests/auditRegressions.test.ts",
-    "check:local": "npm run test:transport && npm run test:budget-allocation && npm run test:audit-regressions && npm run test:encryption-rotation && npm run test:financial-invariants && npm run test:backend-domain && npm run test:domain-kernel && npm run typecheck && npm run lint && npm run test:verify && npm run test:business && npm run test:cache && npm run test:security && npm run test:storage-lifecycle && npm run test:deployment-contract && npm run test:assembly-privacy && npm run test:opening-balances && npm run test:reserve-rate && npm run test:quittance-integrity && npm run test:subscription-capacity && npm run test:subscription-billing && npm run test:monthly-billing && npm run test:production && npm run test:recovery && npm run build:functions && npm run build && npm run test:bundle && npm run test:deployment-contract:built && npm run test:startup",
+    "check:local": "npm run test:transport && npm run test:live-sync && npm run test:budget-allocation && npm run test:audit-regressions && npm run test:encryption-rotation && npm run test:financial-invariants && npm run test:backend-domain && npm run test:domain-kernel && npm run typecheck && npm run lint && npm run test:verify && npm run test:business && npm run test:cache && npm run test:security && npm run test:storage-lifecycle && npm run test:deployment-contract && npm run test:assembly-privacy && npm run test:opening-balances && npm run test:reserve-rate && npm run test:quittance-integrity && npm run test:subscription-capacity && npm run test:subscription-billing && npm run test:monthly-billing && npm run test:production && npm run test:recovery && npm run build:functions && npm run build && npm run test:bundle && npm run test:deployment-contract:built && npm run test:startup",
     "build:server": "esbuild server.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-server/server.js",
     "test:production": "node --import ./tests/helpers/networkGuard.mjs --import tsx tests/productionReadiness.ts",
     "test:recovery": "node --import ./tests/helpers/networkGuard.mjs --import tsx tests/adminRecovery.ts",
@@ -49,7 +49,8 @@
     "test:domain-kernel": "node --import tsx tests/domainKernelParity.test.ts",
     "test:financial-invariants": "node --import ./tests/helpers/networkGuard.mjs --import tsx --test tests/financialInvariants.test.ts",
     "test:backend-domain": "node --import ./tests/helpers/networkGuard.mjs --import tsx tests/backendDomainParity.test.ts",
-    "test:transport": "node --import ./tests/helpers/networkGuard.mjs --import tsx --test tests/transportBoundaries.test.ts"
+    "test:transport": "node --import ./tests/helpers/networkGuard.mjs --import tsx --test tests/transportBoundaries.test.ts",
+    "test:live-sync": "node --import ./tests/helpers/networkGuard.mjs --import tsx --test tests/liveSync.test.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.28.4",

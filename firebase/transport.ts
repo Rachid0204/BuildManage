@@ -99,8 +99,29 @@ function cacheServerStore(store: Record<string, unknown>) {
   }
 }
 
+export class SyncHttpError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+  ) {
+    super(message);
+    this.name = 'SyncHttpError';
+  }
+}
+
+function notifySyncSucceeded() {
+  if (
+    typeof window !== 'undefined' &&
+    typeof window.dispatchEvent === 'function' &&
+    typeof CustomEvent !== 'undefined'
+  ) {
+    window.dispatchEvent(new CustomEvent('syndik-sync-succeeded'));
+  }
+}
+
 export async function syncAllSharedStateFromServer(
   force: boolean = false,
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown> | null> {
   const headers = getAuthenticatedRequestHeaders();
   if (!headers['Authorization']) {
@@ -121,6 +142,12 @@ export async function syncAllSharedStateFromServer(
 
   const generation = stateCacheGeneration;
   const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  if (signal?.aborted) {
+    controller.abort();
+  } else {
+    signal?.addEventListener('abort', onAbort, { once: true });
+  }
   syncControllers.add(controller);
   const timeout = setTimeout(() => controller.abort(), 15000);
   const task = (async () => {
@@ -139,8 +166,16 @@ export async function syncAllSharedStateFromServer(
       if (!res.ok) {
         if ([401, 403].includes(res.status) && typeof window !== 'undefined')
           window.dispatchEvent(new CustomEvent('syndik-session-invalid'));
-        const failure = await readCommandResponse(res);
-        throw new Error(failure.error || 'Chargement des données impossible.');
+        let failureMessage = 'Chargement des données impossible.';
+        try {
+          const failure = await readCommandResponse(res);
+          if (failure.error) failureMessage = failure.error;
+        } catch (error) {
+          if (error instanceof Error && error.message) {
+            failureMessage = error.message;
+          }
+        }
+        throw new SyncHttpError(failureMessage, res.status);
       }
       const contentType = res.headers.get('content-type') || '';
       if (!contentType.includes('application/json'))
@@ -166,6 +201,7 @@ export async function syncAllSharedStateFromServer(
       lastSyncTimestampMs = Date.now();
 
       if (data.unchanged || !data.store) {
+        notifySyncSucceeded();
         return null;
       }
 
@@ -186,12 +222,14 @@ export async function syncAllSharedStateFromServer(
       }
 
       cacheServerStore(serverStore);
+      notifySyncSucceeded();
       return serverStore;
     } catch (error) {
       if (generation !== stateCacheGeneration) return null;
       throw error;
     } finally {
       clearTimeout(timeout);
+      signal?.removeEventListener('abort', onAbort);
       syncControllers.delete(controller);
     }
   })();
@@ -531,6 +569,7 @@ function applyCommandResult(data: WireResponse, operation: string) {
     lastSyncTimestampMs = Date.now();
     cacheServerStore(data.store);
   }
+  notifySyncSucceeded();
   for (const key of Object.values(STORAGE_KEYS)) notifyStateUpdated(key);
   notifyOperation({ operation });
 }

@@ -39,6 +39,9 @@ jobs:
       - name: Verify typed transport and production import boundaries
         run: npm run test:transport
 
+      - name: Verify live sync resilience, retry cancellation and session recovery
+        run: npm run test:live-sync
+
       - name: Verify strict financial and domain invariants
         run: npm run test:financial-invariants
 

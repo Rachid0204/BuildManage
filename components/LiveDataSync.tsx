@@ -17,7 +17,10 @@ export default function LiveDataSync() {
     userProfile.buildingId, userProfile.residentId, userProfile.prestataireId,
     userProfile.emailVerified, userProfile.mustChangePassword].join(':');
   useEffect(() => {
-    if (!scope || userProfile?.emailVerified === false || userProfile?.mustChangePassword) return;
+    if (!scope || userProfile?.emailVerified === false || userProfile?.mustChangePassword) {
+      setStatus('connecting');
+      return;
+    }
     let active = true, queued = false;
     let connection: ReturnType<typeof startLiveSync> | undefined;
     const invalidSession = () => { void retrySession(); };
@@ -36,18 +39,34 @@ export default function LiveDataSync() {
     };
     const resume = () => {
       if (!active) return;
-      if (document.visibilityState === 'hidden' || navigator.onLine === false) {
+      if (document.visibilityState === 'hidden') {
         connection?.stop(); connection = undefined;
-        if (navigator.onLine === false) setStatus('offline');
         return;
       }
       if (!connection) connection = startLiveSync(setStatus, invalidSession);
       else connection.reconnect();
     };
+    const onOffline = () => {
+      if (!active) return;
+      if (!connection) {
+        setStatus('offline');
+        return;
+      }
+      connection.goOffline();
+    };
     const onFocus = () => {
-      if (!active || document.visibilityState === 'hidden' || navigator.onLine === false) return;
+      if (!active || document.visibilityState === 'hidden') return;
       if (!connection) connection = startLiveSync(setStatus, invalidSession);
       else connection.refresh();
+    };
+    const onSyncSucceeded = () => {
+      if (!active) return;
+      connection?.markSynced();
+    };
+    const onSessionRestored = () => {
+      if (!active || document.visibilityState === 'hidden') return;
+      if (!connection) connection = startLiveSync(setStatus, invalidSession);
+      else connection.reconnect();
     };
     const channel = typeof BroadcastChannel === 'undefined' ? undefined : new BroadcastChannel('syndik_realtime_sync');
     channel?.addEventListener('message', event => {
@@ -55,9 +74,11 @@ export default function LiveDataSync() {
     });
     reconnectRef.current = resume;
     window.addEventListener('syndik-state-updated', invalidate);
+    window.addEventListener('syndik-sync-succeeded', onSyncSucceeded);
     window.addEventListener('syndik-session-invalid', invalidSession);
+    window.addEventListener('syndik-session-restored', onSessionRestored);
     window.addEventListener('online', resume);
-    window.addEventListener('offline', resume);
+    window.addEventListener('offline', onOffline);
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', resume);
     resume();
@@ -66,9 +87,11 @@ export default function LiveDataSync() {
       connection?.stop(); channel?.close();
       reconnectRef.current = () => {};
       window.removeEventListener('syndik-state-updated', invalidate);
+      window.removeEventListener('syndik-sync-succeeded', onSyncSucceeded);
       window.removeEventListener('syndik-session-invalid', invalidSession);
+      window.removeEventListener('syndik-session-restored', onSessionRestored);
       window.removeEventListener('online', resume);
-      window.removeEventListener('offline', resume);
+      window.removeEventListener('offline', onOffline);
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', resume);
     };
