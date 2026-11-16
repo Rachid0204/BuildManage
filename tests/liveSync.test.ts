@@ -81,9 +81,14 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-async function flushMicrotasks(rounds = 8) {
-  for (let i = 0; i < rounds; i++) {
-    await Promise.resolve();
+async function flushMicrotasks(turns = 4) {
+  // Drain deep Promise/WebStream chains (e.g. Response.json() on Node 22 Undici)
+  // without advancing mocked setTimeout/setInterval timers.
+  for (let i = 0; i < turns; i++) {
+    for (let j = 0; j < 24; j++) {
+      await Promise.resolve();
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve));
   }
 }
 
