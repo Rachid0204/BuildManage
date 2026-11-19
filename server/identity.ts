@@ -68,24 +68,48 @@ export function registerIdentityRoutes(api: any, authenticate: any) {
       caller = await authenticate(req, state);
     if (!caller)
       return res.status(401).json({ error: "Authentification requise." });
-    const u = identityAccounts(state).find(u => accountUid(u) === caller.uid);
-    if (u?.profile?.emailVerified === false) {
-      if (u.lastVerificationAt > Date.now() - 60000) {
-        const retryAfter = Math.max(1, Math.ceil((u.lastVerificationAt + 60000 - Date.now()) / 1000));
+    const matching = identityAccounts(state).filter(
+      (a: any) => !a.disabled && accountUid(a) === caller.uid,
+    );
+    const primary = matching[0];
+    const needsVerification =
+      (caller as any).emailVerified === false ||
+      matching.some((a: any) => a?.profile?.emailVerified === false);
+    if (needsVerification) {
+      const lastVerificationAt = matching.reduce(
+        (max: number, a: any) => Math.max(max, Number(a.lastVerificationAt) || 0),
+        0,
+      );
+      if (lastVerificationAt > Date.now() - 60000) {
+        const retryAfter = Math.max(
+          1,
+          Math.ceil((lastVerificationAt + 60000 - Date.now()) / 1000),
+        );
         return res
           .status(429)
           .set('Retry-After', String(retryAfter))
           .json({ ok: false, code: 'AUTH_RATE_LIMITED', error: "Veuillez patienter une minute.", retryAfter });
       }
-      if (u.firebaseUid) {
-        const idToken = String(req.body?.idToken || '');
+      const firebaseUid = matching.find((a: any) => a.firebaseUid)?.firebaseUid;
+      if (firebaseUid) {
+        const idToken = String(req.body?.idToken || '').trim();
+        if (!idToken) {
+          throw new OperationError(
+            'Reconnectez-vous pour renvoyer le lien de vérification.',
+            401,
+          );
+        }
         let decoded;
         try { decoded = await firebaseAdminAuth().verifyIdToken(idToken, true); }
         catch { throw new OperationError('Reconnectez-vous pour renvoyer le lien de vérification.', 401); }
-        if (decoded.uid !== u.firebaseUid) throw new OperationError('Identité incorrecte.', 403);
+        if (decoded.uid !== firebaseUid) throw new OperationError('Identité incorrecte.', 403);
         res.locals.afterCommit = () => sendFirebaseVerification(idToken);
-      } else createIdentityAction(state, caller.email, "verify");
-      u.lastVerificationAt = Date.now();
+      } else {
+        const targetEmail = (primary?.email || caller.email || '').trim().toLowerCase();
+        if (targetEmail) createIdentityAction(state, targetEmail, "verify");
+      }
+      const now = Date.now();
+      for (const a of matching) a.lastVerificationAt = now;
     }
     return res.json({ ok: true });
   });

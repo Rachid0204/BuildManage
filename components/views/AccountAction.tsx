@@ -20,8 +20,8 @@ export default function AccountAction() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token: params.get("token"), password }),
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || tr("Opération impossible.", "تعذر تنفيذ العملية."));
       setMessage(
         tr(
           "Terminé. Vous pouvez vous connecter.",

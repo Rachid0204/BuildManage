@@ -16,13 +16,32 @@ function storage() {
   if (!window.sessionStorage) throw new Error('Activez le stockage de session avant de soumettre cette opération.');
   return window.sessionStorage;
 }
+function opaqueKey(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
 export function pendingFor(uid: string): PendingOperation[] {
-  const value = JSON.parse(storage().getItem(PREFIX + uid) || '[]');
+  const key = PREFIX + uid;
+  const raw = storage().getItem(key);
+  if (!raw) return [];
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    try { storage().removeItem(key); } catch {}
+    return [];
+  }
   if (!Array.isArray(value) || value.some(r => !r || typeof r.operationId !== 'string' ||
       !/^op:\d{13}:[a-zA-Z0-9_-]+$/.test(r.operationId) || typeof r.operation !== 'string' ||
       typeof r.target !== 'string' || !Number.isFinite(r.timestamp) || !/^[a-f0-9]{64}$/.test(r.requestHash) ||
-      !r.uploads || Object.entries(r.uploads).some(([hash, url]) => !/^[a-f0-9]{64}$/.test(hash) || typeof url !== 'string' || !/^\/api\/uploads\/[a-zA-Z0-9_-]+$/.test(url))))
-    throw new Error('Métadonnées de reprise invalides. Vérifiez les opérations avant de continuer.');
+      !r.uploads || Object.entries(r.uploads).some(([hash, url]) => !/^[a-f0-9]{64}$/.test(hash) || typeof url !== 'string' || !/^\/api\/uploads\/[a-zA-Z0-9_-]+$/.test(url)))) {
+    try { storage().removeItem(key); } catch {}
+    return [];
+  }
   return value;
 }
 export function savePending(uid: string, record: PendingOperation) {
@@ -38,8 +57,8 @@ export function savePending(uid: string, record: PendingOperation) {
 export function removePending(uid: string, id: string) {
   storage().setItem(PREFIX + uid, JSON.stringify(pendingFor(uid).filter(r => r.operationId !== id)));
 }
-export function operationTarget(_operation: string, args: unknown[]): string {
-  // Use IDs only, never titles, names, email addresses, passwords or free-form text.
+export function operationTarget(operation: string, args: unknown[]): string {
+  // Use IDs or opaque hashes only, never titles, names, email addresses, passwords or free-form text.
   const item: any = args[0];
   const ids = item && typeof item === 'object' ? ['buildingId', 'residentId', 'apartmentId', 'agId', 'prestataireId', 'chargeId', 'syndicId', 'proofId', 'requestId', 'itemId', 'invoiceId', 'id']
     .filter(k => typeof item[k] === 'string' && /^[a-zA-Z0-9:_-]{1,100}$/.test(item[k]))
@@ -48,5 +67,9 @@ export function operationTarget(_operation: string, args: unknown[]): string {
   if (typeof item === 'string' && /^[a-zA-Z0-9:_-]{1,100}$/.test(item)) {
     return typeof args[1] === 'string' && /^[a-zA-Z0-9:_-]{1,100}$/.test(args[1]) ? `${item}/${args[1]}` : item;
   }
-  return 'command';
+  if (operation === 'adminCreateCabinet' && item && typeof item === 'object') {
+    const identity = String(item.email || item.name || '').trim().toLowerCase();
+    if (identity) return `adminCreateCabinet:${opaqueKey(identity)}`;
+  }
+  return operation || 'command';
 }

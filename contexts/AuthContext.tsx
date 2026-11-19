@@ -224,10 +224,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const exchangeFirebaseSession = useCallback(async (firebaseUser: User): Promise<UserProfile> => {
     const epoch = epochRef.current;
-    const token = await firebaseUser.getIdToken();
+    const token = await firebaseUser.getIdToken(true);
     const response = await fetch('/api/auth/firebase-session', { method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(15000) });
-    const data = await response.json();
+    const data = await response.json().catch(() => ({}));
     if (epoch !== epochRef.current) throw new Error('La session a changé.');
     if (!response.ok || !data.profile || !data.token)
       throw Object.assign(new Error(data.error || 'Connexion au serveur impossible.'), { status: response.status });
@@ -235,7 +235,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent !== 'undefined') {
       window.dispatchEvent(new CustomEvent('syndik-session-restored'));
     }
-    await syncAllSharedStateFromServer(true);
+    if (data.profile.emailVerified !== false && !data.profile.mustChangePassword) {
+      await syncAllSharedStateFromServer(true);
+    }
     return data.profile;
   }, [persistSession]);
 
@@ -272,7 +274,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           if (typeof window !== 'undefined' && typeof CustomEvent !== 'undefined') {
             window.dispatchEvent(new CustomEvent('syndik-session-restored'));
           }
-          void syncAllSharedStateFromServer(true);
+          if (data.profile.emailVerified !== false && !data.profile.mustChangePassword) {
+            void syncAllSharedStateFromServer(true);
+          }
         }
         return 'authenticated';
       } catch {
@@ -366,7 +370,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setLoading(true);
     try {
       const identifier = email.trim().toLowerCase();
-      const password = (pass || '').trim();
+      const password = String(pass || '');
       if (!identifier || !password || isAlreadyHashedPassword(password)) throw new Error('Identifiants invalides.');
       const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ identifier, password }), signal: AbortSignal.timeout(15000) });
@@ -375,7 +379,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         const firebaseUser = data.firebaseAuth
           ? (await signInWithEmailAndPassword(auth, data.profile.email, password)).user : undefined;
         persistSession(data.profile, firebaseUser, data.token);
-        await syncAllSharedStateFromServer(true);
+        if (data.profile.emailVerified !== false && !data.profile.mustChangePassword) {
+          await syncAllSharedStateFromServer(true);
+        }
         return data.profile;
       }
       if (response.status === 404 && identifier.includes('@')) {
@@ -440,14 +446,16 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const firebaseUser = data.firebaseAuth
         ? (await signInWithEmailAndPassword(auth, input.email.trim().toLowerCase(), input.password)).user : undefined;
       persistSession(data.profile, firebaseUser, data.token);
-      await syncAllSharedStateFromServer(true);
+      if (data.profile.emailVerified !== false && !data.profile.mustChangePassword) {
+        await syncAllSharedStateFromServer(true);
+      }
       return data.profile;
     } finally { setLoading(false); }
   };
 
   const completeMandatoryPasswordChange = async (newPassword: string) => {
     if (!userProfile) throw new Error('Authentification requise.');
-    const password = newPassword.trim();
+    const password = String(newPassword || '');
     if (password.length < 10 || isAlreadyHashedPassword(password)) throw new Error('Mot de passe invalide.');
     const response = await fetch('/api/auth/change-password', { method: 'POST',
       signal: AbortSignal.timeout(15000),
@@ -464,7 +472,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         // Server session is already persisted
       }
     }
-    await syncAllSharedStateFromServer(true);
+    if (updatedProfile.emailVerified !== false && !updatedProfile.mustChangePassword) {
+      await syncAllSharedStateFromServer(true);
+    }
   };
 
   const logout = async () => {

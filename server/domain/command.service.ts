@@ -79,10 +79,28 @@ function buildingFor(actor: Actor, id: string, managed = true) {
   );
   check(s, "Immeuble introuvable.", 404);
   cabinetFor(actor, s.id);
-  if (managed) manager(actor);
-  else if (!["admin", "syndic"].includes(actor.role))
-    check(actor.buildingId === id, "Immeuble non autorisé.");
   const b = s.buildings.find((b: any) => b.id === id);
+  if (managed) manager(actor);
+  else if (!["admin", "syndic"].includes(actor.role)) {
+    const memberId = actorIdentity(actor);
+    const inBuilding =
+      actor.buildingId === id ||
+      (actor.role === "resident" &&
+        Array.isArray(b?.residents) &&
+        b.residents.some(
+          (r: any) =>
+            !r.archivedAt && (r.id === memberId || r.id === actor.uid),
+        )) ||
+      (actor.role === "provider" &&
+        (transactionState.syndik_prod_prestataires_v1 || []).some(
+          (p: any) =>
+            p.buildingId === id &&
+            !p.archivedAt &&
+            p.active !== false &&
+            (p.id === memberId || p.id === actor.uid),
+        ));
+    check(inBuilding, "Immeuble non autorisé.");
+  }
   b.syndicId = s.id;
   return b;
 }
@@ -296,6 +314,7 @@ async function runOperation(
     manager(actor);
     const input = object(args[0]),
       s = cabinetFor(actor, str(input.id));
+    check(!s.archivedAt, "Cabinet archivé.", 409);
     check(
       actor.role === "admin" || subscriptionCanWrite(s),
       "Abonnement expiré : consultation et export disponibles.",
@@ -319,11 +338,19 @@ async function runOperation(
           "Statut invalide.",
           400,
         );
-      for (const k of [
-        "subscriptionPlan",
-        "subscriptionStatus",
-        "subscriptionExpiry",
-      ])
+      if ("subscriptionExpiry" in input) {
+        const rawExpiry = String(input.subscriptionExpiry || "").trim();
+        const parsedExpiry = Date.parse(rawExpiry);
+        check(
+          Boolean(rawExpiry) && Number.isFinite(parsedExpiry),
+          "Date d’expiration invalide.",
+          400,
+        );
+        s.subscriptionExpiry = /^\d{4}-\d{2}-\d{2}$/.test(rawExpiry)
+          ? `${rawExpiry}T23:59:59.999Z`
+          : new Date(parsedExpiry).toISOString();
+      }
+      for (const k of ["subscriptionPlan", "subscriptionStatus"])
         if (k in input) s[k] = input[k];
     } else
       for (const k of [
@@ -607,6 +634,16 @@ async function runOperation(
       appendAudit(transactionState, actor, operation, b.id);
       return true;
     }
+    check(!row.item.archivedAt, "Résident archivé.", 409);
+    if (operation === "regenerateResidentCredentials") {
+      const residentEmail = String(row.item.email || "").trim().toLowerCase();
+      check(Boolean(residentEmail), "Adresse email requise.", 400);
+      check(
+        emailAvailable(residentEmail, "residentId", row.item.id),
+        "Email déjà lié à un compte.",
+        409,
+      );
+    }
   } else if (operation === "savePrestataire") {
     const raw = object(args[0]);
     b = buildingFor(actor, str(raw.buildingId));
@@ -658,17 +695,33 @@ async function runOperation(
     );
     b = row.b;
     buildingId = b.id;
-    if (operation === "regeneratePrestataireCredentials" && !row.item.email?.trim()) {
-      const slug = String(row.item.name || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 12) || 'prestataire';
-      const fallbackEmail = `contact@${slug}.ma`;
-      check(emailAvailable(fallbackEmail, "prestataireId", row.item.id), "Email déjà lié.", 409);
-    }
     if (operation === "deletePrestataire") {
       row.item.archivedAt = new Date().toISOString();
       row.item.active = false;
       disableAccount(row.item.id, "prestataireId");
       appendAudit(transactionState, actor, operation, b.id);
       return true;
+    }
+    if (
+      operation === "regeneratePrestataireCredentials" ||
+      operation === "recordPrestataireCredentialShare"
+    ) {
+      check(!row.item.archivedAt, "Prestataire archivé.", 409);
+      if (operation === "regeneratePrestataireCredentials") {
+        const slug =
+          String(row.item.name || "")
+            .toLowerCase()
+            .replace(/[^a-z0-9]/g, "")
+            .slice(0, 12) || "prestataire";
+        const targetEmail =
+          String(row.item.email || "").trim().toLowerCase() ||
+          `contact@${slug}.ma`;
+        check(
+          emailAvailable(targetEmail, "prestataireId", row.item.id),
+          "Email déjà lié.",
+          409,
+        );
+      }
     }
     if (operation === "addPrestataireReview") {
       check(actor.role === "resident", "Avis réservé aux résidents.");
@@ -983,6 +1036,7 @@ async function runOperation(
     b = buildingFor(actor, str(m.buildingId), false);
     buildingId = b.id;
     canWrite(actor, b);
+    check(actor.role !== "provider", "Rôle interdit.");
     validateAttachments(actor, b, m);
     const id = actorIdentity(actor),
       peer = m.recipientId;
@@ -1024,6 +1078,7 @@ async function runOperation(
       senderRole: actor.role,
     };
   } else if (operation === "toggleChatMessageLike") {
+    check(actor.role !== "provider", "Rôle interdit.");
     const row = record(actor, "syndik_prod_chat_v1", str(args[0]), false);
     b = row.b;
     buildingId = b.id;
@@ -1246,6 +1301,7 @@ function emailAvailable(email: string, field?: string, id?: string) {
   ].every((key) =>
     (state[key] || []).every(
       (u: any) =>
+        Boolean(u.disabled) ||
         u.email?.toLowerCase() !== email.toLowerCase() ||
         Boolean(id && field && (u[field] === id || u.profile?.[field] === id)),
     ),

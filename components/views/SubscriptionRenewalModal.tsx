@@ -799,82 +799,88 @@ const SubscriptionRenewalModal: React.FC<{
                   </div>
                 )}
 
-                {/* Expanded Checkout Card Fields (when enabled & eligible) */}
-                {billingConfig.paypal.checkoutMode === 'expanded' &&
-                  cardEligible && (
-                    <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 space-y-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2 font-bold text-slate-900 text-xs sm:text-sm">
-                          <CreditCard className="w-4 h-4 text-teal-700" />
-                          <span>
-                            {tr(
-                              'Payer directement par Carte Bancaire (Visa / Mastercard)',
-                              'الدفع مباشرة بالبطاقة البنكية',
-                            )}
-                          </span>
-                        </div>
-                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700">
-                          <ShieldCheck className="w-3.5 h-3.5" />
-                          3D Secure
+                {/* Expanded Checkout Card Fields (mounted in expanded mode so refs exist when SDK renders) */}
+                {billingConfig.paypal.checkoutMode === 'expanded' && (
+                  <div
+                    className={
+                      cardEligible
+                        ? 'p-4 rounded-xl border border-slate-200 bg-slate-50/70 space-y-3'
+                        : 'hidden'
+                    }
+                    aria-hidden={!cardEligible}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 font-bold text-slate-900 text-xs sm:text-sm">
+                        <CreditCard className="w-4 h-4 text-teal-700" />
+                        <span>
+                          {tr(
+                            'Payer directement par Carte Bancaire (Visa / Mastercard)',
+                            'الدفع مباشرة بالبطاقة البنكية',
+                          )}
                         </span>
                       </div>
+                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700">
+                        <ShieldCheck className="w-3.5 h-3.5" />
+                        3D Secure
+                      </span>
+                    </div>
 
-                      <div className="space-y-2.5">
+                    <div className="space-y-2.5">
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                          {tr('Nom sur la carte', 'الاسم على البطاقة')}
+                        </label>
+                        <div
+                          ref={cardNameRef}
+                          className="h-10 px-3 bg-white border border-slate-300 rounded-lg"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                          {tr('Numéro de carte', 'رقم البطاقة')}
+                        </label>
+                        <div
+                          ref={cardNumberRef}
+                          className="h-10 px-3 bg-white border border-slate-300 rounded-lg"
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2.5">
                         <div>
                           <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                            {tr('Nom sur la carte', 'الاسم على البطاقة')}
+                            {tr('Expiration (MM/AA)', 'تاريخ الانتهاء')}
                           </label>
                           <div
-                            ref={cardNameRef}
+                            ref={cardExpiryRef}
                             className="h-10 px-3 bg-white border border-slate-300 rounded-lg"
                           />
                         </div>
                         <div>
                           <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                            {tr('Numéro de carte', 'رقم البطاقة')}
+                            CVV
                           </label>
                           <div
-                            ref={cardNumberRef}
+                            ref={cardCvvRef}
                             className="h-10 px-3 bg-white border border-slate-300 rounded-lg"
                           />
-                        </div>
-                        <div className="grid grid-cols-2 gap-2.5">
-                          <div>
-                            <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                              {tr('Expiration (MM/AA)', 'تاريخ الانتهاء')}
-                            </label>
-                            <div
-                              ref={cardExpiryRef}
-                              className="h-10 px-3 bg-white border border-slate-300 rounded-lg"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                              CVV
-                            </label>
-                            <div
-                              ref={cardCvvRef}
-                              className="h-10 px-3 bg-white border border-slate-300 rounded-lg"
-                            />
-                          </div>
                         </div>
                       </div>
-
-                      <Button
-                        type="button"
-                        onClick={handleCardSubmit}
-                        disabled={cardSubmitting}
-                        className="w-full"
-                      >
-                        {cardSubmitting
-                          ? tr('Traitement sécurisé...', 'جاري المعالجة الآمنة...')
-                          : tr(
-                              `Payer ${paypalAmount.toFixed(2)} ${billingConfig.paypal.currency} par carte`,
-                              `دفع ${paypalAmount.toFixed(2)} ${billingConfig.paypal.currency} بالبطاقة`,
-                            )}
-                      </Button>
                     </div>
-                  )}
+
+                    <Button
+                      type="button"
+                      onClick={handleCardSubmit}
+                      disabled={cardSubmitting || !cardEligible}
+                      className="w-full"
+                    >
+                      {cardSubmitting
+                        ? tr('Traitement sécurisé...', 'جاري المعالجة الآمنة...')
+                        : tr(
+                            `Payer ${paypalAmount.toFixed(2)} ${billingConfig.paypal.currency} par carte`,
+                            `دفع ${paypalAmount.toFixed(2)} ${billingConfig.paypal.currency} بالبطاقة`,
+                          )}
+                    </Button>
+                  </div>
+                )}
 
                 <div className="p-4 rounded-xl border border-slate-200 bg-white space-y-2">
                   <div className="flex items-center justify-between text-xs">

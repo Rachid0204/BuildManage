@@ -1118,3 +1118,163 @@ test('Admin subscription policy & CRUD: effective status distinguishes trialing 
   assert.equal(ann.title, 'Ouvert');
 });
 
+test('PR1 Hardening: credential provisioning sets emailVerified, guards archived entities, allows disabled email reuse, validates saveSyndic, and locks provider chat', async () => {
+  const state: any = baseState();
+  const cmd = createCommandService(state);
+  const adminActor = { uid: 'admin-1', role: 'admin', email: 'admin@test.ma' };
+  const providerActor = {
+    uid: 'user-prest-prov-1',
+    role: 'provider',
+    syndicId: 'cab-1',
+    buildingId: 'bld-1',
+    prestataireId: 'prov-1',
+    email: 'prov1@test.ma',
+  };
+
+  // 1. Provisioning resident & prestataire credentials sets emailVerified: true and matches strictly by ID
+  const createdRes = await cmd.runOperation(
+    actor,
+    'addResident',
+    [{
+      syndicId: 'cab-1',
+      buildingId: 'bld-1',
+      name: 'Nouveau Copro',
+      email: 'copro.verified@test.ma',
+      phone: '0612345678',
+      cin: 'BB998877',
+      isOwner: true,
+    }],
+    'op-pr1-add-res',
+  );
+  const regRes = state.syndik_prod_registered_users_v1.find((u: any) => u.uid === `user-res-${createdRes.id}`);
+  assert.equal(regRes?.profile?.emailVerified, true);
+
+  const createdProv = await cmd.runOperation(
+    actor,
+    'savePrestataire',
+    [{
+      id: 'prov-pr1',
+      buildingId: 'bld-1',
+      name: 'Elec Pro',
+      contactPerson: 'Karim',
+      category: 'electrical',
+      phone: '0698765432',
+      email: 'elec.verified@test.ma',
+      active: true,
+    }, true],
+    'op-pr1-add-prov',
+  );
+  const regProv = state.syndik_prod_registered_users_v1.find((u: any) => u.uid === `user-prest-${createdProv.id}`);
+  assert.equal(regProv?.profile?.emailVerified, true);
+
+  // 2. Archiving resident/prestataire blocks credential regeneration & sharing and frees email for reuse
+  await cmd.runOperation(actor, 'deleteResident', [createdRes.id], 'op-pr1-del-res');
+  await assert.rejects(
+    cmd.runOperation(actor, 'regenerateResidentCredentials', [createdRes.id], 'op-pr1-regen-arch-res'),
+    /archivé/i,
+  );
+  await assert.rejects(
+    cmd.runOperation(actor, 'recordResidentCredentialShare', [createdRes.id, 'email'], 'op-pr1-share-arch-res'),
+    /archivé/i,
+  );
+  const reusedRes = await cmd.runOperation(
+    actor,
+    'addResident',
+    [{
+      syndicId: 'cab-1',
+      buildingId: 'bld-1',
+      name: 'Remplacant Copro',
+      email: 'copro.verified@test.ma',
+      phone: '0612345679',
+      cin: 'CC112233',
+      isOwner: true,
+    }],
+    'op-pr1-reuse-res-email',
+  );
+  assert.equal(reusedRes.email, 'copro.verified@test.ma');
+
+  await cmd.runOperation(actor, 'deletePrestataire', [createdProv.id], 'op-pr1-del-prov');
+  await assert.rejects(
+    cmd.runOperation(actor, 'regeneratePrestataireCredentials', [createdProv.id], 'op-pr1-regen-arch-prov'),
+    /archivé/i,
+  );
+
+  // 3. adminCreateCabinet rejects case-insensitive duplicate email across active registries
+  await assert.rejects(
+    cmd.runOperation(adminActor, 'adminCreateCabinet', [{
+      name: 'Cabinet Doublon',
+      email: 'RES1@TEST.MA',
+      managerName: 'Manager',
+      password: 'ValidPassword123!',
+      plan: 'starter',
+    }], 'op-pr1-dup-cab'),
+    /existant/i,
+  );
+
+  // 4. saveSyndic rejects malformed subscriptionExpiry and archived cabinets, and normalizes YYYY-MM-DD
+  await assert.rejects(
+    cmd.runOperation(adminActor, 'saveSyndic', [{
+      id: 'cab-1',
+      subscriptionExpiry: 'not-a-date',
+    }], 'op-pr1-bad-expiry'),
+    /expiration invalide/i,
+  );
+  const normalizedCab = await cmd.runOperation(adminActor, 'saveSyndic', [{
+    id: 'cab-1',
+    subscriptionExpiry: '2028-03-15',
+  }], 'op-pr1-norm-expiry');
+  assert.equal(normalizedCab.subscriptionExpiry, '2028-03-15T23:59:59.999Z');
+
+  await cmd.runOperation(adminActor, 'adminArchiveCabinet', ['cab-1'], 'op-pr1-arch-cab');
+  await assert.rejects(
+    cmd.runOperation(adminActor, 'saveSyndic', [{ id: 'cab-1', name: 'Blocked Edit' }], 'op-pr1-save-arch-cab'),
+    /archivé/i,
+  );
+  await cmd.runOperation(adminActor, 'adminRestoreCabinet', ['cab-1'], 'op-pr1-rest-cab');
+
+  // 5. External providers cannot send or like community chat messages
+  await assert.rejects(
+    cmd.runOperation(providerActor, 'sendChatMessage', [{
+      buildingId: 'bld-1',
+      channelId: 'general',
+      content: 'Provider spam',
+    }], 'op-pr1-prov-chat'),
+    /interdit/i,
+  );
+  const syndicMsg = await cmd.runOperation(actor, 'sendChatMessage', [{
+    buildingId: 'bld-1',
+    channelId: 'general',
+    content: 'Bonjour les copropriétaires',
+  }], 'op-pr1-syndic-chat');
+  await assert.rejects(
+    cmd.runOperation(providerActor, 'toggleChatMessageLike', [syndicMsg.id], 'op-pr1-prov-like'),
+    /interdit/i,
+  );
+
+  // 6. Multi-building resident membership works in buildingFor even when buildingId differs from primary
+  state.syndik_prod_syndics_v1[0].buildings.push({
+    id: 'bld-2',
+    syndicId: 'cab-1',
+    name: 'Residence 2',
+    address: '2 Rue Atlas',
+    city: 'Casablanca',
+    monthlySyndicFees: 200,
+    apartments: [],
+    residents: [{ id: 'res-1', name: 'Resident 1', email: 'res1@test.ma', isOwner: true }],
+    documents: [],
+    announcements: [],
+    financials: { balance: 0, reserveFundBalance: 0, transactions: [] },
+  });
+  const residentActor = {
+    uid: 'user-res-res-1',
+    role: 'resident',
+    syndicId: 'cab-1',
+    buildingId: 'bld-1',
+    residentId: 'res-1',
+    email: 'res1@test.ma',
+  };
+  const b2 = cmd.buildingFor(residentActor, 'bld-2', false);
+  assert.equal(b2.id, 'bld-2');
+});
+
+

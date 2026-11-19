@@ -17,11 +17,9 @@ export default function EmailVerificationGate() {
         headers: getAuthenticatedRequestHeaders(),
         body: JSON.stringify({ idToken: await auth.currentUser?.getIdToken(true) }),
       });
-      const d = await r.json();
+      const d = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(d.error || tr('Envoi impossible.', 'تعذر الإرسال.'));
-      setMessage(
-        r.ok ? tr("Le lien a été envoyé.", "تم إرسال الرابط.") : d.error,
-      );
+      setMessage(tr("Le lien a été envoyé.", "تم إرسال الرابط."));
       showToast(tr("Le lien a été envoyé.", "تم إرسال الرابط."), 'success');
     } catch (error) {
       const text = error instanceof Error ? error.message : tr("Envoi impossible.", "تعذر الإرسال.");

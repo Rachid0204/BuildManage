@@ -118,6 +118,18 @@ try {
     assert.equal(readOperationStatus(state, { ...actor, uid: 'other' }, id).status, 'not_found');
     assert.throws(() => readOperationStatus(state, { ...actor, syndicId: 'other' }, id), /contexte/);
   });
+  await test('corrupt sessionStorage recovery metadata resets cleanly and adminCreateCabinet targets are opaque and distinct', async () => {
+    const { pendingFor, operationTarget } = await import('../firebase/operationRecovery');
+    reset();
+    memory.set('syndik_pending_operations_v1:recovery-owner', '{not-valid-json');
+    assert.deepEqual(pendingFor('recovery-owner'), []);
+    assert.equal(memory.has('syndik_pending_operations_v1:recovery-owner'), false);
+
+    const t1 = operationTarget('adminCreateCabinet', [{ email: 'cabinet1@example.ma', name: 'Cab 1' }]);
+    const t2 = operationTarget('adminCreateCabinet', [{ email: 'cabinet2@example.ma', name: 'Cab 2' }]);
+    assert.notEqual(t1, t2);
+    assert.ok(!t1.includes('cabinet1@example.ma') && !t2.includes('cabinet2@example.ma'));
+  });
 } finally {
   clearStateCache(); setActiveAuthContext(null, null); globalThis.fetch = originalFetch;
   Reflect.deleteProperty(globalThis, 'window'); Reflect.deleteProperty(globalThis, 'localStorage');
