@@ -1,6 +1,9 @@
 import type { AddBuildingCommand } from '../../shared/domain/commands';
 import { getBuildingReserveRate } from '../../shared/domain/money';
-import { getBuildingCapacity } from '../../shared/domain/subscription';
+import {
+  countActiveBuildings,
+  getBuildingCapacity,
+} from '../../shared/domain/subscription';
 import type { Apartment, Building, Syndic } from '../../types';
 import { isAlreadyHashedPassword } from '../../utils/security';
 import { ApartmentSchema, BuildingSchema } from '../../utils/validation';
@@ -9,6 +12,50 @@ import type { DomainContext } from './context';
 import { assertContext } from './context';
 import { STORAGE_KEYS } from './records';
 import { transactionRecords } from './state';
+
+/**
+ * Keeps resident login/account registries aligned with live apartment ownership/tenancy
+ * whenever lots are added, edited, transferred, or archived.
+ */
+export function syncResidentAccountApartment(
+  state: State,
+  bld: Building,
+  residentId: string,
+) {
+  const resident = (bld.residents || []).find((r) => r.id === residentId);
+  const aptId = resident?.apartmentId;
+  const activeApt = aptId
+    ? (bld.apartments || []).find(
+        (a: any) => !a.archivedAt && a.id === aptId,
+      )
+    : undefined;
+  const nextAptId = activeApt?.id;
+  const nextAptNumber = activeApt?.number;
+
+  for (const user of state.syndik_prod_registered_users_v1 || []) {
+    if (user?.profile?.residentId === residentId) {
+      if (nextAptId) {
+        user.profile.apartmentId = nextAptId;
+        if (nextAptNumber !== undefined) user.profile.apartmentNumber = nextAptNumber;
+      } else {
+        delete user.profile.apartmentId;
+        delete user.profile.apartmentNumber;
+      }
+    }
+  }
+  for (const acc of state.syndik_prod_resident_accounts_v1 || []) {
+    if (acc?.residentId === residentId) {
+      if (nextAptId) {
+        acc.apartmentId = nextAptId;
+        if (nextAptNumber !== undefined) acc.apartmentNumber = nextAptNumber;
+      } else {
+        delete acc.apartmentId;
+        delete acc.apartmentNumber;
+      }
+    }
+  }
+}
+
 export function createBuildingService(context: DomainContext) {
   assertContext(context);
   const {
@@ -32,38 +79,37 @@ export function createBuildingService(context: DomainContext) {
             : 5,
     });
     if (!validation.success) {
-      throw new Error('Invalid Building Data: ' + validation.error.message);
+      throw new OperationError('Invalid Building Data: ' + validation.error.message, 400);
     }
 
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, []);
     const syndic = syndics.find((s) => s.id === syndicId);
-    if (!syndic) throw new Error('Syndic introuvable ou non autorisé');
-    // Audit Item 21: Enforce subscription status & building limits
-    const isExpired =
-      syndic.subscriptionStatus === 'expired' ||
-      syndic.subscriptionStatus === 'cancelled' ||
-      (syndic.subscriptionExpiry &&
-        new Date(syndic.subscriptionExpiry).getTime() < Date.now());
-    if (isExpired) {
-      throw new Error(
+    if (!syndic) throw new OperationError('Syndic introuvable ou non autorisé', 404);
+    // Audit Item 21: Delegate subscription expiry check to canonical subscriptionCanWrite with admin bypass
+    if (context.actor.role !== 'admin' && !subscriptionCanWrite(syndic)) {
+      throw new OperationError(
         'Abonnement expiré. Veuillez renouveler votre abonnement pour ajouter un nouvel immeuble.',
+        402,
       );
     }
     const { limit: maxBuildings, canAdd } = getBuildingCapacity(syndic);
     if (!canAdd) {
-      throw new Error(
+      throw new OperationError(
         `Limite atteinte pour le forfait ${syndic.subscriptionPlan} (${maxBuildings} immeuble(s) max).`,
+        409,
       );
     }
     const newBuildingId = crypto.randomUUID();
+    const targetTotalTantiemes = validation.data.totalTantiemes ?? 1000;
     const totalLots = apartments?.length || 0;
-    const baseTantiemes = totalLots > 0 ? Math.floor(1000 / totalLots) : 100;
+    const baseTantiemes =
+      totalLots > 0 ? Math.floor(targetTotalTantiemes / totalLots) : 100;
     const remainderTantiemes =
-      totalLots > 0 ? 1000 - baseTantiemes * totalLots : 0;
+      totalLots > 0 ? targetTotalTantiemes - baseTantiemes * totalLots : 0;
     const generatedApts: Apartment[] = (apartments || []).map((apt, idx) => ({
       id: `apt-${crypto.randomUUID()}`,
       buildingId: newBuildingId,
-      number: apt.number,
+      number: apt.number.trim(),
       floor: apt.floor,
       area: apt.area,
       monthlyFees: apt.monthlyFees ?? coreBuilding.monthlySyndicFees,
@@ -89,12 +135,12 @@ export function createBuildingService(context: DomainContext) {
         ? { rc: (coreBuilding as any).rc }
         : {}),
       monthlySyndicFees: coreBuilding.monthlySyndicFees,
-      totalTantiemes: validation.data.totalTantiemes ?? 1000,
+      totalTantiemes: targetTotalTantiemes,
       reserveFundRate: validation.data.reserveFundRate,
-      bankName: coreBuilding.bankName,
-      bankRib: coreBuilding.bankRib,
-      managerName: coreBuilding.managerName,
-      managerPhone: coreBuilding.managerPhone,
+      bankName: coreBuilding.bankName?.trim() || undefined,
+      bankRib: coreBuilding.bankRib?.trim() || undefined,
+      managerName: coreBuilding.managerName?.trim() || undefined,
+      managerPhone: coreBuilding.managerPhone?.trim() || undefined,
       residents: [],
       apartments: generatedApts,
       announcements: [],
@@ -129,6 +175,13 @@ export function createBuildingService(context: DomainContext) {
   ) => {
     const { syncApartmentFees, ...buildingUpdates } = updates;
     BuildingSchema.partial().parse(buildingUpdates);
+    const normalizedUpdates: Record<string, any> = { ...buildingUpdates };
+    for (const optField of ['bankName', 'bankRib', 'managerName', 'managerPhone'] as const) {
+      if (optField in normalizedUpdates && typeof normalizedUpdates[optField] === 'string') {
+        const trimmed = normalizedUpdates[optField].trim();
+        normalizedUpdates[optField] = trimmed === '' ? undefined : trimmed;
+      }
+    }
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, []);
     for (const syndic of syndics) {
       const idx = syndic.buildings.findIndex((b) => b.id === buildingId);
@@ -136,7 +189,7 @@ export function createBuildingService(context: DomainContext) {
         const bld = syndic.buildings[idx];
         const updatedBuilding: Building = {
           ...bld,
-          ...buildingUpdates,
+          ...normalizedUpdates,
           reserveFundRate:
             buildingUpdates.reserveFundRate ?? getBuildingReserveRate(bld),
         };
@@ -182,7 +235,7 @@ export function createBuildingService(context: DomainContext) {
   const addApartment = async (apartmentData: Omit<Apartment, 'id'>) => {
     const validation = ApartmentSchema.safeParse(apartmentData);
     if (!validation.success) {
-      throw new Error('Invalid Apartment Data: ' + validation.error.message);
+      throw new OperationError('Invalid Apartment Data: ' + validation.error.message, 400);
     }
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, []);
     for (const syndic of syndics) {
@@ -193,6 +246,7 @@ export function createBuildingService(context: DomainContext) {
         const newApt: Apartment = {
           id: `apt-${crypto.randomUUID()}`,
           ...apartmentData,
+          number: apartmentData.number.trim(),
           monthlyFees: apartmentData.monthlyFees ?? bld.monthlySyndicFees,
           tantiemes: apartmentData.tantiemes ?? 100,
           coproType: apartmentData.coproType ?? 'apartment',
@@ -200,11 +254,17 @@ export function createBuildingService(context: DomainContext) {
         bld.apartments.push(newApt);
         if (newApt.ownerId) {
           const owner = bld.residents.find((r) => r.id === newApt.ownerId);
-          if (owner && !owner.apartmentId) owner.apartmentId = newApt.id;
+          if (owner && !owner.apartmentId) {
+            owner.apartmentId = newApt.id;
+            syncResidentAccountApartment(context.state, bld, owner.id);
+          }
         }
         if (newApt.tenantId) {
           const tenant = bld.residents.find((r) => r.id === newApt.tenantId);
-          if (tenant && !tenant.apartmentId) tenant.apartmentId = newApt.id;
+          if (tenant && !tenant.apartmentId) {
+            tenant.apartmentId = newApt.id;
+            syncResidentAccountApartment(context.state, bld, tenant.id);
+          }
         }
         setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
 
@@ -232,17 +292,29 @@ export function createBuildingService(context: DomainContext) {
           const normalizedNum = aptData.number.trim().toLowerCase();
           if (existingNumbers.has(normalizedNum)) return;
           existingNumbers.add(normalizedNum);
+          const parsedArea =
+            aptData.area !== undefined &&
+            aptData.area !== null &&
+            Number.isFinite(Number(aptData.area))
+              ? Number(aptData.area)
+              : 60;
+          const parsedTantiemes =
+            aptData.tantiemes !== undefined &&
+            aptData.tantiemes !== null &&
+            Number.isFinite(Number(aptData.tantiemes))
+              ? Number(aptData.tantiemes)
+              : 100;
           const newApt: Apartment = {
             id: `apt-${randomUUID()}`,
             buildingId,
             number: aptData.number.trim(),
             floor: Number(aptData.floor) || 0,
-            area: Number(aptData.area) || 60,
+            area: parsedArea,
             monthlyFees:
               aptData.monthlyFees !== undefined && aptData.monthlyFees !== null
                 ? Number(aptData.monthlyFees)
                 : bld.monthlySyndicFees,
-            tantiemes: Number(aptData.tantiemes) || 100,
+            tantiemes: parsedTantiemes,
             coproType: aptData.coproType || 'apartment',
             ownerId: aptData.ownerId || null,
             tenantId: aptData.tenantId || null,
@@ -250,11 +322,17 @@ export function createBuildingService(context: DomainContext) {
           bld.apartments.push(newApt);
           if (newApt.ownerId) {
             const owner = bld.residents.find((r) => r.id === newApt.ownerId);
-            if (owner && !owner.apartmentId) owner.apartmentId = newApt.id;
+            if (owner && !owner.apartmentId) {
+              owner.apartmentId = newApt.id;
+              syncResidentAccountApartment(context.state, bld, owner.id);
+            }
           }
           if (newApt.tenantId) {
             const tenant = bld.residents.find((r) => r.id === newApt.tenantId);
-            if (tenant && !tenant.apartmentId) tenant.apartmentId = newApt.id;
+            if (tenant && !tenant.apartmentId) {
+              tenant.apartmentId = newApt.id;
+              syncResidentAccountApartment(context.state, bld, tenant.id);
+            }
           }
           createdApartments.push(newApt);
         });
@@ -274,6 +352,12 @@ export function createBuildingService(context: DomainContext) {
         const activeApts = bld.apartments.filter((a: any) => !a.archivedAt);
         if (activeApts.length === 0) return bld.apartments;
         const totalTarget = bld.totalTantiemes || 1000;
+        if (activeApts.length > totalTarget) {
+          throw new OperationError(
+            `Impossible de rééquilibrer : ${activeApts.length} lots actifs dépassent le total de ${totalTarget} tantièmes.`,
+            400,
+          );
+        }
         const totalArea = activeApts.reduce(
           (sum, a) => sum + (Number(a.area) || 1),
           0,
@@ -314,7 +398,7 @@ export function createBuildingService(context: DomainContext) {
   const updateApartment = async (apartment: Apartment) => {
     const validation = ApartmentSchema.safeParse(apartment);
     if (!validation.success) {
-      throw new Error('Invalid Apartment Data: ' + validation.error.message);
+      throw new OperationError('Invalid Apartment Data: ' + validation.error.message, 400);
     }
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, []);
     for (const syndic of syndics) {
@@ -323,7 +407,12 @@ export function createBuildingService(context: DomainContext) {
         const idx = bld.apartments.findIndex((a) => a.id === apartment.id);
         if (idx >= 0) {
           const prevApt = bld.apartments[idx];
-          bld.apartments[idx] = { ...prevApt, ...apartment };
+          const touchedResidents = new Set<string>();
+          bld.apartments[idx] = {
+            ...prevApt,
+            ...apartment,
+            number: apartment.number.trim(),
+          };
           if (prevApt.ownerId && prevApt.ownerId !== apartment.ownerId) {
             const oldOwner = bld.residents.find(
               (r) => r.id === prevApt.ownerId,
@@ -336,6 +425,7 @@ export function createBuildingService(context: DomainContext) {
                   (a.ownerId === oldOwner.id || a.tenantId === oldOwner.id),
               );
               oldOwner.apartmentId = otherOwned?.id || undefined;
+              touchedResidents.add(oldOwner.id);
             }
           }
           if (prevApt.tenantId && prevApt.tenantId !== apartment.tenantId) {
@@ -350,23 +440,33 @@ export function createBuildingService(context: DomainContext) {
                   (a.ownerId === oldTenant.id || a.tenantId === oldTenant.id),
               );
               oldTenant.apartmentId = otherRented?.id || undefined;
+              touchedResidents.add(oldTenant.id);
             }
           }
           if (apartment.ownerId) {
             const newOwner = bld.residents.find(
               (r) => r.id === apartment.ownerId,
             );
-            if (newOwner && !newOwner.apartmentId) newOwner.apartmentId = apartment.id;
+            if (newOwner) {
+              if (!newOwner.apartmentId) newOwner.apartmentId = apartment.id;
+              touchedResidents.add(newOwner.id);
+            }
           }
           if (apartment.tenantId) {
             const newTenant = bld.residents.find(
               (r) => r.id === apartment.tenantId,
             );
-            if (newTenant && !newTenant.apartmentId) newTenant.apartmentId = apartment.id;
+            if (newTenant) {
+              if (!newTenant.apartmentId) newTenant.apartmentId = apartment.id;
+              touchedResidents.add(newTenant.id);
+            }
+          }
+          for (const resId of touchedResidents) {
+            syncResidentAccountApartment(context.state, bld, resId);
           }
           setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
 
-          return apartment;
+          return bld.apartments[idx];
         }
       }
     }
@@ -386,6 +486,7 @@ export function createBuildingService(context: DomainContext) {
                   !a.archivedAt && (a.ownerId === res.id || a.tenantId === res.id),
               );
               res.apartmentId = fallbackApt?.id || undefined;
+              syncResidentAccountApartment(context.state, bld, res.id);
             }
           });
           setLocalItem(STORAGE_KEYS.SYNDICS, syndics, apartmentId);
@@ -615,6 +716,13 @@ export function activatePlatformSubscription(
   const plan = z
     .enum(['starter', 'professional', 'enterprise'])
     .parse(input.plan);
+  const activeBuildingsCount = countActiveBuildings(s.buildings);
+  const planLimit = PLANS[plan].buildings;
+  check(
+    activeBuildingsCount <= planLimit,
+    `Impossible de passer au forfait ${plan} : ${activeBuildingsCount} immeuble(s) actif(s) pour une limite de ${planLimit}. Archivez des immeubles avant de changer de forfait.`,
+    409,
+  );
   const months = z.number().int().min(1).max(12).parse(input.months);
   const reference = z.string().min(1).max(200).parse(input.reference).trim();
   const amountCents = Math.round(Number(input.amountMad) * 100);
@@ -812,6 +920,13 @@ function submitSubscriptionBankTransfer(actor: Actor, input: any) {
   const plan = z
     .enum(["starter", "professional", "enterprise"])
     .parse(data.plan);
+  const activeBuildingsCount = countActiveBuildings(s.buildings);
+  const planLimit = PLANS[plan].buildings;
+  check(
+    activeBuildingsCount <= planLimit,
+    `Impossible de passer au forfait ${plan} : ${activeBuildingsCount} immeuble(s) actif(s) pour une limite de ${planLimit}. Archivez des immeubles avant de changer de forfait.`,
+    409,
+  );
   const months = z.number().int().min(1).max(12).parse(data.months);
   const transferReference = str(data.transferReference, 120).trim();
   check(
@@ -1020,7 +1135,12 @@ function restoreArchived(actor: Actor,args:any[]) { const operation='restoreArch
       b = buildingFor(actor, id);
       const s = cabinetFor(actor, b.syndicId);
       check(
-        subscriptionCanWrite(s),
+        !s.archivedAt,
+        "Cabinet archivé : restaurez d'abord le cabinet.",
+        409,
+      );
+      check(
+        actor.role === "admin" || subscriptionCanWrite(s),
         "Abonnement expiré : renouvelez votre abonnement pour restaurer un immeuble.",
         402,
       );
@@ -1108,7 +1228,50 @@ function restoreArchived(actor: Actor,args:any[]) { const operation='restoreArch
     return item;
 
 }
-function archiveBuilding(actor: Actor,b:any) { b.archivedAt=new Date().toISOString(); appendAudit(transactionState,actor,'deleteBuilding',b.id); return true; }
+function archiveBuilding(actor: Actor, b: any) {
+  const openVotingAg = (transactionState.syndik_prod_ag_v1 || []).some(
+    (ag: any) =>
+      ag.buildingId === b.id &&
+      ag.isVotingOpen === true &&
+      !["completed", "closed"].includes(ag.status),
+  );
+  check(
+    !openVotingAg,
+    "Impossible d'archiver l'immeuble : une Assemblée Générale a un scrutin ouvert. Clôturez le vote avant d'archiver.",
+    409,
+  );
+  const pendingProofs = (
+    transactionState.syndik_prod_payment_proofs_v1 || []
+  ).some((p: any) => p.buildingId === b.id && p.status === "pending");
+  check(
+    !pendingProofs,
+    "Impossible d'archiver l'immeuble : des justificatifs de paiement sont en attente de validation.",
+    409,
+  );
+  b.archivedAt = new Date().toISOString();
+  const buildingResidentIds = new Set(
+    (b.residents || []).map((r: any) => r.id),
+  );
+  const buildingPrestIds = new Set(
+    (transactionState.syndik_prod_prestataires_v1 || [])
+      .filter((p: any) => p.buildingId === b.id)
+      .map((p: any) => p.id),
+  );
+  for (const user of transactionState.syndik_prod_registered_users_v1 || []) {
+    const prof = user?.profile;
+    if (!prof || !["resident", "provider"].includes(prof.role)) continue;
+    const belongsToArchivedBuilding =
+      prof.buildingId === b.id ||
+      (prof.residentId && buildingResidentIds.has(prof.residentId)) ||
+      (prof.prestataireId && buildingPrestIds.has(prof.prestataireId));
+    if (belongsToArchivedBuilding) {
+      (transactionState.__sessionVersions ??= {})[user.uid] =
+        (transactionState.__sessionVersions?.[user.uid] || 0) + 1;
+    }
+  }
+  appendAudit(transactionState, actor, "deleteBuilding", b.id);
+  return true;
+}
 return {createCabinet, archiveCabinet, restoreCabinet, subscriptionPayment, voidSubscriptionPayment, submitSubscriptionBankTransfer, reviewSubscriptionBankTransfer, restoreArchived, archiveBuilding};
 }
 

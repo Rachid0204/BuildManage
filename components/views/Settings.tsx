@@ -22,6 +22,7 @@ const SettingsForm: React.FC<SettingsProps> = ({ syndic, onUpdate }) => {
   const dirty = SETTINGS_FIELDS.some(field => draft.values[field] !== draft.remote[field]);
   const mounted = useRef(true);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [logoErrorUrl, setLogoErrorUrl] = useState<string | null>(null);
 
   useEffect(() => {
     mounted.current = true;
@@ -41,28 +42,61 @@ const SettingsForm: React.FC<SettingsProps> = ({ syndic, onUpdate }) => {
 
     const safeName = (name ?? '').trim();
     const safeLogoUrl = (logoUrl ?? '').trim();
-    const safeIce = (ice ?? '').trim();
+    const safeIce = (ice ?? '').replace(/\s/g, '').trim();
     const safeTaxId = (taxId ?? '').trim();
     const safeRc = (rc ?? '').trim();
     const safePatente = (patente ?? '').trim();
 
-    if (!safeName) {
-      throw new Error(t('settings.validation.nameRequired'));
+    const failValidation = (text: string) => {
+      setMessage({ type: 'error', text });
+      showToast(text, 'error');
+    };
+
+    if (safeName.length < 2) {
+      failValidation(t('settings.validation.nameRequired'));
+      return;
+    }
+
+    if (safeLogoUrl) {
+      let validUrl = false;
+      try {
+        const parsed = new URL(safeLogoUrl);
+        validUrl = parsed.protocol === 'https:' || parsed.protocol === 'http:';
+      } catch {
+        validUrl = false;
+      }
+      if (!validUrl) {
+        failValidation(
+          tr(
+            "L'URL du logo doit être une adresse HTTP(S) valide.",
+            'يجب أن يكون رابط الشعار عنوان HTTP(S) صالحاً.'
+          )
+        );
+        return;
+      }
     }
 
     if (safeIce && !/^\d{15}$/.test(safeIce)) {
-      throw new Error(tr("L'identifiant Commun de l'Entreprise (ICE) doit comporter exactement 15 chiffres.", 'يجب أن يتكون التعريف الموحد للمقاولة (ICE) من 15 رقماً بالضبط.'));
+      failValidation(
+        tr(
+          "L'identifiant Commun de l'Entreprise (ICE) doit comporter exactement 15 chiffres.",
+          'يجب أن يتكون التعريف الموحد للمقاولة (ICE) من 15 رقماً بالضبط.'
+        )
+      );
+      return;
     }
 
     const submitted = { name: safeName, logoUrl: safeLogoUrl,
       ice: safeIce, taxId: safeTaxId, rc: safeRc, patente: safePatente };
-    const updated = { ...syndic, ...submitted };
+    // Never include protected subscription/ownership fields in Settings payloads to avoid spurious 403s
+    // when subscription metadata changes concurrently on the server.
+    const updatePayload = { id: syndic.id, ...submitted } as Syndic;
     dispatch({ type: 'saveStarted', values: submitted });
     try {
-      const saved = await Promise.resolve(onUpdate(updated));
+      const saved = await Promise.resolve(onUpdate(updatePayload));
       if (!mounted.current) return;
       const accepted = saved && typeof saved === 'object' && (saved as Partial<Syndic>).id === syndic.id
-        ? { ...updated, ...(saved as Partial<Syndic>) } : updated;
+        ? { ...syndic, ...submitted, ...(saved as Partial<Syndic>) } : { ...syndic, ...submitted };
       dispatch({ type: 'saved', values: settingsValues(accepted) });
       setMessage({ type: 'success', text: t('settings.success') });
       showToast(t('settings.success'), 'success');
@@ -154,16 +188,22 @@ const SettingsForm: React.FC<SettingsProps> = ({ syndic, onUpdate }) => {
                 placeholder={t('settings.logoUrlPlaceholder')}
                 className="block w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
               />
-              {logoUrl && (
+              {logoUrl.trim() && logoErrorUrl !== logoUrl.trim() && (
                 <div className="mt-2 flex items-center gap-2">
                   <span className="text-xs text-slate-500">{tr('Aperçu :', 'معاينة :')}</span>
                   <img
-                    src={logoUrl}
+                    key={logoUrl.trim()}
+                    src={logoUrl.trim()}
                     alt="Logo Preview"
                     className="h-10 object-contain border border-slate-200 rounded p-1 bg-white"
-                    onError={(e) => (e.currentTarget.style.display = 'none')}
+                    onError={() => setLogoErrorUrl(logoUrl.trim())}
                   />
                 </div>
+              )}
+              {logoUrl.trim() && logoErrorUrl === logoUrl.trim() && (
+                <p className="mt-1 text-xs text-amber-700">
+                  {tr("Impossible de charger l'aperçu du logo.", 'تعذر تحميل معاينة الشعار.')}
+                </p>
               )}
             </div>
           </div>

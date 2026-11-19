@@ -31,7 +31,7 @@ const state = {
   ],
   syndik_prod_charges_v1: [{ id: 'c-a', buildingId: 'b-a', syndicId: 's-a', residentId: 'r-a', amount: 100, paidAmount: 0, status: 'unpaid' },
     { id: 'c-b', buildingId: 'b-b', syndicId: 's-b', residentId: 'r-b', amount: 100, status: 'unpaid' }],
-  syndik_prod_ag_v1: [{ id: 'ag-a', syndicId: 's-a', buildingId: 'b-a', status: 'in_progress', isVotingOpen: true,
+  syndik_prod_ag_v1: [{ id: 'ag-a', syndicId: 's-a', buildingId: 'b-a', status: 'in_progress', isVotingOpen: true, votingOpenedAt: '2026-01-01T00:00:00.000Z',
     totalTantiemes: 1000, quorumRequired: 500, attendees: [{ residentId: 'r-a', apartmentNumber: '1', status: 'present' }],
     resolutions: [{ id: 'resolution', majorityType: 'simple_24', votesFor: 0, votesAgainst: 0, votesAbstain: 0, status: 'pending', voterChoices: [] }] }],
   syndik_prod_chat_v1: [{ id: 'msg-a', syndicId: 's-a', buildingId: 'b-a', channelId: 'general', senderId: 'r-a', senderName: 'r-a', text: 'Private copropriete chat', createdAt: '2026-01-01T00:00:00.000Z' }],
@@ -147,6 +147,11 @@ try {
     client.clearStateCache(); setActiveAuthContext(null, null); globalThis.fetch = nativeFetch;
     Reflect.deleteProperty(globalThis, 'window'); Reflect.deleteProperty(globalThis, 'localStorage');
   }
+  // Archiving a resident while an AG has open voting must be blocked (409) until the AG is closed.
+  const blockedArchive = await call('/api/commands',ownerHeaders,{operation:'deleteResident',args:['r-a'],operationId:crypto.randomUUID()});
+  assert.equal(blockedArchive.status,409,JSON.stringify(blockedArchive.data));
+  const closedAg = await call('/api/commands',ownerHeaders,{operation:'toggleAGVoting',args:['ag-a',false],operationId:crypto.randomUUID()});
+  assert.equal(closedAg.status,200,JSON.stringify(closedAg.data));
   const archived = await call('/api/commands',ownerHeaders,{operation:'deleteResident',args:['r-a'],operationId:crypto.randomUUID()});
   assert.equal(archived.status,200,JSON.stringify(archived.data));
   assert.equal((await call('/api/shared-state',residentHeaders)).status,401);

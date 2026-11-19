@@ -132,7 +132,14 @@ const ResidentModal: React.FC<ResidentModalProps> = ({
       apartmentId: apartmentId || undefined,
     };
     if (existingResident) {
-      await onSave({ ...existingResident, name: residentData.name, email: residentData.email, phone: residentData.phone, cin: residentData.cin });
+      const { apartmentId: _omittedApartmentId, ...existingWithoutApartmentId } = existingResident;
+      await onSave({
+        ...existingWithoutApartmentId,
+        name: residentData.name,
+        email: residentData.email,
+        phone: residentData.phone,
+        cin: residentData.cin,
+      });
     } else {
       await onSave(residentData, generateCredentials);
     }
@@ -402,6 +409,14 @@ const CredentialsModal: React.FC<CredentialsModalProps> = ({
 }) => {
   const { tr, language } = useI18n();
   const [copied, setCopied] = useState(false);
+  const [confirmRegenerate, setConfirmRegenerate] = useState(false);
+  const [isRegenerating, setIsRegenerating] = useState(false);
+
+  useEffect(() => {
+    setConfirmRegenerate(false);
+    setIsRegenerating(false);
+    setCopied(false);
+  }, [resident?.id]);
 
   if (!resident) return null;
 
@@ -443,6 +458,17 @@ const CredentialsModal: React.FC<CredentialsModalProps> = ({
     onShareRecorded?.(resident.id, 'pdf');
   };
 
+  const handleConfirmRegenerate = async () => {
+    if (!onRegenerate || isRegenerating) return;
+    setIsRegenerating(true);
+    try {
+      await onRegenerate(resident.id);
+      setConfirmRegenerate(false);
+    } finally {
+      setIsRegenerating(false);
+    }
+  };
+
   return (
     <Modal
       isOpen={!!resident}
@@ -450,11 +476,12 @@ const CredentialsModal: React.FC<CredentialsModalProps> = ({
       title={tr("Fiche Officielle d'Accès Résident", 'بطاقة الولوج الرسمية للساكن')}
       footer={
         <div className="flex flex-wrap items-center justify-between w-full gap-2">
-          {onRegenerate && (
+          {onRegenerate && !confirmRegenerate && (
             <button
               type="button"
-              onClick={() => onRegenerate(resident.id)}
-              className="text-xs font-semibold text-slate-600 hover:text-teal-700 underline"
+              disabled={isRegenerating}
+              onClick={() => setConfirmRegenerate(true)}
+              className="text-xs font-semibold text-slate-600 hover:text-teal-700 underline disabled:opacity-50"
             >
               {tr('🔄 Régénérer un mot de passe temporaire', '🔄 إعادة توليد كلمة مرور مؤقتة')}
             </button>
@@ -498,13 +525,55 @@ const CredentialsModal: React.FC<CredentialsModalProps> = ({
               </span>
             </div>
             <p className="mt-1 text-emerald-800">
-              {tr(
-                `Imprimez la Fiche PDF officielle ou copiez ces identifiants pour les remettre à ${resident.name}.`,
-                `اطبعوا بطاقة PDF الرسمية أو انسخوا هذه البيانات لتسليمها إلى ${resident.name}.`
-              )}
+              {password
+                ? tr(
+                    `Imprimez la Fiche PDF officielle ou copiez ces identifiants pour les remettre à ${resident.name}.`,
+                    `اطبعوا بطاقة PDF الرسمية أو انسخوا هذه البيانات لتسليمها إلى ${resident.name}.`
+                  )
+                : tr(
+                    "Par sécurité, le mot de passe n'est plus stocké en clair. Utilisez « Régénérer » uniquement si le résident a perdu son accès.",
+                    'لأسباب أمنية، لا تُخزَّن كلمة المرور بنص واضح. استخدموا « إعادة التوليد » فقط في حال فقدان الساكن لبيانات دخوله.'
+                  )}
             </p>
           </div>
         </div>
+
+        {confirmRegenerate && (
+          <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-900 space-y-2">
+            <p className="font-bold">
+              {tr(
+                'Confirmer la réinitialisation du mot de passe ?',
+                'تأكيد إعادة تعيين كلمة المرور؟'
+              )}
+            </p>
+            <p className="text-rose-800">
+              {tr(
+                'Cette action révoque immédiatement le mot de passe actuel et déconnecte les sessions actives de ce résident.',
+                'سيؤدي هذا الإجراء فوراً إلى إلغاء كلمة المرور الحالية وتسجيل خروج الجلسات النشطة لهذا الساكن.'
+              )}
+            </p>
+            <div className="flex items-center gap-2 pt-1">
+              <Button
+                variant="danger"
+                disabled={isRegenerating}
+                onClick={handleConfirmRegenerate}
+                className="!py-1 !px-3 text-xs"
+              >
+                {isRegenerating
+                  ? tr('Régénération...', 'جاري التوليد...')
+                  : tr('Oui, régénérer', 'نعم، إعادة التوليد')}
+              </Button>
+              <Button
+                variant="secondary"
+                disabled={isRegenerating}
+                onClick={() => setConfirmRegenerate(false)}
+                className="!py-1 !px-3 text-xs"
+              >
+                {tr('Annuler', 'إلغاء')}
+              </Button>
+            </div>
+          </div>
+        )}
 
         <div className="p-4 rounded-xl bg-slate-900 text-white space-y-3 font-mono text-xs">
           <div className="flex justify-between items-center border-b border-slate-800 pb-2">
@@ -543,7 +612,7 @@ const CredentialsModal: React.FC<CredentialsModalProps> = ({
               {tr('Mot de passe temporaire :', 'كلمة المرور المؤقتة :')}
             </span>
             <span className="px-2.5 py-1 rounded bg-slate-800 text-emerald-300 font-bold text-sm tracking-wider select-all border border-slate-700 tabular-nums">
-              {password || tr('Non disponible — régénérez', 'غير متوفر — أعد التوليد')}
+              {password || tr('Masqué (régénérer si perdu)', 'مخفي (أعد التوليد عند الفقدان)')}
             </span>
           </div>
         </div>
@@ -562,8 +631,9 @@ const CredentialsModal: React.FC<CredentialsModalProps> = ({
           </div>
           <button
             type="button"
+            disabled={!password}
             onClick={handleDownloadPDF}
-            className="shrink-0 px-3 py-1.5 rounded-lg bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold text-xs transition-colors"
+            className="shrink-0 px-3 py-1.5 rounded-lg bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold text-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {tr('📄 Télécharger PDF', '📄 تحميل PDF')}
           </button>
@@ -648,34 +718,55 @@ const Residents: React.FC<{
   const [credentialResidentId, setCredentialResidentId] = useState<string | null>(
     null
   );
+  const [ephemeralPasswords, setEphemeralPasswords] = useState<Record<string, string>>({});
   const [deletingResident, setDeletingResident] = useState<Resident | null>(null);
+
+  const activeApartments = useMemo(
+    () => building.apartments.filter((a) => !a.archivedAt),
+    [building.apartments]
+  );
+  const activeResidents = useMemo(
+    () => building.residents.filter((r) => !r.archivedAt),
+    [building.residents]
+  );
 
   const handleRecordShare = async (residentId: string, method: 'pdf' | 'copy') => {
     await recordResidentCredentialShare(residentId, method);
     await queryClient.invalidateQueries({ queryKey: ['syndics'] });
   };
 
-  // Map residentId -> Apartment for fast lookup
+  // Map residentId -> Apartment[] (all active assigned lots)
   const residentApartmentMap = useMemo(() => {
-    const map = new Map<string, Apartment>();
-    building.apartments.forEach((apt) => {
-      if (apt.ownerId) map.set(apt.ownerId, apt);
-      if (apt.tenantId) map.set(apt.tenantId, apt);
+    const map = new Map<string, Apartment[]>();
+    const addLot = (resId: string, apt: Apartment) => {
+      const existing = map.get(resId);
+      if (!existing) {
+        map.set(resId, [apt]);
+      } else if (!existing.some((a) => a.id === apt.id)) {
+        existing.push(apt);
+      }
+    };
+    activeApartments.forEach((apt) => {
+      if (apt.ownerId) addLot(apt.ownerId, apt);
+      if (apt.tenantId) addLot(apt.tenantId, apt);
     });
-    building.residents.forEach((res) => {
+    activeResidents.forEach((res) => {
       if (res.apartmentId && !map.has(res.id)) {
-        const found = building.apartments.find((a) => a.id === res.apartmentId);
-        if (found) map.set(res.id, found);
+        const found = activeApartments.find((a) => a.id === res.apartmentId);
+        if (found && (res.isOwner ? !found.ownerId : !found.tenantId)) {
+          addLot(res.id, found);
+        }
       }
     });
     return map;
-  }, [building.apartments, building.residents]);
+  }, [activeApartments, activeResidents]);
 
-  const activeCredentialResident = useMemo(
-    () =>
-      building.residents.find((r) => r.id === credentialResidentId) || null,
-    [building.residents, credentialResidentId]
-  );
+  const activeCredentialResident = useMemo(() => {
+    const found = activeResidents.find((r) => r.id === credentialResidentId) || null;
+    if (!found) return null;
+    const cachedPassword = ephemeralPasswords[found.id];
+    return cachedPassword ? { ...found, generatedPassword: cachedPassword } : found;
+  }, [activeResidents, credentialResidentId, ephemeralPasswords]);
 
   const handleEdit = (resident: Resident) => {
     setSelectedResident(resident);
@@ -688,18 +779,29 @@ const Residents: React.FC<{
   };
 
   const openAssignLotModal = (resident: Resident) => {
-    const firstAvailable = building.apartments.find((a) =>
+    const firstAvailable = activeApartments.find((a) =>
       resident.isOwner ? !a.ownerId : !a.tenantId
     );
     setAssigningResident(resident);
-    setAssignLotId(firstAvailable?.id || building.apartments[0]?.id || '');
+    setAssignLotId(firstAvailable?.id || '');
     setAssignTransferReason('');
   };
 
   const handleConfirmAssignLot = async () => {
     if (!assigningResident || !assignLotId) return;
-    const targetApt = building.apartments.find((a) => a.id === assignLotId);
+    const targetApt = activeApartments.find((a) => a.id === assignLotId);
     if (!targetApt) return;
+    const currentHolderId = assigningResident.isOwner ? targetApt.ownerId : targetApt.tenantId;
+    if (currentHolderId) {
+      showToast(
+        tr(
+          'Ce lot est déjà assigné. Choisissez un lot libre ou effectuez le transfert depuis Lots & Appartements.',
+          'هذه الشقة معينة بالفعل. اختر شقة شاغرة أو قم بالنقل من قسم الشقق والوحدات.'
+        ),
+        'error'
+      );
+      return;
+    }
     if (assigningResident.isOwner && assignTransferReason.trim().length < 3) {
       showToast(
         tr(
@@ -749,14 +851,35 @@ const Residents: React.FC<{
     }
   };
 
+  const rememberPassword = (res: unknown) => {
+    if (!res || typeof res !== 'object' || !('id' in res)) return undefined;
+    const typed = res as Resident;
+    const pw = typed.generatedPassword || typed.invitationCode || typed.invitationToken;
+    if (pw) {
+      setEphemeralPasswords((prev) => ({ ...prev, [typed.id]: pw }));
+    }
+    return pw;
+  };
+
   const handleSaveResident = async (
     residentPayload: Omit<Resident, 'id' | 'syndicId' | 'buildingId'> | Resident,
     generateCredentials?: boolean
   ) => {
     if ('id' in residentPayload) {
-      await onUpdateResident(residentPayload);
+      const updated = await onUpdateResident(residentPayload);
+      const regeneratedPw = rememberPassword(updated);
+      if (regeneratedPw) {
+        showToast(
+          tr(
+            'Email mis à jour : de nouveaux identifiants ont été générés. Cliquez sur « Voir Identifiants » pour les partager.',
+            'تم تحديث البريد الإلكتروني وتوليد بيانات ولوج جديدة. انقروا على « عرض بيانات الولوج » لمشاركتها.'
+          ),
+          'success'
+        );
+      }
     } else {
       const created = await onAddResident(residentPayload, generateCredentials);
+      rememberPassword(created);
       if (generateCredentials && created && typeof created === 'object' && 'id' in created) {
         setCredentialResidentId(created.id);
       }
@@ -764,10 +887,14 @@ const Residents: React.FC<{
   };
 
   const handleGenerateOrShowCredentials = async (resident: Resident) => {
-    if (resident.hasAccount && (resident.invitationCode || resident.invitationToken)) {
+    if (resident.hasAccount) {
+      // Never auto-regenerate credentials when viewing an existing account.
       setCredentialResidentId(resident.id);
-    } else if (onRegenerateCredentials) {
+      return;
+    }
+    if (onRegenerateCredentials) {
       const updated = await onRegenerateCredentials(resident.id);
+      rememberPassword(updated);
       if (updated && typeof updated === 'object' && 'id' in updated) {
         setCredentialResidentId(updated.id);
       } else {
@@ -780,7 +907,15 @@ const Residents: React.FC<{
 
   const handleRegenerateInsideModal = async (residentId: string) => {
     if (onRegenerateCredentials) {
-      await onRegenerateCredentials(residentId);
+      const updated = await onRegenerateCredentials(residentId);
+      rememberPassword(updated);
+      showToast(
+        tr(
+          'Nouveau mot de passe temporaire généré. Partagez la nouvelle fiche au résident.',
+          'تم توليد كلمة مرور مؤقتة جديدة. شاركوا البطاقة الجديدة مع الساكن.'
+        ),
+        'success'
+      );
     }
   };
 
@@ -791,15 +926,22 @@ const Residents: React.FC<{
     }
   };
 
+  const availableLotsForAssigning = useMemo(() => {
+    if (!assigningResident) return [];
+    return activeApartments.filter((apt) =>
+      assigningResident.isOwner ? !apt.ownerId : !apt.tenantId
+    );
+  }, [activeApartments, assigningResident]);
+
   return (
     <div className="space-y-6">
       <ResidentModal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         onSave={handleSaveResident}
-        existingResident={building.residents.find((r) => r.id === selectedResident?.id) || selectedResident}
-        apartments={building.apartments}
-        residents={building.residents}
+        existingResident={activeResidents.find((r) => r.id === selectedResident?.id) || selectedResident}
+        apartments={activeApartments}
+        residents={activeResidents}
       />
 
       <CredentialsModal
@@ -807,7 +949,9 @@ const Residents: React.FC<{
         building={building}
         apartmentNumber={
           activeCredentialResident
-            ? residentApartmentMap.get(activeCredentialResident.id)?.number
+            ? (residentApartmentMap.get(activeCredentialResident.id) || [])
+                .map((a) => a.number)
+                .join(', ') || undefined
             : undefined
         }
         onClose={() => setCredentialResidentId(null)}
@@ -831,6 +975,7 @@ const Residents: React.FC<{
               type="submit"
               disabled={
                 !assignLotId ||
+                availableLotsForAssigning.length === 0 ||
                 isAssigningLot ||
                 (Boolean(assigningResident?.isOwner) && assignTransferReason.trim().length < 3)
               }
@@ -845,33 +990,45 @@ const Residents: React.FC<{
           <p className="text-slate-600">
             {assigningResident
               ? tr(
-                  `Sélectionnez le lot à attribuer à ${assigningResident.name} (${assigningResident.isOwner ? 'Copropriétaire' : 'Locataire'}) :`,
-                  `اختر الشقة المراد تعيينها لـ ${assigningResident.name} (${assigningResident.isOwner ? 'مالك مشترك' : 'مكتري'}) :`
+                  `Sélectionnez un lot libre à attribuer à ${assigningResident.name} (${assigningResident.isOwner ? 'Copropriétaire' : 'Locataire'}) :`,
+                  `اختر شقة شاغرة لتعيينها لـ ${assigningResident.name} (${assigningResident.isOwner ? 'مالك مشترك' : 'مكتري'}) :`
                 )
               : ''}
           </p>
+          {availableLotsForAssigning.length === 0 && (
+            <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-800">
+              {tr(
+                'Aucun lot libre disponible pour ce rôle. Pour transférer un lot déjà occupé, utilisez la fiche du lot dans « Lots & Appartements ».',
+                'لا توجد شقة شاغرة لهذا الدور. لنقل شقة مشغولة، استخدموا بطاقة الشقة في قسم « الشقق والوحدات ».'
+              )}
+            </div>
+          )}
           <select
             value={assignLotId}
             onChange={(e) => setAssignLotId(e.target.value)}
-            className="block w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
+            disabled={availableLotsForAssigning.length === 0}
+            className="block w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white disabled:bg-slate-100 disabled:text-slate-500"
           >
-            <option value="">{tr('-- Choisir un lot --', '-- اختر شقة --')}</option>
-            {building.apartments.map((apt) => {
+            <option value="">{tr('-- Choisir un lot libre --', '-- اختر شقة شاغرة --')}</option>
+            {activeApartments.map((apt) => {
               const holderId = assigningResident?.isOwner ? apt.ownerId : apt.tenantId;
+              const isAlreadyAssignedToThis = Boolean(holderId && holderId === assigningResident?.id);
               const holderName = holderId
-                ? building.residents.find((r) => r.id === holderId)?.name
+                ? activeResidents.find((r) => r.id === holderId)?.name
                 : null;
               return (
-                <option key={apt.id} value={apt.id} disabled={!!holderId && holderId !== assigningResident?.id}>
+                <option key={apt.id} value={apt.id} disabled={Boolean(holderId)}>
                   {tr('Lot', 'شقة')} {apt.number} ({tr('Étage', 'طابق')} {apt.floor} · {apt.area}m²) —{' '}
-                  {holderName
-                    ? `${assigningResident?.isOwner ? tr('Propriétaire', 'المالك') : tr('Locataire', 'المكتري')}: ${holderName}`
-                    : tr('Libre', 'شاغرة')}
+                  {isAlreadyAssignedToThis
+                    ? tr('Déjà assigné à ce résident', 'معين بالفعل لهذا الساكن')
+                    : holderName
+                      ? `${assigningResident?.isOwner ? tr('Propriétaire', 'المالك') : tr('Locataire', 'المكتري')}: ${holderName}`
+                      : tr('Libre', 'شاغرة')}
                 </option>
               );
             })}
           </select>
-          {assigningResident?.isOwner && (
+          {assigningResident?.isOwner && availableLotsForAssigning.length > 0 && (
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
                 {tr("Motif de l'attribution *", 'سبب تعيين الملكية *')}
@@ -888,26 +1045,28 @@ const Residents: React.FC<{
         </div>
       </Modal>
 
-      {/* Delete Confirmation Modal */}
+      {/* Archive Confirmation Modal */}
       <Modal
         isOpen={!!deletingResident}
         onClose={() => setDeletingResident(null)}
-        title={tr('Supprimer le résident', 'حذف الساكن')}
+        onSubmit={confirmDelete}
+        title={tr('Archiver le résident', 'أرشفة الساكن')}
         footer={
           <>
             <Button variant="secondary" onClick={() => setDeletingResident(null)}>
               {tr('Annuler', 'إلغاء')}
             </Button>
-            <Button variant="danger" onClick={confirmDelete} className="ms-3">
-              {tr('Supprimer', 'حذف')}
+            <Button variant="danger" type="submit" className="ms-3">
+              {tr('Archiver', 'أرشفة')}
             </Button>
           </>
         }
       >
         <p className="text-sm text-slate-600">
-          {t('residents.deleteConfirm.message', {
-            name: deletingResident?.name || '',
-          })}
+          {tr(
+            `Confirmez-vous l'archivage de ${deletingResident?.name || ''} ? Son accès portail sera désactivé, ses lots seront libérés et son historique financier sera conservé.`,
+            `هل تؤكدون أرشفة ${deletingResident?.name || ''}؟ سيتم تعطيل حساب الولوج وتحرير الشقق المرتبطة مع الاحتفاظ بالسجل المالي.`
+          )}
         </p>
       </Modal>
 
@@ -927,7 +1086,7 @@ const Residents: React.FC<{
           <Button
             variant="secondary"
             onClick={() => exportResidentsPDF(building)}
-            disabled={building.residents.length === 0}
+            disabled={activeResidents.length === 0}
             className="flex items-center gap-1.5 text-xs sm:text-sm"
             title={tr(
               'Exporter le registre officiel des résidents en PDF (Loi 18-00)',
@@ -940,7 +1099,7 @@ const Residents: React.FC<{
           <Button
             variant="secondary"
             onClick={() => exportResidentsCSV(building)}
-            disabled={building.residents.length === 0}
+            disabled={activeResidents.length === 0}
             className="flex items-center gap-1.5 text-xs sm:text-sm"
             title={tr(
               'Exporter la liste des résidents au format CSV (Excel)',
@@ -961,8 +1120,8 @@ const Residents: React.FC<{
 
       {/* Mobile Card List (< md) */}
       <div className="md:hidden space-y-3">
-        {building.residents.map((resident) => {
-          const assignedApt = residentApartmentMap.get(resident.id);
+        {activeResidents.map((resident) => {
+          const assignedApts = residentApartmentMap.get(resident.id) || [];
           return (
             <Card key={resident.id} className="p-4">
               <div className="flex items-start justify-between gap-3">
@@ -989,16 +1148,30 @@ const Residents: React.FC<{
                   <p className="text-xs text-slate-600 font-medium mt-0.5">
                     {resident.phone} {resident.cin ? `• CIN: ${resident.cin}` : ''}
                   </p>
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    {assignedApt ? (
-                      <span className="px-2 py-0.5 rounded bg-teal-50 text-teal-800 border border-teal-200 font-mono text-xs font-bold">
-                        {tr('Lot', 'شقة')} {assignedApt.number} ({tr('Étage', 'طابق')} {assignedApt.floor})
-                      </span>
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                    {assignedApts.length > 0 ? (
+                      assignedApts.map((apt) => (
+                        <span
+                          key={apt.id}
+                          className="px-2 py-0.5 rounded bg-teal-50 text-teal-800 border border-teal-200 font-mono text-xs font-bold"
+                        >
+                          {tr('Lot', 'شقة')} {apt.number} ({tr('Étage', 'طابق')} {apt.floor})
+                        </span>
+                      ))
                     ) : (
                       <span className="px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 text-xs">
                         {tr('Lot non assigné', 'شقة غير معينة')}
                       </span>
                     )}
+                    <button
+                      type="button"
+                      onClick={() => openAssignLotModal(resident)}
+                      className="text-xs text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-2 py-0.5 rounded font-medium"
+                    >
+                      {assignedApts.length > 0
+                        ? tr('+ Lot', '+ شقة')
+                        : tr('+ Assigner un lot', '+ تعيين شقة')}
+                    </button>
                     <button
                       type="button"
                       onClick={() => handleGenerateOrShowCredentials(resident)}
@@ -1055,7 +1228,7 @@ const Residents: React.FC<{
                     variant="danger"
                     className="!p-2 min-w-[40px] min-h-[40px]"
                     onClick={() => setDeletingResident(resident)}
-                    title={tr('Supprimer', 'حذف')}
+                    title={tr('Archiver', 'أرشفة')}
                   >
                     <TrashIcon />
                   </Button>
@@ -1064,7 +1237,7 @@ const Residents: React.FC<{
             </Card>
           );
         })}
-        {building.residents.length === 0 && (
+        {activeResidents.length === 0 && (
           <Card>
             <p className="text-center py-8 text-gray-500">
               {t('residents.noResidents')}
@@ -1083,7 +1256,7 @@ const Residents: React.FC<{
                   {t('residents.table.name')}
                 </th>
                 <th className="px-5 py-3 text-start text-xs font-semibold text-slate-500 uppercase">
-                  {tr('Lot Assigné', 'الشقة المعينة')}
+                  {tr('Lot(s) Assigné(s)', 'الشقق المعينة')}
                 </th>
                 <th className="px-5 py-3 text-start text-xs font-semibold text-slate-500 uppercase">
                   {t('residents.table.role')}
@@ -1103,8 +1276,8 @@ const Residents: React.FC<{
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-slate-100">
-              {building.residents.map((resident) => {
-                const assignedApt = residentApartmentMap.get(resident.id);
+              {activeResidents.map((resident) => {
+                const assignedApts = residentApartmentMap.get(resident.id) || [];
                 return (
                   <tr key={resident.id} className="hover:bg-slate-50">
                     <td className="px-5 py-3.5 whitespace-nowrap">
@@ -1117,20 +1290,26 @@ const Residents: React.FC<{
                         </div>
                       )}
                     </td>
-                    <td className="px-5 py-3.5 whitespace-nowrap">
-                      {assignedApt ? (
-                        <span className="px-2.5 py-1 rounded-md bg-teal-50 text-teal-900 border border-teal-200 font-mono text-xs font-bold">
-                          {tr('Lot', 'شقة')} {assignedApt.number} · {tr('Étage', 'طابق')} {assignedApt.floor}
-                        </span>
-                      ) : (
+                    <td className="px-5 py-3.5">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {assignedApts.map((apt) => (
+                          <span
+                            key={apt.id}
+                            className="px-2.5 py-1 rounded-md bg-teal-50 text-teal-900 border border-teal-200 font-mono text-xs font-bold whitespace-nowrap"
+                          >
+                            {tr('Lot', 'شقة')} {apt.number} · {tr('Étage', 'طابق')} {apt.floor}
+                          </span>
+                        ))}
                         <button
                           type="button"
                           onClick={() => openAssignLotModal(resident)}
-                          className="text-xs text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-2.5 py-1 rounded-md font-medium"
+                          className="text-xs text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-2.5 py-1 rounded-md font-medium whitespace-nowrap"
                         >
-                          {tr('+ Assigner un lot', '+ تعيين شقة')}
+                          {assignedApts.length > 0
+                            ? tr('+ Assigner un lot', '+ تعيين شقة')
+                            : tr('+ Assigner un lot', '+ تعيين شقة')}
                         </button>
-                      )}
+                      </div>
                     </td>
                     <td className="px-5 py-3.5 whitespace-nowrap">
                       <span
@@ -1219,7 +1398,7 @@ const Residents: React.FC<{
                           variant="danger"
                           className="!p-2"
                           onClick={() => setDeletingResident(resident)}
-                          title={tr('Supprimer', 'حذف')}
+                          title={tr('Archiver', 'أرشفة')}
                         >
                           <TrashIcon />
                         </Button>
@@ -1231,7 +1410,7 @@ const Residents: React.FC<{
             </tbody>
           </table>
         </div>
-        {building.residents.length === 0 && (
+        {activeResidents.length === 0 && (
           <p className="text-center py-8 text-gray-500">
             {t('residents.noResidents')}
           </p>

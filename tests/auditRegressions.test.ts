@@ -1429,5 +1429,296 @@ test('PR 2 AG Governance: Law 18-00/106-12 quorum, 2nd convocation, open simple 
   assert.equal(closed.resolutions[0].status, 'approved', '2nd convocation approves simple majority without 1st-convocation quorum');
 });
 
+test('PR 3 Property & Residents Lifecycle: registry sync, tantiemes/RIB/ICE validation, plan downgrade, restore & archival guards', async () => {
+  const baseState = (): any => ({
+    syndik_prod_syndics_v1: [
+      {
+        id: 's-pr3',
+        name: 'Cabinet PR3',
+        email: 'syndic@pr3.invalid',
+        subscriptionPlan: 'professional',
+        subscriptionStatus: 'active',
+        subscriptionExpiry: '2099-01-01',
+        buildings: [
+          {
+            id: 'b-pr3',
+            syndicId: 's-pr3',
+            name: 'Residence PR3',
+            address: '10 Boulevard Zerktouni',
+            city: 'Casablanca',
+            monthlySyndicFees: 300,
+            totalTantiemes: 1000,
+            reserveFundRate: 5,
+            bankName: 'CIH',
+            bankRib: '230780000123456789012345',
+            managerName: 'Gardien Ahmed',
+            managerPhone: '0600000001',
+            apartments: [
+              { id: 'apt-1', buildingId: 'b-pr3', number: 'A1', floor: 1, area: 80, tantiemes: 500, monthlyFees: 300, ownerId: 'res-1', tenantId: null },
+              { id: 'apt-2', buildingId: 'b-pr3', number: 'A2', floor: 1, area: 80, tantiemes: 500, monthlyFees: 300, ownerId: 'res-1', tenantId: null },
+            ],
+            residents: [
+              { id: 'res-1', syndicId: 's-pr3', buildingId: 'b-pr3', name: 'Owner One', email: 'o1@pr3.invalid', phone: '0611111111', isOwner: true, apartmentId: 'apt-1', hasAccount: true },
+              { id: 'res-2', syndicId: 's-pr3', buildingId: 'b-pr3', name: 'Owner Two', email: 'o2@pr3.invalid', phone: '0622222222', isOwner: true, hasAccount: true },
+            ],
+            announcements: [],
+            documents: [],
+            financials: { balance: 0, reserveFundBalance: 0, transactions: [], openingBalancesRecordedAt: '2026-01-01T00:00:00.000Z' },
+          },
+          ...['b-pr3-2', 'b-pr3-3', 'b-pr3-4'].map((id) => ({
+            id,
+            syndicId: 's-pr3',
+            name: `Residence ${id}`,
+            address: '12 Boulevard Zerktouni',
+            city: 'Casablanca',
+            monthlySyndicFees: 250,
+            totalTantiemes: 1000,
+            apartments: [],
+            residents: [],
+            announcements: [],
+            documents: [],
+            financials: { balance: 0, reserveFundBalance: 0, transactions: [] },
+          })),
+        ],
+      },
+    ],
+    syndik_prod_registered_users_v1: [
+      { uid: 'u-res-1', email: 'o1@pr3.invalid', profile: { uid: 'u-res-1', role: 'resident', residentId: 'res-1', syndicId: 's-pr3', buildingId: 'b-pr3', apartmentId: 'apt-1', apartmentNumber: 'A1' } },
+      { uid: 'u-res-2', email: 'o2@pr3.invalid', profile: { uid: 'u-res-2', role: 'resident', residentId: 'res-2', syndicId: 's-pr3', buildingId: 'b-pr3' } },
+      { uid: 'u-prov-1', email: 'prov@pr3.invalid', profile: { uid: 'u-prov-1', role: 'provider', prestataireId: 'prov-1', syndicId: 's-pr3', buildingId: 'b-pr3' } },
+    ],
+    syndik_prod_resident_accounts_v1: [
+      { residentId: 'res-1', email: 'o1@pr3.invalid', syndicId: 's-pr3', buildingId: 'b-pr3', apartmentId: 'apt-1', apartmentNumber: 'A1' },
+      { residentId: 'res-2', email: 'o2@pr3.invalid', syndicId: 's-pr3', buildingId: 'b-pr3' },
+    ],
+    syndik_prod_prestataires_v1: [
+      { id: 'prov-1', syndicId: 's-pr3', buildingId: 'b-pr3', name: 'Plombier PR3', category: 'plumbing', phone: '0633333333', email: 'prov@pr3.invalid', active: true },
+    ],
+    syndik_prod_ag_v1: [],
+    syndik_prod_payment_proofs_v1: [],
+    syndik_prod_subscription_requests_v1: [],
+    syndik_prod_invoices_v1: [],
+    syndik_prod_charges_v1: [],
+  });
+
+  const syndicActor = { uid: 'u-syndic-pr3', role: 'syndic' as const, email: 'syndic@pr3.invalid', syndicId: 's-pr3', buildingId: 'b-pr3' };
+  const adminActor = { uid: 'u-admin-pr3', role: 'admin' as const, email: 'admin@pr3.invalid' };
+
+  // 1. assignApartmentOwner: reject no-op self-transfer, sync registered_users & resident_accounts for both owners
+  const state = baseState();
+  const cmd = createCommandService(state);
+
+  await assert.rejects(
+    cmd.runOperation(syndicActor, 'assignApartmentOwner', [{
+      buildingId: 'b-pr3', apartmentId: 'apt-1', residentId: 'res-1', expectedOwnerId: 'res-1', reason: 'Self transfer attempt',
+    }], 'op-pr3-self-transfer'),
+    /déjà titulaire|déjà assigné/i,
+  );
+
+  await cmd.runOperation(syndicActor, 'assignApartmentOwner', [{
+    buildingId: 'b-pr3', apartmentId: 'apt-1', residentId: 'res-2', expectedOwnerId: 'res-1', reason: 'Acte de vente notarié',
+  }], 'op-pr3-transfer-apt1');
+
+  const bldAfterTransfer = state.syndik_prod_syndics_v1[0].buildings[0];
+  const res1After = bldAfterTransfer.residents.find((r: any) => r.id === 'res-1');
+  const res2After = bldAfterTransfer.residents.find((r: any) => r.id === 'res-2');
+  assert.equal(res1After.apartmentId, 'apt-2', 'Previous multi-lot owner falls back to remaining owned lot apt-2');
+  assert.equal(res2After.apartmentId, 'apt-1', 'New owner receives apt-1');
+  const regRes1 = state.syndik_prod_registered_users_v1.find((u: any) => u.uid === 'u-res-1');
+  const regRes2 = state.syndik_prod_registered_users_v1.find((u: any) => u.uid === 'u-res-2');
+  assert.equal(regRes1.profile.apartmentId, 'apt-2');
+  assert.equal(regRes1.profile.apartmentNumber, 'A2');
+  assert.equal(regRes2.profile.apartmentId, 'apt-1');
+  assert.equal(regRes2.profile.apartmentNumber, 'A1');
+  const accRes1 = state.syndik_prod_resident_accounts_v1.find((a: any) => a.residentId === 'res-1');
+  const accRes2 = state.syndik_prod_resident_accounts_v1.find((a: any) => a.residentId === 'res-2');
+  assert.equal(accRes1.apartmentId, 'apt-2');
+  assert.equal(accRes1.apartmentNumber, 'A2');
+  assert.equal(accRes2.apartmentId, 'apt-1');
+  assert.equal(accRes2.apartmentNumber, 'A1');
+
+  // 2. addBuilding: RIB validation, totalTantiemes auto-distribution, case-insensitive lot duplicate check, admin expiry bypass
+  await assert.rejects(
+    cmd.runOperation(syndicActor, 'addBuilding', ['s-pr3', {
+      name: 'Bad RIB Bldg', address: '1 Rue Test', city: 'Rabat', monthlySyndicFees: 200, bankRib: '12345',
+    }], 'op-pr3-bad-rib'),
+    /RIB.*24/i,
+  );
+
+  await assert.rejects(
+    cmd.runOperation(syndicActor, 'addBuilding', ['s-pr3', {
+      name: 'Dup Lot Bldg', address: '1 Rue Test', city: 'Rabat', monthlySyndicFees: 200,
+      apartments: [
+        { number: ' A1 ', floor: 1, area: 80, monthlyFees: 200 },
+        { number: 'a1', floor: 1, area: 80, monthlyFees: 200 },
+      ],
+    }], 'op-pr3-dup-lot'),
+    /Lots initiaux invalides|en double/i,
+  );
+
+  const createdBld = await cmd.runOperation(syndicActor, 'addBuilding', ['s-pr3', {
+    name: 'Tantiemes 10k Bldg', address: '2 Rue Test', city: 'Rabat', monthlySyndicFees: 200,
+    totalTantiemes: 10000, bankRib: '007 780 0001234567890123 45',
+    apartments: [
+      { number: ' L1 ', floor: 1, area: 80, monthlyFees: 200 },
+      { number: 'L2', floor: 1, area: 80, monthlyFees: 200 },
+      { number: 'L3', floor: 1, area: 80, monthlyFees: 200 },
+    ],
+  }], 'op-pr3-add-10k');
+  const tantiemeSum = createdBld.apartments.reduce((s: number, a: any) => s + a.tantiemes, 0);
+  assert.equal(tantiemeSum, 10000, 'Auto-distributed tantiemes match custom totalTantiemes = 10000');
+  assert.deepEqual(createdBld.apartments.map((a: any) => a.tantiemes), [3334, 3333, 3333]);
+  assert.equal(createdBld.apartments[0].number, 'L1', 'Lot number is trimmed');
+
+  // 3. updateBuilding: reject invalid RIB, allow clearing optional fields
+  await assert.rejects(
+    cmd.runOperation(syndicActor, 'updateBuilding', ['b-pr3', { bankRib: '999' }], 'op-pr3-upd-bad-rib'),
+    /RIB.*24/i,
+  );
+  const clearedBld = await cmd.runOperation(syndicActor, 'updateBuilding', ['b-pr3', {
+    bankRib: '', bankName: '  ', managerName: '', managerPhone: '',
+  }], 'op-pr3-upd-clear');
+  assert.equal(clearedBld.bankRib, undefined);
+  assert.equal(clearedBld.bankName, undefined);
+  assert.equal(clearedBld.managerName, undefined);
+  assert.equal(clearedBld.managerPhone, undefined);
+
+  // 4. addApartmentsBulk preserves explicit 0 area/tantiemes & rejects case-insensitive duplicates; rebalance rejects lots > totalTarget
+  const bulkAdded = await cmd.runOperation(syndicActor, 'addApartmentsBulk', ['b-pr3', [
+    { number: ' P-01 ', floor: -1, area: 0, tantiemes: 0, monthlyFees: 0, coproType: 'parking', ownerId: null, tenantId: null },
+  ]], 'op-pr3-bulk-zero');
+  assert.equal(bulkAdded[0].number, 'P-01');
+  assert.equal(bulkAdded[0].area, 0, 'Explicit area: 0 preserved in bulk creation');
+  assert.equal(bulkAdded[0].tantiemes, 0, 'Explicit tantiemes: 0 preserved in bulk creation');
+
+  await assert.rejects(
+    cmd.runOperation(syndicActor, 'addApartmentsBulk', ['b-pr3', [
+      { number: 'p-01', floor: -1, area: 12, tantiemes: 0, monthlyFees: 0, coproType: 'parking', ownerId: null, tenantId: null },
+    ]], 'op-pr3-bulk-dup'),
+    /déjà utilisé|en double/i,
+  );
+
+  // Rebalance fails when active lots exceed totalTantiemes
+  const tinyBld = state.syndik_prod_syndics_v1[0].buildings.find((b: any) => b.id === 'b-pr3');
+  tinyBld.totalTantiemes = 2;
+  await assert.rejects(
+    cmd.runOperation(syndicActor, 'rebalanceBuildingTantiemes', ['b-pr3'], 'op-pr3-rebalance-too-small'),
+    /dépassent le total/i,
+  );
+  tinyBld.totalTantiemes = 1000;
+
+  // 5. Plan downgrade capacity guard (cabinet currently has 5 active buildings; starter allows 4)
+  state.__platformBillingConfig = {
+    bankTransfer: {
+      enabled: true,
+      bankName: 'CIH',
+      accountHolder: 'Syndik Platform',
+      rib: '230780000123456789012345',
+    },
+  };
+  await assert.rejects(
+    cmd.runOperation(syndicActor, 'submitSubscriptionBankTransfer', [{
+      syndicId: 's-pr3', plan: 'starter', months: 1, transferReference: 'VIR-DOWNGRADE', bankName: 'CIH', transferDate: '2026-06-01',
+    }], 'op-pr3-downgrade-transfer'),
+    /limite de 4|Archivez des immeubles/i,
+  );
+  await assert.rejects(
+    cmd.runOperation(adminActor, 'recordSubscriptionPayment', [{
+      syndicId: 's-pr3', plan: 'starter', months: 1, reference: 'PAY-DOWNGRADE', amount: 199,
+    }], 'op-pr3-downgrade-activate'),
+    /limite de 4|Archivez des immeubles/i,
+  );
+
+  // 6. saveSyndic: rejects invalid ICE and javascript: logoUrl
+  await assert.rejects(
+    cmd.runOperation(syndicActor, 'saveSyndic', [{ id: 's-pr3', name: 'Cabinet PR3', ice: '12345' }], 'op-pr3-bad-ice'),
+    /ICE.*15/i,
+  );
+  await assert.rejects(
+    cmd.runOperation(syndicActor, 'saveSyndic', [{ id: 's-pr3', name: 'Cabinet PR3', logoUrl: 'javascript:alert(1)' }], 'op-pr3-bad-logo'),
+    /HTTP|URL/i,
+  );
+  await cmd.runOperation(syndicActor, 'saveSyndic', [{
+    id: 's-pr3', name: 'Cabinet PR3 Valid', ice: '001234567000089', logoUrl: 'https://example.com/logo.png',
+  }], 'op-pr3-valid-syndic');
+  assert.equal(state.syndik_prod_syndics_v1[0].ice, '001234567000089');
+
+  // 7. Archival guards (open AG voting & pending payment proofs) + session revocation on deleteBuilding
+  state.syndik_prod_ag_v1.push({
+    id: 'ag-open-pr3', buildingId: 'b-pr3', syndicId: 's-pr3', title: 'AG Ouverte', date: '2026-06-01',
+    status: 'planned', isVotingOpen: true, totalTantiemes: 1000, resolutions: [],
+  });
+  await assert.rejects(
+    cmd.runOperation(syndicActor, 'deleteBuilding', ['b-pr3'], 'op-pr3-arch-bld-ag'),
+    /scrutin ouvert/i,
+  );
+  await assert.rejects(
+    cmd.runOperation(syndicActor, 'deleteApartment', ['apt-1'], 'op-pr3-arch-apt-ag'),
+    /scrutin ouvert/i,
+  );
+  await assert.rejects(
+    cmd.runOperation(syndicActor, 'deleteResident', ['res-1'], 'op-pr3-arch-res-ag'),
+    /scrutin ouvert/i,
+  );
+  // Close AG, add pending payment proof
+  state.syndik_prod_ag_v1[0].isVotingOpen = false;
+  state.syndik_prod_ag_v1[0].status = 'completed';
+  state.syndik_prod_payment_proofs_v1.push({
+    id: 'proof-pending-pr3', buildingId: 'b-pr3', syndicId: 's-pr3', residentId: 'res-2',
+    apartmentId: 'apt-1', amount: 300, status: 'pending',
+  });
+  await assert.rejects(
+    cmd.runOperation(syndicActor, 'deleteBuilding', ['b-pr3'], 'op-pr3-arch-bld-proof'),
+    /justificatifs?.*en attente/i,
+  );
+  await assert.rejects(
+    cmd.runOperation(syndicActor, 'deleteApartment', ['apt-1'], 'op-pr3-arch-apt-proof'),
+    /justificatifs?.*en attente/i,
+  );
+  await assert.rejects(
+    cmd.runOperation(syndicActor, 'deleteResident', ['res-2'], 'op-pr3-arch-res-proof'),
+    /justificatifs?.*en attente/i,
+  );
+  // Resolve proof -> deleteBuilding succeeds and revokes resident/provider sessions
+  state.syndik_prod_payment_proofs_v1[0].status = 'approved';
+  await cmd.runOperation(syndicActor, 'deleteBuilding', ['b-pr3'], 'op-pr3-arch-bld-ok');
+  assert.ok(state.syndik_prod_syndics_v1[0].buildings[0].archivedAt, 'Building archived');
+  assert.ok((state.__sessionVersions?.['u-res-1'] || 0) >= 1, 'Archived building revokes u-res-1 session');
+  assert.ok((state.__sessionVersions?.['u-res-2'] || 0) >= 1, 'Archived building revokes u-res-2 session');
+  assert.ok((state.__sessionVersions?.['u-prov-1'] || 0) >= 1, 'Archived building revokes u-prov-1 session');
+
+  // 8. Expired subscription: syndic blocked from addBuilding & restoreArchived('buildings'), admin bypasses; archived cabinet blocks restore
+  state.syndik_prod_syndics_v1[0].subscriptionStatus = 'expired';
+  state.syndik_prod_syndics_v1[0].subscriptionExpiry = '2020-01-01';
+  await assert.rejects(
+    cmd.runOperation(syndicActor, 'addBuilding', ['s-pr3', {
+      name: 'Blocked Expired', address: '3 Rue Test', city: 'Rabat', monthlySyndicFees: 200,
+    }], 'op-pr3-exp-add-syndic'),
+    /abonnement/i,
+  );
+  await assert.rejects(
+    cmd.runOperation(syndicActor, 'restoreArchived', ['buildings', 'b-pr3'], 'op-pr3-exp-restore-syndic'),
+    /abonnement/i,
+  );
+  // Admin can restore even when expired (as long as cabinet is not archived & capacity allows)
+  await cmd.runOperation(adminActor, 'restoreArchived', ['buildings', 'b-pr3'], 'op-pr3-exp-restore-admin');
+  assert.equal(state.syndik_prod_syndics_v1[0].buildings[0].archivedAt, undefined, 'Admin restored building despite expired subscription');
+
+  // Admin can add building even when expired (within capacity: professional allows 8, currently 5)
+  const adminAdded = await cmd.runOperation(adminActor, 'addBuilding', ['s-pr3', {
+    name: 'Admin Bypass Bldg', address: '4 Rue Test', city: 'Rabat', monthlySyndicFees: 200,
+  }], 'op-pr3-exp-add-admin');
+  assert.equal(adminAdded.name, 'Admin Bypass Bldg');
+
+  // Archived cabinet blocks restoring a building even for admin
+  await cmd.runOperation(adminActor, 'deleteBuilding', ['b-pr3'], 'op-pr3-rearchive-for-cab-test');
+  state.syndik_prod_syndics_v1[0].archivedAt = '2026-06-01T00:00:00.000Z';
+  await assert.rejects(
+    cmd.runOperation(adminActor, 'restoreArchived', ['buildings', 'b-pr3'], 'op-pr3-restore-archived-cab'),
+    /cabinet.*archivé/i,
+  );
+});
+
+
 
 

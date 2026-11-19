@@ -572,15 +572,19 @@ function getAuthorizedScopeForCaller(
   }
 
   if (caller.role === "resident") {
-    // Audit P0-4: A resident is ONLY authorized for the specific building(s) they belong to, NEVER other buildings in the same syndic
+    // Audit P0-4 & PR3 #20: A resident is ONLY authorized for active (non-archived) building(s) they belong to
     for (const s of syndics) {
+      if (s?.archivedAt) continue;
       const residentBuildings = (s?.buildings || []).filter(
         (b: any) =>
-          (caller.buildingId && b?.id === caller.buildingId) ||
-          (Array.isArray(b?.residents) &&
-            b.residents.some(
-              (r: any) => r?.id === callerResId || r?.id === caller.uid,
-            )),
+          !b?.archivedAt &&
+          ((caller.buildingId && b?.id === caller.buildingId) ||
+            (Array.isArray(b?.residents) &&
+              b.residents.some(
+                (r: any) =>
+                  !r?.archivedAt &&
+                  (r?.id === callerResId || r?.id === caller.uid),
+              ))),
       );
       if (residentBuildings.length > 0) {
         if (s?.id) authorizedSyndicIds.add(s.id);
@@ -605,7 +609,10 @@ function getAuthorizedScopeForCaller(
 
   if (caller.role === "provider") {
     const matchedPrests = prestatairesList.filter(
-      (p) => p?.id === callerPrestId || p?.id === caller.uid,
+      (p) =>
+        !p?.archivedAt &&
+        p?.active !== false &&
+        (p?.id === callerPrestId || p?.id === caller.uid),
     );
     const providerBldIds = new Set<string>();
     if (caller.buildingId) providerBldIds.add(caller.buildingId);
@@ -614,8 +621,9 @@ function getAuthorizedScopeForCaller(
     }
 
     for (const s of syndics) {
+      if (s?.archivedAt) continue;
       const providerBuildings = (s?.buildings || []).filter(
-        (b: any) => b?.id && providerBldIds.has(b.id),
+        (b: any) => !b?.archivedAt && b?.id && providerBldIds.has(b.id),
       );
       if (providerBuildings.length > 0) {
         if (s?.id) authorizedSyndicIds.add(s.id);

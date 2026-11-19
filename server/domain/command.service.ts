@@ -15,7 +15,7 @@ import { type State } from "../repository";
 import { firebaseLinkedResidentIds,LINKED_RESIDENT_EMAIL_CODE,LINKED_RESIDENT_EMAIL_MESSAGE } from '../residentIdentity';
 import { createAssemblyCommands } from './assembly.service';
 import { normalizeBillingPeriodKey } from "./billingPeriod";
-import { createBuildingCommands } from './building.service';
+import { createBuildingCommands, syncResidentAccountApartment } from './building.service';
 import type { CommandDependencies } from './dependencies';
 import { dispatchMutation } from "./dispatch";
 import { createFinanceCommands } from './finance.service';
@@ -175,9 +175,13 @@ function links(b: any, apt: any) {
         "Occupant non lié.",
         400,
       );
+  const normalizedNumber = String(apt.number || "").trim().toLowerCase();
   check(
     !b.apartments.some(
-      (a: any) => a.number === apt.number && a.id !== apt.id && !a.archivedAt,
+      (a: any) =>
+        String(a.number || "").trim().toLowerCase() === normalizedNumber &&
+        a.id !== apt.id &&
+        !a.archivedAt,
     ),
     "Numéro de lot déjà utilisé.",
     409,
@@ -321,8 +325,14 @@ async function runOperation(
       402,
     );
     const data = SyndicSchema.partial().parse(input);
-    if (data.rib)
+    if (data.rib && data.rib.trim() !== "")
       check(/^\d{24}$/.test(data.rib.replace(/\s/g, "")), "RIB invalide.", 400);
+    if (data.ice && data.ice.trim() !== "")
+      check(
+        /^\d{15}$/.test(data.ice.replace(/\s/g, "")),
+        "ICE invalide (15 chiffres requis).",
+        400,
+      );
     if (actor.role === "admin") {
       if (input.subscriptionPlan)
         check(
@@ -385,14 +395,28 @@ async function runOperation(
         reserveFundRate: args[1].reserveFundRate !== undefined ? args[1].reserveFundRate
           : args[1].reserveFundPercentage !== undefined ? args[1].reserveFundPercentage : 5,
         syndicId: s.id,
-      }),
-      lots = z
-        .array(ApartmentSchema.omit({ id: true, buildingId: true }))
-        .max(500)
-        .parse(args[1].apartments || []);
+      });
+    if (data.bankRib && data.bankRib.trim() !== "")
+      check(
+        /^\d{24}$/.test(data.bankRib.replace(/\s/g, "")),
+        "RIB invalide (24 chiffres requis).",
+        400,
+      );
+    const initialLotSchema = ApartmentSchema.omit({
+      id: true,
+      buildingId: true,
+      tantiemes: true,
+    }).extend({
+      tantiemes: z.number().nonnegative().optional(),
+    });
+    const lots = z
+      .array(initialLotSchema)
+      .max(500)
+      .parse(args[1].apartments || []);
     check(
       lots.every((a) => !a.ownerId && !a.tenantId) &&
-        new Set(lots.map((a) => a.number)).size === lots.length,
+        new Set(lots.map((a) => a.number.trim().toLowerCase())).size ===
+          lots.length,
       "Lots initiaux invalides.",
       400,
     );
@@ -435,10 +459,10 @@ async function runOperation(
         "Champ immeuble protégé.",
       );
       BuildingSchema.partial().parse(args[1]);
-      if (args[1].bankRib)
+      if (args[1].bankRib && String(args[1].bankRib).trim() !== "")
         check(
-          /^\d{24}$/.test(args[1].bankRib.replace(/\s/g, "")),
-          "RIB invalide.",
+          /^\d{24}$/.test(String(args[1].bankRib).replace(/\s/g, "")),
+          "RIB invalide (24 chiffres requis).",
           400,
         );
     }
@@ -450,7 +474,8 @@ async function runOperation(
         .parse(args[1]);
       for (const a of args[1]) links(b, a);
       check(
-        new Set(args[1].map((a: any) => a.number)).size === args[1].length,
+        new Set(args[1].map((a: any) => String(a.number || "").trim().toLowerCase())).size ===
+          args[1].length,
         "Numéros en double.",
         409,
       );
@@ -532,6 +557,35 @@ async function runOperation(
     args[0] = apt;
   } else if (operation === "deleteApartment") {
     const row = nested(actor, "apartments", str(args[0]));
+    const openVotingAg = (transactionState.syndik_prod_ag_v1 || []).some(
+      (ag: any) =>
+        ag.buildingId === row.b.id &&
+        ag.isVotingOpen === true &&
+        !["completed", "closed"].includes(ag.status),
+    );
+    check(
+      !openVotingAg,
+      "Impossible d'archiver ce lot : une Assemblée Générale a un scrutin ouvert.",
+      409,
+    );
+    const pendingProof = (
+      transactionState.syndik_prod_payment_proofs_v1 || []
+    ).some((p: any) => {
+      if (p.buildingId !== row.b.id || p.status !== "pending") return false;
+      if (p.apartmentId === row.item.id) return true;
+      const charge = (transactionState.syndik_prod_charges_v1 || []).find(
+        (c: any) => c.id === p.chargeId,
+      );
+      return charge?.apartmentId === row.item.id;
+    });
+    check(
+      !pendingProof,
+      "Impossible d'archiver ce lot : un justificatif de paiement est en attente de validation.",
+      409,
+    );
+    const affectedResidentIds = new Set<string>();
+    if (row.item.ownerId) affectedResidentIds.add(row.item.ownerId);
+    if (row.item.tenantId) affectedResidentIds.add(row.item.tenantId);
     row.item.archivedAt = new Date().toISOString();
     row.item.ownerId = null;
     row.item.tenantId = null;
@@ -543,7 +597,11 @@ async function runOperation(
             a.id !== row.item.id &&
             (a.ownerId === res.id || a.tenantId === res.id),
         )?.id;
+        affectedResidentIds.add(res.id);
       }
+    }
+    for (const resId of affectedResidentIds) {
+      syncResidentAccountApartment(transactionState, row.b, resId);
     }
     appendAudit(transactionState, actor, operation, row.b.id);
     return true;
@@ -562,16 +620,27 @@ async function runOperation(
       r.id === input.residentId && r.isOwner && !r.archivedAt && r.buildingId === b.id && r.syndicId === b.syndicId);
     check(input.residentId === null || next, "Propriétaire non lié.", 400);
     const previousOwnerId = apt.ownerId || null;
-    apt.ownerId = next?.id || null;
+    const nextOwnerId = next?.id || null;
+    check(
+      previousOwnerId !== nextOwnerId,
+      "Ce copropriétaire est déjà titulaire de ce lot.",
+      409,
+    );
+    apt.ownerId = nextOwnerId;
     const previous = b.residents.find((r: any) => r.id === previousOwnerId);
     if (previous && previous.apartmentId === apt.id && previousOwnerId !== apt.ownerId)
       previous.apartmentId = b.apartments.find((a: any) => !a.archivedAt && a.ownerId === previous.id)?.id;
     if (
       next &&
       (!next.apartmentId ||
-        !b.apartments.some((a: any) => !a.archivedAt && a.id === next.apartmentId))
+        !b.apartments.some(
+          (a: any) =>
+            !a.archivedAt && a.id === next.apartmentId && a.ownerId === next.id,
+        ))
     )
       next.apartmentId = apt.id;
+    if (previous) syncResidentAccountApartment(transactionState, b, previous.id);
+    if (next) syncResidentAccountApartment(transactionState, b, next.id);
     appendAudit(transactionState, actor, operation, b.id, {
       apartmentId: apt.id, previousOwnerId, ownerId: apt.ownerId, reason, operationId,
     });
@@ -624,12 +693,37 @@ async function runOperation(
     b = row.b;
     buildingId = b.id;
     if (operation === "deleteResident") {
+      const openVotingAg = (transactionState.syndik_prod_ag_v1 || []).some(
+        (ag: any) =>
+          ag.buildingId === b.id &&
+          ag.isVotingOpen === true &&
+          !["completed", "closed"].includes(ag.status),
+      );
+      check(
+        !openVotingAg,
+        "Impossible d'archiver ce résident : une Assemblée Générale a un scrutin ouvert.",
+        409,
+      );
+      const pendingProof = (
+        transactionState.syndik_prod_payment_proofs_v1 || []
+      ).some(
+        (p: any) =>
+          p.buildingId === b.id &&
+          p.residentId === row.item.id &&
+          p.status === "pending",
+      );
+      check(
+        !pendingProof,
+        "Impossible d'archiver ce résident : un justificatif de paiement est en attente de validation.",
+        409,
+      );
       row.item.archivedAt = new Date().toISOString();
       row.item.hasAccount = false;
       row.item.apartmentId = undefined;
       for (const apt of b.apartments)
         for (const field of ["ownerId", "tenantId"])
           if (apt[field] === row.item.id) apt[field] = null;
+      syncResidentAccountApartment(transactionState, b, row.item.id);
       disableAccount(row.item.id, "residentId");
       appendAudit(transactionState, actor, operation, b.id);
       return true;

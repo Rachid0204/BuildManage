@@ -58,8 +58,8 @@ export default function Form({ children, onSubmit, noValidate, onInput, onBusyCh
           return `${field} — ${reason}`;
         });
         setError(tr('Veuillez corriger les champs suivants :', 'يرجى تصحيح الحقول التالية:') + '\n' + messages.join('\n'));
+        failures[0].focus({ preventScroll: true });
         requestAnimationFrame(() => {
-          failures[0].focus({ preventScroll: true });
           failures[0].scrollIntoView({ block: 'center', behavior: 'smooth' });
         });
         return;

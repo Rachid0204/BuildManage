@@ -64,7 +64,18 @@ export const BuildingSchema = z.object({
 export const SyndicSchema = z.object({
   id: z.string().optional(),
   name: z.string().min(2, "Company name is required"),
-  logoUrl: z.string().url().optional().or(z.literal('')),
+  logoUrl: z
+    .string()
+    .refine((val) => {
+      if (!val) return true;
+      try {
+        const parsed = new URL(val);
+        return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+      } catch {
+        return false;
+      }
+    }, "Logo URL must be a valid HTTP(S) URL")
+    .optional(),
   syndicType: z.enum(['professionnel', 'benevole']).optional(),
   phone: z.string().optional(),
   email: z.string().optional(),
