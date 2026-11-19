@@ -371,8 +371,25 @@ const AdminDashboard: React.FC = () => {
   const voidPaymentMutation = useMutation({
     mutationFn: ({ paymentId, reason }: { paymentId: string; reason: string }) =>
       voidSubscriptionPayment(paymentId, reason),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['subscriptionPayments'] });
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['subscriptionPayments'] }),
+        queryClient.invalidateQueries({ queryKey: ['syndics'] }),
+      ]);
+      const refreshed = await refetchSyndics();
+      const updatedCab = (refreshed.data || []).find(
+        (s) => s.id === selectedSyndic?.id,
+      );
+      if (updatedCab) {
+        setSelectedSyndic(updatedCab);
+        setEditPlan(updatedCab.subscriptionPlan);
+        setEditStatus(updatedCab.subscriptionStatus);
+        setEditExpiry(
+          updatedCab.subscriptionExpiry
+            ? new Date(updatedCab.subscriptionExpiry).toISOString().split('T')[0]
+            : '',
+        );
+      }
       setVoidTarget(null);
       setVoidReason('');
       setVoidError('');
@@ -393,6 +410,13 @@ const AdminDashboard: React.FC = () => {
           tr(
             'Mot de passe : 10 caractères minimum.',
             'كلمة المرور: عشرة أحرف على الأقل.',
+          ),
+        );
+      if (newBuildingName.trim() && !newBuildingAddress.trim())
+        throw new Error(
+          tr(
+            "L'adresse de l'immeuble initial est obligatoire.",
+            'عنوان العمارة الأولية مطلوب.',
           ),
         );
       return remoteMutation('adminCreateCabinet', [
@@ -2567,8 +2591,8 @@ const AdminDashboard: React.FC = () => {
                     </div>
                     <p className="text-[11px] text-slate-500 mt-1">
                       {tr(
-                        'Événement à abonner : PAYMENT.CAPTURE.COMPLETED',
-                        'الحدث المطلوب تفعيله: PAYMENT.CAPTURE.COMPLETED',
+                        'Événements à abonner : PAYMENT.CAPTURE.COMPLETED, PAYMENT.CAPTURE.REFUNDED, PAYMENT.CAPTURE.REVERSED',
+                        'الأحداث المطلوب تفعيلها: PAYMENT.CAPTURE.COMPLETED, PAYMENT.CAPTURE.REFUNDED, PAYMENT.CAPTURE.REVERSED',
                       )}
                     </p>
                   </div>
@@ -3591,8 +3615,8 @@ const AdminDashboard: React.FC = () => {
             )}
             <p className="text-slate-700">
               {tr(
-                `Paiement ${voidTarget.amount} MAD (réf. ${voidTarget.reference}). L’annulation retire ce paiement des rapports encaissés et libère la référence bancaire ; ajustez si nécessaire la date d’échéance du cabinet.`,
-                `دفع بمبلغ ${voidTarget.amount} درهم (مرجع ${voidTarget.reference}). سيؤدي الإلغاء إلى سحبه من التقارير وتحرير المرجع البنكي؛ عدّل تاريخ انتهاء المكتب عند الحاجة.`,
+                `Paiement ${voidTarget.amount} MAD (réf. ${voidTarget.reference}). L’annulation retire ce paiement des rapports encaissés, libère la référence bancaire et rétablit automatiquement l’état précédent de l’abonnement (forfait, statut et date d’échéance) lorsque le dernier paiement est annulé.`,
+                `دفع بمبلغ ${voidTarget.amount} درهم (مرجع ${voidTarget.reference}). سيؤدي الإلغاء إلى سحبه من التقارير وتحرير المرجع البنكي واستعادة حالة الاشتراك السابقة تلقائياً عند إلغاء آخر دفعة.`,
               )}
             </p>
             <div>

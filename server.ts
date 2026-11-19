@@ -96,6 +96,7 @@ import {
   computeSubscriptionPricing,
   createPayPalOrder,
   getPayPalAccessToken,
+  getPayPalOrder,
   resolvePlatformBillingConfig,
   updatePlatformBillingConfig,
   verifyPayPalWebhookSignature,
@@ -233,6 +234,7 @@ function lookupCandidateProfilesInStore(
     ? store.syndik_prod_registered_users_v1
     : [];
   for (const u of regUsers) {
+    if (u?.disabled) continue;
     if (u?.uid === uid || u?.profile?.uid === uid) {
       const p = u.profile || u;
       candidates.push({
@@ -254,6 +256,7 @@ function lookupCandidateProfilesInStore(
     ? store.syndik_prod_resident_accounts_v1
     : [];
   for (const a of resAccounts) {
+    if (a?.disabled) continue;
     const rId = a?.residentId;
     if (
       rId &&
@@ -295,6 +298,7 @@ function lookupCandidateProfilesInStore(
     }
     for (const b of s?.buildings || []) {
       for (const r of b?.residents || []) {
+        if (r?.archivedAt) continue;
         if (
           r?.id &&
           (uid === `user-res-${r.id}` || uid === `res-${r.id}` || uid === r.id)
@@ -319,6 +323,7 @@ function lookupCandidateProfilesInStore(
     ? store.syndik_prod_prestataire_accounts_v1
     : [];
   for (const a of prestAccounts) {
+    if (a?.disabled) continue;
     const pId = a?.prestataireId;
     if (
       pId &&
@@ -339,6 +344,7 @@ function lookupCandidateProfilesInStore(
     ? store.syndik_prod_prestataires_v1
     : [];
   for (const p of prestList) {
+    if (p?.archivedAt || p?.active === false) continue;
     if (
       p?.id &&
       (uid === `user-prest-${p.id}` || uid === `prov-${p.id}` || uid === p.id)
@@ -710,6 +716,7 @@ function filterStoreForCaller(store: ServerStore, caller: AuthCallerContext) {
                       coproType: a.coproType,
                     })),
                     announcements: [],
+                    documents: [],
                   }
                 : {
                     ...b,
@@ -784,17 +791,17 @@ function filterStoreForCaller(store: ServerStore, caller: AuthCallerContext) {
           !(scope.isAdmin || scope.authorizedBuildingIds.has(item.buildingId))
         )
           return false;
-        if (key === "syndik_prod_chat_v1")
+        if (key === "syndik_prod_chat_v1") {
+          if (caller.role === "provider") return false;
           return (
             !item.recipientId ||
             [item.senderId, item.recipientId].includes(
-              caller.role === "resident"
-                ? scope.callerResId
-                : caller.role === "provider"
-                  ? scope.callerPrestId
-                  : caller.uid,
+              caller.role === "resident" ? scope.callerResId : caller.uid,
             )
           );
+        }
+        if (key === "syndik_prod_ag_v1" && caller.role === "provider")
+          return false;
         if (key === "syndik_prod_maintenance_v1")
           return (
             managed ||
@@ -849,6 +856,34 @@ function filterStoreForCaller(store: ServerStore, caller: AuthCallerContext) {
         projectAssemblyForRole(assembly, caller.role),
     );
   return clean(result);
+}
+
+function assertOnboarded(caller: AuthCallerContext, state: Record<string, any>) {
+  const accounts = identityAccounts(state).filter(
+    (u: any) => !u.disabled && accountUid(u) === caller.uid,
+  );
+  if (
+    (caller as any).emailVerified === false ||
+    accounts.some((u: any) => u?.profile?.emailVerified === false)
+  ) {
+    throw new OperationError(
+      "Vérifiez votre adresse email.",
+      403,
+      "ONBOARDING_REQUIRED",
+    );
+  }
+  if (
+    (caller as any).mustChangePassword ||
+    accounts.some(
+      (u: any) => u?.mustChangePassword || u?.profile?.mustChangePassword,
+    )
+  ) {
+    throw new OperationError(
+      "Changez votre mot de passe initial avant de continuer.",
+      403,
+      "ONBOARDING_REQUIRED",
+    );
+  }
 }
 
 async function startServer() {
@@ -1046,7 +1081,11 @@ async function startServer() {
     post: (route: string, handler: (req: express.Request, res: express.Response) => unknown) => app.post(route, wrap(handler)),
   };
   registerIdentityRoutes(api, extractAndVerifyCaller);
-  registerLiveUpdates(app, repository, extractAndVerifyCaller);
+  registerLiveUpdates(app, repository, async (req, state) => {
+    const caller = await extractAndVerifyCaller(req, state);
+    if (caller) assertOnboarded(caller, state);
+    return caller;
+  });
   app.use("/api", (_req, res, next) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Cache-Control", "no-store");
@@ -1184,26 +1223,47 @@ async function startServer() {
     if (!decoded.email_verified && !linked) return res.status(401).json({ error: 'Vérifiez votre adresse email.' });
     if (linked?.disabled) return res.status(403).json({ error: 'Compte désactivé.' });
     let candidates = lookupCandidateProfilesInStore(sharedStore, linked ? accountUid(linked) : decoded.uid);
+    const registered: any[] = (sharedStore.syndik_prod_registered_users_v1 ??= []);
     if (
-      decoded.email_verified && process.env.SYNDIK_BOOTSTRAP_ADMIN_EMAIL?.toLowerCase() ===
+      decoded.email_verified &&
+      process.env.SYNDIK_BOOTSTRAP_ADMIN_EMAIL?.toLowerCase() ===
         decoded.email.toLowerCase() &&
       !candidates.some((p) => p.role === "admin")
     ) {
+      const emailLower = decoded.email.toLowerCase();
+      const existingIdx = registered.findIndex(
+        (u: any) =>
+          !u.disabled &&
+          (u.uid === decoded.uid ||
+            u.firebaseUid === decoded.uid ||
+            u.email?.trim().toLowerCase() === emailLower),
+      );
+      const existing = existingIdx >= 0 ? registered[existingIdx] : undefined;
       const profile = {
-        uid: decoded.uid,
-        email: decoded.email.toLowerCase(),
+        ...(existing?.profile || {}),
+        uid: existing?.uid || decoded.uid,
+        email: emailLower,
         role: "admin",
-        displayName: decoded.name || "Admin",
+        displayName:
+          existing?.profile?.displayName || decoded.name || "Admin",
         emailVerified: true,
       };
-      (sharedStore.syndik_prod_registered_users_v1 ??= []).push({
-        uid: decoded.uid,
-        email: profile.email,
-        profile,
-      });
+      if (existingIdx >= 0) {
+        registered[existingIdx] = {
+          ...existing,
+          uid: profile.uid,
+          email: emailLower,
+          profile,
+        };
+      } else {
+        registered.push({
+          uid: profile.uid,
+          email: emailLower,
+          profile,
+        });
+      }
       candidates = [profile];
     }
-    const registered: any[] = sharedStore.syndik_prod_registered_users_v1 || [];
     if (!candidates.length) {
       const known = identityAccounts(sharedStore).find(
         (u) => !u.disabled && u.email?.trim().toLowerCase() === decoded.email!.toLowerCase(),
@@ -1259,12 +1319,15 @@ async function startServer() {
     const firebaseAccount = identityAccounts(sharedStore).find(a => accountUid(a) === profile.uid);
     if (firebaseAccount && fbUser && firebaseAccount !== knownAccount) bindFirebaseAccount(sharedStore, firebaseAccount, fbUser);
     const storedProfile = registered.find((u) => u.uid === profile.uid)?.profile || {};
+    const verifiedNow = fbUser
+      ? fbUser.emailVerified === true
+      : decoded.email_verified === true;
     profile = {
       ...storedProfile,
       ...profile,
       firebaseAuthTime: decoded.auth_time,
       firebaseUid: firebaseAccount?.firebaseUid,
-      emailVerified: decoded.email_verified === true,
+      emailVerified: verifiedNow,
       displayName:
         storedProfile.displayName ||
         profile.displayName ||
@@ -1325,7 +1388,7 @@ async function startServer() {
     ];
     if (
       accountEmails.some(
-        (u: any) => u.email?.trim().toLowerCase() === emailNorm,
+        (u: any) => !u.disabled && u.email?.trim().toLowerCase() === emailNorm,
       )
     ) {
       return res.status(409).json({
@@ -1457,7 +1520,7 @@ async function startServer() {
         .json({ ok: false, error: "Unauthorized: authentication required" });
     }
 
-    const newPassword = String(req.body?.newPassword || "").trim();
+    const newPassword = String(req.body?.newPassword || "");
     if (
       !newPassword ||
       newPassword.length < 10 ||
@@ -1718,6 +1781,7 @@ async function startServer() {
         .status(401)
         .json({ ok: false, error: "Unauthorized: authentication required" });
     }
+    assertOnboarded(caller, sharedStore);
     const currentRevision = Number(sharedStore.__revision) || 0;
     const etag = `"rev-${currentRevision}-${caller.uid}"`;
     res.setHeader("ETag", etag);
@@ -1783,199 +1847,255 @@ async function startServer() {
   };
 
   // Binary Document & Receipt Offload Endpoints (/api/uploads) with building-scoped auth (Audit P1-5)
-  api.post("/api/uploads", async (req, res) => {
-    const caller = await extractAndVerifyCaller(req, sharedStore);
-    if (!caller)
-      return res.status(401).json({ error: "Authentification requise." });
-    const buildingId = String(req.body?.buildingId || caller.buildingId || ""),
-      b = buildingFor(caller, buildingId, false);
-    canWrite(caller, b);
-    const decoded = decodeValidatedUploadBytes(req.body?.dataUrl);
-    if (!decoded) return res.status(400).json({ error: "Fichier invalide." });
-    const { bytes, mime } = decoded;
-    const fileId = crypto
-        .createHash("sha256")
-        .update(`${buildingId}:${caller.uid}:`)
-        .update(bytes)
-        .digest("hex"),
-      key = `private/${buildingId}/${fileId}`;
-    if(sharedStore.__files?.[fileId]?.lifecycle==='deleting')throw new OperationError('Fichier en cours de suppression. Réessayez dans un instant.',409);
-    await savePrivateFile(UPLOADS_DIR, fileId, key, bytes, mime);
-    (sharedStore.__files ??= {})[fileId] = {
-      fileId,
-      key,
-      mimeType: mime,
-      buildingId,
-      uploadedBy: caller.uid,
-      name: String(req.body?.name || "document").slice(0, 200),
-      sizeBytes: bytes.length,
-      createdAt: sharedStore.__files?.[fileId]?.createdAt || new Date().toISOString(),
-      lastUploadedAt: new Date().toISOString(),
-    };
-    return res.json({
-      ok: true,
-      fileId,
-      url: `/api/uploads/${fileId}`,
-      mimeType: mime,
-      sizeBytes: bytes.length,
-    });
-  });
-
-  api.post("/api/subscription/upload-proof", async (req, res) => {
-    const caller = await extractAndVerifyCaller(req, sharedStore);
-    if (!caller)
-      return res.status(401).json({ error: "Authentification requise." });
-    if (!["admin", "syndic"].includes(caller.role))
-      return res.status(403).json({ error: "Opération réservée au syndic." });
-    const callerUser = (sharedStore.syndik_prod_registered_users_v1 || []).find(
-      (u: any) => u.uid === caller.uid,
-    );
-    if (
-      (caller as any).emailVerified === false ||
-      callerUser?.profile?.emailVerified === false
-    ) {
-      return res.status(403).json({ error: "Vérifiez votre adresse email." });
-    }
-    if (
-      callerUser?.profile?.mustChangePassword ||
-      (caller as any).mustChangePassword
-    ) {
-      return res.status(403).json({
-        error: "Changez votre mot de passe initial avant de continuer.",
+  app.post(
+    "/api/uploads",
+    wrap(async (req, res) => {
+      const preflight = await repository.transaction(async (state) => {
+        const caller = await extractAndVerifyCaller(req, state);
+        if (!caller)
+          throw new OperationError("Authentification requise.", 401);
+        assertOnboarded(caller, state);
+        const buildingId = String(req.body?.buildingId || caller.buildingId || ""),
+          b = buildingFor(caller, buildingId, false);
+        canWrite(caller, b);
+        const decoded = decodeValidatedUploadBytes(req.body?.dataUrl);
+        if (!decoded) throw new OperationError("Fichier invalide.", 400);
+        const { bytes, mime } = decoded;
+        const fileId = crypto
+            .createHash("sha256")
+            .update(`${buildingId}:${caller.uid}:`)
+            .update(bytes)
+            .digest("hex"),
+          key = `private/${buildingId}/${fileId}`;
+        if (state.__files?.[fileId]?.lifecycle === "deleting")
+          throw new OperationError(
+            "Fichier en cours de suppression. Réessayez dans un instant.",
+            409,
+          );
+        return { caller, buildingId, fileId, key, bytes, mime };
       });
-    }
 
-    const requestedSyndicId = String(
-      req.body?.syndicId || caller.syndicId || "",
-    ).trim();
-    const syndics = sharedStore.syndik_prod_syndics_v1 || [];
-    const s = syndics.find((cab: any) =>
-      requestedSyndicId
-        ? cab.id === requestedSyndicId
-        : cab.createdBy === caller.uid || caller.syndicId === cab.id,
-    );
-    if (
-      !s ||
-      (caller.role !== "admin" &&
-        s.createdBy !== caller.uid &&
-        caller.syndicId !== s.id)
-    ) {
-      return res.status(403).json({ error: "Cabinet non autorisé." });
-    }
-    if (s.archivedAt) {
-      return res.status(409).json({
-        error: "Cabinet archivé : impossible de téléverser un justificatif.",
-      });
-    }
-    if (caller.role !== "admin" && s.subscriptionStatus === "cancelled") {
-      return res.status(403).json({
-        error: "Votre compte est suspendu. Contactez l'administration.",
-      });
-    }
-
-    const decoded = decodeValidatedUploadBytes(req.body?.dataUrl);
-    if (!decoded) return res.status(400).json({ error: "Fichier invalide." });
-    const { bytes, mime } = decoded;
-    const fileId = crypto
-        .createHash("sha256")
-        .update(`sub:${s.id}:${caller.uid}:`)
-        .update(bytes)
-        .digest("hex"),
-      key = `private/subscription-${s.id}/${fileId}`;
-    if (sharedStore.__files?.[fileId]?.lifecycle === "deleting")
-      throw new OperationError(
-        "Fichier en cours de suppression. Réessayez dans un instant.",
-        409,
+      await savePrivateFile(
+        UPLOADS_DIR,
+        preflight.fileId,
+        preflight.key,
+        preflight.bytes,
+        preflight.mime,
       );
-    await savePrivateFile(UPLOADS_DIR, fileId, key, bytes, mime);
-    (sharedStore.__files ??= {})[fileId] = {
-      fileId,
-      key,
-      mimeType: mime,
-      scope: "subscription",
-      syndicId: s.id,
-      uploadedBy: caller.uid,
-      name: String(req.body?.name || "justificatif-virement").slice(0, 200),
-      sizeBytes: bytes.length,
-      createdAt:
-        sharedStore.__files?.[fileId]?.createdAt || new Date().toISOString(),
-      lastUploadedAt: new Date().toISOString(),
-    };
-    return res.json({
-      ok: true,
-      fileId,
-      url: `/api/uploads/${fileId}`,
-      mimeType: mime,
-      sizeBytes: bytes.length,
-    });
-  });
 
-  api.get("/api/uploads/:fileId", async (req, res) => {
-    const caller = await extractAndVerifyCaller(req, sharedStore);
-    if (!caller)
-      return res.status(401).json({ error: "Authentification requise." });
-    const id = String(req.params.fileId),
-      meta = sharedStore.__files?.[id];
-    if (!meta) return res.status(404).json({ error: "Fichier introuvable." });
-    if (meta.scope === "subscription") {
-      const ownerSyndic =
-        caller.role === "syndic" &&
-        (sharedStore.syndik_prod_syndics_v1 || []).some(
-          (s: any) =>
-            s.id === meta.syndicId &&
-            (s.createdBy === caller.uid || caller.syndicId === s.id),
+      await repository.transaction(async (state) => {
+        if (state.__files?.[preflight.fileId]?.lifecycle === "deleting")
+          throw new OperationError(
+            "Fichier en cours de suppression. Réessayez dans un instant.",
+            409,
+          );
+        (state.__files ??= {})[preflight.fileId] = {
+          fileId: preflight.fileId,
+          key: preflight.key,
+          mimeType: preflight.mime,
+          buildingId: preflight.buildingId,
+          uploadedBy: preflight.caller.uid,
+          name: String(req.body?.name || "document").slice(0, 200),
+          sizeBytes: preflight.bytes.length,
+          createdAt:
+            state.__files?.[preflight.fileId]?.createdAt ||
+            new Date().toISOString(),
+          lastUploadedAt: new Date().toISOString(),
+        };
+      });
+
+      return res.json({
+        ok: true,
+        fileId: preflight.fileId,
+        url: `/api/uploads/${preflight.fileId}`,
+        mimeType: preflight.mime,
+        sizeBytes: preflight.bytes.length,
+      });
+    }, false),
+  );
+
+  app.post(
+    "/api/subscription/upload-proof",
+    wrap(async (req, res) => {
+      const preflight = await repository.transaction(async (state) => {
+        const caller = await extractAndVerifyCaller(req, state);
+        if (!caller)
+          throw new OperationError("Authentification requise.", 401);
+        if (!["admin", "syndic"].includes(caller.role))
+          throw new OperationError("Opération réservée au syndic.", 403);
+        assertOnboarded(caller, state);
+
+        const requestedSyndicId = String(
+          req.body?.syndicId || caller.syndicId || "",
+        ).trim();
+        const syndics = state.syndik_prod_syndics_v1 || [];
+        const s = syndics.find((cab: any) =>
+          requestedSyndicId
+            ? cab.id === requestedSyndicId
+            : cab.createdBy === caller.uid || caller.syndicId === cab.id,
         );
-      if (
-        caller.role !== "admin" &&
-        meta.uploadedBy !== caller.uid &&
-        !ownerSyndic
-      ) {
-        return res.status(403).json({ error: "Fichier privé." });
-      }
-      const bytes = await readPrivateFile(UPLOADS_DIR, id, meta.key);
-      res.setHeader("Content-Type", meta.mimeType);
+        if (
+          !s ||
+          (caller.role !== "admin" &&
+            s.createdBy !== caller.uid &&
+            caller.syndicId !== s.id)
+        ) {
+          throw new OperationError("Cabinet non autorisé.", 403);
+        }
+        if (s.archivedAt) {
+          throw new OperationError(
+            "Cabinet archivé : impossible de téléverser un justificatif.",
+            409,
+          );
+        }
+        if (caller.role !== "admin" && s.subscriptionStatus === "cancelled") {
+          throw new OperationError(
+            "Votre compte est suspendu. Contactez l'administration.",
+            403,
+          );
+        }
+
+        const decoded = decodeValidatedUploadBytes(req.body?.dataUrl);
+        if (!decoded) throw new OperationError("Fichier invalide.", 400);
+        const { bytes, mime } = decoded;
+        const fileId = crypto
+            .createHash("sha256")
+            .update(`sub:${s.id}:${caller.uid}:`)
+            .update(bytes)
+            .digest("hex"),
+          key = `private/subscription-${s.id}/${fileId}`;
+        if (state.__files?.[fileId]?.lifecycle === "deleting")
+          throw new OperationError(
+            "Fichier en cours de suppression. Réessayez dans un instant.",
+            409,
+          );
+        return { caller, syndicId: s.id as string, fileId, key, bytes, mime };
+      });
+
+      await savePrivateFile(
+        UPLOADS_DIR,
+        preflight.fileId,
+        preflight.key,
+        preflight.bytes,
+        preflight.mime,
+      );
+
+      await repository.transaction(async (state) => {
+        if (state.__files?.[preflight.fileId]?.lifecycle === "deleting")
+          throw new OperationError(
+            "Fichier en cours de suppression. Réessayez dans un instant.",
+            409,
+          );
+        (state.__files ??= {})[preflight.fileId] = {
+          fileId: preflight.fileId,
+          key: preflight.key,
+          mimeType: preflight.mime,
+          scope: "subscription",
+          syndicId: preflight.syndicId,
+          uploadedBy: preflight.caller.uid,
+          name: String(req.body?.name || "justificatif-virement").slice(0, 200),
+          sizeBytes: preflight.bytes.length,
+          createdAt:
+            state.__files?.[preflight.fileId]?.createdAt ||
+            new Date().toISOString(),
+          lastUploadedAt: new Date().toISOString(),
+        };
+      });
+
+      return res.json({
+        ok: true,
+        fileId: preflight.fileId,
+        url: `/api/uploads/${preflight.fileId}`,
+        mimeType: preflight.mime,
+        sizeBytes: preflight.bytes.length,
+      });
+    }, false),
+  );
+
+  app.get(
+    "/api/uploads/:fileId",
+    wrap(async (req, res) => {
+      const id = String(req.params.fileId);
+      const authorized = await repository.transaction(async (state) => {
+        const caller = await extractAndVerifyCaller(req, state);
+        if (!caller)
+          throw new OperationError("Authentification requise.", 401);
+        assertOnboarded(caller, state);
+        const meta = state.__files?.[id];
+        if (!meta) throw new OperationError("Fichier introuvable.", 404);
+        if (meta.scope === "subscription") {
+          const ownerSyndic =
+            caller.role === "syndic" &&
+            (state.syndik_prod_syndics_v1 || []).some(
+              (s: any) =>
+                s.id === meta.syndicId &&
+                (s.createdBy === caller.uid || caller.syndicId === s.id),
+            );
+          if (
+            caller.role !== "admin" &&
+            meta.uploadedBy !== caller.uid &&
+            !ownerSyndic
+          ) {
+            throw new OperationError("Fichier privé.", 403);
+          }
+          return { key: meta.key as string, mimeType: meta.mimeType as string };
+        }
+        const b = buildingFor(caller, meta.buildingId, false),
+          publicDocument =
+            caller.role !== "provider" &&
+            (b.documents || []).some(
+              (d: any) => d.url === `/api/uploads/${id}`,
+            ),
+          marketImage =
+            caller.role !== "provider" &&
+            (state.syndik_prod_marketplace_v1 || []).some(
+              (m: any) =>
+                m.buildingId === b.id &&
+                (m.imageUrl === `/api/uploads/${id}` ||
+                  m.images?.includes(`/api/uploads/${id}`)),
+            ),
+          assigned = (state.syndik_prod_maintenance_v1 || []).some(
+            (m: any) =>
+              m.buildingId === b.id &&
+              ((caller.role === "provider" &&
+                caller.prestataireId &&
+                [m.prestataireId, m.assignedTo].includes(
+                  caller.prestataireId,
+                )) ||
+                (caller.role === "resident" &&
+                  caller.residentId &&
+                  m.residentId === caller.residentId)) &&
+              privateAttachments(m).has(`/api/uploads/${id}`),
+          ),
+          sharedInChat =
+            caller.role !== "provider" &&
+            (state.syndik_prod_chat_v1 || []).some(
+              (m: any) =>
+                m.buildingId === b.id &&
+                m.attachmentUrl === `/api/uploads/${id}` &&
+                (!m.recipientId ||
+                  [m.senderId, m.recipientId].includes(actorIdentity(caller))),
+            );
+        if (
+          !["admin", "syndic"].includes(caller.role) &&
+          meta.uploadedBy !== caller.uid &&
+          !publicDocument &&
+          !marketImage &&
+          !assigned &&
+          !sharedInChat
+        ) {
+          throw new OperationError("Fichier privé.", 403);
+        }
+        return { key: meta.key as string, mimeType: meta.mimeType as string };
+      });
+
+      const bytes = await readPrivateFile(UPLOADS_DIR, id, authorized.key);
+      res.setHeader("Content-Type", authorized.mimeType);
       res.setHeader("Content-Security-Policy", "sandbox; default-src 'none'");
       res.setHeader("X-Content-Type-Options", "nosniff");
       return res.send(bytes);
-    }
-    const b = buildingFor(caller, meta.buildingId, false),
-      publicDocument = (b.documents || []).some(
-        (d: any) => d.url === `/api/uploads/${id}`,
-      ),
-      marketImage =
-        caller.role !== "provider" &&
-        (sharedStore.syndik_prod_marketplace_v1 || []).some(
-          (m: any) =>
-            m.buildingId === b.id &&
-            (m.imageUrl === `/api/uploads/${id}` ||
-              m.images?.includes(`/api/uploads/${id}`)),
-        ),
-      assigned = (sharedStore.syndik_prod_maintenance_v1 || []).some(
-        (m: any) =>
-          m.buildingId === b.id &&
-          ((caller.role === 'provider' && caller.prestataireId &&
-            [m.prestataireId, m.assignedTo].includes(caller.prestataireId)) ||
-            (caller.role === 'resident' && caller.residentId && m.residentId === caller.residentId)) &&
-          privateAttachments(m).has(`/api/uploads/${id}`),
-      ),
-      sharedInChat = (sharedStore.syndik_prod_chat_v1 || []).some((m: any) =>
-        m.buildingId === b.id && m.attachmentUrl === `/api/uploads/${id}` &&
-        (!m.recipientId || [m.senderId, m.recipientId].includes(actorIdentity(caller))));
-    if (
-      !["admin", "syndic"].includes(caller.role) &&
-      meta.uploadedBy !== caller.uid &&
-      !publicDocument &&
-      !marketImage &&
-      !assigned &&
-      !sharedInChat
-    )
-      return res.status(403).json({ error: "Fichier privé." });
-    const bytes = await readPrivateFile(UPLOADS_DIR, id, meta.key);
-    res.setHeader("Content-Type", meta.mimeType);
-    res.setHeader("Content-Security-Policy", "sandbox; default-src 'none'");
-    res.setHeader("X-Content-Type-Options", "nosniff");
-    return res.send(bytes);
-  });
+    }, false),
+  );
 
   // Platform Subscription Billing Configuration & PayPal Checkout / Webhook Routes
   const AdminBillingConfigPaypalSchema = z.object({
@@ -2251,6 +2371,7 @@ async function startServer() {
         if (!caller) throw new OperationError("Authentification requise.", 401);
         if (!["admin", "syndic"].includes(caller.role))
           throw new OperationError("Opération réservée au syndic.", 403);
+        assertOnboarded(caller, state);
         const s = (state.syndik_prod_syndics_v1 || []).find(
           (cab: any) => cab.id === body.syndicId,
         );
@@ -2310,6 +2431,7 @@ async function startServer() {
         return {
           alreadyCaptured: false as const,
           caller,
+          hasMappedIntent: Boolean(mappedIntent),
           creds: {
             env: billing.paypalSecrets.env,
             clientId: billing.paypalSecrets.clientId,
@@ -2326,6 +2448,25 @@ async function startServer() {
           store: preflight.store,
           revision: preflight.revision,
         });
+      }
+
+      if (!preflight.hasMappedIntent) {
+        // Crash-recovery path: verify ownership via read-only GET order before capturing funds.
+        const remoteOrder = await getPayPalOrder(preflight.creds, body.orderId);
+        const ownerVerified = await repository.transaction(async (state) => {
+          const recoveredIntent = remoteOrder.customId
+            ? state.__paypalIntents?.[remoteOrder.customId]
+            : undefined;
+          return Boolean(
+            recoveredIntent && recoveredIntent.syndicId === body.syndicId,
+          );
+        });
+        if (!ownerVerified) {
+          throw new OperationError(
+            "Commande PayPal introuvable ou non autorisée pour ce cabinet.",
+            403,
+          );
+        }
       }
 
       const capture = await capturePayPalOrder(preflight.creds, body.orderId);
@@ -2725,6 +2866,7 @@ async function startServer() {
     const caller = await extractAndVerifyCaller(req, sharedStore);
     if (!caller)
       return res.status(401).json({ error: "Authentification requise." });
+    assertOnboarded(caller, sharedStore);
     return res.json(
       buildingReport(sharedStore, caller, String(req.query.buildingId || "")),
     );
@@ -2733,6 +2875,7 @@ async function startServer() {
     const caller = await extractAndVerifyCaller(req, sharedStore);
     if (!caller || !["admin", "syndic"].includes(caller.role))
       return res.status(403).json({ error: "Accès refusé." });
+    assertOnboarded(caller, sharedStore);
     const scope = getAuthorizedScopeForCaller(sharedStore, caller);
     return res.json({
       buildings: scope.authorizedSyndics.flatMap((s: any) =>
@@ -2754,6 +2897,7 @@ async function startServer() {
     const caller = await extractAndVerifyCaller(req, sharedStore);
     if (!caller || !['admin', 'syndic'].includes(caller.role))
       return res.status(403).json({ error: 'Accès réservé au gestionnaire.' });
+    assertOnboarded(caller, sharedStore);
     return res.json({
       revision: process.env.K_REVISION || 'local',
       database: { backend: process.env.SYNDIK_STATE_BACKEND || (process.env.NODE_ENV === 'production' ? 'firestore' : 'file'), id: process.env.FIRESTORE_DATABASE_ID, read: 'ok' },
@@ -2784,6 +2928,7 @@ async function startServer() {
   api.get('/api/billing-runs', async (req, res) => {
     const caller = await extractAndVerifyCaller(req, sharedStore);
     if (!caller) throw new OperationError('Authentification requise.', 401);
+    assertOnboarded(caller, sharedStore);
     const syndicId = String(req.query.syndicId || ''), buildingId = String(req.query.buildingId || '');
     authorizeBillingBuilding(sharedStore, caller, syndicId, buildingId);
     const runs = (sharedStore.__billingRuns || []).filter((r: any) => r.results.some((x: any) =>
@@ -2800,7 +2945,10 @@ async function startServer() {
     const input = await repository.transaction(async state => {
       const caller = await extractAndVerifyCaller(req, state);
       if (!caller) throw new OperationError('Authentification requise.', 401);
-      authorizeBillingBuilding(state, caller, syndicId, buildingId);
+      assertOnboarded(caller, state);
+      const b = authorizeBillingBuilding(state, caller, syndicId, buildingId);
+      b.syndicId = syndicId;
+      canWrite(caller, b);
       const run = (state.__billingRuns || []).find((r: any) => r.id === runId);
       if (!run) throw new OperationError('Exécution introuvable.', 404);
       return { caller, period: run.period };

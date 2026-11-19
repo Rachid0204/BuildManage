@@ -161,6 +161,14 @@ try {
   const persistedBeforeReads = disk();
   for (const [role, token] of tokens) {
     if (role === 'syndic') continue;
+    if (role === 'provider') {
+      await test('provider: excluded from syndik_prod_ag_v1 completely', async () => {
+        const response = await call('/api/shared-state', token);
+        assert.equal(response.status, 200);
+        assert.deepEqual(response.data.store.syndik_prod_ag_v1, []);
+      });
+      continue;
+    }
     for (const historical of legacyAssemblies) {
       await test(`${role}: ${historical.status} legacy assembly hides all owner contacts and preserves voting history`, async () => {
         const response = await call('/api/shared-state', token);
@@ -241,10 +249,10 @@ try {
     assert.equal(closed.data.result.resolutions[0].votesFor, 600);
     assert.equal(closed.data.result.resolutions[0].status, 'approved');
     assert.equal(closed.data.result.isVotingOpen, false);
-    for (const token of [tokens.get(residents[0].email)!, tokens.get('provider')!]) {
-      const response = await call('/api/shared-state', token);
-      assertPrivateSnapshotAbsent(response.data.store.syndik_prod_ag_v1.find((ag: any) => ag.id === id));
-    }
+    const residentRead = await call('/api/shared-state', tokens.get(residents[0].email)!);
+    assertPrivateSnapshotAbsent(residentRead.data.store.syndik_prod_ag_v1.find((ag: any) => ag.id === id));
+    const providerRead = await call('/api/shared-state', tokens.get('provider')!);
+    assert.deepEqual(providerRead.data.store.syndik_prod_ag_v1, []);
     const manager = await call('/api/shared-state', managerToken);
     assert.equal(manager.data.store.syndik_prod_syndics_v1[0].buildings[0].residents[1].phone, residents[1].phone);
     assert.deepEqual(disk().syndik_prod_syndics_v1[0].buildings[0].financials, financials);

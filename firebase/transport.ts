@@ -164,17 +164,23 @@ export async function syncAllSharedStateFromServer(
       });
       if (generation !== stateCacheGeneration) return null;
       if (!res.ok) {
-        if ([401, 403].includes(res.status) && typeof window !== 'undefined')
-          window.dispatchEvent(new CustomEvent('syndik-session-invalid'));
         let failureMessage = 'Chargement des données impossible.';
+        let failureCode: string | undefined;
         try {
           const failure = await readCommandResponse(res);
           if (failure.error) failureMessage = failure.error;
+          if (typeof failure.code === 'string') failureCode = failure.code;
         } catch (error) {
           if (error instanceof Error && error.message) {
             failureMessage = error.message;
           }
         }
+        if (
+          [401, 403].includes(res.status) &&
+          failureCode !== 'ONBOARDING_REQUIRED' &&
+          typeof window !== 'undefined'
+        )
+          window.dispatchEvent(new CustomEvent('syndik-session-invalid'));
         throw new SyncHttpError(failureMessage, res.status);
       }
       const contentType = res.headers.get('content-type') || '';
@@ -624,7 +630,6 @@ async function readCommandResponse(response: Response): Promise<WireResponse> {
 if (typeof window !== 'undefined') {
   for (const key of [...Object.values(STORAGE_KEYS), ...LEGACY_TEST_KEYS])
     window.localStorage.removeItem(key);
-  void syncAllSharedStateFromServer().catch(() => {});
 }
 export function ephemeralInvitation(id: string) {
   return ephemeralInvites.get(id);

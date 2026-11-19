@@ -702,13 +702,7 @@ async function createCabinet(actor: Actor, input: any) {
     email = z.string().email().parse(data.email).toLowerCase(),
     password = z.string().min(10).max(200).parse(data.password);
   check(!isAlreadyHashedPassword(password), "Mot de passe invalide.", 400);
-  check(
-    !(transactionState.syndik_prod_registered_users_v1 || []).some(
-      (u: any) => u.email === email,
-    ),
-    "Compte déjà existant.",
-    409,
-  );
+  check(emailAvailable(email), "Compte déjà existant.", 409);
   const plan = z
       .enum(["starter", "professional", "enterprise"])
       .parse(data.plan),

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { syncAllSharedStateFromServer } from '../../firebase/transport';
 import { getAuthenticatedRequestHeaders } from '../../utils/security';
 import { useI18n } from '../../hooks/useI18n';
 import type { Building } from '../../types';
@@ -27,7 +28,16 @@ export default function BillingFailures({ building }: { building: Building }) {
         body: JSON.stringify({ runId, syndicId: building.syndicId, buildingId: building.id }) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.ok) throw new Error(data.results?.find((r: any) => r.status === 'failed')?.reason || data.error || tr('La relance a échoué.', 'فشلت إعادة المحاولة.'));
-      setMessage(tr('Relance terminée. Les charges déjà émises sont conservées.', 'انتهت إعادة المحاولة. تم الاحتفاظ بالمساهمات الصادرة مسبقاً.'));
+      const outcome = data.results?.[0];
+      if (outcome?.status === 'skipped') {
+        const reason = outcome.reason === 'already_billed'
+          ? tr('Les charges de cette période étaient déjà facturées.', 'مساهمات هذه الفترة تمت فوترتها مسبقاً.')
+          : outcome.reason || tr('Aucune charge à générer pour cet immeuble.', 'لا توجد مساهمات لإصدارها لهذه العمارة.');
+        setMessage(reason);
+      } else {
+        setMessage(tr('Relance terminée. Les charges déjà émises sont conservées.', 'انتهت إعادة المحاولة. تم الاحتفاظ بالمساهمات الصادرة مسبقاً.'));
+      }
+      await syncAllSharedStateFromServer(true).catch(() => {});
     } catch (error: any) { setMessage(error.message); }
     finally { setBusy(undefined); await client.invalidateQueries(); }
   }

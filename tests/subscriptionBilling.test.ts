@@ -103,6 +103,7 @@ interface MockOrderRecord {
 }
 
 const mockOrders = new Map<string, MockOrderRecord>();
+const captureHits: string[] = [];
 const validClientPairs = new Map<string, string>([
   ['env-pp-client', 'env-pp-secret'],
   ['admin-pp-client', 'admin-pp-secret'],
@@ -159,6 +160,7 @@ const paypalMockServer = createHttpServer(async (req: IncomingMessage, res: Serv
   const captureMatch = /^\/v2\/checkout\/orders\/([^/]+)\/capture$/.exec(urlPath);
   if (req.method === 'POST' && captureMatch) {
     const orderId = decodeURIComponent(captureMatch[1]);
+    captureHits.push(orderId);
     const rec = mockOrders.get(orderId);
     if (!rec) {
       return jsonOut(404, { name: 'RESOURCE_NOT_FOUND', message: 'Order not found' });
@@ -1153,6 +1155,76 @@ try {
     assert.equal(refundReplay.status, 200, JSON.stringify(refundReplay.data));
     assert.equal(refundReplay.data.ignored, true);
     assert.equal(refundReplay.data.reason, 'payment_not_found_or_already_voided');
+  });
+
+  await test('PayPal capture preflight rejects unmapped foreign orders BEFORE calling PayPal /capture and supports crash-recovery', async () => {
+    // 1. Create a real intent/order for cab-b so we have a live persisted intent customId
+    const createdForB = await httpCall('/api/subscription/paypal/create-order', {
+      token: syndicBToken,
+      body: { syndicId: 'cab-b', plan: 'professional', months: 1 },
+    });
+    assert.equal(createdForB.status, 200, JSON.stringify(createdForB.data));
+    const origOrder = mockOrders.get(createdForB.data.orderId as string);
+    assert.ok(origOrder, 'expected mock order for cab-b');
+
+    // 2. Inject an unmapped PayPal order carrying cab-b's intent customId; cab-a tries to capture it
+    mockOrders.set('PP-FOREIGN-UNMAPPED', {
+      orderId: 'PP-FOREIGN-UNMAPPED',
+      currency: origOrder.currency,
+      value: origOrder.value,
+      customId: origOrder.customId,
+      status: 'CREATED',
+      requestPayload: origOrder.requestPayload,
+    });
+    const foreignRes = await httpCall('/api/subscription/paypal/capture-order', {
+      token: syndicAToken,
+      body: { orderId: 'PP-FOREIGN-UNMAPPED', syndicId: 'cab-a' },
+    });
+    assert.equal(foreignRes.status, 403, JSON.stringify(foreignRes.data));
+    assert.ok(
+      !captureHits.includes('PP-FOREIGN-UNMAPPED'),
+      'PayPal /capture must NEVER be invoked for an unmapped foreign order',
+    );
+
+    // 3. Inject an unmapped PayPal order with an unknown customId; cab-b tries to capture it
+    mockOrders.set('PP-UNKNOWN-INTENT', {
+      orderId: 'PP-UNKNOWN-INTENT',
+      currency: origOrder.currency,
+      value: origOrder.value,
+      customId: 'non-existent-intent-id',
+      status: 'CREATED',
+      requestPayload: origOrder.requestPayload,
+    });
+    const unknownRes = await httpCall('/api/subscription/paypal/capture-order', {
+      token: syndicBToken,
+      body: { orderId: 'PP-UNKNOWN-INTENT', syndicId: 'cab-b' },
+    });
+    assert.equal(unknownRes.status, 403, JSON.stringify(unknownRes.data));
+    assert.ok(
+      !captureHits.includes('PP-UNKNOWN-INTENT'),
+      'PayPal /capture must NEVER be invoked for an order with unknown intent',
+    );
+
+    // 4. Crash-recovery: unmapped PayPal order whose customId matches cab-b's persisted intent succeeds
+    mockOrders.set('PP-CRASH-RECOVERY-1', {
+      orderId: 'PP-CRASH-RECOVERY-1',
+      currency: origOrder.currency,
+      value: origOrder.value,
+      customId: origOrder.customId,
+      status: 'CREATED',
+      requestPayload: origOrder.requestPayload,
+    });
+    const recoveryRes = await httpCall('/api/subscription/paypal/capture-order', {
+      token: syndicBToken,
+      body: { orderId: 'PP-CRASH-RECOVERY-1', syndicId: 'cab-b' },
+    });
+    assert.equal(recoveryRes.status, 200, JSON.stringify(recoveryRes.data));
+    assert.equal(recoveryRes.data.alreadyCaptured, false);
+    assert.equal(recoveryRes.data.payment.externalOrderId, 'PP-CRASH-RECOVERY-1');
+    assert.ok(
+      captureHits.includes('PP-CRASH-RECOVERY-1'),
+      'Crash-recovery order must be captured after read-only ownership proof',
+    );
   });
 } finally {
   clearTimeout(killTimer);

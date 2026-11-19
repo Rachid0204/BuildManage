@@ -42,9 +42,16 @@ export function registerLiveUpdates(app: Express, repository: StateRepository,
       expiry = setTimeout(stop, 60000);
       if (stopped) { unsubscribe(); clearInterval(heartbeat); clearTimeout(expiry); }
     } catch (error: any) {
-      console.error(JSON.stringify({ event: 'realtime_unavailable', requestId, code: error.code || 'UNAVAILABLE' }));
-      if (!res.headersSent) res.status(error.status || 503).json({ error: 'Connexion en direct indisponible.', requestId });
-      else res.end();
+      const status = error?.status || 503;
+      const code = error?.code || 'UNAVAILABLE';
+      console.error(JSON.stringify({ event: 'realtime_unavailable', requestId, code }));
+      if (!res.headersSent) {
+        res.status(status).json({
+          error: status >= 400 && status < 500 && error?.message ? error.message : 'Connexion en direct indisponible.',
+          code,
+          requestId,
+        });
+      } else res.end();
     }
   });
 }

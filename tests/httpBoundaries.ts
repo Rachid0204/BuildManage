@@ -10,14 +10,18 @@ const root = resolve(import.meta.dirname, '..');
 const dataDir = mkdtempSync(join(tmpdir(), 'buildmanage-boundaries-'));
 const password = 'Synthetic-Test-Password-42!';
 const owner = { uid: 'owner-a', email: 'owner@audit.invalid', displayName: 'Owner', role: 'syndic' as const, syndicId: 's-a', buildingId: 'b-a' };
+const unverifiedOwner = { uid: 'owner-unv', email: 'unverified@audit.invalid', displayName: 'Unverified', role: 'syndic' as const, syndicId: 's-unv', buildingId: 'b-unv', emailVerified: false };
 const admin = { uid: 'admin-fixture', email: 'admin@audit.invalid', displayName: 'Admin', role: 'admin' as const };
 const resident = (id: string, email: string) => ({ id, name: id, email, isOwner: true, hasAccount: true, mustChangePassword: false });
-const record = (profile: typeof owner | typeof admin) => ({ uid: profile.uid, email: profile.email, passwordHash: hashPasswordSync(password, profile.email), profile });
+const record = (profile: typeof owner | typeof unverifiedOwner | typeof admin) => ({ uid: profile.uid, email: profile.email, passwordHash: hashPasswordSync(password, profile.email), profile });
 const state = {
-  syndik_prod_registered_users_v1: [record(owner), record(admin)],
+  syndik_prod_registered_users_v1: [record(owner), record(unverifiedOwner), record(admin)],
   syndik_prod_syndics_v1: [
     { id: 's-a', createdBy: owner.uid, subscriptionPlan: 'starter', subscriptionStatus: 'trialing', subscriptionExpiry: '2099-01-01', buildings: [
       { id: 'b-a', syndicId: 's-a', residents: [resident('r-a', 'a@audit.invalid')], apartments: [{ id: 'lot-a', number: '1', ownerId: 'r-a', tantiemes: 1000 }] },
+    ] },
+    { id: 's-unv', createdBy: unverifiedOwner.uid, subscriptionPlan: 'starter', subscriptionStatus: 'trialing', subscriptionExpiry: '2099-01-01', buildings: [
+      { id: 'b-unv', syndicId: 's-unv', residents: [], apartments: [] },
     ] },
     { id: 's-b', createdBy: 'owner-b', buildings: [{ id: 'b-b', residents: [resident('r-b', 'b@audit.invalid')], apartments: [] }] },
   ],
@@ -30,6 +34,7 @@ const state = {
   syndik_prod_ag_v1: [{ id: 'ag-a', syndicId: 's-a', buildingId: 'b-a', status: 'in_progress', isVotingOpen: true,
     totalTantiemes: 1000, quorumRequired: 500, attendees: [{ residentId: 'r-a', apartmentNumber: '1', status: 'present' }],
     resolutions: [{ id: 'resolution', majorityType: 'simple_24', votesFor: 0, votesAgainst: 0, votesAbstain: 0, status: 'pending', voterChoices: [] }] }],
+  syndik_prod_chat_v1: [{ id: 'msg-a', syndicId: 's-a', buildingId: 'b-a', channelId: 'general', senderId: 'r-a', senderName: 'r-a', text: 'Private copropriete chat', createdAt: '2026-01-01T00:00:00.000Z' }],
 };
 writeFileSync(join(dataDir, 'shared-state.json'), JSON.stringify(state));
 const port = await new Promise<number>((resolvePort) => { const server = createServer(); server.listen(0, '127.0.0.1', () => {
@@ -145,6 +150,66 @@ try {
   const archived = await call('/api/commands',ownerHeaders,{operation:'deleteResident',args:['r-a'],operationId:crypto.randomUUID()});
   assert.equal(archived.status,200,JSON.stringify(archived.data));
   assert.equal((await call('/api/shared-state',residentHeaders)).status,401);
+
+  // PR 1: Unverified user is gated (403 ONBOARDING_REQUIRED) on read/SSE endpoints while /api/auth/session works
+  const unverifiedHeaders = await login(unverifiedOwner.email);
+  assert.equal((await call('/api/auth/session', unverifiedHeaders)).status, 200);
+  const gatedShared = await call('/api/shared-state', unverifiedHeaders);
+  assert.equal(gatedShared.status, 403);
+  assert.equal(gatedShared.data.code, 'ONBOARDING_REQUIRED');
+  const gatedReports = await call('/api/reports?buildingId=b-unv', unverifiedHeaders);
+  assert.equal(gatedReports.status, 403);
+  assert.equal(gatedReports.data.code, 'ONBOARDING_REQUIRED');
+  const gatedArchives = await call('/api/archives', unverifiedHeaders);
+  assert.equal(gatedArchives.status, 403);
+  assert.equal(gatedArchives.data.code, 'ONBOARDING_REQUIRED');
+  const gatedDiagnostics = await call('/api/diagnostics', unverifiedHeaders);
+  assert.equal(gatedDiagnostics.status, 403);
+  assert.equal(gatedDiagnostics.data.code, 'ONBOARDING_REQUIRED');
+  const gatedBillingRuns = await call('/api/billing-runs?syndicId=s-unv&buildingId=b-unv', unverifiedHeaders);
+  assert.equal(gatedBillingRuns.status, 403);
+  assert.equal(gatedBillingRuns.data.code, 'ONBOARDING_REQUIRED');
+  const gatedEvents = await call('/api/events', unverifiedHeaders);
+  assert.equal(gatedEvents.status, 403);
+  assert.equal(gatedEvents.data.code, 'ONBOARDING_REQUIRED');
+
+  // PR 1: Provider cannot see building documents, AG, or chat in shared-state, and cannot download building docs via /api/uploads/:id
+  const docUpload = await call('/api/uploads', ownerHeaders, {
+    name: 'reglement.pdf', buildingId: 'b-a',
+    dataUrl: 'data:application/pdf;base64,' + Buffer.from('%PDF-1.4\nBUILDING-REGLEMENT').toString('base64'),
+  });
+  assert.equal(docUpload.status, 200);
+  const attachDoc = await call('/api/commands', ownerHeaders, {
+    operation: 'attachDocument',
+    args: ['b-a', { fileId: docUpload.data.fileId }],
+    operationId: crypto.randomUUID(),
+  });
+  assert.equal(attachDoc.status, 200, JSON.stringify(attachDoc.data));
+  const provCreate = await call('/api/commands', ownerHeaders, {
+    operation: 'savePrestataire',
+    args: [{ id: 'p-lockdown', buildingId: 'b-a', name: 'Plombier Lock', contactPerson: 'Omar', category: 'plumbing', phone: '0600112233', email: 'provlock@audit.invalid', active: true }, true],
+    operationId: crypto.randomUUID(),
+  });
+  assert.equal(provCreate.status, 200, JSON.stringify(provCreate.data));
+  const provLogin = await call('/api/auth/login', {}, { identifier: 'provlock@audit.invalid', password: provCreate.data.result.generatedPassword });
+  assert.equal(provLogin.status, 200, JSON.stringify(provLogin.data));
+  const provHeadersInit = { Authorization: `Bearer ${provLogin.data.token}` };
+  // Provider has mustChangePassword=true initially -> gated on shared-state
+  assert.equal((await call('/api/shared-state', provHeadersInit)).status, 403);
+  // Complete password change with leading/trailing spaces (PR 1: no asymmetric trim)
+  const spacePassword = '  ProviderPass-42!  ';
+  const changedPass = await call('/api/auth/change-password', provHeadersInit, { newPassword: spacePassword });
+  assert.equal(changedPass.status, 200, JSON.stringify(changedPass.data));
+  const provRelogin = await call('/api/auth/login', {}, { identifier: 'provlock@audit.invalid', password: spacePassword });
+  assert.equal(provRelogin.status, 200, JSON.stringify(provRelogin.data));
+  const provHeaders = { Authorization: `Bearer ${provRelogin.data.token}` };
+  const provState = await call('/api/shared-state', provHeaders);
+  assert.equal(provState.status, 200, JSON.stringify(provState.data));
+  assert.deepEqual(provState.data.store.syndik_prod_syndics_v1[0].buildings[0].documents, []);
+  assert.deepEqual(provState.data.store.syndik_prod_ag_v1, []);
+  assert.deepEqual(provState.data.store.syndik_prod_chat_v1, []);
+  assert.equal((await call(docUpload.data.url, provHeaders)).status, 403);
+
   console.log('PASS: registration isolation, token verification, roles, scoped voting, proof review and private files.');
   // Exhaust admission, then make the platform file unreadable: the real route
   // must still return 429, proving it never enters the platform transaction.

@@ -160,7 +160,7 @@ function saveResidentCredentialAccount(resident: Resident, rawPassword: string):
         mustChangePassword: resident.mustChangePassword ?? true,
         invitationExpiresAt: resident.invitationExpiresAt,
     };
-    const existingIdx = accounts.findIndex((a) => a.residentId === resident.id || a.email.toLowerCase() === emailNorm);
+    const existingIdx = accounts.findIndex((a) => a.residentId === resident.id);
     if (existingIdx >= 0) {
         accounts[existingIdx] = record;
     }
@@ -199,9 +199,10 @@ function saveResidentCredentialAccount(resident: Resident, rawPassword: string):
             cin: resident.cin?.trim() || undefined,
             phone: resident.phone?.trim() || undefined,
             isOwner: resident.isOwner,
+            emailVerified: true,
             mustChangePassword: resident.mustChangePassword ?? true,
         };
-        const regIdx = regUsers.findIndex((u) => u?.email?.toLowerCase() === emailNorm ||
+        const regIdx = regUsers.findIndex((u) =>
             u?.uid === canonicalUid ||
             u?.uid === `res-${resident.id}` ||
             u?.profile?.residentId === resident.id);
@@ -573,8 +574,7 @@ function savePrestataireCredentialAccount(prestataire: Prestataire, rawPassword:
         mustChangePassword: prestataire.mustChangePassword ?? true,
         invitationExpiresAt: prestataire.invitationExpiresAt,
     };
-    const existingIdx = accounts.findIndex((a) => a.prestataireId === prestataire.id ||
-        (prestataire.email && a.email.toLowerCase() === emailNorm));
+    const existingIdx = accounts.findIndex((a) => a.prestataireId === prestataire.id);
     if (existingIdx >= 0) {
         accounts[existingIdx] = record;
     }
@@ -598,9 +598,10 @@ function savePrestataireCredentialAccount(prestataire: Prestataire, rawPassword:
             prestataireCategory: prestataire.category,
             providerCategory: prestataire.category,
             phone: prestataire.phone?.trim() || undefined,
+            emailVerified: true,
             mustChangePassword: prestataire.mustChangePassword ?? true,
         };
-        const regIdx = regUsers.findIndex((u) => u?.email?.toLowerCase() === emailNorm ||
+        const regIdx = regUsers.findIndex((u) =>
             u?.uid === canonicalUid ||
             u?.uid === `prov-${prestataire.id}` ||
             u?.profile?.prestataireId === prestataire.id);
