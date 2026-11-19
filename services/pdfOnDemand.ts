@@ -20,6 +20,7 @@ export const exportPrestataireCredentialsPDF = deferred('exportPrestataireCreden
 export const exportResidentCredentialsPDF = deferred('exportResidentCredentialsPDF');
 export const exportResidentsCSV = deferred('exportResidentsCSV');
 export const exportResidentsPDF = deferred('exportResidentsPDF');
+export const exportResidentStatementPDF = deferred('exportResidentStatementPDF');
 export const generateInvoicePDF = deferred('generateInvoicePDF');
 export const generateMiseEnDemeurePDF = deferred('generateMiseEnDemeurePDF');
 export const generatePvAgPDF = deferred('generatePvAgPDF');

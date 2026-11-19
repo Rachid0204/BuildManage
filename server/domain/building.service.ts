@@ -443,6 +443,123 @@ type CheckFn = (
   status?: number,
 ) => asserts condition;
 
+function shiftUtcMonths(baseMs: number, deltaMonths: number): Date {
+  const result = new Date(baseMs);
+  const originalDay = result.getUTCDate();
+  result.setUTCDate(1);
+  result.setUTCMonth(result.getUTCMonth() + deltaMonths);
+  result.setUTCDate(
+    Math.min(
+      originalDay,
+      new Date(
+        Date.UTC(result.getUTCFullYear(), result.getUTCMonth() + 1, 0),
+      ).getUTCDate(),
+    ),
+  );
+  return result;
+}
+
+export function voidPlatformSubscriptionPayment(
+  state: State,
+  actor: Actor,
+  paymentId: string,
+  reason: string,
+  auditOperation: string = 'voidSubscriptionPayment',
+): SubscriptionPayment {
+  const payments: SubscriptionPayment[] =
+    state.syndik_prod_subscription_payments_v1 || [];
+  const payment = payments.find((p) => p.id === paymentId);
+  if (!payment) throw new OperationError('Paiement introuvable.', 404);
+  if (payment.voidedAt) throw new OperationError('Paiement déjà annulé.', 409);
+
+  payment.voidedAt = new Date().toISOString();
+  payment.voidReason = reason;
+  payment.voidedBy = actor.uid;
+
+  const cabinets = state.syndik_prod_syndics_v1 || [];
+  const cabinet = cabinets.find((c: Syndic) => c.id === payment.syndicId);
+  if (cabinet && cabinet.subscriptionStatus !== 'cancelled') {
+    const cabinetPayments = payments
+      .filter((p) => p.syndicId === cabinet.id)
+      .sort((a, b) =>
+        String(a.createdAt || '').localeCompare(String(b.createdAt || '')),
+      );
+    const activePayments = cabinetPayments.filter((p) => !p.voidedAt);
+    const firstWithBaseline = cabinetPayments.find(
+      (p) => p.previousSubscriptionExpiry !== undefined,
+    );
+
+    if (activePayments.length === 0) {
+      if (firstWithBaseline?.previousSubscriptionExpiry) {
+        const restoredMs = Date.parse(
+          firstWithBaseline.previousSubscriptionExpiry,
+        );
+        cabinet.subscriptionExpiry =
+          firstWithBaseline.previousSubscriptionExpiry;
+        if (firstWithBaseline.previousSubscriptionPlan) {
+          cabinet.subscriptionPlan = firstWithBaseline.previousSubscriptionPlan;
+        }
+        cabinet.subscriptionStatus =
+          Number.isFinite(restoredMs) && restoredMs > Date.now()
+            ? firstWithBaseline.previousSubscriptionStatus || 'trialing'
+            : 'expired';
+      } else {
+        const currentMs = Date.parse(cabinet.subscriptionExpiry || '');
+        const rolledBack = Number.isFinite(currentMs)
+          ? shiftUtcMonths(currentMs, -Math.max(1, Number(payment.months) || 1))
+          : new Date(0);
+        cabinet.subscriptionExpiry = rolledBack.toISOString();
+        cabinet.subscriptionStatus =
+          rolledBack.getTime() > Date.now() ? 'active' : 'expired';
+      }
+    } else if (firstWithBaseline?.previousSubscriptionExpiry) {
+      let cursorMs = Date.parse(firstWithBaseline.previousSubscriptionExpiry);
+      if (!Number.isFinite(cursorMs)) cursorMs = 0;
+      for (const active of activePayments) {
+        const createdMs = Date.parse(active.createdAt || '') || 0;
+        const baseMs = Math.max(createdMs, cursorMs);
+        cursorMs = shiftUtcMonths(baseMs, active.months).getTime();
+      }
+      const latest = activePayments[activePayments.length - 1];
+      cabinet.subscriptionPlan = latest.plan;
+      cabinet.subscriptionExpiry = new Date(cursorMs).toISOString();
+      cabinet.subscriptionStatus =
+        cursorMs > Date.now() ? 'active' : 'expired';
+    } else {
+      const currentMs = Date.parse(cabinet.subscriptionExpiry || '');
+      const rolledBack = Number.isFinite(currentMs)
+        ? shiftUtcMonths(currentMs, -Math.max(1, Number(payment.months) || 1))
+        : new Date(0);
+      const latest = activePayments[activePayments.length - 1];
+      cabinet.subscriptionPlan = latest.plan;
+      cabinet.subscriptionExpiry = rolledBack.toISOString();
+      cabinet.subscriptionStatus =
+        rolledBack.getTime() > Date.now() ? 'active' : 'expired';
+    }
+  }
+
+  (state.syndik_prod_audit_v1 ??= []).push({
+    id: randomUUID(),
+    actorUid: actor.uid,
+    actorRole: actor.role,
+    syndicId: payment.syndicId,
+    operation: auditOperation,
+    detail: {
+      paymentId: payment.id,
+      syndicId: payment.syndicId,
+      reason,
+      ...(cabinet
+        ? {
+            updatedSubscriptionExpiry: cabinet.subscriptionExpiry,
+            updatedSubscriptionStatus: cabinet.subscriptionStatus,
+          }
+        : {}),
+    },
+    createdAt: new Date().toISOString(),
+  });
+  return payment;
+}
+
 export function activatePlatformSubscription(
   state: State,
   actor: Actor,
@@ -513,19 +630,13 @@ export function activatePlatformSubscription(
     409,
   );
 
-  const expiry = new Date(
+  const previousSubscriptionPlan = s.subscriptionPlan;
+  const previousSubscriptionStatus = s.subscriptionStatus;
+  const previousSubscriptionExpiry = s.subscriptionExpiry;
+
+  const expiry = shiftUtcMonths(
     Math.max(Date.now(), Date.parse(s.subscriptionExpiry) || 0),
-  );
-  const originalDay = expiry.getUTCDate();
-  expiry.setUTCDate(1);
-  expiry.setUTCMonth(expiry.getUTCMonth() + months);
-  expiry.setUTCDate(
-    Math.min(
-      originalDay,
-      new Date(
-        Date.UTC(expiry.getUTCFullYear(), expiry.getUTCMonth() + 1, 0),
-      ).getUTCDate(),
-    ),
+    months,
   );
   Object.assign(s, {
     subscriptionPlan: plan,
@@ -557,6 +668,9 @@ export function activatePlatformSubscription(
     createdAt: new Date().toISOString(),
     subscriptionExpiry: s.subscriptionExpiry,
     subscriptionStatus: s.subscriptionStatus,
+    ...(previousSubscriptionPlan ? { previousSubscriptionPlan } : {}),
+    ...(previousSubscriptionStatus ? { previousSubscriptionStatus } : {}),
+    ...(previousSubscriptionExpiry ? { previousSubscriptionExpiry } : {}),
   };
   payments.push(payment);
   (state.syndik_prod_audit_v1 ??= []).push({
@@ -889,19 +1003,13 @@ function voidSubscriptionPayment(actor: Actor, paymentId: any, reasonArg: any) {
   const id = str(paymentId);
   const reason = str(reasonArg, 1000).trim();
   check(reason.length >= 3, "Indiquez un motif d'annulation (min. 3 caractères).", 400);
-  const payments = transactionState.syndik_prod_subscription_payments_v1 || [];
-  const payment = payments.find((p: any) => p.id === id);
-  check(payment, "Paiement introuvable.", 404);
-  check(!payment.voidedAt, "Paiement déjà annulé.", 409);
-  payment.voidedAt = new Date().toISOString();
-  payment.voidReason = reason;
-  payment.voidedBy = actor.uid;
-  appendAudit(transactionState, actor, "voidSubscriptionPayment", undefined, {
-    paymentId: payment.id,
-    syndicId: payment.syndicId,
+  return voidPlatformSubscriptionPayment(
+    transactionState,
+    actor,
+    id,
     reason,
-  });
-  return payment;
+    "voidSubscriptionPayment",
+  );
 }
 function restoreArchived(actor: Actor,args:any[]) { const operation='restoreArchived';
 

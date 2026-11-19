@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createServer } from 'node:net';
 import { allocateBudgetInCentimes, centimes } from '../shared/domain/money';
+import { buildAnnualRepartitionSummary } from '../shared/annualRepartition';
 import { createCommandService } from '../server/domain/command.service';
 import { hashPasswordSync } from '../utils/security';
 
@@ -343,3 +344,314 @@ test('public scheduler endpoint commits successful buildings when one period is 
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('overdue status is preserved across partial payments, opening arrears, and reversals; reversal requires opening balances and logs negative balance', async () => {
+  const state: any = fixture();
+  const pastDue = '2025-01-10';
+  state.syndik_prod_charges_v1[0].dueDate = pastDue;
+  state.syndik_prod_charges_v1[0].status = 'overdue';
+  const commands = service(state);
+
+  // Partial payment via createQuittance on overdue charge preserves 'overdue' status
+  const q1 = await commands.runOperation(actorA, 'createQuittance', [{
+    chargeId: 'charge-a',
+    buildingId: 'building-a',
+    buildingName: 'Building building-a',
+    syndicId: 'cab-a',
+    syndicName: 'Cabinet cab-a',
+    apartmentId: 'lot-building-a-1',
+    apartmentNumber: '1',
+    residentId: 'resident-a',
+    residentName: 'Resident building-a',
+    amount: 40,
+    chargesCourantesAmount: 40,
+    reserveFundAmount: 0,
+    paymentMethod: 'virement',
+    paymentDate: today,
+    periodCovered: month,
+    paymentId: 'pay-partial-1',
+  }], 'inv-partial-1');
+  assert.equal(state.syndik_prod_charges_v1[0].status, 'overdue');
+  assert.equal(state.syndik_prod_charges_v1[0].paidAmount, 40);
+
+  // Second partial payment via createQuittance completes charge -> 'paid'
+  await commands.runOperation(actorA, 'createQuittance', [{
+    chargeId: 'charge-a',
+    buildingId: 'building-a',
+    buildingName: 'Building building-a',
+    syndicId: 'cab-a',
+    syndicName: 'Cabinet cab-a',
+    apartmentId: 'lot-building-a-1',
+    apartmentNumber: '1',
+    residentId: 'resident-a',
+    residentName: 'Resident building-a',
+    amount: 60,
+    chargesCourantesAmount: 60,
+    reserveFundAmount: 0,
+    paymentMethod: 'virement',
+    paymentDate: today,
+    periodCovered: month,
+    paymentId: 'pay-partial-2',
+  }], 'inv-partial-2');
+  assert.equal(state.syndik_prod_charges_v1[0].status, 'paid');
+  assert.equal(state.syndik_prod_charges_v1[0].paidAmount, 100);
+
+  // Spend 80 MAD so reversing 60 MAD pushes operating balance negative (-40 MAD: +40 +60 -80 -60)
+  await commands.runOperation(actorA, 'addTransaction', ['building-a', {
+    type: 'expense',
+    fundType: 'courant',
+    category: 'maintenance',
+    description: 'Emergency repair',
+    amount: 80,
+    date: today,
+    paymentMethod: 'virement',
+    invoiceNumber: 'F-80',
+    thirdPartyName: 'Prestataire Test',
+  }], 'inv-expense-80');
+
+  // Reversing second partial payment restores 'overdue' status, preserves paidAt (since 40 MAD remains paid), and audits resultingNegativeBalance
+  await commands.runOperation(actorA, 'reversePayment', ['building-a', 'pay-partial-2', 'Chèque rejeté'], 'inv-rev-2');
+  assert.equal(state.syndik_prod_charges_v1[0].status, 'overdue');
+  assert.equal(state.syndik_prod_charges_v1[0].paidAmount, 40);
+  assert.ok(state.syndik_prod_charges_v1[0].paidAt, 'paidAt should be preserved when remaining paidAmount > 0');
+  assert.equal(state.syndik_prod_syndics_v1[0].buildings[0].financials.balance, -40);
+  const revAudit = state.syndik_prod_audit_v1.find((a: any) => a.operation === 'reversePayment');
+  assert.equal(revAudit?.detail?.resultingNegativeBalance, true);
+  assert.ok(q1.id);
+
+  // importOpeningArrears for a past period creates charge directly as 'overdue'
+  await commands.runOperation(actorA, 'importOpeningArrears', ['building-a', [{
+    apartmentId: 'lot-building-a-2',
+    residentId: 'resident-a',
+    period: '2025-02',
+    amount: 250,
+    reason: 'Reprise historique 2025',
+  }]], 'inv-opening-arrear');
+  const arrear = state.syndik_prod_charges_v1.find((c: any) => c.id === 'opening:building-a:lot-building-a-2:2025-02');
+  assert.equal(arrear?.status, 'overdue');
+
+  // Reversal rejected if openingBalancesRecordedAt is missing
+  const origOpening = state.syndik_prod_syndics_v1[0].buildings[0].financials.openingBalancesRecordedAt;
+  delete state.syndik_prod_syndics_v1[0].buildings[0].financials.openingBalancesRecordedAt;
+  await assert.rejects(
+    commands.runOperation(actorA, 'reversePayment', ['building-a', 'pay-partial-1', 'Missing opening check'], 'inv-rev-no-opening'),
+    /soldes initiaux|ouverture/i
+  );
+  state.syndik_prod_syndics_v1[0].buildings[0].financials.openingBalancesRecordedAt = origOpening;
+});
+
+test('submitPaymentProof rejects overlapping pending proofs exceeding remaining charge balance', async () => {
+  const state: any = fixture();
+  state.__files = {
+    'proof-1.pdf': { uploadedBy: 'resident-a', buildingId: 'building-a' },
+    'proof-2.pdf': { uploadedBy: 'resident-a', buildingId: 'building-a' },
+  };
+  const commands = service(state);
+  const residentActor = {
+    uid: 'resident-a',
+    role: 'resident',
+    syndicId: 'cab-a',
+    buildingId: 'building-a',
+    residentId: 'resident-a',
+  } as const;
+  state.syndik_prod_charges_v1[0].amount = 100;
+  state.syndik_prod_charges_v1[0].paidAmount = 0;
+
+  await commands.runOperation(residentActor, 'submitPaymentProof', [{
+    chargeId: 'charge-a',
+    buildingId: 'building-a',
+    syndicId: 'cab-a',
+    apartmentId: 'lot-building-a-1',
+    apartmentNumber: '1',
+    residentId: 'resident-a',
+    residentName: 'Resident building-a',
+    amount: 70,
+    paymentMethod: 'virement',
+    bankName: 'CIH Bank',
+    referenceNumber: 'REF-PEND-1',
+    bankTransactionDate: today,
+    receiptUrl: '/api/uploads/proof-1.pdf',
+  }], 'inv-proof-1');
+
+  await assert.rejects(
+    commands.runOperation(residentActor, 'submitPaymentProof', [{
+      chargeId: 'charge-a',
+      buildingId: 'building-a',
+      syndicId: 'cab-a',
+      apartmentId: 'lot-building-a-1',
+      apartmentNumber: '1',
+      residentId: 'resident-a',
+      residentName: 'Resident building-a',
+      amount: 40,
+      paymentMethod: 'virement',
+      bankName: 'CIH Bank',
+      referenceNumber: 'REF-PEND-2',
+      bankTransactionDate: today,
+      receiptUrl: '/api/uploads/proof-2.pdf',
+    }], 'inv-proof-2'),
+    /justificatif|attente|solde|montant/i
+  );
+});
+
+test('generateMonthlyCharges parses Arabic and English months and cleanly rejects invalid free-text periods', async () => {
+  const state: any = fixture();
+  state.syndik_prod_charges_v1 = [];
+  const commands = service(state);
+
+  const arabicGenerated = await commands.runOperation(
+    actorA,
+    'generateMonthlyCharges',
+    ['building-a', 'cab-a', 'مارس 2027', {}],
+    'inv-arabic-period'
+  );
+  assert.equal(arabicGenerated.length, 2);
+  assert.equal(arabicGenerated[0].periodKey, '2027-03');
+  assert.equal(arabicGenerated[0].dueDate, '2027-03-05');
+
+  await assert.rejects(
+    commands.runOperation(
+      actorA,
+      'generateMonthlyCharges',
+      ['building-a', 'cab-a', 'Trimestre spécial été', {}],
+      'inv-invalid-period'
+    ),
+    /période|AAAA-MM|Date comptable invalide/i
+  );
+});
+
+test('generateChargesFromAGResolution enforces owner-only liability for capital works', async () => {
+  const state: any = fixture();
+  const b = state.syndik_prod_syndics_v1[0].buildings[0];
+  b.residents.push({
+    id: 'tenant-only',
+    syndicId: 'cab-a',
+    buildingId: 'building-a',
+    apartmentId: 'lot-building-a-2',
+    name: 'Locataire Lot 2',
+    email: 'tenant@a4.invalid',
+    phone: '0611111111',
+    isOwner: false,
+    hasAccount: false,
+  });
+  // Case 1: tenant-only lot (no ownerId) must be rejected so tenant is never billed for capital works
+  b.apartments[1].ownerId = null;
+  b.apartments[1].tenantId = 'tenant-only';
+  state.syndik_prod_ag_v1 = [{
+    id: 'ag-works-1',
+    syndicId: 'cab-a',
+    buildingId: 'building-a',
+    title: 'AG Travaux Étanchéité',
+    date: today,
+    status: 'closed',
+    resolutions: [{
+      id: 'res-works-1',
+      number: 1,
+      title: 'Réfection étanchéité terrasse',
+      description: 'Budget exceptionnel 2000 MAD',
+      majorityRequired: 'three_quarters',
+      status: 'approved',
+      generatesCharges: true,
+      budgetAmount: 2000,
+    }],
+  }];
+  const commands = service(state);
+  await assert.rejects(
+    commands.runOperation(
+      actorA,
+      'generateChargesFromAGResolution',
+      ['ag-works-1', 'res-works-1'],
+      'inv-ag-tenant-only-reject'
+    ),
+    /copropriétaire|payeur|assigné/i
+  );
+
+  // Case 2: lot with both owner and tenant bills the owner, never the tenant
+  b.apartments[1].ownerId = 'resident-a';
+  const result = await commands.runOperation(
+    actorA,
+    'generateChargesFromAGResolution',
+    ['ag-works-1', 'res-works-1'],
+    'inv-ag-owner-only'
+  );
+  assert.equal(result.createdCharges.length, 2);
+  assert.ok(result.createdCharges.every((c: any) => c.residentId === 'resident-a'), 'all capital-works charges must be billed to the owner, never the tenant');
+});
+
+test('reconcileBankStatementCSV supports invoice-number matching, multi-charge combined transfers, and structured unmatched rows', async () => {
+  const state: any = fixture();
+  state.syndik_prod_charges_v1 = [
+    {
+      id: 'c-lot1-jan', syndicId: 'cab-a', buildingId: 'building-a', apartmentId: 'lot-building-a-1',
+      residentId: 'resident-a', period: '2026-01', periodKey: '2026-01', amount: 150, paidAmount: 0, status: 'overdue', dueDate: '2026-01-10',
+    },
+    {
+      id: 'c-lot1-feb', syndicId: 'cab-a', buildingId: 'building-a', apartmentId: 'lot-building-a-1',
+      residentId: 'resident-a', period: '2026-02', periodKey: '2026-02', amount: 150, paidAmount: 0, status: 'overdue', dueDate: '2026-02-10',
+    },
+    {
+      id: 'c-lot2-mar', syndicId: 'cab-a', buildingId: 'building-a', apartmentId: 'lot-building-a-2',
+      residentId: 'resident-a', period: '2026-03', periodKey: '2026-03', amount: 220, paidAmount: 0, status: 'unpaid', dueDate: today,
+    },
+  ];
+  state.syndik_prod_invoices_v1 = [
+    {
+      id: 'inv-fac-99',
+      syndicId: 'cab-a',
+      buildingId: 'building-a',
+      residentId: 'resident-a',
+      invoiceNumber: 'FAC-2026-0099',
+      totalAmount: 220,
+      paidAmount: 0,
+      status: 'unpaid',
+      createdAt: today + 'T08:00:00.000Z',
+      dueDate: today,
+      chargeIds: ['c-lot2-mar'],
+    },
+  ];
+  const commands = service(state);
+  const res = await commands.runOperation(actorA, 'reconcileBankStatementCSV', ['building-a', [
+    { date: today, label: 'VIR FAC-2026-0099', amount: 220, reference: 'CSV-INV-99' },
+    { date: today, label: 'VIR Lot 1 Resident building-a (2 mois)', amount: 300, reference: 'CSV-MULTI-2M' },
+    { date: today, label: 'VIR inconnu sans correspondance', amount: 777, reference: 'CSV-UNKNOWN' },
+    { date: today, label: 'Frais tenue compte', amount: -50, reference: 'CSV-DEBIT' },
+  ], {}], 'inv-csv-enhanced');
+
+  assert.equal(res.matchedCount, 2);
+  assert.equal(res.totalReconciledMad, 520);
+  assert.equal(state.syndik_prod_invoices_v1[0].status, 'paid');
+  assert.equal(state.syndik_prod_charges_v1.find((c: any) => c.id === 'c-lot1-jan').status, 'paid');
+  assert.equal(state.syndik_prod_charges_v1.find((c: any) => c.id === 'c-lot1-feb').status, 'paid');
+  assert.equal(state.syndik_prod_charges_v1.find((c: any) => c.id === 'c-lot2-mar').status, 'paid');
+  assert.equal(res.unmatchedRows.length, 2);
+  assert.equal(res.unmatchedRows.find((r: any) => r.reference === 'CSV-UNKNOWN')?.reason, 'no_match');
+  assert.equal(res.unmatchedRows.find((r: any) => r.reference === 'CSV-DEBIT')?.reason, 'non_positive');
+});
+
+test('buildAnnualRepartitionSummary isolates fiscalYear, uses integer centimes, includes archived lots with activity, and respects totalTantiemes', () => {
+  const b: any = building('b-rep', 'cab-a', 'res-1', true);
+  b.totalTantiemes = 10000;
+  b.apartments[0].tantiemes = 6000;
+  b.apartments[1].tantiemes = 4000;
+  b.apartments[1].archivedAt = '2026-06-01T00:00:00.000Z';
+
+  const charges: any[] = [
+    { id: 'c2026-1', buildingId: 'b-rep', apartmentId: 'lot-b-rep-1', residentId: 'res-1', period: '2026-01', periodKey: '2026-01', dueDate: '2026-01-10', amount: 100.1, paidAmount: 50.05, status: 'overdue' },
+    { id: 'c2026-2', buildingId: 'b-rep', apartmentId: 'lot-b-rep-2', residentId: 'res-1', period: '2026-02', periodKey: '2026-02', dueDate: '2026-02-10', amount: 200.2, paidAmount: 200.2, status: 'paid' },
+    { id: 'c2025-old', buildingId: 'b-rep', apartmentId: 'lot-b-rep-1', residentId: 'res-1', period: '2025-12', periodKey: '2025-12', dueDate: '2025-12-10', amount: 999, paidAmount: 0, status: 'overdue' },
+  ];
+  const quittances: any[] = [
+    { id: 'q2026', buildingId: 'b-rep', apartmentId: 'lot-b-rep-1', residentId: 'res-1', amount: 50.05, paymentDate: '2026-01-15', createdAt: '2026-01-15', periodCovered: '2026-01', chargesCourantesAmount: 45.05, reserveFundAmount: 5 },
+    { id: 'q2026-void', buildingId: 'b-rep', apartmentId: 'lot-b-rep-1', residentId: 'res-1', amount: 100, paymentDate: '2026-01-16', createdAt: '2026-01-16', periodCovered: '2026-01', voidedAt: '2026-01-20', chargesCourantesAmount: 90, reserveFundAmount: 10 },
+    { id: 'q2025', buildingId: 'b-rep', apartmentId: 'lot-b-rep-1', residentId: 'res-1', amount: 300, paymentDate: '2025-11-15', createdAt: '2025-11-15', periodCovered: '2025-11', chargesCourantesAmount: 270, reserveFundAmount: 30 },
+  ];
+
+  const summary = buildAnnualRepartitionSummary(b, charges, quittances, 2026);
+  assert.equal(summary.totalTantiemes, 10000);
+  assert.equal(summary.rows.length, 2, 'archived lot with 2026 activity must remain in 2026 closing report');
+  assert.equal(summary.totalCalledMad, 300.3);
+  assert.equal(summary.totalPaidMad, 250.25);
+  assert.equal(summary.totalRemainingMad, 50.05);
+  assert.equal(summary.totalReserveMad, 5);
+  assert.equal(summary.receiptCount, 1);
+});
+

@@ -87,7 +87,10 @@ import {
   sendFirebaseVerification,
   usesFirebaseAuth,
 } from './server/firebaseIdentity';
-import { activatePlatformSubscription } from './server/domain/building.service';
+import {
+  activatePlatformSubscription,
+  voidPlatformSubscriptionPayment,
+} from './server/domain/building.service';
 import {
   capturePayPalOrder,
   computeSubscriptionPricing,
@@ -2489,11 +2492,62 @@ async function startServer() {
       }
 
       const eventType = String(req.body?.event_type || "");
+      const resource = (req.body?.resource || {}) as Record<string, any>;
+
+      if (
+        eventType === "PAYMENT.CAPTURE.REFUNDED" ||
+        eventType === "PAYMENT.CAPTURE.REVERSED"
+      ) {
+        const refundId = String(resource.id || "").trim();
+        const relatedOrderId = String(
+          resource.supplementary_data?.related_ids?.order_id || "",
+        ).trim();
+        const captureLink = Array.isArray(resource.links)
+          ? resource.links.find((l: any) => l?.rel === "up")?.href || ""
+          : "";
+        const linkedCaptureId =
+          String(
+            resource.supplementary_data?.related_ids?.capture_id || "",
+          ).trim() ||
+          (/\/captures\/([^/?]+)/.exec(String(captureLink))?.[1] || "").trim() ||
+          (eventType === "PAYMENT.CAPTURE.REVERSED" ? refundId : "");
+        const customId = String(resource.custom_id || "").trim();
+
+        const outcome = await repository.transaction(async (state) => {
+          const payments =
+            state.syndik_prod_subscription_payments_v1 || [];
+          const intentPaymentId = customId
+            ? state.__paypalIntents?.[customId]?.paymentId
+            : undefined;
+          const match = payments.find(
+            (p: any) =>
+              !p.voidedAt &&
+              ((linkedCaptureId && p.externalCaptureId === linkedCaptureId) ||
+                (relatedOrderId && p.externalOrderId === relatedOrderId) ||
+                (intentPaymentId && p.id === intentPaymentId)),
+          );
+          if (!match) {
+            return { ignored: true, reason: "payment_not_found_or_already_voided" };
+          }
+          const reason =
+            eventType === "PAYMENT.CAPTURE.REFUNDED"
+              ? `Remboursement PayPal (${refundId || linkedCaptureId || relatedOrderId})`
+              : `Annulation / contestation PayPal (${refundId || linkedCaptureId || relatedOrderId})`;
+          voidPlatformSubscriptionPayment(
+            state,
+            { uid: "paypal:webhook", role: "admin" },
+            match.id,
+            reason,
+            "paypalWebhookRefundSubscription",
+          );
+          return { ignored: false, voidedPaymentId: match.id };
+        });
+        return res.json({ ok: true, eventType, ...outcome });
+      }
+
       if (eventType !== "PAYMENT.CAPTURE.COMPLETED") {
         return res.json({ ok: true, ignored: true, eventType });
       }
-
-      const resource = (req.body?.resource || {}) as Record<string, any>;
       const captureStatus = String(resource.status || "");
       const captureId = String(resource.id || "").trim();
       const relatedOrderId = String(

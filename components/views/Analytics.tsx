@@ -22,6 +22,7 @@ import Card from '../common/Card';
 import { useI18n } from '../../hooks/useI18n';
 import { DashboardSkeleton } from '../common/Skeleton';
 import { isIncomeTransaction } from '../../utils/security';
+import { isChargeEffectivelyOverdue } from '../../shared/moroccoDate';
 
 const currencyFormatter = new Intl.NumberFormat('fr-MA', {
   style: 'currency',
@@ -62,7 +63,7 @@ const Analytics: React.FC<{ building: Building }> = ({ building }) => {
 
     charges.forEach((ch) => {
       if (ch.status === 'paid') paid++;
-      else if (ch.status === 'overdue') overdue++;
+      else if (isChargeEffectivelyOverdue(ch)) overdue++;
       else unpaid++;
     });
 
@@ -119,22 +120,37 @@ const Analytics: React.FC<{ building: Building }> = ({ building }) => {
         const bucket = byKey.get(key);
         if (bucket && (req.cost ?? 0) > 0) {
           bucket.cost += req.cost ?? 0;
-          if (req.invoiceRef) recordedTicketCosts.add(`${key}:${req.invoiceRef}`);
+          if (req.invoiceRef) {
+            recordedTicketCosts.add(`${key}:${req.invoiceRef.trim().toUpperCase()}`);
+          }
         }
       }
     });
+
+    const reversedExpenseIds = new Set(
+      ledgerTransactions
+        .map((tx: any) => tx.reversalOf)
+        .filter((id: unknown): id is string => typeof id === 'string' && id.length > 0)
+    );
 
     ledgerTransactions
       .filter(
         (tx: any) =>
           !isIncomeTransaction(tx) &&
           !tx.reversalOf &&
+          !tx.transferId &&
+          !reversedExpenseIds.has(tx.id) &&
           ['maintenance', 'elevator', 'cleaning', 'security'].includes(tx.category || '')
       )
       .forEach((tx: any) => {
         const key = monthKey(tx.date);
         const bucket = byKey.get(key);
-        if (bucket && (!tx.reference || !recordedTicketCosts.has(`${key}:${tx.reference}`))) {
+        const refKey = tx.reference ? `${key}:${String(tx.reference).trim().toUpperCase()}` : '';
+        const invKey = tx.invoiceNumber ? `${key}:${String(tx.invoiceNumber).trim().toUpperCase()}` : '';
+        const alreadyCounted =
+          (refKey && recordedTicketCosts.has(refKey)) ||
+          (invKey && recordedTicketCosts.has(invKey));
+        if (bucket && !alreadyCounted) {
           bucket.cost += Math.abs(tx.amount || 0);
         }
       });

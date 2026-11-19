@@ -2,13 +2,30 @@ import type { Apartment, Building } from '../../types';
 import { centimes } from '../../shared/domain/money';
 
 /** Explicit links take priority; a broken link must not silently bill somebody else. */
-export function billingPayer(building: Building, apartment: Apartment): string | undefined {
-  const id = apartment.ownerId || apartment.tenantId;
+export function billingPayer(
+  building: Building,
+  apartment: Apartment,
+  options?: { ownerOnly?: boolean },
+): string | undefined {
+  const ownerOnly = options?.ownerOnly === true;
+  const id = ownerOnly
+    ? apartment.ownerId
+    : apartment.ownerId || apartment.tenantId;
   const resident = id
-    ? building.residents.find(r => r.id === id)
-    : building.residents.find(r => r.apartmentId === apartment.id && !(r as any).archivedAt);
-  return resident && !(resident as any).archivedAt && resident.buildingId === building.id &&
-    resident.syndicId === building.syndicId ? resident.id : undefined;
+    ? building.residents.find((r) => r.id === id)
+    : building.residents.find(
+        (r) =>
+          r.apartmentId === apartment.id &&
+          !(r as any).archivedAt &&
+          (!ownerOnly || r.isOwner !== false),
+      );
+  if (ownerOnly && resident && resident.isOwner === false) return undefined;
+  return resident &&
+    !(resident as any).archivedAt &&
+    resident.buildingId === building.id &&
+    resident.syndicId === building.syndicId
+    ? resident.id
+    : undefined;
 }
 
 export function assertBudgetConserved(amounts: number[], budget: number): void {

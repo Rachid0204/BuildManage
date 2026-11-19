@@ -1,8 +1,8 @@
 import BillingFailures from './BillingFailures';
 import FinancialTools from './FinancialTools';
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import type { Building, Transaction, Charge, Syndic, Quittance, PaymentMethod } from '../../types';
+import type { Building, Transaction, Charge, Syndic, Quittance, PaymentMethod, Invoice, Apartment } from '../../types';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import Modal from '../common/Modal';
@@ -17,10 +17,13 @@ import {
   getChargesForBuilding,
   getInvoicesForBuilding,
   createInvoiceForResident,
+  recordPayment,
+  voidInvoice,
   getPaymentProofsForBuilding,
   reviewPaymentProof,
   approvePaymentProofsBatch,
   reconcileBankStatementCSV,
+  type UnmatchedBankCsvRow,
   getQuittancesForBuilding,
   createQuittance,
   generateQuittanceForCharge,
@@ -34,7 +37,8 @@ import {
 import {
   generateInvoicePDF,
   generateQuittancePDF,
-  generateMiseEnDemeurePDF,
+  exportMiseEnDemeurePDF,
+  exportResidentStatementPDF,
   generateTransactionVoucherPDF,
   exportAnnualRepartitionPDF,
 } from '../../services/pdfOnDemand';
@@ -48,6 +52,7 @@ import {
   isIncomeTransaction,
   signedTransactionAmount,
 } from '../../utils/security';
+import { isChargeEffectivelyOverdue, todayCasablancaIsoDate } from '../../shared/moroccoDate';
 import Loading from '../common/Loading';
 import { useI18n } from '../../hooks/useI18n';
 import { useToast } from '../common/Toast';
@@ -69,6 +74,7 @@ const currencyFormatter = new Intl.NumberFormat('fr-MA', {
 
 const MOROCCAN_BANKS = [
   '',
+  'Attijariwafa Bank',
   'Banque Populaire (BCP)',
   'Bank of Africa (BMCE)',
   'CIH Bank',
@@ -228,6 +234,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
       virement: tr('Virement bancaire', 'تحويل بنكي'),
       cheque: tr('Chèque', 'شيك'),
       versement: tr('Versement agence', 'إيداع بالوكالة'),
+      versement_especes: tr('Versement espèces', 'إيداع نقدي'),
       cmi: tr('Carte CMI', 'بطاقة بنكية CMI'),
       especes: tr('Espèces (Caisse)', 'نقداً (الصندوق)'),
     }),
@@ -284,6 +291,19 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
   const [reverseExpenseTarget, setReverseExpenseTarget] = useState<Transaction | null>(null);
   const [reverseExpenseReason, setReverseExpenseReason] = useState('');
 
+  // Fiscal Year, Voided Quittances, Invoices & CSV Unmatched State
+  const [selectedFiscalYear, setSelectedFiscalYear] = useState<number>(() => new Date().getFullYear());
+  const [showVoidedQuittances, setShowVoidedQuittances] = useState(false);
+  const [chargesSubTab, setChargesSubTab] = useState<'charges' | 'invoices'>('charges');
+  const [unmatchedCsvRows, setUnmatchedCsvRows] = useState<UnmatchedBankCsvRow[]>([]);
+  const [payInvoiceTarget, setPayInvoiceTarget] = useState<Invoice | null>(null);
+  const [payInvoiceAmount, setPayInvoiceAmount] = useState('');
+  const [payInvoiceMethod, setPayInvoiceMethod] = useState<PaymentMethod>('virement');
+  const [payInvoiceReference, setPayInvoiceReference] = useState('');
+  const [payInvoiceDate, setPayInvoiceDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [voidInvoiceTarget, setVoidInvoiceTarget] = useState<Invoice | null>(null);
+  const [voidInvoiceReason, setVoidInvoiceReason] = useState('');
+
   // Charge Generation Form State
   const [useTantiemes, setUseTantiemes] = useState(false);
   const [periodName, setPeriodName] = useState(
@@ -324,11 +344,17 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
   const [quittanceSearch, setQuittanceSearch] = useState('');
   const [quittanceFilterMethod, setQuittanceFilterMethod] = useState('all');
   const [directGeneratingChargeId, setDirectGeneratingChargeId] = useState<string | null>(null);
+  const lastSyncedQuittanceKeyRef = useRef<string>('');
 
   // Queries
   const { data: charges = [], isLoading: loadingCharges } = useQuery({
     queryKey: ['charges', building.id],
     queryFn: () => getChargesForBuilding(building.id),
+  });
+
+  const { data: invoices = [] } = useQuery({
+    queryKey: ['invoices', building.id],
+    queryFn: () => getInvoicesForBuilding(building.id),
   });
 
   const { data: paymentProofs = [], isLoading: loadingProofs } = useQuery({
@@ -337,14 +363,32 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
   });
 
   const { data: quittances = [], isLoading: loadingQuittances } = useQuery({
-    queryKey: ['quittances', building.id],
-    queryFn: () => getQuittancesForBuilding(building.id),
+    queryKey: ['quittances', building.id, showVoidedQuittances],
+    queryFn: () => getQuittancesForBuilding(building.id, { includeVoided: showVoidedQuittances }),
   });
 
   const { data: prestataires = [] } = useQuery({
     queryKey: ['prestataires', building.id],
     queryFn: () => getPrestatairesForBuilding(building.id),
   });
+
+  const buildingTantiemesBase = building.totalTantiemes || 1000;
+
+  const availableFiscalYears = useMemo(() => {
+    const currentYear = new Date().getFullYear();
+    const years = new Set<number>([
+      currentYear,
+      currentYear - 1,
+      currentYear - 2,
+      currentYear - 3,
+      currentYear - 4,
+    ]);
+    charges.forEach((c) => {
+      const m = `${c.period || ''} ${c.dueDate || ''}`.match(/\b(20\d{2})\b/);
+      if (m) years.add(Number(m[1]));
+    });
+    return Array.from(years).sort((a, b) => b - a);
+  }, [charges]);
 
   const openChargeGeneration = () => {
     setUseTantiemes(false);
@@ -353,21 +397,52 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
       .reduce((sum, a) => sum + (a.monthlyFees ?? building.monthlySyndicFees ?? 0), 0)));
     setIsGenerateModalOpen(true);
   };
-  const chargePreview = useMemo(() => {
+  const { chargePreview, vacantLotsInTantiemesMode } = useMemo(() => {
     const lots = building.apartments.filter((a: any) => !a.archivedAt);
-    const allocations = useTantiemes
-      ? allocateBudgetInCentimes(Number(totalBudgetInput), lots.map(a => ({ id: a.id, tantiemes: a.tantiemes ?? 100 })), building.totalTantiemes || 1000)
-      : null;
-    return lots.flatMap(apt => {
-      const residentId = apt.ownerId || apt.tenantId || building.residents.find((r: any) => !r.archivedAt && r.apartmentId === apt.id)?.id;
-      if (!residentId) return [];
-      const existing = charges.find(c => c.apartmentId === apt.id &&
-        normalizeBillingPeriodKey(c.period || '') === normalizeBillingPeriodKey(periodName) &&
-        (c.chargeType || 'courante') === 'courante');
-      return [{ id: apt.id, number: apt.number, existing: !!existing,
-        amount: existing?.amount ?? allocations?.get(apt.id) ?? Math.round((apt.monthlyFees ?? building.monthlySyndicFees ?? 0) * 100) / 100 }];
+    const parsedBudget = Number(totalBudgetInput);
+    let allocations: Map<string, number> | null = null;
+    if (useTantiemes && Number.isFinite(parsedBudget) && parsedBudget > 0 && lots.length > 0) {
+      try {
+        allocations = allocateBudgetInCentimes(
+          parsedBudget,
+          lots.map((a) => ({ id: a.id, tantiemes: a.tantiemes ?? 100 })),
+          buildingTantiemesBase
+        );
+      } catch {
+        allocations = null;
+      }
+    }
+    let vacantCount = 0;
+    const rows = lots.flatMap((apt) => {
+      const residentId =
+        apt.ownerId ||
+        apt.tenantId ||
+        building.residents.find((r: any) => !r.archivedAt && r.apartmentId === apt.id)?.id;
+      if (!residentId) {
+        vacantCount += 1;
+        return [];
+      }
+      const existing = charges.find(
+        (c) =>
+          c.apartmentId === apt.id &&
+          normalizeBillingPeriodKey(c.period || '') === normalizeBillingPeriodKey(periodName) &&
+          (c.chargeType || 'courante') === 'courante'
+      );
+      return [
+        {
+          id: apt.id,
+          number: apt.number,
+          existing: !!existing,
+          amount:
+            existing?.amount ??
+            (useTantiemes
+              ? allocations?.get(apt.id) ?? Number.NaN
+              : Math.round((apt.monthlyFees ?? building.monthlySyndicFees ?? 0) * 100) / 100),
+        },
+      ];
     });
-  }, [building, charges, periodName, totalBudgetInput, useTantiemes]);
+    return { chargePreview: rows, vacantLotsInTantiemesMode: vacantCount };
+  }, [building, buildingTantiemesBase, charges, periodName, totalBudgetInput, useTantiemes]);
 
   // Reset form helper
   const resetTrxForm = () => {
@@ -468,9 +543,64 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
     },
   });
 
-  // Open Quittance Modal for a specific charge
-  const openQuittanceModalForCharge = (charge: Charge) => {
+  const recordInvoicePaymentMutation = useMutation({
+    mutationFn: (input: {
+      invoice: Invoice;
+      amount: number;
+      method: PaymentMethod;
+      reference?: string;
+      date?: string;
+    }) =>
+      recordPayment(
+        input.invoice,
+        input.amount,
+        input.method,
+        input.reference || undefined,
+        input.date ? { bankTransactionDate: input.date } : undefined
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['invoices', building.id] });
+      queryClient.invalidateQueries({ queryKey: ['charges', building.id] });
+      queryClient.invalidateQueries({ queryKey: ['quittances', building.id] });
+      queryClient.invalidateQueries({ queryKey: ['syndics'] });
+      queryClient.invalidateQueries({ queryKey: ['financialReport', building.id] });
+      setPayInvoiceTarget(null);
+      setPayInvoiceAmount('');
+      setPayInvoiceReference('');
+      showToast(
+        tr('Règlement de la facture enregistré et ventilé sur les charges.', 'تم تسجيل أداء الفاتورة وتوزيعه على المساهمات.'),
+        'success'
+      );
+    },
+    onError: (error: Error) => showToast(error.message, 'error'),
+  });
+
+  const voidInvoiceMutation = useMutation({
+    mutationFn: (input: { invoiceId: string; reason: string }) =>
+      voidInvoice(building.id, input.invoiceId, input.reason),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['invoices', building.id] });
+      queryClient.invalidateQueries({ queryKey: ['charges', building.id] });
+      setVoidInvoiceTarget(null);
+      setVoidInvoiceReason('');
+      showToast(tr('Facture / avis annulé.', 'تم إلغاء الفاتورة / الإشعار.'), 'success');
+    },
+    onError: (error: Error) => showToast(error.message, 'error'),
+  });
+
+  // Open Quittance Modal for a specific charge (with optional bank CSV prefill)
+  const openQuittanceModalForCharge = (
+    charge: Charge,
+    prefill?: { amount?: number; reference?: string; bankDate?: string; remarks?: string }
+  ) => {
     const res = building.residents.find((r) => r.id === charge.residentId);
+    const remaining = Math.max(0, Math.round((charge.amount - (charge.paidAmount ?? 0)) * 100)) / 100;
+    const prefilledAmount =
+      prefill?.amount !== undefined && prefill.amount > 0
+        ? Math.min(remaining > 0 ? remaining : charge.amount, prefill.amount)
+        : charge.status === 'paid'
+        ? charge.paidAmount ?? charge.amount
+        : remaining;
 
     setQuittancePaymentId(crypto.randomUUID());
     setQuittanceChargeId(charge.id);
@@ -478,22 +608,26 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
     setQuittanceResidentId(charge.residentId);
     setQuittanceResidentCin(res?.cin || '');
     setQuittancePeriod(charge.period || '');
-    setQuittanceAmount(String(charge.status === 'paid' ? (charge.paidAmount ?? charge.amount) : Math.max(0, charge.amount - (charge.paidAmount ?? 0))));
+    setQuittanceAmount(String(prefilledAmount));
     setQuittanceReserveRatio(resolveChargeReserveRate(building, charge));
     setQuittancePaymentMethod((charge.paymentMethod as PaymentMethod) || 'virement');
     setQuittanceBankName(building.bankName || '');
-    setQuittanceReference(`VIR-${charge.id.slice(-6).toUpperCase()}`);
-    const defaultDate = charge.paidAt ? charge.paidAt.split('T')[0] : new Date().toISOString().split('T')[0];
+    setQuittanceReference(prefill?.reference || `VIR-${charge.id.slice(-6).toUpperCase()}`);
+    const defaultDate =
+      prefill?.bankDate ||
+      (charge.paidAt ? charge.paidAt.split('T')[0] : new Date().toISOString().split('T')[0]);
     setQuittancePaymentDate(defaultDate);
     setQuittanceBankTransactionDate(defaultDate);
     setQuittancePostingDate('');
     setQuittanceAdjustmentReason('');
     setQuittanceRemarks(
-      tr(
-        'Cotisation copropriété - Récépissé libératoire (Loi 18-00 / 106-12)',
-        'مساهمة الملكية المشتركة - وصل إبراء الذمة (القانون 18-00 / 106-12)'
-      )
+      prefill?.remarks ||
+        tr(
+          'Cotisation copropriété - Récépissé libératoire (Loi 18-00 / 106-12)',
+          'مساهمة الملكية المشتركة - وصل إبراء الذمة (القانون 18-00 / 106-12)'
+        )
     );
+    lastSyncedQuittanceKeyRef.current = `${charge.id}:${prefilledAmount}`;
     setIsQuittanceModalOpen(true);
   };
 
@@ -534,6 +668,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
         'المساهمة الشهرية للملكية المشتركة - وصل إبراء الذمة'
       )
     );
+    lastSyncedQuittanceKeyRef.current = '';
     setIsQuittanceModalOpen(true);
   };
 
@@ -546,10 +681,22 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
   const receiptSelectionRemaining = receiptSelection
     ? Math.max(0, Math.round((receiptSelection.amount - (receiptSelection.paidAmount ?? 0)) * 100)) / 100 : 0;
   useEffect(() => {
-    if (!isQuittanceModalOpen) return;
-    setQuittanceChargeId(receiptSelection?.id || '');
+    if (!isQuittanceModalOpen) {
+      lastSyncedQuittanceKeyRef.current = '';
+      return;
+    }
+    const selectionId = receiptSelection?.id || '';
+    const syncKey = `${selectionId}:${receiptSelectionRemaining}`;
+    if (lastSyncedQuittanceKeyRef.current === syncKey) return;
+    // If openQuittanceModalForCharge already prefilled this exact charge (e.g., from CSV), keep user's/prefilled amount.
+    const alreadyPrefilledSameCharge =
+      selectionId !== '' && lastSyncedQuittanceKeyRef.current.startsWith(`${selectionId}:`);
+    lastSyncedQuittanceKeyRef.current = syncKey;
+    setQuittanceChargeId(selectionId);
     setQuittancePeriod(receiptSelection?.period || '');
-    setQuittanceAmount(receiptSelection ? String(receiptSelectionRemaining) : '');
+    if (!alreadyPrefilledSameCharge) {
+      setQuittanceAmount(receiptSelection ? String(receiptSelectionRemaining) : '');
+    }
     setQuittanceReserveRatio(resolveChargeReserveRate(building, receiptSelection));
   }, [isQuittanceModalOpen, receiptSelection?.id, receiptSelection?.period, receiptSelection?.chargeType, receiptSelection?.worksFundTarget, receiptSelectionRemaining, building]);
 
@@ -561,6 +708,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
     onSuccess: (newQuit) => {
       queryClient.invalidateQueries({ queryKey: ['quittances', building.id] });
       queryClient.invalidateQueries({ queryKey: ['charges', building.id] });
+      queryClient.invalidateQueries({ queryKey: ['invoices', building.id] });
       queryClient.invalidateQueries({ queryKey: ['syndics'] });
       queryClient.invalidateQueries({ queryKey: ['financialReport', building.id] });
       setIsQuittanceModalOpen(false);
@@ -599,35 +747,42 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
     const { operatingBalance: balance, reserveBalance: reserveFund } =
       computeBuildingFundBalances(building);
 
-    const pendingChargesTotal = charges
-      .filter((c) => c.status === 'pending' || c.status === 'unpaid')
-      .reduce((sum, c) => sum + Math.max(0, c.amount - (c.paidAmount || 0)), 0);
-
-    const overdueChargesTotal = charges
-      .filter((c) => c.status === 'overdue')
-      .reduce((sum, c) => sum + Math.max(0, c.amount - (c.paidAmount || 0)), 0);
+    let pendingCents = 0;
+    let overdueCents = 0;
+    charges.forEach((c) => {
+      const remCents = Math.max(0, Math.round((c.amount - (c.paidAmount || 0)) * 100));
+      if (remCents <= 0 || c.status === 'paid') return;
+      if (isChargeEffectivelyOverdue(c)) {
+        overdueCents += remCents;
+      } else {
+        pendingCents += remCents;
+      }
+    });
 
     const pendingProofsCount = paymentProofs.filter((p) => p.status === 'pending').length;
 
     return {
       balance,
       reserveFund,
-      pendingChargesTotal,
-      overdueChargesTotal,
+      pendingChargesTotal: pendingCents / 100,
+      overdueChargesTotal: overdueCents / 100,
       pendingProofsCount,
     };
   }, [building, charges, paymentProofs]);
 
-  // Overdue Debts Grouped by Resident
+  // Overdue Debts Grouped by Resident (supports multi-lot owners & dynamic dueDate overdue detection)
   const overdueResidents = useMemo(() => {
-    const overdueList = charges.filter((c) => c.status === 'overdue' && c.amount > (c.paidAmount || 0));
+    const overdueList = charges.filter((c) => isChargeEffectivelyOverdue(c));
     const grouped: Record<
       string,
       {
         residentId: string;
         residentName: string;
+        apartmentNumbers: string[];
         apartmentNumber: string;
-        apartment?: any;
+        apartment?: Apartment;
+        apartments: Apartment[];
+        charges: Charge[];
         totalOverdue: number;
         overdueCount: number;
         oldestDate: string;
@@ -641,22 +796,61 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
         grouped[c.residentId] = {
           residentId: c.residentId,
           residentName: res?.name || tr('Copropriétaire', 'مالك مشترك'),
+          apartmentNumbers: apt?.number ? [apt.number] : [],
           apartmentNumber: apt?.number || 'Lot',
           apartment: apt,
+          apartments: apt ? [apt] : [],
+          charges: [],
           totalOverdue: 0,
           overdueCount: 0,
           oldestDate: c.dueDate,
         };
+      } else if (apt && !grouped[c.residentId].apartments.some((a) => a.id === apt.id)) {
+        grouped[c.residentId].apartments.push(apt);
+        if (apt.number && !grouped[c.residentId].apartmentNumbers.includes(apt.number)) {
+          grouped[c.residentId].apartmentNumbers.push(apt.number);
+          grouped[c.residentId].apartmentNumber = grouped[c.residentId].apartmentNumbers.join(', ');
+        }
       }
-      grouped[c.residentId].totalOverdue += Math.max(0, c.amount - (c.paidAmount || 0));
+      grouped[c.residentId].charges.push(c);
+      grouped[c.residentId].totalOverdue =
+        Math.round(
+          (grouped[c.residentId].totalOverdue + Math.max(0, c.amount - (c.paidAmount || 0))) * 100
+        ) / 100;
       grouped[c.residentId].overdueCount += 1;
       if (new Date(c.dueDate) < new Date(grouped[c.residentId].oldestDate)) {
         grouped[c.residentId].oldestDate = c.dueDate;
       }
     });
 
-    return Object.values(grouped);
+    return Object.values(grouped).sort((a, b) => b.totalOverdue - a.totalOverdue);
   }, [charges, building, tr]);
+
+  // Balance Âgée (Aging Report buckets in integer centimes)
+  const agingBuckets = useMemo(() => {
+    const todayMs = Date.parse(`${todayCasablancaIsoDate()}T00:00:00Z`);
+    const buckets = { d0_30: 0, d31_60: 0, d61_90: 0, d90_plus: 0 };
+    charges.forEach((c) => {
+      if (!isChargeEffectivelyOverdue(c)) return;
+      const remCents = Math.max(0, Math.round((c.amount - (c.paidAmount || 0)) * 100));
+      if (remCents <= 0) return;
+      const dueIso = (c.dueDate || '').slice(0, 10);
+      const dueMs = Date.parse(`${dueIso}T00:00:00Z`);
+      const ageDays = Number.isFinite(dueMs)
+        ? Math.max(0, Math.floor((todayMs - dueMs) / 86_400_000))
+        : 0;
+      if (ageDays <= 30) buckets.d0_30 += remCents;
+      else if (ageDays <= 60) buckets.d31_60 += remCents;
+      else if (ageDays <= 90) buckets.d61_90 += remCents;
+      else buckets.d90_plus += remCents;
+    });
+    return {
+      d0_30: buckets.d0_30 / 100,
+      d31_60: buckets.d31_60 / 100,
+      d61_90: buckets.d61_90 / 100,
+      d90_plus: buckets.d90_plus / 100,
+    };
+  }, [charges]);
 
   // Filtered transactions for the Grand Livre
   const filteredTransactions = useMemo(() => {
@@ -694,22 +888,32 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
   }, [building.financials?.transactions, filterFund, filterType, filterCategory, searchTrx]);
 
   const filteredStats = useMemo(() => {
-    let income = 0;
-    let expense = 0;
+    const reversedOriginalIds = new Set(
+      (building.financials?.transactions || [])
+        .map((t) => t.reversalOf)
+        .filter((id): id is string => Boolean(id))
+    );
+    let incomeCents = 0;
+    let expenseCents = 0;
+    let netCents = 0;
     filteredTransactions.forEach((t) => {
-      const signed = signedTransactionAmount(t);
-      if (signed >= 0) income += signed;
-      else expense += Math.abs(signed);
+      const signedCents = Math.round(signedTransactionAmount(t) * 100);
+      netCents += signedCents;
+      // Exclude inter-fund transfers when viewing both funds combined, and exclude cancelled original+reversal pairs from gross flows
+      if (filterFund === 'all' && t.transferId) return;
+      if (t.reversalOf || reversedOriginalIds.has(t.id)) return;
+      if (signedCents >= 0) incomeCents += signedCents;
+      else expenseCents += Math.abs(signedCents);
     });
     return {
-      income,
-      expense,
-      net: income - expense,
+      income: incomeCents / 100,
+      expense: expenseCents / 100,
+      net: netCents / 100,
       count: filteredTransactions.length,
     };
-  }, [filteredTransactions]);
+  }, [building.financials?.transactions, filteredTransactions, filterFund]);
 
-  // Filtered Quittances and stats
+  // Filtered Quittances and stats (active totals exclude voided quittances)
   const filteredQuittances = useMemo(() => {
     return quittances.filter((q) => {
       const qNum = (q.quittanceNumber || '').toLowerCase();
@@ -732,13 +936,25 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
     });
   }, [quittances, quittanceSearch, quittanceFilterMethod]);
 
+  const activeQuittances = useMemo(
+    () => quittances.filter((q) => !q.voidedAt),
+    [quittances]
+  );
+
   const totalQuittancesAmount = useMemo(() => {
-    return quittances.reduce((sum, q) => sum + (q.amount || 0), 0);
-  }, [quittances]);
+    return (
+      activeQuittances.reduce((sum, q) => sum + Math.round((q.amount || 0) * 100), 0) / 100
+    );
+  }, [activeQuittances]);
 
   const totalReserveFundAmount = useMemo(() => {
-    return quittances.reduce((sum, q) => sum + Math.round((getRecordedReserveSplit(q)?.reserveFundAmount ?? 0) * 100), 0) / 100;
-  }, [quittances]);
+    return (
+      activeQuittances.reduce(
+        (sum, q) => sum + Math.round((getRecordedReserveSplit(q)?.reserveFundAmount ?? 0) * 100),
+        0
+      ) / 100
+    );
+  }, [activeQuittances]);
 
   // Prestataire quick-select handler
   const handleSelectPrestataire = (pId: string) => {
@@ -827,7 +1043,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
     const finalAmount = numericAmount;
 
     return addTrxMutation.mutateAsync({
-      date: new Date(trxDate).toISOString(),
+      date: trxDate,
       description: trxDesc.trim(),
       amount: finalAmount,
       type: trxType,
@@ -870,23 +1086,37 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
             )}
           </p>
         </div>
-        <div className="flex items-center gap-2.5">
-          <Button
-            variant="secondary"
-            onClick={() =>
-              exportAnnualRepartitionPDF(
-                building,
-                syndic,
-                charges,
-                quittances,
-                new Date().getFullYear()
-              )
-            }
-            className="text-xs sm:text-sm flex items-center gap-1.5"
-          >
-            <DocumentsIcon />
-            <span>{tr('Clôture Annuelle (PDF)', 'الحصيلة السنوية (PDF)')}</span>
-          </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="inline-flex items-center rounded-lg border border-slate-300 bg-white overflow-hidden">
+            <select
+              aria-label={tr('Exercice fiscal', 'السنة المالية')}
+              value={selectedFiscalYear}
+              onChange={(e) => setSelectedFiscalYear(Number(e.target.value))}
+              className="px-2 py-1.5 text-xs font-mono font-semibold text-slate-700 bg-slate-50 border-e border-slate-200 focus:outline-none"
+            >
+              {availableFiscalYears.map((yr) => (
+                <option key={yr} value={yr}>
+                  {yr}
+                </option>
+              ))}
+            </select>
+            <Button
+              variant="secondary"
+              onClick={() =>
+                exportAnnualRepartitionPDF(
+                  building,
+                  syndic,
+                  charges,
+                  quittances,
+                  selectedFiscalYear
+                )
+              }
+              className="text-xs sm:text-sm flex items-center gap-1.5 border-none rounded-none"
+            >
+              <DocumentsIcon />
+              <span>{tr('Clôture Annuelle (PDF)', 'الحصيلة السنوية (PDF)')}</span>
+            </Button>
+          </div>
           <Button
             variant="secondary"
             onClick={openChargeGeneration}
@@ -1004,7 +1234,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
             }`}
           >
             <QuittanceIcon />
-            <span>{tr('Quittances Certifiées', 'وصولات الأداء المعتمدة')} ({quittances.length})</span>
+            <span>{tr('Quittances Certifiées', 'وصولات الأداء المعتمدة')} ({activeQuittances.length})</span>
           </button>
 
           <button
@@ -1313,15 +1543,39 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
         </div>
       )}
 
-      {/* TAB 2: APPELS DE CHARGES */}
+      {/* TAB 2: APPELS DE CHARGES & FACTURES */}
       {activeTab === 'charges' && (
         <Card className="overflow-hidden border border-slate-200">
           <div className="p-4 bg-slate-50 border-b border-slate-200 flex flex-wrap justify-between items-center gap-3">
             <div>
-              <h3 className="font-semibold text-slate-800 text-sm">{tr('Appels de Charges de Copropriété', 'طلبات مساهمات الملكية المشتركة')}</h3>
+              <h3 className="font-semibold text-slate-800 text-sm">{tr('Appels de Charges & Factures (Avis d’appel)', 'طلبات المساهمات والفواتير (إشعارات الأداء)')}</h3>
               <p className="text-xs text-slate-500">
                 {tr('Cotisations configurées par lot ou budget réparti selon les tantièmes, selon le mode choisi à l’émission.', 'مساهمات محددة لكل شقة أو ميزانية موزعة حسب الحصص وفق طريقة الإصدار المختارة.')}
               </p>
+              <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 mt-2">
+                <button
+                  type="button"
+                  onClick={() => setChargesSubTab('charges')}
+                  className={`px-3 py-1 text-xs font-semibold rounded-md transition-colors ${
+                    chargesSubTab === 'charges'
+                      ? 'bg-teal-700 text-white'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {tr('Appels par lot', 'المساهمات حسب الوحدة')} ({charges.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setChargesSubTab('invoices')}
+                  className={`px-3 py-1 text-xs font-semibold rounded-md transition-colors ${
+                    chargesSubTab === 'invoices'
+                      ? 'bg-teal-700 text-white'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {tr('Factures / Avis d’appel', 'الفواتير / إشعارات الأداء')} ({invoices.length})
+                </button>
+              </div>
             </div>
             <div className="flex items-center gap-2">
               <Button
@@ -1341,6 +1595,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
             </div>
           </div>
 
+          {chargesSubTab === 'charges' ? (
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-slate-200 text-xs sm:text-sm">
               <thead className="bg-slate-50 text-slate-500 text-start font-medium">
@@ -1362,6 +1617,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                   const amountCents = Math.round((charge.amount || 0) * 100);
                   const remainingCents = Math.max(0, amountCents - paidCents);
                   const isPartial = charge.status !== 'paid' && paidCents > 0 && remainingCents > 0;
+                  const effectivelyOverdue = isChargeEffectivelyOverdue(charge);
                   const activeChargeQuittances = quittances.filter(
                     (q) => q.chargeId === charge.id && !q.voidedAt
                   );
@@ -1370,9 +1626,9 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                     <tr key={charge.id} className="hover:bg-slate-50 transition-colors h-11">
                       <td className="px-4 py-2 font-mono font-bold text-teal-800">
                         {apt?.number || 'Lot'}
-                        {apt?.tantiemes && (
+                        {apt?.tantiemes !== undefined && (
                           <span className="ms-1.5 text-[11px] font-normal text-slate-400">
-                            ({apt.tantiemes}/1000)
+                            ({apt.tantiemes}/{buildingTantiemesBase})
                           </span>
                         )}
                       </td>
@@ -1387,8 +1643,10 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                             charge.status === 'paid'
                               ? 'bg-emerald-50 text-emerald-700'
                               : isPartial
-                              ? 'bg-sky-50 text-sky-700'
-                              : charge.status === 'overdue'
+                              ? effectivelyOverdue
+                                ? 'bg-rose-50 text-rose-700'
+                                : 'bg-sky-50 text-sky-700'
+                              : effectivelyOverdue
                               ? 'bg-rose-50 text-rose-700'
                               : 'bg-amber-50 text-amber-700'
                           }`}
@@ -1396,8 +1654,10 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                           {charge.status === 'paid'
                             ? tr('Payé', 'مؤدى')
                             : isPartial
-                            ? tr('Partiellement payée', 'مؤدى جزئياً')
-                            : charge.status === 'overdue'
+                            ? effectivelyOverdue
+                              ? tr('Partiel (en retard)', 'جزئي (متأخر)')
+                              : tr('Partiellement payée', 'مؤدى جزئياً')
+                            : effectivelyOverdue
                             ? tr('En retard', 'متأخر')
                             : tr('En attente', 'في الانتظار')}
                         </span>
@@ -1458,12 +1718,19 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                             onClick={async () => {
                               if (!res) return;
                               try {
-                                const invoices = await getInvoicesForBuilding(building.id);
-                                const invoice = invoices.find(i => i.id === charge.invoiceId || i.chargeIds.includes(charge.id)) || await createInvoiceForResident(charge.residentId,building.id,building.syndicId);
-                                generateInvoicePDF(invoice,building,res,syndic);
-                              } catch (e:any) { showToast(e.message,'error'); }
+                                const buildingInvoices = await getInvoicesForBuilding(building.id);
+                                const invoice =
+                                  buildingInvoices.find(
+                                    (i) =>
+                                      i.status !== 'cancelled' &&
+                                      (i.id === charge.invoiceId || i.chargeIds.includes(charge.id))
+                                  ) || (await createInvoiceForResident(charge.residentId, building.id, building.syndicId));
+                                queryClient.invalidateQueries({ queryKey: ['invoices', building.id] });
+                                generateInvoicePDF(invoice, building, res, syndic);
+                              } catch (e: any) {
+                                showToast(e.message, 'error');
+                              }
                             }}
-
                             className="text-[11px] text-slate-500 hover:text-slate-800 underline px-1"
                           >
                             {tr('Avis', 'إشعار')}
@@ -1476,6 +1743,142 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
               </tbody>
             </table>
           </div>
+          ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-slate-200 text-xs sm:text-sm">
+              <thead className="bg-slate-50 text-slate-500 text-start font-medium">
+                <tr>
+                  <th className="px-4 py-2.5 text-start">{tr('N° Facture / Avis', 'رقم الفاتورة / الإشعار')}</th>
+                  <th className="px-4 py-2.5 text-start">{tr('Copropriétaire', 'المالك المشترك')}</th>
+                  <th className="px-4 py-2.5 text-start">{tr('Émission & Échéance', 'الإصدار والاستحقاق')}</th>
+                  <th className="px-4 py-2.5 text-start">{tr('Statut', 'الحالة')}</th>
+                  <th className="px-4 py-2.5 text-end">{tr('Total / Reste', 'المجموع / الباقي')}</th>
+                  <th className="px-4 py-2.5 text-end">{tr('Actions', 'إجراءات')}</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 bg-white">
+                {invoices.map((inv) => {
+                  const res = building.residents.find((r) => r.id === inv.residentId);
+                  const remaining = Math.max(
+                    0,
+                    Math.round(((inv.totalAmount || 0) - (inv.paidAmount || 0)) * 100)
+                  ) / 100;
+                  const isVoided = inv.status === 'cancelled' || Boolean(inv.voidedAt);
+                  const isPartialInv = !isVoided && inv.status !== 'paid' && (inv.paidAmount || 0) > 0 && remaining > 0;
+                  const canPay = !isVoided && inv.status !== 'paid' && remaining > 0;
+                  const canVoid = !isVoided && (inv.paidAmount || 0) === 0;
+                  return (
+                    <tr
+                      key={inv.id}
+                      className={`hover:bg-slate-50 transition-colors ${isVoided ? 'opacity-60 bg-slate-50/70' : ''}`}
+                    >
+                      <td className="px-4 py-2.5 font-mono font-bold text-teal-800">
+                        <div>{inv.invoiceNumber}</div>
+                        <div className="text-[10px] font-normal text-slate-400">
+                          {inv.chargeIds.length} {tr('charge(s)', 'مساهمة(ات)')}
+                        </div>
+                      </td>
+                      <td className="px-4 py-2.5 font-medium text-slate-900">
+                        {res?.name || inv.issuedTo?.name || tr('Copropriétaire', 'مالك مشترك')}
+                      </td>
+                      <td className="px-4 py-2.5 text-slate-500 font-mono text-xs">
+                        <div>{new Date(inv.createdAt).toLocaleDateString(isAr ? 'ar-MA' : 'fr-MA')}</div>
+                        <div className="text-[10px] text-slate-400">
+                          {tr('Éch.:', 'الاستحقاق:')} {new Date(inv.dueDate).toLocaleDateString(isAr ? 'ar-MA' : 'fr-MA')}
+                        </div>
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <span
+                          className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
+                            inv.status === 'paid'
+                              ? 'bg-emerald-50 text-emerald-700'
+                              : isVoided
+                              ? 'bg-slate-200 text-slate-600'
+                              : inv.status === 'overdue'
+                              ? 'bg-rose-50 text-rose-700'
+                              : isPartialInv
+                              ? 'bg-sky-50 text-sky-700'
+                              : 'bg-amber-50 text-amber-700'
+                          }`}
+                        >
+                          {inv.status === 'paid'
+                            ? tr('Soldée', 'مؤداة')
+                            : isVoided
+                            ? tr('Annulée', 'ملغاة')
+                            : inv.status === 'overdue'
+                            ? tr('En retard', 'متأخرة')
+                            : isPartialInv
+                            ? tr('Partielle', 'جزئية')
+                            : tr('Émise', 'صادرة')}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 text-end font-mono">
+                        <div className={`font-bold ${isVoided ? 'line-through text-slate-400' : 'text-slate-900'}`}>
+                          {currencyFormatter.format(inv.totalAmount)}
+                        </div>
+                        {!isVoided && remaining > 0 && remaining < inv.totalAmount && (
+                          <div className="text-[10px] text-sky-700">
+                            {tr('Reste:', 'الباقي:')} {currencyFormatter.format(remaining)}
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-end whitespace-nowrap">
+                        <div className="flex items-center justify-end gap-1.5">
+                          {res && (
+                            <button
+                              type="button"
+                              onClick={() => generateInvoicePDF(inv, building, res, syndic)}
+                              className="px-2 py-0.5 text-[11px] bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded"
+                            >
+                              PDF
+                            </button>
+                          )}
+                          {canPay && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPayInvoiceTarget(inv);
+                                setPayInvoiceAmount(String(remaining));
+                                setPayInvoiceMethod('virement');
+                                setPayInvoiceReference(`VIR-${inv.invoiceNumber}`);
+                                setPayInvoiceDate(new Date().toISOString().split('T')[0]);
+                              }}
+                              className="px-2 py-0.5 text-[11px] bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-semibold rounded border border-emerald-200"
+                            >
+                              {tr('Encaisser', 'تحصيل')}
+                            </button>
+                          )}
+                          {canVoid && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setVoidInvoiceTarget(inv);
+                                setVoidInvoiceReason('');
+                              }}
+                              className="px-2 py-0.5 text-[11px] text-rose-600 hover:bg-rose-50 font-semibold rounded border border-rose-200"
+                            >
+                              {tr('Annuler', 'إلغاء')}
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {invoices.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-10 text-center text-xs text-slate-500">
+                      {tr(
+                        'Aucune facture / avis groupé émis. Cliquez sur « Avis » sur une charge pour générer une facture consolidée.',
+                        'لم تصدر أي فاتورة أو إشعار مجمع بعد. اضغط على «إشعار» بجانب أي مساهمة لإصدار فاتورة مجمعة.'
+                      )}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          )}
         </Card>
       )}
 
@@ -1520,17 +1923,25 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                       });
                       if (!confirmed) return;
                       const res = await reconcileBankStatementCSV(building.id, parsedRows, bankPostingOptions);
+                      setUnmatchedCsvRows(res.unmatchedRows || []);
                       await queryClient.invalidateQueries({ queryKey: ['charges', building.id] });
+                      await queryClient.invalidateQueries({ queryKey: ['invoices', building.id] });
                       await queryClient.invalidateQueries({ queryKey: ['proofs', building.id] });
                       await queryClient.invalidateQueries({ queryKey: ['quittances', building.id] });
                       await queryClient.invalidateQueries({ queryKey: ['syndics'] });
                       await queryClient.invalidateQueries({ queryKey: ['financialReport', building.id] });
+                      const unmatchedCount = (res.unmatchedRows || []).length;
                       showToast(
-                        tr(
-                          `Rapprochement bancaire terminé : ${res.matchedCount} virement(s) lettré(s) (${res.totalReconciledMad} MAD).`,
-                          `تمت المطابقة البنكية: ${res.matchedCount} تحويلات مطابقة (${res.totalReconciledMad} درهم).`
-                        ),
-                        'success'
+                        unmatchedCount > 0
+                          ? tr(
+                              `Rapprochement bancaire terminé : ${res.matchedCount} virement(s) lettré(s) (${res.totalReconciledMad} MAD), ${unmatchedCount} ligne(s) à rapprocher manuellement.`,
+                              `تمت المطابقة البنكية: ${res.matchedCount} تحويلات مطابقة (${res.totalReconciledMad} درهم)، و${unmatchedCount} سطر(اً) يتطلب مطابقة يدوية.`
+                            )
+                          : tr(
+                              `Rapprochement bancaire terminé : ${res.matchedCount} virement(s) lettré(s) (${res.totalReconciledMad} MAD).`,
+                              `تمت المطابقة البنكية: ${res.matchedCount} تحويلات مطابقة (${res.totalReconciledMad} درهم).`
+                            ),
+                        res.matchedCount > 0 ? 'success' : 'info'
                       );
                     } catch (err: any) {
                       showToast(err?.message || 'Erreur lors de la lecture du CSV', 'error');
@@ -1552,10 +1963,16 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                       await queryClient.invalidateQueries({ queryKey: ['quittances', building.id] });
                       await queryClient.invalidateQueries({ queryKey: ['syndics'] });
                       await queryClient.invalidateQueries({ queryKey: ['financialReport', building.id] });
+                      const skippedSuffixFr = res.skippedCount
+                        ? ` (${res.skippedCount} ignoré(s) : montant non exact ou charge déjà soldée)`
+                        : '';
+                      const skippedSuffixAr = res.skippedCount
+                        ? ` (تم تجاوز ${res.skippedCount} لعدم تطابق المبلغ أو تسديد المساهمة مسبقاً)`
+                        : '';
                       showToast(
                         tr(
-                          `${res.approvedCount} justificatif(s) conforme(s) validé(s) (${res.totalAmountMad} MAD).`,
-                          `تمت المصادقة على ${res.approvedCount} إثباتات مطابقة (${res.totalAmountMad} درهم).`
+                          `${res.approvedCount} justificatif(s) conforme(s) validé(s) (${res.totalAmountMad} MAD)${skippedSuffixFr}.`,
+                          `تمت المصادقة على ${res.approvedCount} إثباتات مطابقة (${res.totalAmountMad} درهم)${skippedSuffixAr}.`
                         ),
                         res.approvedCount > 0 ? 'success' : 'info'
                       );
@@ -1579,6 +1996,106 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
             <label>{tr('Date de comptabilisation', 'تاريخ القيد')}<input type="date" value={bankPostingDate} onChange={e => setBankPostingDate(e.target.value)} className="border rounded p-2 mx-2" /></label>
             <label>{tr('Motif de l’ajustement', 'سبب التعديل')}<input value={bankAdjustmentReason} maxLength={1000} onChange={e => setBankAdjustmentReason(e.target.value)} className="border rounded p-2 mx-2" /></label>
           </details>
+
+          {unmatchedCsvRows.length > 0 && (
+            <div className="p-4 bg-amber-50/70 border-b border-amber-200 space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <h4 className="text-xs font-bold text-amber-950 uppercase tracking-wider">
+                    {tr(
+                      `Lignes CSV non lettrées automatiquement (${unmatchedCsvRows.length})`,
+                      `أسطر CSV غير مطابقة تلقائياً (${unmatchedCsvRows.length})`
+                    )}
+                  </h4>
+                  <p className="text-[11px] text-amber-800">
+                    {tr(
+                      'Cliquez sur une charge candidate pour pré-remplir la quittance avec les informations du relevé.',
+                      'انقر على مساهمة مرشحة لتعبئة الوصل تلقائياً ببيانات الكشف البنكي.'
+                    )}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setUnmatchedCsvRows([])}
+                  className="text-xs font-semibold text-amber-900 hover:underline"
+                >
+                  {tr('Fermer', 'إغلاق')}
+                </button>
+              </div>
+              <div className="space-y-2 max-h-72 overflow-y-auto">
+                {unmatchedCsvRows.map((row, rowIdx) => {
+                  const reasonLabel =
+                    row.reason === 'duplicate'
+                      ? tr('Déjà importé', 'تم استيراده مسبقاً')
+                      : row.reason === 'ambiguous'
+                      ? tr('Ambiguë (plusieurs lots)', 'غائم (عدة شقق)')
+                      : row.reason === 'non_positive'
+                      ? tr('Montant ≤ 0', 'مبلغ ≤ 0')
+                      : tr('Aucune correspondance exacte', 'لا يوجد تطابق دقيق');
+                  return (
+                    <div
+                      key={`${rowIdx}-${row.reference || row.label}`}
+                      className="p-2.5 bg-white rounded-lg border border-amber-200/80 text-xs space-y-1.5"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-mono text-[11px] text-slate-500">{row.date}</span>
+                          <span className="font-semibold text-slate-900">{row.label}</span>
+                          {row.reference && (
+                            <span className="font-mono text-[11px] text-slate-500">
+                              ({row.reference})
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono font-bold text-slate-900">
+                            {currencyFormatter.format(row.amount)}
+                          </span>
+                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900">
+                            {reasonLabel}
+                          </span>
+                        </div>
+                      </div>
+                      {row.candidates && row.candidates.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                          <span className="text-[11px] text-slate-500">
+                            {tr('Affecter à :', 'توجيه إلى:')}
+                          </span>
+                          {row.candidates.map((cand, candIdx) => {
+                            const matchedCharge = cand.chargeId
+                              ? charges.find((c) => c.id === cand.chargeId)
+                              : undefined;
+                            if (!matchedCharge) return null;
+                            return (
+                              <button
+                                key={cand.chargeId || cand.invoiceId || candIdx}
+                                type="button"
+                                onClick={() =>
+                                  openQuittanceModalForCharge(matchedCharge, {
+                                    amount: row.amount,
+                                    reference: row.reference || undefined,
+                                    bankDate: /^\d{4}-\d{2}-\d{2}/.test(row.date)
+                                      ? row.date.slice(0, 10)
+                                      : undefined,
+                                    remarks: `Rapprochement relevé CSV : ${row.label}`,
+                                  })
+                                }
+                                className="px-2 py-0.5 rounded border border-teal-300 bg-teal-50 hover:bg-teal-100 text-teal-900 font-medium text-[11px]"
+                              >
+                                {tr('Lot', 'شقة')} {cand.apartmentNumber} · {cand.residentName} (
+                                {matchedCharge.period || cand.invoiceNumber || '—'} —{' '}
+                                {currencyFormatter.format(cand.remainingAmount)})
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           <div className="divide-y divide-slate-100">
             {paymentProofs.map((proof) => (
               <div key={proof.id} className="p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -1711,9 +2228,9 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5 pt-4 border-t border-teal-700/60">
               <div className="bg-teal-950/40 p-2.5 rounded-lg border border-teal-600/30">
                 <span className="text-[10px] text-teal-200 font-semibold uppercase block">
-                  {tr('Quittances Émises', 'الوصولات الصادرة')}
+                  {tr('Quittances Actives', 'الوصولات السارية')}
                 </span>
-                <span className="text-lg font-bold font-mono text-white mt-0.5 block">{quittances.length}</span>
+                <span className="text-lg font-bold font-mono text-white mt-0.5 block">{activeQuittances.length}</span>
               </div>
               <div className="bg-teal-950/40 p-2.5 rounded-lg border border-teal-600/30">
                 <span className="text-[10px] text-teal-200 font-semibold uppercase block">
@@ -1736,7 +2253,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                   {tr('Dernier Récépissé', 'آخر وصل صادر')}
                 </span>
                 <span className="text-xs font-mono font-bold text-teal-100 truncate mt-1 block">
-                  {quittances[0]?.quittanceNumber || tr('Aucun', 'لا يوجد')}
+                  {activeQuittances[0]?.quittanceNumber || quittances[0]?.quittanceNumber || tr('Aucun', 'لا يوجد')}
                 </span>
               </div>
             </div>
@@ -1754,7 +2271,17 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                 />
               </div>
 
-              <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+              <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto justify-end">
+                <label className="inline-flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={showVoidedQuittances}
+                    onChange={(e) => setShowVoidedQuittances(e.target.checked)}
+                    className="rounded text-rose-600 focus:ring-rose-500"
+                  />
+                  <span>{tr('Inclure les quittances annulées', 'إظهار الوصولات الملغاة')}</span>
+                </label>
+
                 <select
                   value={quittanceFilterMethod}
                   onChange={(e) => setQuittanceFilterMethod(e.target.value)}
@@ -1801,9 +2328,20 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                     const res = building.residents.find((r) => r.id === quit.residentId);
 
                     return (
-                      <tr key={quit.id} className="hover:bg-slate-50/80 transition-colors">
+                      <tr
+                        key={quit.id}
+                        className={`hover:bg-slate-50/80 transition-colors ${
+                          quit.voidedAt ? 'opacity-70 bg-rose-50/30' : ''
+                        }`}
+                      >
                         <td className="px-4 py-3 whitespace-nowrap">
-                          <span className="font-mono font-bold text-teal-800 bg-teal-50 px-2 py-0.5 rounded text-xs block w-fit">
+                          <span
+                            className={`font-mono font-bold px-2 py-0.5 rounded text-xs block w-fit ${
+                              quit.voidedAt
+                                ? 'text-rose-700 bg-rose-50 line-through'
+                                : 'text-teal-800 bg-teal-50'
+                            }`}
+                          >
                             {quit.quittanceNumber}
                           </span>
                           <span className="text-[11px] text-slate-400 font-mono mt-0.5 block">
@@ -1821,7 +2359,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                             {tr('Lot', 'شقة')} {quit.apartmentNumber}
                           </div>
                           <div className="text-[11px] text-slate-400 font-mono">
-                            {quit.tantiemes || apt?.tantiemes || 100} / 1000
+                            {quit.tantiemes || apt?.tantiemes || 0} / {buildingTantiemesBase}
                           </div>
                         </td>
                         <td className="px-4 py-3">
@@ -1837,7 +2375,11 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                           </div>
                         </td>
                         <td className="px-4 py-3 text-end whitespace-nowrap">
-                          <span className="font-mono font-bold text-base text-teal-900 block">
+                          <span
+                            className={`font-mono font-bold text-base block ${
+                              quit.voidedAt ? 'text-rose-700 line-through' : 'text-teal-900'
+                            }`}
+                          >
                             {currencyFormatter.format(quit.amount)}
                           </span>
                           <span className={`text-[10px] font-semibold px-1.5 py-0.2 rounded ${quit.voidedAt ? 'text-rose-700 bg-rose-50' : 'text-emerald-700 bg-emerald-50'}`}>
@@ -1924,11 +2466,47 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
             </div>
           </Card>
 
+          {/* Balance Âgée (Aging Report) */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <Card className="p-3.5 border-s-4 border-s-amber-400 bg-white">
+              <span className="text-[11px] font-semibold text-slate-500 uppercase block">
+                {tr('Retard 0 – 30 jours', 'تأخر 0 – 30 يوماً')}
+              </span>
+              <span className="text-lg font-bold font-mono text-amber-800 mt-1 block tabular-nums">
+                {currencyFormatter.format(agingBuckets.d0_30)}
+              </span>
+            </Card>
+            <Card className="p-3.5 border-s-4 border-s-orange-500 bg-white">
+              <span className="text-[11px] font-semibold text-slate-500 uppercase block">
+                {tr('Retard 31 – 60 jours', 'تأخر 31 – 60 يوماً')}
+              </span>
+              <span className="text-lg font-bold font-mono text-orange-800 mt-1 block tabular-nums">
+                {currencyFormatter.format(agingBuckets.d31_60)}
+              </span>
+            </Card>
+            <Card className="p-3.5 border-s-4 border-s-rose-500 bg-white">
+              <span className="text-[11px] font-semibold text-slate-500 uppercase block">
+                {tr('Retard 61 – 90 jours', 'تأخر 61 – 90 يوماً')}
+              </span>
+              <span className="text-lg font-bold font-mono text-rose-700 mt-1 block tabular-nums">
+                {currencyFormatter.format(agingBuckets.d61_90)}
+              </span>
+            </Card>
+            <Card className="p-3.5 border-s-4 border-s-red-800 bg-white">
+              <span className="text-[11px] font-semibold text-slate-500 uppercase block">
+                {tr('Contentieux > 90 jours', 'منازعات أكثر من 90 يوماً')}
+              </span>
+              <span className="text-lg font-bold font-mono text-red-900 mt-1 block tabular-nums">
+                {currencyFormatter.format(agingBuckets.d90_plus)}
+              </span>
+            </Card>
+          </div>
+
           <Card className="overflow-hidden border border-slate-200">
             <div className="p-4 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
               <div>
                 <h3 className="font-semibold text-slate-800 text-sm">{tr('Copropriétaires Débiteurs', 'الملاك المشتركون المتأخرون عن الأداء')}</h3>
-                <p className="text-xs text-slate-500">{tr('Générez la mise en demeure formelle en 1 clic', 'إصدار الإنذار الرسمي بالأداء بنقرة واحدة')}</p>
+                <p className="text-xs text-slate-500">{tr('Générez la mise en demeure formelle ou le relevé de compte en 1 clic', 'إصدار الإنذار الرسمي أو كشف الحساب بنقرة واحدة')}</p>
               </div>
               <span className="text-xs font-mono font-bold text-rose-700 bg-rose-50 px-2 py-1 rounded">
                 {tr('Total créances :', 'مجموع الديون:')} {currencyFormatter.format(stats.overdueChargesTotal)}
@@ -1938,7 +2516,15 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
             <div className="divide-y divide-slate-100">
               {overdueResidents.map((item) => {
                 const resident = building.residents.find((r) => r.id === item.residentId);
-                const apt = item.apartment;
+                const residentApartments =
+                  item.apartments.length > 0
+                    ? item.apartments
+                    : building.apartments.filter(
+                        (a) =>
+                          a.ownerId === item.residentId ||
+                          a.tenantId === item.residentId ||
+                          a.id === resident?.apartmentId
+                      );
 
                 return (
                   <div
@@ -1946,10 +2532,10 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                     className="p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
                   >
                     <div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className="font-bold text-slate-900 text-sm">{item.residentName}</span>
                         <span className="font-mono text-xs font-semibold text-slate-700 bg-slate-100 px-2 py-0.5 rounded">
-                          {tr('Lot', 'شقة')} {item.apartmentNumber}
+                          {item.apartments.length > 1 ? tr('Lots', 'شقق') : tr('Lot', 'شقة')} {item.apartmentNumber}
                         </span>
                         <span className="text-xs text-rose-700 font-semibold bg-rose-50 px-2 py-0.5 rounded">
                           {item.overdueCount} {tr('échéance(s) impayée(s)', 'دفعات غير مؤداة')}
@@ -1962,18 +2548,44 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                       </p>
                     </div>
 
-                    <div className="flex items-center gap-4 shrink-0">
-                      <div className="text-end">
+                    <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                      <div className="text-end me-1">
                         <span className="text-xs text-slate-400 block">{tr('Total Dû', 'المبلغ المستحق')}</span>
                         <span className="font-mono font-bold text-base text-rose-700">
                           {currencyFormatter.format(item.totalOverdue)}
                         </span>
                       </div>
 
+                      {resident && (
+                        <Button
+                          variant="secondary"
+                          onClick={() =>
+                            exportResidentStatementPDF(
+                              building,
+                              syndic,
+                              resident,
+                              residentApartments,
+                              charges,
+                              quittances
+                            )
+                          }
+                          className="text-xs flex items-center gap-1"
+                        >
+                          <DocumentsIcon />
+                          <span>{tr('Relevé PDF', 'كشف PDF')}</span>
+                        </Button>
+                      )}
+
                       <Button
                         onClick={() => {
-                          if (resident && apt) {
-                            generateMiseEnDemeurePDF(resident, apt, building, item.totalOverdue, syndic);
+                          if (resident && residentApartments.length > 0) {
+                            exportMiseEnDemeurePDF(
+                              building,
+                              syndic,
+                              resident,
+                              residentApartments,
+                              item.charges
+                            );
                           } else {
                             showToast(tr('Informations du copropriétaire incomplètes.', 'بيانات المالك المشترك غير مكتملة.'), 'error');
                           }
@@ -2751,6 +3363,14 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                   onChange={(e) => setTotalBudgetInput(e.target.value)}
                   className="w-full px-3 py-1.5 border border-teal-300 rounded text-sm font-mono bg-white"
                 />
+                {vacantLotsInTantiemesMode > 0 && (
+                  <p className="mt-2 p-2 rounded bg-amber-50 border border-amber-200 text-[11px] text-amber-900">
+                    {tr(
+                      `Attention : ${vacantLotsInTantiemesMode} lot(s) actif(s) sans résident assigné ne seront pas facturés dans cet appel (leur quote-part en tantièmes reste réservée sur le budget global).`,
+                      `تنبيه: ${vacantLotsInTantiemesMode} شقة(ات) نشطة بدون ساكن مرتبط لن يتم إصدار مساهمة لها في هذا الطلب (تبقى حصتها محفوظة من الميزانية الإجمالية).`
+                    )}
+                  </p>
+                )}
               </div>
             )}
           </div>
@@ -2915,7 +3535,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                     );
                     return (
                       <option key={a.id} value={a.id}>
-                        {tr('Lot', 'شقة')} {a.number} — {res?.name || tr('Copropriétaire', 'مالك مشترك')} ({a.tantiemes || 100}/1000)
+                        {tr('Lot', 'شقة')} {a.number} — {res?.name || tr('Copropriétaire', 'مالك مشترك')} ({a.tantiemes || 0}/{buildingTantiemesBase})
                       </option>
                     );
                   })}
@@ -2962,7 +3582,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
               <div className="text-slate-600">
                 <span>{tr('Tantièmes :', 'الأجزاء:')} </span>
                 <strong className="text-teal-800">
-                  {building.apartments.find((a) => a.id === quittanceApartmentId)?.tantiemes || 100} / 1000
+                  {building.apartments.find((a) => a.id === quittanceApartmentId)?.tantiemes || 0} / {buildingTantiemesBase}
                 </strong>
               </div>
               <div className="text-slate-600">
@@ -3227,6 +3847,20 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
           }
         >
           <div className="p-6 bg-slate-50 border-2 border-teal-800/40 rounded-xl space-y-5 text-slate-800 shadow-inner">
+            {selectedQuittanceForPreview.voidedAt && (
+              <div className="p-3 rounded-lg bg-rose-100 border-2 border-rose-500 text-rose-900 text-center space-y-1">
+                <p className="text-sm font-extrabold tracking-widest uppercase">
+                  {tr('QUITTANCE ANNULÉE — SANS VALEUR LIBÉRATOIRE', 'وصل ملغى — لا يُعتد به لإبراء الذمة')}
+                </p>
+                <p className="text-xs">
+                  {tr('Annulée le', 'أُلغي في')}{' '}
+                  {new Date(selectedQuittanceForPreview.voidedAt).toLocaleDateString(isAr ? 'ar-MA' : 'fr-MA')}
+                  {selectedQuittanceForPreview.voidReason
+                    ? ` · ${selectedQuittanceForPreview.voidReason}`
+                    : ''}
+                </p>
+              </div>
+            )}
             <div className="text-center pb-4 border-b-2 border-teal-800/20">
               <p className="text-[11px] font-bold tracking-widest text-teal-900 uppercase">
                 {tr('ROYAUME DU MAROC  ·  SYNDICAT DES COPROPRIÉTAIRES', 'المملكة المغربية  ·  اتحاد الملاك المشتركين')}
@@ -3267,7 +3901,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                 </span>
                 <p className="font-bold text-slate-900">{selectedQuittanceForPreview.residentName}</p>
                 <p className="text-slate-600 font-mono">
-                  {tr('Lot', 'شقة')} {selectedQuittanceForPreview.apartmentNumber} · {selectedQuittanceForPreview.tantiemes} / 1000
+                  {tr('Lot', 'شقة')} {selectedQuittanceForPreview.apartmentNumber} · {selectedQuittanceForPreview.tantiemes} / {buildingTantiemesBase}
                 </p>
                 <p className="text-slate-500 font-mono text-[11px]">
                   CIN: {selectedQuittanceForPreview.residentCin || tr('Non renseigné', 'غير محدد')}
@@ -3582,6 +4216,194 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                 className="bg-rose-600 hover:bg-rose-700"
               >
                 {tr('Confirmer la contrepassation', 'تأكيد العكس')}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* MODAL: RECORD MULTI-CHARGE INVOICE PAYMENT */}
+      {payInvoiceTarget && (
+        <Modal
+          isOpen={!!payInvoiceTarget}
+          busy={recordInvoicePaymentMutation.isPending}
+          onSubmit={async () => {
+            const amount = parseFloat(payInvoiceAmount);
+            const remaining =
+              Math.max(
+                0,
+                Math.round(((payInvoiceTarget.totalAmount || 0) - (payInvoiceTarget.paidAmount || 0)) * 100)
+              ) / 100;
+            if (!Number.isFinite(amount) || amount <= 0 || Math.round(amount * 100) > Math.round(remaining * 100)) {
+              throw new Error(
+                tr(
+                  'Indiquez un montant valide inférieur ou égal au solde restant de la facture.',
+                  'أدخل مبلغاً صالحاً أقل من أو يساوي الرصيد المتبقي للفاتورة.'
+                )
+              );
+            }
+            await recordInvoicePaymentMutation.mutateAsync({
+              invoice: payInvoiceTarget,
+              amount,
+              method: payInvoiceMethod,
+              reference: payInvoiceReference.trim() || undefined,
+              date: payInvoiceDate || undefined,
+            });
+          }}
+          onClose={() => {
+            setPayInvoiceTarget(null);
+            setPayInvoiceAmount('');
+            setPayInvoiceReference('');
+          }}
+          title={tr(
+            `Encaisser la facture ${payInvoiceTarget.invoiceNumber}`,
+            `تحصيل الفاتورة ${payInvoiceTarget.invoiceNumber}`
+          )}
+        >
+          <div className="space-y-3 text-xs">
+            <p className="text-slate-600">
+              {tr(
+                'Le règlement sera automatiquement ventilé sur les charges ouvertes de cette facture (par ordre d’ancienneté).',
+                'سيتم توزيع الأداء تلقائياً على المساهمات المفتوحة المرتبطة بهذه الفاتورة حسب الأقدمية.'
+              )}
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  {tr('Montant encaissé (MAD)', 'المبلغ المحصل (درهم)')}
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  value={payInvoiceAmount}
+                  onChange={(e) => setPayInvoiceAmount(e.target.value)}
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded font-mono font-bold"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  {tr('Mode de paiement', 'طريقة الدفع')}
+                </label>
+                <select
+                  value={payInvoiceMethod}
+                  onChange={(e) => setPayInvoiceMethod(e.target.value as PaymentMethod)}
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded bg-white"
+                >
+                  <option value="virement">{tr('Virement bancaire', 'تحويل بنكي')}</option>
+                  <option value="cheque">{tr('Chèque', 'شيك')}</option>
+                  <option value="versement">{tr('Versement agence', 'إيداع بنكي')}</option>
+                  <option value="especes">{tr('Espèces', 'نقداً')}</option>
+                </select>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  {tr('Référence bancaire', 'المرجع البنكي')}
+                </label>
+                <input
+                  type="text"
+                  value={payInvoiceReference}
+                  onChange={(e) => setPayInvoiceReference(e.target.value)}
+                  placeholder="Ex: VIR-FAC-2026-0001"
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded font-mono"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  {tr('Date d’opération bancaire', 'تاريخ العملية البنكية')}
+                </label>
+                <input
+                  type="date"
+                  value={payInvoiceDate}
+                  onChange={(e) => setPayInvoiceDate(e.target.value)}
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded font-mono"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setPayInvoiceTarget(null)}
+              >
+                {tr('Annuler', 'إلغاء')}
+              </Button>
+              <Button
+                type="submit"
+                disabled={recordInvoicePaymentMutation.isPending}
+                className="bg-teal-700 hover:bg-teal-800"
+              >
+                {tr('Enregistrer le règlement', 'تسجيل الأداء')}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* MODAL: VOID UNPAID INVOICE */}
+      {voidInvoiceTarget && (
+        <Modal
+          isOpen={!!voidInvoiceTarget}
+          busy={voidInvoiceMutation.isPending}
+          onSubmit={async () => {
+            if (voidInvoiceReason.trim().length < 3) {
+              throw new Error(tr('Indiquez un motif d’annulation (min. 3 caractères).', 'أدخل سبب الإلغاء (3 أحرف على الأقل).'));
+            }
+            await voidInvoiceMutation.mutateAsync({
+              invoiceId: voidInvoiceTarget.id,
+              reason: voidInvoiceReason.trim(),
+            });
+          }}
+          onClose={() => {
+            setVoidInvoiceTarget(null);
+            setVoidInvoiceReason('');
+          }}
+          title={tr(
+            `Annuler la facture ${voidInvoiceTarget.invoiceNumber}`,
+            `إلغاء الفاتورة ${voidInvoiceTarget.invoiceNumber}`
+          )}
+        >
+          <div className="space-y-3 text-xs">
+            <p className="text-slate-600">
+              {tr(
+                'Seule une facture sans paiement encaissé peut être annulée. Les charges restent ouvertes pour un nouvel avis.',
+                'يمكن إلغاء الفاتورة فقط إذا لم يتم تحصيل أي مبلغ عنها. تبقى المساهمات مفتوحة لإشعار جديد.'
+              )}
+            </p>
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">
+                {tr('Motif d’annulation :', 'سبب الإلغاء:')}
+              </label>
+              <textarea
+                rows={3}
+                maxLength={1000}
+                value={voidInvoiceReason}
+                onChange={(e) => setVoidInvoiceReason(e.target.value)}
+                placeholder={tr('Ex: Avis émis par erreur ou à regrouper différemment', 'مثال: إشعار صادر عن طريق الخطأ')}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
+                required
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => {
+                  setVoidInvoiceTarget(null);
+                  setVoidInvoiceReason('');
+                }}
+              >
+                {tr('Fermer', 'إغلاق')}
+              </Button>
+              <Button
+                type="submit"
+                disabled={voidInvoiceReason.trim().length < 3 || voidInvoiceMutation.isPending}
+                className="bg-rose-600 hover:bg-rose-700"
+              >
+                {tr('Confirmer l’annulation', 'تأكيد الإلغاء')}
               </Button>
             </div>
           </div>

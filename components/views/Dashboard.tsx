@@ -21,6 +21,7 @@ import {
 } from '../../firebase/services';
 import { exportBuildingSummaryReportPDF } from '../../services/pdfOnDemand';
 import { computeBuildingFundBalances, isIncomeTransaction } from '../../utils/security';
+import { isChargeEffectivelyOverdue } from '../../shared/moroccoDate';
 import { useI18n } from '../../hooks/useI18n';
 import { useToast } from '../common/Toast';
 import { useBuilding } from '../../contexts/BuildingContext';
@@ -137,7 +138,7 @@ const Dashboard: React.FC<DashboardProps> = ({ building, syndic }) => {
     const pendingProofsCount = proofs.filter(
       (p) => p.status === 'pending' || (p.status as string) === 'pending_review'
     ).length;
-    const overdueChargesCount = charges.filter((c) => c.status === 'overdue').length;
+    const overdueChargesCount = charges.filter((c) => isChargeEffectivelyOverdue(c)).length;
 
     return {
       workingBalance,

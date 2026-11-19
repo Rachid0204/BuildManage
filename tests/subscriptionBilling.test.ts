@@ -1063,6 +1063,96 @@ try {
       ])).status,
       409,
     );
+
+    // Voiding cab-exp-vir's only subscription payment rolls back subscriptionStatus & subscriptionExpiry
+    const transferPaymentId = approved.data.result.payment.id as string;
+    const voidRes = await command(adminToken, 'voidSubscriptionPayment', [
+      transferPaymentId,
+      'Virement rejeté par la banque émettrice',
+    ]);
+    assert.equal(voidRes.status, 200, JSON.stringify(voidRes.data));
+    const cabAfterVoid = readDiskState().syndik_prod_syndics_v1.find(
+      (s: any) => s.id === 'cab-exp-vir',
+    );
+    assert.equal(cabAfterVoid.subscriptionStatus, 'expired');
+    assert.equal(cabAfterVoid.subscriptionExpiry, expiryBeforeTransfer);
+    const voidedPayment = readDiskState().syndik_prod_subscription_payments_v1.find(
+      (p: any) => p.id === transferPaymentId,
+    );
+    assert.ok(voidedPayment?.voidedAt, 'voided transfer payment must record voidedAt');
+
+    // PayPal PAYMENT.CAPTURE.REFUNDED webhook voids cab-b's captured payment and rolls back expiry
+    const cabBPayment = readDiskState().syndik_prod_subscription_payments_v1.find(
+      (p: any) => p.syndicId === 'cab-b' && p.externalCaptureId,
+    );
+    const cabBPriorExpiry = cabBPayment?.previousSubscriptionExpiry;
+    const cabBCaptureId = cabBPayment?.externalCaptureId as string;
+    assert.ok(cabBCaptureId, 'cab-b must have a recorded PayPal externalCaptureId');
+
+    const refundWebhook = await httpCall('/api/webhooks/paypal', {
+      body: {
+        id: 'WH-EVT-REFUND-1',
+        event_type: 'PAYMENT.CAPTURE.REFUNDED',
+        resource: {
+          id: 'PP-REFUND-1',
+          status: 'COMPLETED',
+          links: [
+            {
+              rel: 'up',
+              href: `https://api-m.sandbox.paypal.com/v2/payments/captures/${cabBCaptureId}`,
+            },
+          ],
+        },
+      },
+      headers: {
+        'paypal-auth-algo': 'SHA256withRSA',
+        'paypal-cert-url': 'https://api.sandbox.paypal.com/cert.pem',
+        'paypal-transmission-id': 'tx-refund-1',
+        'paypal-transmission-sig': 'VALID-SIG',
+        'paypal-transmission-time': new Date().toISOString(),
+      },
+    });
+    assert.equal(refundWebhook.status, 200, JSON.stringify(refundWebhook.data));
+    assert.equal(refundWebhook.data.ignored, false);
+    assert.equal(refundWebhook.data.voidedPaymentId, cabBPayment.id);
+    const cabBAfterRefund = readDiskState().syndik_prod_syndics_v1.find(
+      (s: any) => s.id === 'cab-b',
+    );
+    if (cabBPriorExpiry) {
+      assert.equal(cabBAfterRefund.subscriptionExpiry, cabBPriorExpiry);
+    }
+    const refundedPayment = readDiskState().syndik_prod_subscription_payments_v1.find(
+      (p: any) => p.externalCaptureId === cabBCaptureId,
+    );
+    assert.ok(refundedPayment?.voidedAt, 'refunded PayPal payment must record voidedAt');
+
+    // Replaying the same refund webhook is idempotent (ignored: true)
+    const refundReplay = await httpCall('/api/webhooks/paypal', {
+      body: {
+        id: 'WH-EVT-REFUND-2',
+        event_type: 'PAYMENT.CAPTURE.REFUNDED',
+        resource: {
+          id: 'PP-REFUND-1',
+          status: 'COMPLETED',
+          links: [
+            {
+              rel: 'up',
+              href: `https://api-m.sandbox.paypal.com/v2/payments/captures/${cabBCaptureId}`,
+            },
+          ],
+        },
+      },
+      headers: {
+        'paypal-auth-algo': 'SHA256withRSA',
+        'paypal-cert-url': 'https://api.sandbox.paypal.com/cert.pem',
+        'paypal-transmission-id': 'tx-refund-2',
+        'paypal-transmission-sig': 'VALID-SIG',
+        'paypal-transmission-time': new Date().toISOString(),
+      },
+    });
+    assert.equal(refundReplay.status, 200, JSON.stringify(refundReplay.data));
+    assert.equal(refundReplay.data.ignored, true);
+    assert.equal(refundReplay.data.reason, 'payment_not_found_or_already_voided');
   });
 } finally {
   clearTimeout(killTimer);

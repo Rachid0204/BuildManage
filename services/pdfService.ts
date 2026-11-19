@@ -1,6 +1,7 @@
 import { normalFont,boldFont } from '../assets/pdfFonts';
 import { jsPDF } from "jspdf";
-import { getRecordedReserveSplit, getRecordedReserveTotal, isIncomeTransaction } from '../utils/security';
+import { buildAnnualRepartitionSummary } from '../shared/annualRepartition';
+import { getRecordedReserveSplit, isIncomeTransaction } from '../utils/security';
 import type {
   Invoice,
   Building,
@@ -527,7 +528,7 @@ export const exportResidentsCSV = (building: Building) => {
     'Lot Assigné',
     'Étage',
     'Superficie (m²)',
-    'Tantièmes (/1000)',
+    `Tantièmes (/${building.totalTantiemes || 1000})`,
     'Cotisation Mensuelle (MAD)',
     'Email',
     'Téléphone',
@@ -690,7 +691,7 @@ export const exportResidentsPDF = (building: Building, syndic?: Syndic) => {
     doc.text(apt ? `Lot ${sanitizePdfText(apt.number)} (Ét. ${apt.floor})` : 'Non assigné', 142, y + 5.5);
 
     doc.setFont('helvetica', 'normal');
-    doc.text(apt ? `${apt.tantiemes || 100} / 1000` : '-', 176, y + 5.5);
+    doc.text(apt ? `${apt.tantiemes || 100} / ${building.totalTantiemes || 1000}` : '-', 176, y + 5.5);
     doc.text(sanitizePdfText(res.phone) || '-', 204, y + 5.5);
     doc.text((sanitizePdfText(res.email) || '-').slice(0, 28), 238, y + 5.5);
 
@@ -717,6 +718,8 @@ export const exportApartmentsCSV = (building: Building, residents?: Resident[]) 
   const allResidents = residents || building.residents || [];
   const residentMap = new Map<string, Resident>(allResidents.map((r) => [r.id, r]));
 
+  const buildingTantiemesBase = building.totalTantiemes || 1000;
+
   const headers = [
     'Immeuble',
     'Ville',
@@ -724,7 +727,7 @@ export const exportApartmentsCSV = (building: Building, residents?: Resident[]) 
     'Type de Bien',
     'Étage',
     'Superficie (m²)',
-    'Quote-part Tantièmes (/1000)',
+    `Quote-part Tantièmes (/${buildingTantiemesBase})`,
     'Cotisation Mensuelle (MAD)',
     'Statut Occupation',
     'Copropriétaire',
@@ -746,7 +749,7 @@ export const exportApartmentsCSV = (building: Building, residents?: Resident[]) 
       COPRO_TYPE_LABELS[apt.coproType || 'apartment'] || 'Appartement',
       String(apt.floor),
       String(apt.area),
-      String(apt.tantiemes || 100),
+      String(apt.tantiemes || 0),
       String(apt.monthlyFees || building.monthlySyndicFees || 0),
       isOccupied ? 'Assigné / Occupé' : 'Vacant / Non assigné',
       owner ? owner.name : 'Non assigné',
@@ -772,7 +775,7 @@ export const exportApartmentsCSV = (building: Building, residents?: Resident[]) 
     '-',
     '-',
     `${totalArea} m²`,
-    `${totalTantiemes} / 1000`,
+    `${totalTantiemes} / ${buildingTantiemesBase}`,
     `${totalMonthlyFees} MAD`,
     '-',
     '-',
@@ -801,6 +804,7 @@ export const exportApartmentsPDF = (
   const allResidents = residents || building.residents || [];
   const residentMap = new Map<string, Resident>(allResidents.map((r) => [r.id, r]));
 
+  const buildingTantiemesBase = building.totalTantiemes || 1000;
   const totalLots = building.apartments.length;
   const occupiedLots = building.apartments.filter((a) => a.ownerId || a.tenantId).length;
   const totalArea = building.apartments.reduce((sum, a) => sum + (a.area || 0), 0);
@@ -861,7 +865,7 @@ export const exportApartmentsPDF = (
   doc.setFontSize(9);
   doc.text(`Total Lots : ${totalLots} (${occupiedLots} occupés)`, 18, y + 8.5);
   doc.text(`Superficie Totale : ${totalArea} m²`, 82, y + 8.5);
-  doc.text(`Total Tantièmes : ${totalTantiemes} / 1000`, 145, y + 8.5);
+  doc.text(`Total Tantièmes : ${totalTantiemes} / ${buildingTantiemesBase}`, 145, y + 8.5);
   doc.text(
     `Budget Mensuel Global : ${currencyFormatter.format(totalMonthlyFees)}`,
     210,
@@ -922,7 +926,7 @@ export const exportApartmentsPDF = (
     doc.text(`${apt.area} m²`, 100, y + 5.5);
 
     doc.setFont('helvetica', 'bold');
-    doc.text(`${apt.tantiemes || 100} / 1000`, 125, y + 5.5);
+    doc.text(`${apt.tantiemes || 0} / ${buildingTantiemesBase}`, 125, y + 5.5);
     doc.text(
       currencyFormatter.format(apt.monthlyFees || building.monthlySyndicFees || 0),
       154,
@@ -959,7 +963,7 @@ export const exportApartmentsPDF = (
   doc.setFontSize(8.5);
   doc.text(`TOTAL (${totalLots} LOTS)`, 17, y + 6);
   doc.text(`${totalArea} m²`, 100, y + 6);
-  doc.text(`${totalTantiemes} / 1000`, 125, y + 6);
+  doc.text(`${totalTantiemes} / ${buildingTantiemesBase}`, 125, y + 6);
   doc.text(currencyFormatter.format(totalMonthlyFees), 154, y + 6);
 
   // Legal Footer
@@ -1564,7 +1568,7 @@ export const exportBuildingSummaryReportPDF = (
     18,
     y + 16
   );
-  doc.text(`Quote-part totale : ${totalTantiemes} / 1000 tantièmes`, 18, y + 24);
+  doc.text(`Quote-part totale : ${totalTantiemes} / ${building.totalTantiemes || 1000} tantièmes`, 18, y + 24);
 
   doc.setFont('helvetica', 'bold');
   doc.text(`Taux d'Occupation : ${occupancyRate}%`, 115, y + 8);
@@ -1787,6 +1791,12 @@ export const exportAnnualRepartitionPDF = (
   fiscalYear: number = new Date().getFullYear()
 ) => {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const summary = buildAnnualRepartitionSummary(
+    building,
+    charges,
+    quittances,
+    fiscalYear
+  );
 
   doc.setFillColor(15, 118, 110);
   doc.rect(0, 0, 210, 38, 'F');
@@ -1818,81 +1828,82 @@ export const exportAnnualRepartitionPDF = (
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9.5);
   doc.text(
-    `Syndic Gestionnaire : ${sanitizePdfText(syndic?.name || 'Cabinet Syndic')}   |   Réserve : allocations historiques documentées`,
+    `Syndic Gestionnaire : ${sanitizePdfText(syndic?.name || 'Cabinet Syndic')}   |   Base tantièmes : ${summary.totalTantiemes}`,
     14,
     y
   );
 
-  y += 8;
-  doc.setFillColor(241, 245, 249);
-  doc.rect(14, y, 182, 8, 'F');
-  doc.setFontSize(8.5);
-  doc.text('Lot', 17, y + 5.5);
-  doc.text('Copropriétaire', 35, y + 5.5);
-  doc.text('Tantièmes', 92, y + 5.5);
-  doc.text('Appelé (MAD)', 116, y + 5.5);
-  doc.text('Réglé (MAD)', 144, y + 5.5);
-  doc.text('Dont Réserve', 168, y + 5.5);
+  const drawTableHeader = (topY: number) => {
+    doc.setFillColor(241, 245, 249);
+    doc.rect(14, topY, 182, 8, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.setTextColor(30, 41, 59);
+    doc.text('Lot', 17, topY + 5.5);
+    doc.text('Copropriétaire', 35, topY + 5.5);
+    doc.text('Tantièmes', 92, topY + 5.5);
+    doc.text('Appelé (MAD)', 116, topY + 5.5);
+    doc.text('Réglé (MAD)', 144, topY + 5.5);
+    doc.text('Dont Réserve', 168, topY + 5.5);
+    return topY + 12;
+  };
 
-  y += 12;
+  y = drawTableHeader(y + 8);
   doc.setFont('helvetica', 'normal');
-  let sumCalled = 0;
-  let sumPaid = 0;
-  let sumReserve = 0;
-  let reserveDocumented = true;
 
-  for (const apt of building.apartments) {
+  for (const row of summary.rows) {
     if (y > 265) {
       doc.addPage();
-      y = 20;
+      y = drawTableHeader(20);
+      doc.setFont('helvetica', 'normal');
     }
-    const owner = building.residents.find(
-      (r) => r.id === apt.ownerId || r.apartmentId === apt.id
-    );
-    const aptCharges = charges.filter((c) => c.apartmentId === apt.id);
-    const called = aptCharges.reduce((s, c) => s + (c.amount || 0), 0);
-    const paid = aptCharges.reduce(
-      (s, c) => s + (c.paidAmount ?? (c.status === 'paid' ? c.amount : 0)),
-      0
-    );
-    const reserveContrib = getRecordedReserveTotal(quittances.filter(receipt =>
-      receipt.buildingId === building.id && (receipt.apartmentId ? receipt.apartmentId === apt.id : receipt.apartmentNumber === apt.number)), paid);
 
-    sumCalled += called;
-    sumPaid += paid;
-    if (reserveContrib === undefined) reserveDocumented = false;
-    else sumReserve = Math.round((sumReserve + reserveContrib) * 100) / 100;
-
-    doc.text(String(apt.number), 17, y);
-    doc.text(sanitizePdfText(owner?.name || 'Non assigné').slice(0, 26), 35, y);
-    doc.text(`${apt.tantiemes || 100}/1000`, 92, y);
-    doc.text(called.toFixed(2), 116, y);
-    doc.text(paid.toFixed(2), 144, y);
-    doc.text(reserveContrib === undefined ? 'Non documenté' : reserveContrib.toFixed(2), 168, y);
+    doc.text(
+      row.archived ? `${sanitizePdfText(row.apartmentNumber)} (arch.)` : sanitizePdfText(row.apartmentNumber),
+      17,
+      y
+    );
+    doc.text(sanitizePdfText(row.ownerName).slice(0, 26), 35, y);
+    doc.text(`${row.tantiemes}/${summary.totalTantiemes}`, 92, y);
+    doc.text(row.calledMad.toFixed(2), 116, y);
+    doc.text(row.paidMad.toFixed(2), 144, y);
+    doc.text(row.reserveMad === undefined ? 'Non documenté' : row.reserveMad.toFixed(2), 168, y);
 
     doc.setDrawColor(226, 232, 240);
     doc.line(14, y + 2, 196, y + 2);
     y += 7;
   }
 
-  if (y > 260) {
+  if (y > 256) {
     doc.addPage();
-    y = 20;
+    y = 24;
   }
   y += 4;
   doc.setFont('helvetica', 'bold');
   doc.setFillColor(240, 253, 250);
   doc.rect(14, y - 4, 182, 9, 'F');
   doc.text('TOTAL EXERCICE', 17, y + 1.5);
-  doc.text(`${sumCalled.toFixed(2)} MAD`, 116, y + 1.5);
-  doc.text(`${sumPaid.toFixed(2)} MAD`, 144, y + 1.5);
-  doc.text(reserveDocumented ? `${sumReserve.toFixed(2)} MAD` : 'Non documenté', 168, y + 1.5);
+  doc.text(`${summary.totalCalledMad.toFixed(2)} MAD`, 116, y + 1.5);
+  doc.text(`${summary.totalPaidMad.toFixed(2)} MAD`, 144, y + 1.5);
+  doc.text(
+    summary.reserveDocumented ? `${summary.totalReserveMad.toFixed(2)} MAD` : 'Non documenté',
+    168,
+    y + 1.5
+  );
+
+  doc.setFontSize(8.5);
+  doc.setTextColor(153, 27, 27);
+  doc.text(
+    `Reste à recouvrer sur l'exercice ${fiscalYear} : ${summary.totalRemainingMad.toFixed(2)} MAD`,
+    14,
+    y + 11
+  );
 
   doc.setFontSize(8);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(100, 116, 139);
   doc.text(
-    `Arrêté des comptes certifié conforme aux articles 24 et 37 de la Loi 18-00 — Quittances émises : ${quittances.length}`,
+    `Arrêté des comptes exercice ${fiscalYear} certifié conforme aux articles 24 et 37 de la Loi 18-00 — Quittances exercice : ${summary.receiptCount}`,
     105,
     284,
     { align: 'center' }
@@ -1908,14 +1919,32 @@ export const exportMiseEnDemeurePDF = (
   building: Building,
   syndic: Syndic | undefined,
   resident: Resident,
-  apartment: Apartment | undefined,
+  apartmentOrList: Apartment | Apartment[] | undefined,
   unpaidCharges: Charge[]
 ) => {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-  const totalDue = unpaidCharges.reduce(
-    (s, c) => s + Math.max(0, c.amount - (c.paidAmount || 0)),
+  const totalTantiemes = building.totalTantiemes || 1000;
+  const apartments = Array.isArray(apartmentOrList)
+    ? apartmentOrList
+    : apartmentOrList
+      ? [apartmentOrList]
+      : [];
+  const lotsLabel = apartments.length
+    ? apartments
+        .map((a) => `${sanitizePdfText(a.number)} (${a.tantiemes ?? 100}/${totalTantiemes})`)
+        .join(', ')
+    : 'N/A';
+  const totalDueCents = unpaidCharges.reduce(
+    (s, c) =>
+      s +
+      Math.max(
+        0,
+        Math.round((Number(c.amount) || 0) * 100) -
+          Math.round((Number(c.paidAmount) || 0) * 100),
+      ),
     0
   );
+  const totalDue = totalDueCents / 100;
   const issueDate = new Date().toLocaleDateString('fr-MA');
 
   doc.setFillColor(153, 27, 27); // Rose/Red 800
@@ -1948,14 +1977,20 @@ export const exportMiseEnDemeurePDF = (
   doc.setFont('helvetica', 'normal');
   doc.text(`Immeuble : ${sanitizePdfText(building.name)} (${sanitizePdfText(building.address)}, ${sanitizePdfText(building.city)})`, 14, y + 6);
   doc.text(`Date d'émission : ${issueDate}`, 14, y + 12);
+  if (building.bankRib) {
+    doc.text(`RIB Copropriété : ${sanitizePdfText(building.bankRib)}`, 14, y + 18);
+  }
 
   doc.setFont('helvetica', 'bold');
   doc.text(`Destinataire Débiteur : ${sanitizePdfText(resident.name)}`, 115, y);
   doc.setFont('helvetica', 'normal');
-  doc.text(`Lot N° : ${apartment?.number || 'N/A'} (${apartment?.tantiemes || 100}/1000 tantièmes)`, 115, y + 6);
-  if (resident.cin) doc.text(`CIN : ${resident.cin}`, 115, y + 12);
+  const wrappedLots = doc.splitTextToSize(`Lot(s) : ${lotsLabel}`, 80);
+  doc.text(wrappedLots, 115, y + 6);
+  if (resident.cin) {
+    doc.text(`CIN : ${sanitizePdfText(resident.cin)}`, 115, y + 6 + wrappedLots.length * 5);
+  }
 
-  y += 24;
+  y += Math.max(26, 14 + wrappedLots.length * 5);
   const bodyText = doc.splitTextToSize(
     `Madame, Monsieur,\n\nMalgré nos précédents rappels amiables, nous constatons qu'à la date du ${issueDate}, votre compte copropriétaire au sein de la résidence « ${sanitizePdfText(building.name)} » présente un solde débiteur exigible de ${currencyFormatter.format(totalDue)} au titre des cotisations votées en Assemblée Générale.\n\nPar la présente, nous vous mettons formellement en demeure, conformément à l'article 25 de la Loi n° 18-00 (telle que modifiée par la Loi n° 106-12), de régulariser ce montant sous un délai de trente (30) jours à compter de la réception de cet avis.`,
     180
@@ -1963,38 +1998,42 @@ export const exportMiseEnDemeurePDF = (
   doc.text(bodyText, 14, y);
 
   y += bodyText.length * 4.8 + 6;
+  const drawChargesHeader = (topY: number) => {
+    doc.setFillColor(241, 245, 249);
+    doc.rect(14, topY, 182, 8, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(30, 41, 59);
+    doc.text('Lot', 17, topY + 5.5);
+    doc.text('Période / Désignation de la charge impayée', 36, topY + 5.5);
+    doc.text('Échéance', 132, topY + 5.5);
+    doc.text('Reste dû (MAD)', 162, topY + 5.5);
+    return topY + 13;
+  };
   if (y > 245) {
     doc.addPage();
     y = 24;
   }
-  doc.setFillColor(241, 245, 249);
-  doc.rect(14, y, 182, 8, 'F');
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9);
-  doc.text('Période / Désignation de la charge impayée', 18, y + 5.5);
-  doc.text('Échéance', 125, y + 5.5);
-  doc.text('Reste dû (MAD)', 160, y + 5.5);
-
-  y += 13;
+  y = drawChargesHeader(y);
   doc.setFont('helvetica', 'normal');
   for (const chg of unpaidCharges) {
     if (y > 258) {
       doc.addPage();
-      y = 24;
-      doc.setFillColor(241, 245, 249);
-      doc.rect(14, y, 182, 8, 'F');
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(9);
-      doc.text('Période / Désignation de la charge impayée', 18, y + 5.5);
-      doc.text('Échéance', 125, y + 5.5);
-      doc.text('Reste dû (MAD)', 160, y + 5.5);
-      y += 13;
+      y = drawChargesHeader(24);
       doc.setFont('helvetica', 'normal');
     }
-    const rem = Math.max(0, chg.amount - (chg.paidAmount || 0));
-    doc.text(sanitizePdfText(chg.description || chg.period || 'Appel de charges').slice(0, 52), 18, y);
-    doc.text(new Date(chg.dueDate).toLocaleDateString('fr-MA'), 125, y);
-    doc.text(currencyFormatter.format(rem), 160, y);
+    const remCents = Math.max(
+      0,
+      Math.round((Number(chg.amount) || 0) * 100) -
+        Math.round((Number(chg.paidAmount) || 0) * 100),
+    );
+    const chgApt =
+      apartments.find((a) => a.id === chg.apartmentId) ||
+      building.apartments.find((a) => a.id === chg.apartmentId);
+    doc.text(sanitizePdfText(chgApt?.number || '-'), 17, y);
+    doc.text(sanitizePdfText(chg.description || chg.period || 'Appel de charges').slice(0, 44), 36, y);
+    doc.text(new Date(chg.dueDate).toLocaleDateString('fr-MA'), 132, y);
+    doc.text(currencyFormatter.format(remCents / 100), 162, y);
     y += 7;
   }
 
@@ -2018,7 +2057,187 @@ export const exportMiseEnDemeurePDF = (
     { align: 'center' }
   );
 
-  doc.save(`Mise_En_Demeure_Lot_${apartment?.number || resident.id}.pdf`);
+  const fileLotSuffix =
+    apartments.length > 1
+      ? `Lots_${apartments.map((a) => a.number).join('-')}`
+      : `Lot_${apartments[0]?.number || resident.id}`;
+  doc.save(`Mise_En_Demeure_${fileLotSuffix.replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`);
 };
+
+/**
+ * Relevé de Compte Individuel Copropriétaire (Historique chronologique appels / règlements / solde)
+ */
+export const exportResidentStatementPDF = (
+  building: Building,
+  syndic: Syndic | undefined,
+  resident: Resident,
+  apartments: Apartment[],
+  charges: Charge[],
+  quittances: Quittance[]
+) => {
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const totalTantiemes = building.totalTantiemes || 1000;
+  const residentCharges = charges.filter(
+    (c) => c.buildingId === building.id && c.residentId === resident.id
+  );
+  const residentQuittances = quittances.filter(
+    (q) =>
+      q.buildingId === building.id &&
+      q.residentId === resident.id &&
+      !q.voidedAt
+  );
+
+  type LedgerRow = {
+    date: string;
+    lot: string;
+    label: string;
+    debitCents: number;
+    creditCents: number;
+  };
+  const entries: LedgerRow[] = [
+    ...residentCharges.map((c) => {
+      const apt =
+        apartments.find((a) => a.id === c.apartmentId) ||
+        building.apartments.find((a) => a.id === c.apartmentId);
+      return {
+        date: (c.dueDate || c.createdAt || '').slice(0, 10),
+        lot: apt?.number || '-',
+        label: c.description || `Appel de charges (${c.period || '-'})`,
+        debitCents: Math.round((Number(c.amount) || 0) * 100),
+        creditCents: 0,
+      };
+    }),
+    ...residentQuittances.map((q) => ({
+      date: (
+        q.postingDate ||
+        q.bankTransactionDate ||
+        q.paymentDate ||
+        q.createdAt ||
+        ''
+      ).slice(0, 10),
+      lot: q.apartmentNumber || '-',
+      label: `Quittance ${q.quittanceNumber} (${q.paymentMethod || 'règlement'})`,
+      debitCents: 0,
+      creditCents: Math.round((Number(q.amount) || 0) * 100),
+    })),
+  ].sort((a, b) => a.date.localeCompare(b.date));
+
+  const totalDebitCents = entries.reduce((s, e) => s + e.debitCents, 0);
+  const totalCreditCents = entries.reduce((s, e) => s + e.creditCents, 0);
+  const netBalanceCents = totalDebitCents - totalCreditCents;
+
+  doc.setFillColor(15, 23, 42);
+  doc.rect(0, 0, 210, 36, 'F');
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.text('ROYAUME DU MAROC · RELEVÉ DE COMPTE COPROPRIÉTAIRE (LOI 18-00)', 105, 12, {
+    align: 'center',
+  });
+  doc.setFontSize(14);
+  doc.text(`SITUATION FINANCIÈRE : ${sanitizePdfText(resident.name)}`, 105, 22, {
+    align: 'center',
+  });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.text(
+    `Résidence ${sanitizePdfText(building.name)} · Arrêté au ${new Date().toLocaleDateString('fr-MA')}`,
+    105,
+    30,
+    { align: 'center' }
+  );
+
+  let y = 44;
+  doc.setTextColor(30, 41, 59);
+  doc.setFontSize(9.5);
+  doc.setFont('helvetica', 'bold');
+  doc.text(`Syndic : ${sanitizePdfText(syndic?.name || 'Cabinet Syndic')}`, 14, y);
+  doc.setFont('helvetica', 'normal');
+  const lotsSummary = apartments.length
+    ? apartments
+        .map((a) => `Lot ${sanitizePdfText(a.number)} (${a.tantiemes ?? 100}/${totalTantiemes})`)
+        .join(' · ')
+    : 'Lot non assigné';
+  doc.text(lotsSummary, 14, y + 6);
+  if (resident.cin) doc.text(`CIN : ${sanitizePdfText(resident.cin)}`, 145, y);
+  doc.text(
+    `Statut : ${netBalanceCents <= 0 ? 'À JOUR / SOLDÉ' : `RESTE DÛ : ${currencyFormatter.format(netBalanceCents / 100)}`}`,
+    145,
+    y + 6
+  );
+
+  const drawHeader = (topY: number) => {
+    doc.setFillColor(241, 245, 249);
+    doc.rect(14, topY, 182, 8, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.setTextColor(30, 41, 59);
+    doc.text('Date', 16, topY + 5.5);
+    doc.text('Lot', 38, topY + 5.5);
+    doc.text('Libellé', 52, topY + 5.5);
+    doc.text('Appelé', 124, topY + 5.5);
+    doc.text('Réglé', 148, topY + 5.5);
+    doc.text('Solde cumulé', 170, topY + 5.5);
+    return topY + 12;
+  };
+
+  y = drawHeader(y + 13);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+
+  let runningCents = 0;
+  for (const row of entries) {
+    if (y > 266) {
+      doc.addPage();
+      y = drawHeader(20);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+    }
+    runningCents += row.debitCents - row.creditCents;
+    doc.setTextColor(30, 41, 59);
+    doc.text(row.date || '-', 16, y);
+    doc.text(sanitizePdfText(row.lot).slice(0, 8), 38, y);
+    doc.text(sanitizePdfText(row.label).slice(0, 40), 52, y);
+    doc.text(row.debitCents ? (row.debitCents / 100).toFixed(2) : '-', 124, y);
+    doc.text(row.creditCents ? (row.creditCents / 100).toFixed(2) : '-', 148, y);
+    doc.setTextColor(runningCents > 0 ? 153 : 15, runningCents > 0 ? 27 : 118, runningCents > 0 ? 27 : 110);
+    doc.text((runningCents / 100).toFixed(2), 170, y);
+
+    doc.setDrawColor(226, 232, 240);
+    doc.line(14, y + 2, 196, y + 2);
+    y += 6.5;
+  }
+
+  if (y > 258) {
+    doc.addPage();
+    y = 24;
+  }
+  y += 4;
+  doc.setFillColor(240, 253, 250);
+  doc.rect(14, y - 4, 182, 9, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.setTextColor(15, 23, 42);
+  doc.text('TOTAUX', 16, y + 1.5);
+  doc.text(`${(totalDebitCents / 100).toFixed(2)}`, 124, y + 1.5);
+  doc.text(`${(totalCreditCents / 100).toFixed(2)}`, 148, y + 1.5);
+  doc.setTextColor(netBalanceCents > 0 ? 153 : 15, netBalanceCents > 0 ? 27 : 118, netBalanceCents > 0 ? 27 : 110);
+  doc.text(`${(netBalanceCents / 100).toFixed(2)} MAD`, 170, y + 1.5);
+
+  doc.setFontSize(7.5);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(100, 116, 139);
+  doc.text(
+    `Relevé de compte généré par ${sanitizePdfText(syndic?.name || 'ImmoGest')} — Conforme à la Loi n° 18-00 relative à la copropriété`,
+    105,
+    284,
+    { align: 'center' }
+  );
+
+  doc.save(
+    `Releve_Compte_${sanitizePdfText(resident.name).replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`
+  );
+};
+
 
 
