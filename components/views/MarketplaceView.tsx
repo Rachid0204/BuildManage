@@ -18,7 +18,7 @@ import {
   addMarketplaceItem,
   updateMarketplaceItemStatus,
   deleteMarketplaceItem,
-  getChatMessages,
+  getMarketplaceDirectMessages,
   sendChatMessage,
 } from '../../firebase/services';
 import Loading from '../common/Loading';
@@ -34,14 +34,33 @@ interface MarketplaceViewProps {
 }
 
 const CATEGORIES: { id: MarketplaceCategory; labelFr: string; labelAr: string; icon: string }[] = [
-  { id: 'furniture', labelFr: 'Meubles & Déco', labelAr: 'أثاث وديكور', icon: '🛋️' },
-  { id: 'appliances', labelFr: 'Électroménager', labelAr: 'أجهزة كهرومنزلية', icon: '🔌' },
-  { id: 'kids', labelFr: 'Enfants & Jouets', labelAr: 'أطفال وألعاب', icon: '🧸' },
-  { id: 'bricolage', labelFr: 'Bricolage & Jardin', labelAr: 'أدوات وحديقة', icon: '🔨' },
+  { id: 'mobilier', labelFr: 'Meubles & Déco', labelAr: 'أثاث وديكور', icon: '🛋️' },
+  { id: 'electromenager', labelFr: 'Électroménager & Tech', labelAr: 'أجهزة كهرومنزلية وإلكترونيات', icon: '🔌' },
+  { id: 'enfants', labelFr: 'Enfants & Jouets', labelAr: 'أطفال وألعاب', icon: '🧸' },
   { id: 'services', labelFr: 'Entraide & Services', labelAr: 'تعاون وخدمات', icon: '🤝' },
-  { id: 'electronics', labelFr: 'High-Tech & TV', labelAr: 'إلكترونيات وتلفاز', icon: '💻' },
-  { id: 'other', labelFr: 'Autre', labelAr: 'أخرى', icon: '📦' },
+  { id: 'parking', labelFr: 'Parking & Garage', labelAr: 'مرآب وركن السيارات', icon: '🚗' },
+  { id: 'don_gratuit', labelFr: 'Dons Gratuits', labelAr: 'تبرعات مجانية', icon: '🎁' },
+  { id: 'autre', labelFr: 'Autre & Bricolage', labelAr: 'أخرى وأدوات', icon: '📦' },
 ];
+
+const normalizeCategorySlug = (raw?: string): string => {
+  const key = String(raw || 'autre').trim().toLowerCase();
+  if (key === 'furniture' || key === 'mobilier') return 'mobilier';
+  if (key === 'appliances' || key === 'electronics' || key === 'electromenager') return 'electromenager';
+  if (key === 'kids' || key === 'enfants') return 'enfants';
+  if (key === 'services' || key === 'service') return 'services';
+  if (key === 'parking') return 'parking';
+  if (key === 'free' || key === 'don_gratuit') return 'don_gratuit';
+  return 'autre';
+};
+
+const normalizeConditionSlug = (raw?: string): 'neuf' | 'tres_bon_etat' | 'bon_etat' | 'a_depanner' => {
+  const key = String(raw || 'bon_etat').trim().toLowerCase();
+  if (key === 'new' || key === 'neuf') return 'neuf';
+  if (key === 'like_new' || key === 'tres_bon_etat') return 'tres_bon_etat';
+  if (key === 'good' || key === 'bon_etat') return 'bon_etat';
+  return 'a_depanner';
+};
 
 const SAMPLE_IMAGES = [
   { labelFr: 'Mobilier & Salon', labelAr: 'أثاث وصالون', url: 'https://images.unsplash.com/photo-1533090161767-e6ffed986c88?w=800&auto=format&fit=crop&q=80' },
@@ -100,6 +119,8 @@ interface MarketplaceCardProps {
   item: MarketplaceItem;
   currentResidentId: string;
   currentApartmentNumber: string;
+  isResidentPortal: boolean;
+  buildingSyndicId: string;
   messageCount: number;
   onOpenDetails: (item: MarketplaceItem, initialIndex?: number) => void;
   onOpenChat: (item: MarketplaceItem) => void;
@@ -111,6 +132,8 @@ const MarketplaceCard: React.FC<MarketplaceCardProps> = ({
   item,
   currentResidentId,
   currentApartmentNumber,
+  isResidentPortal,
+  buildingSyndicId,
   messageCount,
   onOpenDetails,
   onOpenChat,
@@ -118,7 +141,10 @@ const MarketplaceCard: React.FC<MarketplaceCardProps> = ({
   onDelete,
 }) => {
   const { tr } = useI18n();
-  const isOwner = item.residentId === currentResidentId;
+  const isOwner =
+    item.residentId === currentResidentId ||
+    (!isResidentPortal && item.residentId === buildingSyndicId);
+  const canModerate = isOwner || !isResidentPortal;
   const isSold = item.status === 'sold';
   const isReserved = item.status === 'reserved';
 
@@ -147,6 +173,8 @@ const MarketplaceCard: React.FC<MarketplaceCardProps> = ({
     e.stopPropagation();
     setCardPhotoIndex((prev) => (prev - 1 + itemPhotos.length) % itemPhotos.length);
   };
+
+  const normalizedCondition = item.condition ? normalizeConditionSlug(item.condition) : null;
 
   return (
     <Card
@@ -184,13 +212,13 @@ const MarketplaceCard: React.FC<MarketplaceCardProps> = ({
               </span>
             )}
 
-            {item.condition && (
+            {normalizedCondition && (
               <span className="bg-black/60 backdrop-blur-sm text-white font-medium text-[10px] px-2 py-0.5 rounded-full">
-                {item.condition === 'new'
+                {normalizedCondition === 'neuf'
                   ? tr('Neuf', 'جديد')
-                  : item.condition === 'like_new'
+                  : normalizedCondition === 'tres_bon_etat'
                   ? tr('Comme neuf', 'شبه جديد')
-                  : item.condition === 'good'
+                  : normalizedCondition === 'bon_etat'
                   ? tr('Bon état', 'حالة جيدة')
                   : tr("État d'usage", 'مستعمل')}
               </span>
@@ -352,8 +380,8 @@ const MarketplaceCard: React.FC<MarketplaceCardProps> = ({
           </div>
         )}
 
-        {/* Owner Controls */}
-        {isOwner && (
+        {/* Owner / Syndic Moderation Controls */}
+        {canModerate && (
           <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px]">
             {!isSold ? (
               <div className="flex items-center gap-2">
@@ -408,6 +436,13 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
   const publishFormId = useId();
   const { showToast, confirmAction } = useToast();
 
+  const isSelfId = (id?: string) =>
+    Boolean(
+      id &&
+        (id === currentResidentId ||
+          (!isResidentPortal && building.syndicId && id === building.syndicId))
+    );
+
   const [activeTypeTab, setActiveTypeTab] = useState<'all' | 'sale' | 'free' | 'service'>('all');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -427,10 +462,10 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
   // Form State
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [category, setCategory] = useState<MarketplaceCategory>('furniture');
+  const [category, setCategory] = useState<MarketplaceCategory>('mobilier');
   const [listingType, setListingType] = useState<MarketplaceListingType>('sale');
   const [price, setPrice] = useState<number | ''>(200);
-  const [condition, setCondition] = useState<MarketplaceCondition>('good');
+  const [condition, setCondition] = useState<MarketplaceCondition>('bon_etat');
   const [sellerPhone, setSellerPhone] = useState(currentPhone);
 
   // Photo Upload State
@@ -444,17 +479,17 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
     queryFn: () => getMarketplaceItems(building.id),
   });
 
-  // Fetch all marketplace chat messages for this building
+  // Fetch private marketplace direct messages for this building (isolated from public #marketplace channel)
   const { data: allMarketplaceMessages = [] } = useQuery({
-    queryKey: ['chatMessages', building.id, 'marketplace'],
-    queryFn: () => getChatMessages(building.id, 'marketplace'),
+    queryKey: ['marketplaceDirectMessages', building.id],
+    queryFn: () => getMarketplaceDirectMessages(building.id),
     refetchInterval: 4000,
   });
 
   const sendChatMutation = useMutation({
     mutationFn: (content: string) => {
       if (!activeChatListing) throw new Error(tr('Aucune annonce sélectionnée', 'لم يتم تحديد أي إعلان'));
-      const isSeller = activeChatListing.residentId === currentResidentId;
+      const isSeller = isSelfId(activeChatListing.residentId);
       if (isSeller && !activeBuyer) throw new Error(tr('Sélectionnez un acheteur.', 'اختر مشترياً.'));
       const payload: Omit<ChatMessage, 'id' | 'createdAt'> = {
         buildingId: building.id,
@@ -476,6 +511,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
       return sendChatMessage(payload);
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['marketplaceDirectMessages', building.id] });
       queryClient.invalidateQueries({ queryKey: ['chatMessages', building.id] });
       setChatInputText('');
       setTimeout(() => {
@@ -493,11 +529,16 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
   const handleOpenChatForItem = (item: MarketplaceItem) => {
     setActiveChatListing(item);
     setChatInputText('');
-    if (item.residentId === currentResidentId) {
+    if (isSelfId(item.residentId)) {
       const firstBuyer = allMarketplaceMessages
-        .filter((m) => m.marketplaceItemId === item.id || m.channelId === `market-${item.id}`)
-        .map((m) => (m.senderId === currentResidentId ? m.recipientId : m.senderId))
-        .find(Boolean);
+        .filter(
+          (m) =>
+            m.marketplaceItemId === item.id ||
+            m.channelId === `market-${item.id}` ||
+            m.channelId.startsWith(`market-${item.id}:`)
+        )
+        .map((m) => (isSelfId(m.senderId) ? m.recipientId : m.senderId))
+        .find((id) => Boolean(id) && !isSelfId(id));
       setActiveBuyer(firstBuyer || '');
     } else {
       setActiveBuyer('');
@@ -517,7 +558,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
     for (const msg of allMarketplaceMessages) {
       const itemId =
         msg.marketplaceItemId ||
-        (msg.channelId.startsWith('market-') ? msg.channelId.replace('market-', '') : '');
+        (msg.channelId.startsWith('market-') ? msg.channelId.slice(7).split(':')[0] : '');
       if (itemId) {
         counts[itemId] = (counts[itemId] || 0) + 1;
       }
@@ -527,13 +568,17 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
 
   // Active item conversation messages
   const activeItemMessages = useMemo(() => {
-    if (!activeChatListing || (activeChatListing.residentId === currentResidentId && !activeBuyer)) return [];
+    if (!activeChatListing) return [];
+    const sellerSelf = isSelfId(activeChatListing.residentId);
+    if (sellerSelf && !activeBuyer) return [];
     return allMarketplaceMessages.filter(
       (m) =>
-        (activeChatListing.residentId !== currentResidentId || m.senderId === activeBuyer || m.recipientId === activeBuyer) && (m.channelId === `market-${activeChatListing.id}` ||
-        m.marketplaceItemId === activeChatListing.id)
+        (!sellerSelf || m.senderId === activeBuyer || m.recipientId === activeBuyer) &&
+        (m.marketplaceItemId === activeChatListing.id ||
+          m.channelId === `market-${activeChatListing.id}` ||
+          m.channelId.startsWith(`market-${activeChatListing.id}:`))
     );
-  }, [allMarketplaceMessages, activeChatListing, activeBuyer, currentResidentId]);
+  }, [allMarketplaceMessages, activeChatListing, activeBuyer, currentResidentId, isResidentPortal, building.syndicId]);
 
   const publishMutation = useMutation({
     mutationFn: addMarketplaceItem,
@@ -561,6 +606,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
     mutationFn: deleteMarketplaceItem,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['marketplaceItems', building.id] });
+      queryClient.invalidateQueries({ queryKey: ['marketplaceDirectMessages', building.id] });
       if (activeDetailItem) {
         setActiveDetailItem(null);
       }
@@ -570,10 +616,10 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
   const resetForm = () => {
     setTitle('');
     setDescription('');
-    setCategory('furniture');
+    setCategory('mobilier');
     setListingType('sale');
     setPrice(200);
-    setCondition('good');
+    setCondition('bon_etat');
     setUploadedPhotos([]);
     setShowSamplePicker(false);
   };
@@ -655,10 +701,10 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
       whatsapp: (sellerPhone || currentPhone).replace(/\s+/g, '').replace('+', ''),
       title: title.trim(),
       description: description.trim(),
-      category,
+      category: normalizeCategorySlug(category),
       type: listingType,
       price: finalPrice,
-      condition,
+      condition: normalizeConditionSlug(condition),
       status: 'available',
       imageUrl: finalPhotos[0],
       images: finalPhotos,
@@ -670,7 +716,7 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
   const filteredItems = useMemo(() => {
     return items.filter((item) => {
       if (activeTypeTab !== 'all' && item.type !== activeTypeTab) return false;
-      if (selectedCategory !== 'all' && item.category !== selectedCategory) return false;
+      if (selectedCategory !== 'all' && normalizeCategorySlug(item.category) !== selectedCategory) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         const matchesTitle = item.title.toLowerCase().includes(q);
@@ -827,6 +873,8 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
             item={item}
             currentResidentId={currentResidentId}
             currentApartmentNumber={currentApartmentNumber}
+            isResidentPortal={isResidentPortal}
+            buildingSyndicId={building.syndicId}
             messageCount={messageCountByItemId[item.id] || 0}
             onOpenDetails={handleOpenDetails}
             onOpenChat={handleOpenChatForItem}
@@ -972,10 +1020,10 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
                 onChange={(e) => setCondition(e.target.value as any)}
                 className="w-full text-xs p-2.5 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white"
               >
-                <option value="new">{tr('Neuf (jamais utilisé)', 'جديد (غير مستعمل)')}</option>
-                <option value="like_new">{tr('Comme neuf', 'شبه جديد')}</option>
-                <option value="good">{tr('Bon état', 'حالة جيدة')}</option>
-                <option value="fair">{tr("État d'usage", 'مستعمل')}</option>
+                <option value="neuf">{tr('Neuf (jamais utilisé)', 'جديد (غير مستعمل)')}</option>
+                <option value="tres_bon_etat">{tr('Comme neuf', 'شبه جديد')}</option>
+                <option value="bon_etat">{tr('Bon état', 'حالة جيدة')}</option>
+                <option value="a_depanner">{tr("État d'usage", 'مستعمل')}</option>
               </select>
             </div>
           </div>
@@ -1238,24 +1286,27 @@ export const MarketplaceView: React.FC<MarketplaceViewProps> = ({
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2 border-t border-slate-100">
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="font-bold text-xs uppercase tracking-wider bg-teal-50 text-teal-800 border border-teal-200 px-2.5 py-0.5 rounded-full">
-                  {CATEGORIES.find((c) => c.id === activeDetailItem.category)?.icon}{' '}
+                  {CATEGORIES.find((c) => c.id === normalizeCategorySlug(activeDetailItem.category))?.icon}{' '}
                   {isAr
-                    ? CATEGORIES.find((c) => c.id === activeDetailItem.category)?.labelAr
-                    : CATEGORIES.find((c) => c.id === activeDetailItem.category)?.labelFr}
+                    ? CATEGORIES.find((c) => c.id === normalizeCategorySlug(activeDetailItem.category))?.labelAr
+                    : CATEGORIES.find((c) => c.id === normalizeCategorySlug(activeDetailItem.category))?.labelFr}
                 </span>
 
-                {activeDetailItem.condition && (
-                  <span className="text-slate-600 bg-slate-100 text-xs px-2.5 py-0.5 rounded-full font-medium">
-                    {tr('État :', 'الحالة:')}{' '}
-                    {activeDetailItem.condition === 'new'
-                      ? tr('Neuf', 'جديد')
-                      : activeDetailItem.condition === 'like_new'
-                      ? tr('Comme neuf', 'شبه جديد')
-                      : activeDetailItem.condition === 'good'
-                      ? tr('Bon état', 'حالة جيدة')
-                      : tr("État d'usage", 'مستعمل')}
-                  </span>
-                )}
+                {activeDetailItem.condition && (() => {
+                  const normCond = normalizeConditionSlug(activeDetailItem.condition);
+                  return (
+                    <span className="text-slate-600 bg-slate-100 text-xs px-2.5 py-0.5 rounded-full font-medium">
+                      {tr('État :', 'الحالة:')}{' '}
+                      {normCond === 'neuf'
+                        ? tr('Neuf', 'جديد')
+                        : normCond === 'tres_bon_etat'
+                        ? tr('Comme neuf', 'شبه جديد')
+                        : normCond === 'bon_etat'
+                        ? tr('Bon état', 'حالة جيدة')
+                        : tr("État d'usage", 'مستعمل')}
+                    </span>
+                  );
+                })()}
               </div>
 
               <div className="text-xl font-bold font-mono text-teal-900">

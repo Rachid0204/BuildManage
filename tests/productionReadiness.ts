@@ -763,7 +763,8 @@ try {
     200,
   );
   const mail: any = Object.values(disk().__outbox).find(
-    (m: any) => m.to === owner.email,
+    (m: any) =>
+      m.to === owner.email && decrypt(m.encryptedText).includes("token="),
   );
   const text = decrypt(mail.encryptedText),
     link = text.match(/http[^\s]+/)![0],

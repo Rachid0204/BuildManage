@@ -10,6 +10,7 @@ SyndicSchema,
 TransactionSchema,
 } from "../../utils/validation";
 import { allAttachmentValues, privateAttachments } from '../attachments';
+import { fileIsReferenced } from '../lifecycle';
 import { mailIsConfigured,queueMail } from "../mailer";
 import { type State } from "../repository";
 import { firebaseLinkedResidentIds,LINKED_RESIDENT_EMAIL_CODE,LINKED_RESIDENT_EMAIL_MESSAGE } from '../residentIdentity';
@@ -208,24 +209,176 @@ function revoke(id: string) {
       (transactionState.__sessionVersions ??= {})[user.uid] =
         (transactionState.__sessionVersions?.[user.uid] || 0) + 1;
 }
-function notice(
-  residentId: string,
+const SAFE_MEDIA_URL_RE = /^(\/api\/uploads\/[A-Za-z0-9_-]+|https:\/\/[^\s]+)$/;
+const MARKETPLACE_CATEGORY_MAP: Record<string, string> = {
+  mobilier: "mobilier",
+  furniture: "mobilier",
+  electromenager: "electromenager",
+  electronics: "electromenager",
+  appliances: "electromenager",
+  parking: "parking",
+  services: "services",
+  service: "services",
+  enfants: "enfants",
+  kids: "enfants",
+  don_gratuit: "don_gratuit",
+  free: "don_gratuit",
+  bricolage: "autre",
+  autre: "autre",
+  other: "autre",
+};
+const MARKETPLACE_CONDITION_MAP: Record<string, string> = {
+  neuf: "neuf",
+  new: "neuf",
+  tres_bon_etat: "tres_bon_etat",
+  like_new: "tres_bon_etat",
+  bon_etat: "bon_etat",
+  good: "bon_etat",
+  a_depanner: "a_depanner",
+  fair: "a_depanner",
+};
+const ALLOWED_MAINTENANCE_CATEGORIES = [
+  "elevator",
+  "plumbing",
+  "electrical",
+  "common_area",
+  "cleaning",
+  "security",
+  "other",
+] as const;
+const ALLOWED_MAINTENANCE_PRIORITIES = [
+  "low",
+  "medium",
+  "high",
+  "emergency",
+] as const;
+const ALLOWED_PUBLIC_CHAT_CHANNELS = [
+  "general",
+  "syndic",
+  "help",
+  "marketplace",
+] as const;
+
+function validateMediaUrls(urls: unknown): string[] | undefined {
+  if (urls === undefined || urls === null) return undefined;
+  const list = z.array(z.string().trim().min(1).max(2048)).max(10).parse(urls);
+  for (const url of list) {
+    check(
+      SAFE_MEDIA_URL_RE.test(url),
+      "URL de média invalide (HTTPS ou /api/uploads/ requis).",
+      400,
+    );
+  }
+  return list;
+}
+
+function validateMediaUrl(url: unknown): string | undefined {
+  if (url === undefined || url === null || String(url).trim() === "")
+    return undefined;
+  const clean = z.string().trim().min(1).max(2048).parse(url);
+  check(
+    SAFE_MEDIA_URL_RE.test(clean),
+    "URL de média invalide (HTTPS ou /api/uploads/ requis).",
+    400,
+  );
+  return clean;
+}
+
+function cabinetSyndicUids(b: any): Set<string> {
+  const uids = new Set<string>();
+  const cab = cabinets().find((s: any) => s.id === b?.syndicId);
+  if (cab?.createdBy) uids.add(cab.createdBy);
+  for (const u of transactionState.syndik_prod_registered_users_v1 || []) {
+    if (u?.disabled) continue;
+    if (
+      u?.profile?.role === "syndic" &&
+      (u.profile.syndicId === b?.syndicId || u.uid === cab?.createdBy)
+    ) {
+      uids.add(u.uid);
+    }
+  }
+  return uids;
+}
+
+function actorDisplayName(actor: Actor, b?: any): string {
+  const id = actorIdentity(actor);
+  if (actor.role === "resident") {
+    const res = (b?.residents || []).find(
+      (r: any) => r.id === id || r.id === actor.uid,
+    );
+    if (res?.name) return res.name;
+    const reg = (transactionState.syndik_prod_registered_users_v1 || []).find(
+      (u: any) => u.uid === actor.uid,
+    );
+    return reg?.profile?.displayName || "Copropriétaire";
+  }
+  if (actor.role === "provider") {
+    const prov = (transactionState.syndik_prod_prestataires_v1 || []).find(
+      (p: any) => p.id === id || p.id === actor.uid,
+    );
+    if (prov?.name) return prov.name;
+    const reg = (transactionState.syndik_prod_registered_users_v1 || []).find(
+      (u: any) => u.uid === actor.uid,
+    );
+    return reg?.profile?.displayName || "Prestataire";
+  }
+  const reg = (transactionState.syndik_prod_registered_users_v1 || []).find(
+    (u: any) => u.uid === actor.uid,
+  );
+  if (reg?.profile?.displayName) return reg.profile.displayName;
+  const cab = cabinets().find(
+    (s: any) => s.id === (b?.syndicId || actor.syndicId),
+  );
+  if (cab?.name) return cab.name;
+  return actor.role === "admin" ? "Administration" : "Syndic";
+}
+
+function residentApartmentLabel(b: any, residentId: string): string | undefined {
+  const res = (b?.residents || []).find(
+    (r: any) => !r.archivedAt && r.id === residentId,
+  );
+  const apts = (b?.apartments || []).filter((a: any) => !a.archivedAt);
+  const linked =
+    (res?.apartmentId &&
+      apts.find(
+        (a: any) =>
+          a.id === res.apartmentId &&
+          (a.ownerId === residentId || a.tenantId === residentId),
+      )) ||
+    apts.find((a: any) => a.ownerId === residentId || a.tenantId === residentId);
+  return linked?.number
+    ? `Lot ${String(linked.number).replace(/^(Lot|شقة)\s+/i, "").trim()}`
+    : undefined;
+}
+
+function maintenanceStatusFr(status?: string, completionPending?: boolean): string {
+  if (completionPending) return "Intervention à valider";
+  if (status === "completed") return "Clôturée";
+  if (status === "in_progress") return "En cours";
+  return "En attente";
+}
+
+function defaultNotificationLink(type: string): string {
+  if (type === "invoice") return "/financials";
+  if (type === "maintenance") return "/maintenance";
+  if (type === "announcement") return "/announcements";
+  return "/";
+}
+
+function pushUserNotification(
+  uid: string,
   b: any,
   title: string,
   message: string,
   type: string,
+  link?: string,
 ) {
-  const state = transactionState,
-    uid =
-      (transactionState.syndik_prod_registered_users_v1 || []).find(
-        (u: any) => u.profile?.residentId === residentId,
-      )?.uid || `user-res-${residentId}`;
   const account = (transactionState.syndik_prod_registered_users_v1 || []).find(
-    (u: any) => u.uid === uid,
+    (u: any) => !u.disabled && u.uid === uid,
   );
   if (account?.email && mailIsConfigured())
     queueMail(
-      state,
+      transactionState,
       account.email,
       title,
       `${message}\n\n${process.env.PUBLIC_APP_URL || "http://localhost:3000"}`,
@@ -237,9 +390,47 @@ function notice(
     title,
     message,
     type,
+    link: link || defaultNotificationLink(type),
     read: false,
     createdAt: new Date().toISOString(),
   });
+}
+
+function notice(
+  residentId: string,
+  b: any,
+  title: string,
+  message: string,
+  type: string,
+  link?: string,
+) {
+  const regUsers = transactionState.syndik_prod_registered_users_v1 || [];
+  const account = regUsers.find(
+    (u: any) =>
+      !u.disabled &&
+      (u.uid === residentId || u.profile?.residentId === residentId),
+  );
+  if (account?.uid) {
+    pushUserNotification(account.uid, b, title, message, type, link);
+    return;
+  }
+  const isKnownResident = (b?.residents || []).some(
+    (r: any) => !r.archivedAt && r.id === residentId,
+  );
+  if (!isKnownResident) return;
+  pushUserNotification(`user-res-${residentId}`, b, title, message, type, link);
+}
+
+function notifyCabinetSyndics(
+  b: any,
+  title: string,
+  message: string,
+  type: string,
+  link?: string,
+) {
+  for (const uid of cabinetSyndicUids(b)) {
+    pushUserNotification(uid, b, title, message, type, link);
+  }
 }
 function validateAttachments(actor: Actor, b: any, input: unknown, existing?: unknown) {
   const previous = privateAttachments(existing);
@@ -723,6 +914,15 @@ async function runOperation(
       for (const apt of b.apartments)
         for (const field of ["ownerId", "tenantId"])
           if (apt[field] === row.item.id) apt[field] = null;
+      for (const item of transactionState.syndik_prod_marketplace_v1 || []) {
+        if (
+          item.buildingId === b.id &&
+          (item.residentId === row.item.id || item.sellerId === row.item.id) &&
+          item.status !== "sold"
+        ) {
+          item.status = "sold";
+        }
+      }
       syncResidentAccountApartment(transactionState, b, row.item.id);
       disableAccount(row.item.id, "residentId");
       appendAudit(transactionState, actor, operation, b.id);
@@ -757,22 +957,29 @@ async function runOperation(
     ])
       delete cleaned[field];
     const p = PrestataireSchema.parse(cleaned);
+    const resolvedId =
+      typeof p.id === "string" && p.id.trim()
+        ? p.id.trim()
+        : `prest-${randomUUID()}`;
     const old = (transactionState.syndik_prod_prestataires_v1 || []).find(
-      (x: any) => x.id === p.id,
+      (x: any) => x.id === resolvedId,
     );
     check(!old || old.buildingId === b.id, "Prestataire non lié.");
-    const needsAccount = Boolean(args[1] || old?.hasAccount);
-    const email = String(p.email || '').trim().toLowerCase();
-    p.email = needsAccount || email ? z.string().email().parse(email) : '';
-    if (p.email)
+    check(!old?.archivedAt, "Prestataire archivé.", 409);
+    const isActive = p.active !== false;
+    if (!isActive) args[1] = false;
+    const needsAccount = Boolean(args[1] || (old?.hasAccount && isActive));
+    const email = String(p.email || "").trim().toLowerCase();
+    p.email = needsAccount || email ? z.string().email().parse(email) : "";
+    if (p.email && isActive)
       check(
-        emailAvailable(String(p.email), "prestataireId", String(p.id || "")),
+        emailAvailable(String(p.email), "prestataireId", resolvedId),
         "Email déjà lié.",
         409,
       );
-    if (old?.hasAccount && old.email.toLowerCase() !== p.email)
-      changedCredentials = { kind: "Prestataire", id: String(p.id) };
-    args[0] = { ...p, syndicId: b.syndicId };
+    if (old?.hasAccount && isActive && old.email.toLowerCase() !== p.email)
+      changedCredentials = { kind: "Prestataire", id: resolvedId };
+    args[0] = { ...p, id: resolvedId, active: isActive, syndicId: b.syndicId };
   } else if (
     [
       "regeneratePrestataireCredentials",
@@ -792,6 +999,26 @@ async function runOperation(
     if (operation === "deletePrestataire") {
       row.item.archivedAt = new Date().toISOString();
       row.item.active = false;
+      for (const req of transactionState.syndik_prod_maintenance_v1 || []) {
+        if (
+          req.buildingId === b.id &&
+          req.status !== "completed" &&
+          (req.prestataireId === row.item.id || req.assignedTo === row.item.id)
+        ) {
+          req.prestataireId = "";
+          req.assignedTo = "";
+          req.completionPending = false;
+          (req.updates ??= []).push({
+            id: randomUUID(),
+            status: req.status,
+            title: "Prestataire désaffecté",
+            note: `Le prestataire ${row.item.name} a été archivé et désaffecté de cette intervention.`,
+            updatedBy: actorDisplayName(actor, b),
+            updatedByRole: actor.role === "admin" ? "syndic" : actor.role,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      }
       disableAccount(row.item.id, "prestataireId");
       appendAudit(transactionState, actor, operation, b.id);
       return true;
@@ -801,6 +1028,7 @@ async function runOperation(
       operation === "recordPrestataireCredentialShare"
     ) {
       check(!row.item.archivedAt, "Prestataire archivé.", 409);
+      check(row.item.active !== false, "Prestataire inactif.", 409);
       if (operation === "regeneratePrestataireCredentials") {
         const slug =
           String(row.item.name || "")
@@ -819,19 +1047,36 @@ async function runOperation(
     }
     if (operation === "addPrestataireReview") {
       check(actor.role === "resident", "Avis réservé aux résidents.");
+      check(
+        !row.item.archivedAt && row.item.active !== false,
+        "Impossible d'évaluer un prestataire archivé ou inactif.",
+        409,
+      );
+      const reviewerId = actorIdentity(actor);
+      check(
+        !(row.item.reviews || []).some((rev: any) => rev.residentId === reviewerId),
+        "Vous avez déjà publié un avis pour ce prestataire.",
+        409,
+      );
       const rawReview = pick(args[1], ["rating", "comment"]);
       const rating = Number(rawReview.rating);
-      check(Number.isFinite(rating) && rating >= 1 && rating <= 5, "Note invalide.", 400);
-      const comment = typeof rawReview.comment === "string" ? rawReview.comment.trim() : "";
+      check(
+        Number.isInteger(rating) && rating >= 1 && rating <= 5,
+        "Note invalide (entier de 1 à 5 requis).",
+        400,
+      );
+      const comment =
+        typeof rawReview.comment === "string" ? rawReview.comment.trim() : "";
       check(comment.length <= 2000, "Commentaire trop long.", 400);
+      const reviewerName = actorDisplayName(actor, b);
+      const reviewerApt = residentApartmentLabel(b, reviewerId);
       args[1] = {
         rating,
         comment,
-        residentId: actorIdentity(actor),
-        residentName: b.residents.find(
-          (r: any) => r.id === actorIdentity(actor),
-        )?.name,
-        authorName: actor.email,
+        residentId: reviewerId,
+        residentName: reviewerName,
+        apartmentNumber: reviewerApt,
+        authorName: reviewerName,
         authorRole: "resident",
         date: new Date().toISOString(),
       };
@@ -978,21 +1223,86 @@ async function runOperation(
     canWrite(actor, b);
     check(actor.role !== "provider", "Rôle interdit.");
     validateAttachments(actor, b, input);
-    const id = actor.role === "resident" ? actorIdentity(actor) : actor.uid,
-      r = b.residents.find((r: any) => r.id === id) || { name: actor.email };
+    const id = actor.role === "resident" ? actorIdentity(actor) : actor.uid;
+    const category =
+      input.category !== undefined && String(input.category).trim() !== ""
+        ? z.enum(ALLOWED_MAINTENANCE_CATEGORIES).parse(input.category)
+        : "other";
+    const priority =
+      input.priority !== undefined && String(input.priority).trim() !== ""
+        ? z.enum(ALLOWED_MAINTENANCE_PRIORITIES).parse(input.priority)
+        : "medium";
+    const title =
+      input.title !== undefined && String(input.title).trim() !== ""
+        ? z.string().trim().min(1).max(200).parse(input.title)
+        : undefined;
+    const description = z.string().trim().min(1).max(5000).parse(input.description);
+    const location =
+      input.location !== undefined && String(input.location).trim() !== ""
+        ? z.string().trim().max(200).parse(input.location)
+        : undefined;
+    const photoUrl = validateMediaUrl(input.photoUrl);
+    const photos = validateMediaUrls(input.photos);
+
+    let apartmentId: string | undefined;
+    let apartmentNumber: string | undefined;
+    const rawAptId =
+      typeof input.apartmentId === "string" ? input.apartmentId.trim() : "";
+    const rawAptNum =
+      typeof input.apartmentNumber === "string"
+        ? input.apartmentNumber.trim()
+        : "";
+    if (
+      rawAptId === "common" ||
+      /^(parties\s*communes|common|common_area|المناطق\s*المشتركة)$/i.test(rawAptNum)
+    ) {
+      apartmentId = "common";
+      apartmentNumber = "Parties Communes";
+    } else if (rawAptId) {
+      const apt = (b.apartments || []).find(
+        (a: any) => !a.archivedAt && a.id === rawAptId,
+      );
+      check(apt, "Lot introuvable dans cet immeuble.", 400);
+      if (actor.role === "resident") {
+        check(
+          apt.ownerId === id || apt.tenantId === id,
+          "Vous ne pouvez signaler que pour vos propres lots ou les parties communes.",
+          403,
+        );
+      }
+      apartmentId = apt.id;
+      apartmentNumber = `Lot ${String(apt.number).replace(/^(Lot|شقة)\s+/i, "").trim()}`;
+    } else if (actor.role === "resident") {
+      const apts = (b.apartments || []).filter((a: any) => !a.archivedAt);
+      const res = (b.residents || []).find((r: any) => !r.archivedAt && r.id === id);
+      const linked =
+        (res?.apartmentId &&
+          apts.find(
+            (a: any) =>
+              a.id === res.apartmentId &&
+              (a.ownerId === id || a.tenantId === id),
+          )) ||
+        apts.find((a: any) => a.ownerId === id || a.tenantId === id);
+      if (linked) {
+        apartmentId = linked.id;
+        apartmentNumber = `Lot ${String(linked.number).replace(/^(Lot|شقة)\s+/i, "").trim()}`;
+      }
+    } else if (rawAptNum) {
+      apartmentNumber = rawAptNum.slice(0, 80);
+    }
+
     args[0] = {
-      ...pick(input, [
-        "title",
-        "description",
-        "category",
-        "location",
-        "priority",
-        "photos",
-        "photoUrl",
-      ]),
-      description: str(input.description),
+      ...(title ? { title } : {}),
+      description,
+      category,
+      priority,
+      ...(location ? { location } : {}),
+      ...(photoUrl ? { photoUrl } : {}),
+      ...(photos ? { photos } : {}),
+      ...(apartmentId ? { apartmentId } : {}),
+      ...(apartmentNumber ? { apartmentNumber } : {}),
       residentId: id,
-      residentName: r.name,
+      residentName: actorDisplayName(actor, b),
       buildingId: b.id,
       syndicId: b.syndicId,
       status: "pending",
@@ -1027,17 +1337,26 @@ async function runOperation(
         "Intervention non affectée.",
       );
     validateAttachments(actor, b, [args[1], args[2]], request);
+    const displayActor = actorDisplayName(actor, b);
+    const stepRole = actor.role === "admin" ? "syndic" : actor.role;
     if (operation !== "updateMaintenanceRequest") {
       check(
         actor.role !== "provider",
         "Validation réservée au demandeur ou syndic.",
       );
-      check(
-        operation !== "confirmMaintenanceCompletion" ||
+      if (operation === "confirmMaintenanceCompletion") {
+        check(
           request.completionPending,
-        "Aucune intervention à valider.",
-        409,
-      );
+          "Aucune intervention à valider.",
+          409,
+        );
+      } else {
+        check(
+          request.status === "completed",
+          "Seule une intervention clôturée peut être réouverte.",
+          409,
+        );
+      }
       request.completionPending = false;
       request.status =
         operation === "confirmMaintenanceCompletion" ? "completed" : "pending";
@@ -1051,12 +1370,41 @@ async function runOperation(
             : "Intervention réouverte",
         note: str(args[1]),
         status: request.status,
-        updatedBy: actor.uid,
-        updatedByRole: actor.role,
+        updatedBy: displayActor,
+        updatedByRole: stepRole,
         timestamp: new Date().toISOString(),
       });
+      const label = request.title || "Intervention";
+      if (actor.role === "resident") {
+        notifyCabinetSyndics(
+          b,
+          operation === "confirmMaintenanceCompletion"
+            ? "Intervention validée par le résident"
+            : "Intervention réouverte par le résident",
+          `${displayActor} : ${label}`,
+          "maintenance",
+          "/maintenance",
+        );
+      } else {
+        notice(
+          request.residentId,
+          b,
+          "Suivi intervention",
+          `${label} : ${maintenanceStatusFr(request.status, false)}`,
+          "maintenance",
+          "/maintenance",
+        );
+      }
       appendAudit(transactionState, actor, operation, b.id);
       return request;
+    }
+    const isManager = ["admin", "syndic"].includes(actor.role);
+    if (!isManager) {
+      check(
+        request.status !== "completed",
+        "Intervention clôturée : modification non autorisée.",
+        409,
+      );
     }
     const fields =
       actor.role === "resident"
@@ -1080,24 +1428,77 @@ async function runOperation(
       Object.keys(object(args[1])).every((k) => fields.includes(k)),
       "Champ de suivi protégé.",
     );
-    if ('prestataireId' in args[1] || 'assignedTo' in args[1]) {
-      const id = args[1].prestataireId ?? args[1].assignedTo ?? '';
-      check(!args[1].prestataireId || !args[1].assignedTo || args[1].prestataireId === args[1].assignedTo,
-        'Sélectionnez un seul prestataire.', 400);
-      if (id) check((transactionState.syndik_prod_prestataires_v1 || []).some((p: any) =>
-        p.id === id && p.buildingId === b.id && !p.archivedAt && p.active !== false),
-        'Sélectionnez un prestataire actif de cet immeuble.', 400);
+    if ("priority" in args[1] && args[1].priority !== undefined) {
+      args[1].priority = z.enum(ALLOWED_MAINTENANCE_PRIORITIES).parse(args[1].priority);
+    }
+    if ("photoUrl" in args[1] && args[1].photoUrl !== undefined && args[1].photoUrl !== null && args[1].photoUrl !== "") {
+      args[1].photoUrl = validateMediaUrl(args[1].photoUrl);
+    }
+    if ("photos" in args[1] && args[1].photos !== undefined) {
+      args[1].photos = validateMediaUrls(args[1].photos) || [];
+    }
+    if (args[2]?.stepPhotos !== undefined) {
+      args[2] = { ...args[2], stepPhotos: validateMediaUrls(args[2].stepPhotos) };
+    }
+    if ("prestataireId" in args[1] || "assignedTo" in args[1]) {
+      const id = args[1].prestataireId ?? args[1].assignedTo ?? "";
+      check(
+        !args[1].prestataireId ||
+          !args[1].assignedTo ||
+          args[1].prestataireId === args[1].assignedTo,
+        "Sélectionnez un seul prestataire.",
+        400,
+      );
+      if (id)
+        check(
+          (transactionState.syndik_prod_prestataires_v1 || []).some(
+            (p: any) =>
+              p.id === id &&
+              p.buildingId === b.id &&
+              !p.archivedAt &&
+              p.active !== false,
+          ),
+          "Sélectionnez un prestataire actif de cet immeuble.",
+          400,
+        );
       args[1].prestataireId = id;
       args[1].assignedTo = id;
     }
-    if (args[1].status)
+    if (args[1].status) {
       check(
         ["pending", "in_progress", "completed"].includes(args[1].status),
         "Statut invalide.",
         400,
       );
-    if (args[1].cost !== undefined)
-      check(cents(args[1].cost) >= 0, "Coût invalide.", 400);
+      if (actor.role === "provider") {
+        check(
+          !(request.status === "in_progress" && args[1].status === "pending"),
+          "Transition de statut non autorisée pour un prestataire.",
+          409,
+        );
+      }
+    }
+    if ("cost" in args[1]) {
+      if (args[1].cost === null || args[1].cost === "") {
+        args[1].cost = null;
+      } else if (args[1].cost !== undefined) {
+        check(cents(args[1].cost) >= 0, "Coût invalide.", 400);
+      }
+    }
+    if ("invoiceRef" in args[1]) {
+      if (args[1].invoiceRef === null || String(args[1].invoiceRef).trim() === "") {
+        args[1].invoiceRef = "";
+      } else {
+        args[1].invoiceRef = z.string().trim().max(120).parse(args[1].invoiceRef);
+      }
+    }
+    if ("syndicNotes" in args[1]) {
+      if (args[1].syndicNotes === null || String(args[1].syndicNotes).trim() === "") {
+        args[1].syndicNotes = "";
+      } else {
+        args[1].syndicNotes = z.string().trim().max(2000).parse(args[1].syndicNotes);
+      }
+    }
     if (actor.role === "provider" && args[1].status === "completed") {
       request.completionPending = true;
       args[1].status = "in_progress";
@@ -1110,8 +1511,8 @@ async function runOperation(
     }
     args[2] = {
       ...pick(args[2] || {}, ["title", "note", "stepPhotos"]),
-      updatedBy: actor.uid,
-      updatedByRole: actor.role,
+      updatedBy: displayActor,
+      updatedByRole: stepRole,
     };
   } else if (operation === "deleteDocument") {
     const row = nested(actor, "documents", str(args[0]?.id));
@@ -1119,12 +1520,58 @@ async function runOperation(
     buildingId = b.id;
     args[0] = row.item;
   } else if (operation === "markNotificationAsRead") {
-    check(
-      (transactionState.syndik_prod_notifications_v1 || []).some(
-        (n: any) => n.id === args[0] && n.userId === actor.uid,
-      ),
-      "Notification non liée.",
+    const notifId = str(args[0]);
+    const notif = (transactionState.syndik_prod_notifications_v1 || []).find(
+      (n: any) => n.id === notifId,
     );
+    check(notif, "Notification introuvable.", 404);
+    if (notif.userId === "all") {
+      check(notif.buildingId, "Notification non liée.");
+      buildingFor(actor, notif.buildingId, false);
+      const readBy: string[] = Array.isArray(notif.readBy) ? notif.readBy : [];
+      if (!readBy.includes(actor.uid)) readBy.push(actor.uid);
+      notif.readBy = readBy;
+      appendAudit(transactionState, actor, operation, notif.buildingId, {
+        notificationId: notif.id,
+      });
+      return true;
+    }
+    check(notif.userId === actor.uid, "Notification non liée.");
+    notif.read = true;
+    appendAudit(transactionState, actor, operation, notif.buildingId, {
+      notificationId: notif.id,
+    });
+    return true;
+  } else if (operation === "markAllNotificationsAsRead") {
+    let updated = 0;
+    const accessibleBuildings = new Set<string>();
+    for (const s of cabinets()) {
+      for (const bld of s.buildings || []) {
+        try {
+          buildingFor(actor, bld.id, false);
+          accessibleBuildings.add(bld.id);
+        } catch {
+          // Not accessible to caller
+        }
+      }
+    }
+    for (const n of transactionState.syndik_prod_notifications_v1 || []) {
+      if (n.userId === actor.uid) {
+        if (!n.read) {
+          n.read = true;
+          updated++;
+        }
+      } else if (n.userId === "all" && n.buildingId && accessibleBuildings.has(n.buildingId)) {
+        const readBy: string[] = Array.isArray(n.readBy) ? n.readBy : [];
+        if (!readBy.includes(actor.uid)) {
+          readBy.push(actor.uid);
+          n.readBy = readBy;
+          updated++;
+        }
+      }
+    }
+    appendAudit(transactionState, actor, operation, undefined, { updated });
+    return { updated };
   } else if (operation === "sendChatMessage") {
     const m = object(args[0]);
     b = buildingFor(actor, str(m.buildingId), false);
@@ -1132,58 +1579,133 @@ async function runOperation(
     canWrite(actor, b);
     check(actor.role !== "provider", "Rôle interdit.");
     validateAttachments(actor, b, m);
-    const id = actorIdentity(actor),
-      peer = m.recipientId;
-    check(
-      !peer ||
-        peer === b.syndicId ||
-        b.residents.some((r: any) => r.id === peer && !r.archivedAt),
-      "Destinataire non lié.",
+    const id = actorIdentity(actor);
+    const syndicUids = cabinetSyndicUids(b);
+    const isManager = ["admin", "syndic"].includes(actor.role);
+    const peer = typeof m.recipientId === "string" && m.recipientId.trim() ? m.recipientId.trim() : undefined;
+    const peerIsSyndic = Boolean(peer && (peer === b.syndicId || syndicUids.has(peer)));
+    const peerIsResident = Boolean(
+      peer && b.residents.some((r: any) => r.id === peer && !r.archivedAt),
     );
-    let channelId = str(m.channelId, 200);
+    check(!peer || peerIsSyndic || peerIsResident, "Destinataire non lié.");
+    check(
+      !peer || (peer !== id && !(isManager && peerIsSyndic)),
+      "Vous ne pouvez pas vous envoyer un message à vous-même.",
+      400,
+    );
+    const attachmentUrl = validateMediaUrl(m.attachmentUrl);
+    const attachmentName =
+      typeof m.attachmentName === "string" && m.attachmentName.trim()
+        ? m.attachmentName.trim().slice(0, 200)
+        : undefined;
+    const badge =
+      typeof m.badge === "string" && m.badge.trim()
+        ? m.badge.trim().slice(0, 40)
+        : undefined;
+    let channelId = str(m.channelId, 200).trim();
+    let marketplaceMeta: Record<string, any> = {};
     if (m.marketplaceItemId) {
       const item = (transactionState.syndik_prod_marketplace_v1 || []).find(
         (x: any) => x.id === m.marketplaceItemId && x.buildingId === b.id,
       );
+      check(item, "Annonce introuvable.", 404);
       check(
-        item && peer && (item.residentId === id || item.residentId === peer),
+        item.status !== "sold",
+        "Cette annonce est déjà vendue : impossible d'envoyer un message.",
+        409,
+      );
+      const itemOwnerIsSyndic =
+        item.residentId === b.syndicId || syndicUids.has(item.residentId);
+      const senderIsOwner =
+        item.residentId === id || (isManager && itemOwnerIsSyndic);
+      const peerIsOwner =
+        Boolean(peer) &&
+        (item.residentId === peer || (peerIsSyndic && itemOwnerIsSyndic));
+      check(
+        Boolean(peer) && (senderIsOwner || peerIsOwner),
         "Conversation non liée.",
       );
-      channelId = `market-${item.id}:${[id, peer].sort().join(":")}`;
+      const canonicalSelf = isManager ? b.syndicId : id;
+      const canonicalPeer = peerIsSyndic ? b.syndicId : peer!;
+      channelId = `market-${item.id}:${[canonicalSelf, canonicalPeer].sort().join(":")}`;
+      marketplaceMeta = {
+        marketplaceItemId: item.id,
+        marketplaceItemTitle: item.title,
+        marketplaceItemPrice: item.price,
+        ...(item.imageUrl || item.images?.[0]
+          ? { marketplaceItemImage: item.imageUrl || item.images[0] }
+          : {}),
+      };
     } else {
       check(!channelId.startsWith("market-"), "Conversation non liée.");
+      const allowedChannels = peer
+        ? [...ALLOWED_PUBLIC_CHAT_CHANNELS, "private"]
+        : [...ALLOWED_PUBLIC_CHAT_CHANNELS];
+      check(
+        allowedChannels.includes(channelId as any),
+        "Canal de discussion invalide.",
+        400,
+      );
     }
+    const senderApt =
+      actor.role === "resident" ? residentApartmentLabel(b, id) : undefined;
+    const recipientName = peer
+      ? peerIsSyndic
+        ? cabinets().find((s: any) => s.id === b.syndicId)?.name || "Syndic"
+        : b.residents.find((r: any) => r.id === peer)?.name
+      : undefined;
     args[0] = {
-      ...pick(m, [
-        "recipientId",
-        "marketplaceItemId",
-        "marketplaceItemTitle",
-        "attachmentUrl",
-        "attachmentName",
-      ]),
+      ...(peer ? { recipientId: peerIsSyndic ? b.syndicId : peer } : {}),
+      ...(recipientName ? { recipientName } : {}),
+      ...marketplaceMeta,
+      ...(attachmentUrl ? { attachmentUrl } : {}),
+      ...(attachmentName ? { attachmentName } : {}),
+      ...(badge ? { badge } : {}),
+      ...(senderApt ? { senderApartment: senderApt, apartmentNumber: senderApt } : {}),
       buildingId: b.id,
       channelId,
-      content: str(m.content),
+      content: z.string().trim().min(1).max(3000).parse(m.content),
       senderId: id,
-      senderName:
-        b.residents.find((r: any) => r.id === id)?.name ||
-        actor.email ||
-        "Syndic",
-      senderRole: actor.role,
+      senderName: actorDisplayName(actor, b),
+      senderRole: actor.role === "admin" ? "syndic" : actor.role,
     };
   } else if (operation === "toggleChatMessageLike") {
     check(actor.role !== "provider", "Rôle interdit.");
     const row = record(actor, "syndik_prod_chat_v1", str(args[0]), false);
     b = row.b;
     buildingId = b.id;
+    const id = actorIdentity(actor);
+    const syndicUids = cabinetSyndicUids(b);
+    const isManagerParticipant =
+      ["admin", "syndic"].includes(actor.role) &&
+      [row.item.senderId, row.item.recipientId].some(
+        (p) => p === b.syndicId || syndicUids.has(p),
+      );
     check(
       !row.item.recipientId ||
-        [row.item.senderId, row.item.recipientId].includes(
-          actorIdentity(actor),
-        ),
+        [row.item.senderId, row.item.recipientId].includes(id) ||
+        isManagerParticipant,
       "Conversation privée.",
     );
-    args[1] = actorIdentity(actor);
+    args[1] = id;
+  } else if (operation === "deleteChatMessage") {
+    check(actor.role !== "provider", "Rôle interdit.");
+    const row = record(actor, "syndik_prod_chat_v1", str(args[0]), false);
+    b = row.b;
+    buildingId = b.id;
+    const id = actorIdentity(actor);
+    const isManager = ["admin", "syndic"].includes(actor.role);
+    check(
+      isManager || row.item.senderId === id,
+      "Suppression réservée à l'auteur ou au syndic.",
+    );
+    transactionState.syndik_prod_chat_v1 = (
+      transactionState.syndik_prod_chat_v1 || []
+    ).filter((m: any) => m.id !== row.item.id);
+    appendAudit(transactionState, actor, operation, b.id, {
+      messageId: row.item.id,
+    });
+    return true;
   } else if (operation === "addMarketplaceItem") {
     const input = object(args[0]);
     b = buildingFor(actor, str(input.buildingId), false);
@@ -1192,27 +1714,59 @@ async function runOperation(
     check(actor.role !== "provider", "Rôle interdit.");
     validateAttachments(actor, b, input);
     const id = actorIdentity(actor);
+    const rawCat =
+      input.category !== undefined && String(input.category).trim() !== ""
+        ? String(input.category).trim().toLowerCase()
+        : "autre";
+    const category = MARKETPLACE_CATEGORY_MAP[rawCat];
+    check(Boolean(category), "Catégorie d'annonce invalide.", 400);
+    const rawType =
+      input.type !== undefined && String(input.type).trim() !== ""
+        ? String(input.type).trim().toLowerCase()
+        : input.isFree
+          ? "free"
+          : "sale";
+    const type = z.enum(["sale", "free", "service"]).parse(rawType);
+    const rawCond =
+      input.condition !== undefined && String(input.condition).trim() !== ""
+        ? String(input.condition).trim().toLowerCase()
+        : "bon_etat";
+    const condition = MARKETPLACE_CONDITION_MAP[rawCond];
+    check(Boolean(condition), "État d'objet invalide.", 400);
+    const isFree = type === "free" || Boolean(input.isFree);
+    const numericPrice = isFree ? 0 : cents(input.price) / 100;
+    check(numericPrice >= 0, "Prix invalide.", 400);
+    const imageUrl = validateMediaUrl(input.imageUrl);
+    const images = validateMediaUrls(input.images);
+    const sellerDisplay = actorDisplayName(actor, b);
+    const aptLabel =
+      actor.role === "resident"
+        ? residentApartmentLabel(b, id) || ""
+        : "Bureau Syndic";
     args[0] = {
-      ...pick(input, [
-        "category",
-        "type",
-        "condition",
-        "imageUrl",
-        "images",
-        "phone",
-        "whatsapp",
-        "isFree",
-      ]),
-      title: str(input.title, 200),
-      description: str(input.description),
-      price: cents(input.price) / 100,
+      category,
+      type,
+      condition,
+      isFree,
+      ...(imageUrl ? { imageUrl } : {}),
+      ...(images ? { images } : {}),
+      ...(typeof input.phone === "string" && input.phone.trim()
+        ? { phone: input.phone.trim().slice(0, 40) }
+        : {}),
+      ...(typeof input.whatsapp === "string" && input.whatsapp.trim()
+        ? { whatsapp: input.whatsapp.trim().slice(0, 40) }
+        : {}),
+      title: z.string().trim().min(2).max(200).parse(input.title),
+      description: z.string().trim().min(1).max(5000).parse(input.description),
+      price: numericPrice,
       buildingId: b.id,
       residentId: id,
       sellerId: id,
-      residentName: b.residents.find((r: any) => r.id === id)?.name || "Syndic",
+      residentName: sellerDisplay,
+      sellerName: sellerDisplay,
+      apartmentNumber: aptLabel,
       status: "available",
     };
-    check(args[0].price >= 0, "Prix invalide.", 400);
   } else if (
     ["deleteMarketplaceItem", "updateMarketplaceItemStatus"].includes(operation)
   ) {
@@ -1316,6 +1870,36 @@ async function runOperation(
     );
   }
   if (operation === "reconcileBankStatementCSV" && args[2]?.preview === true) return result;
+  if (operation === "deleteDocument") {
+    const docUrl = String(args[0]?.url || "");
+    if (docUrl.startsWith("/api/uploads/")) {
+      const fileId = docUrl.slice("/api/uploads/".length);
+      const meta = transactionState.__files?.[fileId];
+      if (meta && !fileIsReferenced(transactionState, { id: fileId, key: meta.key })) {
+        meta.deletedAt = new Date().toISOString();
+      }
+    }
+  }
+  if (operation === "savePrestataire") {
+    const prestId = result?.id || args[0]?.id;
+    if (args[0]?.active === false && prestId) {
+      disableAccount(prestId, "prestataireId");
+    } else if (args[0]?.active !== false && prestId) {
+      const prestEmail = String(result?.email || args[0]?.email || "").trim().toLowerCase();
+      if (!prestEmail || emailAvailable(prestEmail, "prestataireId", prestId)) {
+        for (const key of [
+          "syndik_prod_registered_users_v1",
+          "syndik_prod_prestataire_accounts_v1",
+        ]) {
+          for (const a of transactionState[key] || []) {
+            if (a.prestataireId === prestId || a.profile?.prestataireId === prestId) {
+              delete a.disabled;
+            }
+          }
+        }
+      }
+    }
+  }
   if (
     b &&
     [
@@ -1348,21 +1932,74 @@ async function runOperation(
         "Nouvel avis de charges",
         `${invoice.invoiceNumber} : ${invoice.totalAmount} MAD`,
         "invoice",
+        "/financials",
       );
+  if (operation === "submitPaymentProof" && actor.role === "resident") {
+    notifyCabinetSyndics(
+      b,
+      "Nouveau justificatif de paiement",
+      `${args[0].residentName} (${args[0].apartmentNumber}) : ${args[0].amount} MAD`,
+      "invoice",
+      "/financials",
+    );
+  }
   if (operation === "addAnnouncement")
     for (const r of b.residents.filter((r: any) => !r.archivedAt))
-      notice(r.id, b, "Nouvelle annonce", args[1].title, "announcement");
+      notice(
+        r.id,
+        b,
+        args[1].priority === "urgent" ? "Annonce urgente" : "Nouvelle annonce",
+        args[1].title,
+        "announcement",
+        "/announcements",
+      );
+  if (operation === "addMaintenanceRequest" && actor.role === "resident") {
+    notifyCabinetSyndics(
+      b,
+      "Nouveau signalement",
+      `${args[0].residentName} : ${args[0].title || args[0].description.slice(0, 80)}`,
+      "maintenance",
+      "/maintenance",
+    );
+  }
   if (operation === "updateMaintenanceRequest") {
     const item = (transactionState.syndik_prod_maintenance_v1 || []).find(
       (x: any) => x.id === args[0],
     );
-    notice(
-      item.residentId,
-      b,
-      "Suivi intervention",
-      item.completionPending ? "Intervention à valider" : item.status,
-      "maintenance",
-    );
+    if (item) {
+      const statusText = maintenanceStatusFr(item.status, item.completionPending);
+      if (actor.role === "resident") {
+        notifyCabinetSyndics(
+          b,
+          "Mise à jour d'un signalement",
+          `${actorDisplayName(actor, b)} a mis à jour : ${item.title || "Intervention"}`,
+          "maintenance",
+          "/maintenance",
+        );
+      } else {
+        const isBuildingResident = (b.residents || []).some(
+          (r: any) => !r.archivedAt && r.id === item.residentId,
+        );
+        if (isBuildingResident) {
+          notice(
+            item.residentId,
+            b,
+            "Suivi intervention",
+            statusText,
+            "maintenance",
+            "/maintenance",
+          );
+        } else if (actor.role === "provider") {
+          notifyCabinetSyndics(
+            b,
+            "Suivi intervention prestataire",
+            `${item.title || "Intervention"} : ${statusText}`,
+            "maintenance",
+            "/maintenance",
+          );
+        }
+      }
+    }
   }
   if (
     [

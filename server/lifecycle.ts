@@ -40,7 +40,7 @@ export function fileIsReferenced(state:State,file:{id:string;key:string}){const 
 export function assertFileLifecycle(state:State,before:State){
  const text=referenceText(state),previous=referenceText(before);
  for(const match of text.matchAll(/\/api\/uploads\/([A-Za-z0-9_-]+)/g)){const meta=state.__files?.[match[1]];
-  if(meta?.lifecycle==='deleting'||(!meta&&!previous.includes(match[0])))throw new LifecycleError('Fichier expiré ou en cours de suppression. Téléversez-le à nouveau.');
+  if(meta?.lifecycle==='deleting'||meta?.deletedAt||(!meta&&!previous.includes(match[0])))throw new LifecycleError('Fichier expiré ou en cours de suppression. Téléversez-le à nouveau.');
  }
  for(const [id,meta] of Object.entries(state.__files||{}) as [string,any][])
   if(meta.lifecycle==='deleting'&&fileIsReferenced(state,{id,key:meta.key}))throw new LifecycleError('Fichier encore référencé.');
@@ -51,7 +51,8 @@ export function claimFileForDeletion(state:State,file:StoredFile,now=Date.now())
  if(!/^[A-Za-z0-9_-]+$/.test(file.id)||!file.key.startsWith('private/')||!file.key.endsWith('/'+file.id))return false;
  if(Object.values(state.__firebaseMutations_v1||{}).some((i:any)=>i.status!=='finalized'))return false;
  const meta=state.__files?.[file.id],age=Math.max(instant(file.createdAt),instant(meta?.lastUploadedAt||meta?.createdAt||file.createdAt));
- if(!Number.isFinite(age)||age>now-FILE_RETENTION||fileIsReferenced(state,file))return false;
+ const explicitlyDeleted=Boolean(meta?.deletedAt);
+ if((!explicitlyDeleted&&(!Number.isFinite(age)||age>now-FILE_RETENTION))||fileIsReferenced(state,file))return false;
  if(meta?.key&&meta.key!==file.key)return false;
  if(meta?.lifecycle==='deleting')return meta.deletionClaim;
  const claim=randomUUID();(state.__files??={})[file.id]={...meta,fileId:file.id,key:file.key,createdAt:meta?.createdAt||file.createdAt,lifecycle:'deleting',deletionClaim:claim,deletionCandidate:file};return claim;

@@ -2,7 +2,11 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../contexts/AuthContext';
-import { getUserNotifications, markNotificationAsRead } from '../../firebase/services';
+import {
+  getUserNotifications,
+  markNotificationAsRead,
+  markAllNotificationsAsRead,
+} from '../../firebase/services';
 import { useI18n } from '../../hooks/useI18n';
 
 const NotificationBell: React.FC = () => {
@@ -27,6 +31,13 @@ const NotificationBell: React.FC = () => {
     },
   });
 
+  const markAllReadMutation = useMutation({
+    mutationFn: markAllNotificationsAsRead,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['notifications', userProfile?.uid] });
+    },
+  });
+
   const unreadCount = notifications.filter((n) => !n.read).length;
 
   useEffect(() => {
@@ -44,15 +55,39 @@ const NotificationBell: React.FC = () => {
       markReadMutation.mutate(notification.id);
     }
     setIsOpen(false);
-    if (notification.link && userProfile?.role === 'syndic') {
-      navigate(notification.link);
+    const targetLink =
+      notification.link ||
+      (notification.type === 'invoice'
+        ? '/financials'
+        : notification.type === 'maintenance'
+        ? '/maintenance'
+        : notification.type === 'announcement'
+        ? '/announcements'
+        : undefined);
+    if (!targetLink) return;
+    if (userProfile?.role === 'syndic' || userProfile?.role === 'admin') {
+      navigate(targetLink);
+    } else if (userProfile?.role === 'resident') {
+      const tabMap: Record<string, string> = {
+        '/financials': 'payments',
+        '/maintenance': 'maintenance',
+        '/announcements': 'overview',
+        '/ag': 'ag',
+        '/documents': 'documents',
+        '/chat': 'chat',
+        '/marketplace': 'marketplace',
+      };
+      const targetTab = tabMap[targetLink] || 'overview';
+      window.dispatchEvent(
+        new CustomEvent('syndik-resident-navigate', { detail: { tab: targetTab } })
+      );
+      navigate('/resident');
     }
   };
 
   const markAllAsRead = () => {
-    notifications.forEach((n) => {
-      if (!n.read) markReadMutation.mutate(n.id);
-    });
+    if (unreadCount === 0 || markAllReadMutation.isPending) return;
+    markAllReadMutation.mutate();
   };
 
   return (
@@ -87,7 +122,8 @@ const NotificationBell: React.FC = () => {
                 <button
                   type="button"
                   onClick={markAllAsRead}
-                  className="text-xs font-semibold text-teal-700 hover:text-teal-900"
+                  disabled={markAllReadMutation.isPending}
+                  className="text-xs font-semibold text-teal-700 hover:text-teal-900 disabled:opacity-50"
                 >
                   {t('header.markAllRead')}
                 </button>

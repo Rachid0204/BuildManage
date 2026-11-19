@@ -230,6 +230,15 @@ function lookupCandidateProfilesInStore(
   const candidates: Array<Record<string, any>> = [];
   if (!uid) return candidates;
 
+  const prestList: any[] = Array.isArray(store.syndik_prod_prestataires_v1)
+    ? store.syndik_prod_prestataires_v1
+    : [];
+  const isProviderInactive = (pId?: string) => {
+    if (!pId) return false;
+    const rec = prestList.find((p: any) => p?.id === pId);
+    return Boolean(rec && (rec.archivedAt || rec.active === false));
+  };
+
   const regUsers: any[] = Array.isArray(store.syndik_prod_registered_users_v1)
     ? store.syndik_prod_registered_users_v1
     : [];
@@ -237,10 +246,12 @@ function lookupCandidateProfilesInStore(
     if (u?.disabled) continue;
     if (u?.uid === uid || u?.profile?.uid === uid) {
       const p = u.profile || u;
+      const role = p.role || u.role || "syndic";
+      if (role === "provider" && isProviderInactive(p.prestataireId)) continue;
       candidates.push({
         uid: p.uid || u.uid,
         email: (p.email || u.email || "").trim().toLowerCase(),
-        role: p.role || u.role || "syndic",
+        role,
         syndicId: p.syndicId || u.syndicId,
         buildingId: p.buildingId || u.buildingId,
         apartmentId: p.apartmentId,
@@ -325,6 +336,7 @@ function lookupCandidateProfilesInStore(
   for (const a of prestAccounts) {
     if (a?.disabled) continue;
     const pId = a?.prestataireId;
+    if (isProviderInactive(pId)) continue;
     if (
       pId &&
       (uid === `user-prest-${pId}` || uid === `prov-${pId}` || uid === pId)
@@ -339,10 +351,6 @@ function lookupCandidateProfilesInStore(
       });
     }
   }
-
-  const prestList: any[] = Array.isArray(store.syndik_prod_prestataires_v1)
-    ? store.syndik_prod_prestataires_v1
-    : [];
   for (const p of prestList) {
     if (p?.archivedAt || p?.active === false) continue;
     if (
@@ -726,36 +734,62 @@ function filterStoreForCaller(store: ServerStore, caller: AuthCallerContext) {
                     announcements: [],
                     documents: [],
                   }
-                : {
-                    ...b,
-                    financials: {
-                      balance: 0,
-                      reserveFundBalance: 0,
-                      transactions: [],
-                    },
-                    residents: (b.residents || []).map((r: any) =>
-                      r.id === scope.callerResId
-                        ? r
-                        : {
-                            id: r.id,
-                            name: r.name,
-                            isOwner: r.isOwner,
-                            apartmentId: r.apartmentId,
-                          },
-                    ),
-                    apartments: (b.apartments || []).map((a: any) => ({ ...a })),
-                  },
+                : (() => {
+                    const callerRes = (b.residents || []).find(
+                      (r: any) =>
+                        !r.archivedAt &&
+                        (r.id === scope.callerResId || r.id === caller.uid),
+                    );
+                    const callerIsOwner = callerRes?.isOwner === true;
+                    return {
+                      ...b,
+                      financials: {
+                        balance: 0,
+                        reserveFundBalance: 0,
+                        transactions: [],
+                      },
+                      residents: (b.residents || []).map((r: any) =>
+                        r.id === scope.callerResId
+                          ? r
+                          : {
+                              id: r.id,
+                              name: r.name,
+                              isOwner: r.isOwner,
+                              apartmentId: r.apartmentId,
+                            },
+                      ),
+                      apartments: (b.apartments || []).map((a: any) => ({ ...a })),
+                      documents: (b.documents || []).filter((d: any) => {
+                        const vis = d?.visibility || "all";
+                        if (vis === "syndic_only") return false;
+                        if (vis === "owners_only") return callerIsOwner;
+                        return true;
+                      }),
+                    };
+                  })(),
           ),
       }));
       continue;
     }
     if (!Array.isArray(value)) continue;
     if (key === "syndik_prod_notifications_v1")
-      result[key] = value.filter(
-        (n: any) =>
-          n.userId === caller.uid ||
-          (n.userId === "all" && scope.authorizedBuildingIds.has(n.buildingId)),
-      );
+      result[key] = value
+        .filter(
+          (n: any) =>
+            n.userId === caller.uid ||
+            (n.userId === "all" && scope.authorizedBuildingIds.has(n.buildingId)),
+        )
+        .map((n: any) =>
+          n.userId === "all"
+            ? {
+                ...n,
+                read: Boolean(
+                  n.read ||
+                    (Array.isArray(n.readBy) && n.readBy.includes(caller.uid)),
+                ),
+              }
+            : n,
+        );
     else if (key === "syndik_prod_registered_users_v1")
       result[key] = value.filter(
         (u: any) =>
@@ -801,11 +835,19 @@ function filterStoreForCaller(store: ServerStore, caller: AuthCallerContext) {
           return false;
         if (key === "syndik_prod_chat_v1") {
           if (caller.role === "provider") return false;
-          return (
-            !item.recipientId ||
-            [item.senderId, item.recipientId].includes(
-              caller.role === "resident" ? scope.callerResId : caller.uid,
-            )
+          if (!item.recipientId) return true;
+          if (caller.role === "resident") {
+            return [item.senderId, item.recipientId].includes(scope.callerResId);
+          }
+          const bldOwnerSyndicId = (store.syndik_prod_syndics_v1 || []).find(
+            (s: any) =>
+              (s.buildings || []).some((b: any) => b.id === item.buildingId),
+          )?.id;
+          return [item.senderId, item.recipientId].some(
+            (p) =>
+              p === caller.uid ||
+              (bldOwnerSyndicId && p === bldOwnerSyndicId) ||
+              scope.authorizedSyndicIds.has(p),
           );
         }
         if (key === "syndik_prod_ag_v1") {
@@ -2074,7 +2116,7 @@ async function startServer() {
           throw new OperationError("Authentification requise.", 401);
         assertOnboarded(caller, state);
         const meta = state.__files?.[id];
-        if (!meta) throw new OperationError("Fichier introuvable.", 404);
+        if (!meta || meta.deletedAt) throw new OperationError("Fichier introuvable.", 404);
         if (meta.scope === "subscription") {
           const ownerSyndic =
             caller.role === "syndic" &&
@@ -2093,11 +2135,23 @@ async function startServer() {
           return { key: meta.key as string, mimeType: meta.mimeType as string };
         }
         const b = buildingFor(caller, meta.buildingId, false),
+          callerResidentRec =
+            caller.role === "resident"
+              ? (b.residents || []).find(
+                  (r: any) =>
+                    !r.archivedAt &&
+                    (r.id === actorIdentity(caller) || r.id === caller.uid),
+                )
+              : undefined,
           publicDocument =
             caller.role !== "provider" &&
-            (b.documents || []).some(
-              (d: any) => d.url === `/api/uploads/${id}`,
-            ),
+            (b.documents || []).some((d: any) => {
+              if (d.url !== `/api/uploads/${id}`) return false;
+              const vis = d.visibility || "all";
+              if (vis === "syndic_only") return false;
+              if (vis === "owners_only") return callerResidentRec?.isOwner === true;
+              return true;
+            }),
           marketImage =
             caller.role !== "provider" &&
             (state.syndik_prod_marketplace_v1 || []).some(

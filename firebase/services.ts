@@ -1029,11 +1029,20 @@ async function readFileAsDurableDataUrl(file: File): Promise<string> {
 export const uploadDocument = async (
   buildingId: string,
   file: File,
+  options?: {
+    visibility?: Document['visibility'];
+    category?: Document['category'];
+  },
 ): Promise<Document> => {
   const dataUrl = await readFileAsDurableDataUrl(file);
   return remoteMutation('attachDocument', [
     buildingId,
-    { name: file.name, dataUrl },
+    {
+      name: file.name,
+      dataUrl,
+      ...(options?.visibility ? { visibility: options.visibility } : {}),
+      ...(options?.category ? { category: options.category } : {}),
+    },
   ]);
 };
 
@@ -1048,12 +1057,22 @@ export const getUserNotifications = async (
 ): Promise<Notification[]> => {
   await syncAllSharedStateFromServer();
   const list = readSnapshot<Notification[]>(STORAGE_KEYS.NOTIFICATIONS, []);
-  // Audit Item 26: Filter notifications by recipient userId
-  return list.filter((n) => n.userId === userId || n.userId === 'all');
+  // Audit Item 26: Filter notifications by recipient userId and sort newest-first
+  return list
+    .filter((n) => n.userId === userId || n.userId === 'all')
+    .sort(
+      (a, b) =>
+        (Date.parse(b.createdAt || '') || 0) -
+        (Date.parse(a.createdAt || '') || 0),
+    );
 };
 
 export const markNotificationAsRead = async (notificationId: string) => {
   return remoteMutation('markNotificationAsRead', [notificationId]);
+};
+
+export const markAllNotificationsAsRead = async () => {
+  return remoteMutation('markAllNotificationsAsRead', []);
 };
 
 export const getChatMessages = async (
@@ -1066,13 +1085,26 @@ export const getChatMessages = async (
   if (channelId) {
     if (channelId === 'marketplace') {
       return buildingMsgs.filter(
-        (m) =>
-          m.channelId === 'marketplace' || m.channelId.startsWith('market-'),
+        (m) => m.channelId === 'marketplace' && !m.recipientId,
       );
     }
-    return buildingMsgs.filter((m) => m.channelId === channelId);
+    return buildingMsgs.filter(
+      (m) => m.channelId === channelId && !m.recipientId,
+    );
   }
   return buildingMsgs;
+};
+
+export const getMarketplaceDirectMessages = async (
+  buildingId: string,
+): Promise<ChatMessage[]> => {
+  await syncAllSharedStateFromServer();
+  const list = readSnapshot<ChatMessage[]>(STORAGE_KEYS.CHAT, []);
+  return list.filter(
+    (m) =>
+      m.buildingId === buildingId &&
+      (m.channelId.startsWith('market-') || Boolean(m.marketplaceItemId)),
+  );
 };
 
 export const sendChatMessage = async (
@@ -1086,6 +1118,10 @@ export const toggleChatMessageLike = async (
   userId: string,
 ): Promise<ChatMessage | null> => {
   return remoteMutation('toggleChatMessageLike', [messageId, userId]);
+};
+
+export const deleteChatMessage = async (messageId: string): Promise<boolean> => {
+  return remoteMutation('deleteChatMessage', [messageId]);
 };
 
 export const getMarketplaceItems = async (

@@ -1920,6 +1920,22 @@ function financialOperation(
   if (operation === "attachDocument") {
     const meta = transactionState.__files?.[String(args[1]?.fileId)];
     check(meta?.buildingId === b.id, "Fichier non lié.");
+    const allowedCategories = [
+      "reglement_copropriete",
+      "pv_ag",
+      "contrat",
+      "budget",
+      "assurance",
+      "autre",
+    ];
+    const allowedVisibilities = ["all", "owners_only", "syndic_only"];
+    const rawCat = String(args[1]?.category || "autre");
+    const rawVis = String(args[1]?.visibility || "all");
+    check(
+      allowedVisibilities.includes(rawVis),
+      "Visibilité de document invalide.",
+      400,
+    );
     const item = {
       id: randomUUID(),
       name: meta.name,
@@ -1927,10 +1943,14 @@ function financialOperation(
       mimeType: meta.mimeType,
       size: `${(meta.sizeBytes / 1048576).toFixed(1)} MB`,
       uploadedAt: new Date().toISOString(),
-      category: "autre",
+      category: allowedCategories.includes(rawCat) ? rawCat : "autre",
+      visibility: rawVis as "all" | "owners_only" | "syndic_only",
     };
     (b.documents ??= []).push(item);
-    appendAudit(transactionState, actor, operation, b.id);
+    appendAudit(transactionState, actor, operation, b.id, {
+      documentId: item.id,
+      visibility: item.visibility,
+    });
     return item;
   }
   if (operation === "importOpeningArrears") {

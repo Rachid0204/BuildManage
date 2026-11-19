@@ -340,6 +340,7 @@ const SyndicPortal: React.FC = () => {
               element={
                 selectedBuilding ? (
                   <Dashboard
+                    key={selectedBuilding.id}
                     building={selectedBuilding}
                     syndic={syndic || undefined}
                     onNavigate={(view: View) => {
@@ -383,6 +384,7 @@ const SyndicPortal: React.FC = () => {
               element={
                 selectedBuilding ? (
                   <Residents
+                    key={selectedBuilding.id}
                     building={selectedBuilding}
                     onAddResident={handleAddResident}
                     onUpdateResident={updateResidentMutation.mutateAsync}
@@ -402,6 +404,7 @@ const SyndicPortal: React.FC = () => {
               element={
                 selectedBuilding ? (
                   <Apartments
+                    key={selectedBuilding.id}
                     building={selectedBuilding}
                     residents={selectedBuilding.residents}
                     onAddApartment={handleAddApartment}
@@ -423,6 +426,7 @@ const SyndicPortal: React.FC = () => {
               element={
                 selectedBuilding && syndic ? (
                   <Financials
+                    key={selectedBuilding.id}
                     building={selectedBuilding}
                     syndic={syndic}
                     onAddTransaction={() =>
@@ -446,6 +450,7 @@ const SyndicPortal: React.FC = () => {
               element={
                 selectedBuilding ? (
                   <Announcements
+                    key={selectedBuilding.id}
                     building={selectedBuilding}
                     announcements={selectedBuilding.announcements}
                     onAddAnnouncement={(data) =>
@@ -467,6 +472,7 @@ const SyndicPortal: React.FC = () => {
               element={
                 selectedBuilding ? (
                   <Documents
+                    key={selectedBuilding.id}
                     building={selectedBuilding}
                     documents={selectedBuilding.documents}
                   />
@@ -481,8 +487,9 @@ const SyndicPortal: React.FC = () => {
               element={
                 selectedBuilding ? (
                   <Maintenance
+                    key={selectedBuilding.id}
                     building={selectedBuilding}
-                    currentResidentId={syndic?.id || userProfile?.uid || ''}
+                    currentResidentId={userProfile?.uid || syndic?.id || ''}
                     currentResidentName={syndic?.name || userProfile?.displayName || ''}
                     currentApartmentNumber={tr('Bureau Syndic', 'مكتب السنديك')}
                   />
@@ -496,7 +503,11 @@ const SyndicPortal: React.FC = () => {
               path="/ag"
               element={
                 selectedBuilding ? (
-                  <AssembleeGenerale building={selectedBuilding} syndic={syndic || undefined} />
+                  <AssembleeGenerale
+                    key={selectedBuilding.id}
+                    building={selectedBuilding}
+                    syndic={syndic || undefined}
+                  />
                 ) : (
                   <Navigate to="/buildings" replace />
                 )
@@ -507,7 +518,7 @@ const SyndicPortal: React.FC = () => {
               path="/prestataires"
               element={
                 selectedBuilding ? (
-                  <Prestataires building={selectedBuilding} />
+                  <Prestataires key={selectedBuilding.id} building={selectedBuilding} />
                 ) : (
                   <Navigate to="/buildings" replace />
                 )
@@ -518,7 +529,7 @@ const SyndicPortal: React.FC = () => {
               path="/chat"
               element={
                 selectedBuilding ? (
-                  <CommunityChat building={selectedBuilding} />
+                  <CommunityChat key={selectedBuilding.id} building={selectedBuilding} />
                 ) : (
                   <Navigate to="/buildings" replace />
                 )
@@ -530,9 +541,10 @@ const SyndicPortal: React.FC = () => {
               element={
                 selectedBuilding ? (
                   <MarketplaceView
+                    key={selectedBuilding.id}
                     building={selectedBuilding}
-                    currentResidentId={syndic?.id || ''}
-                    currentResidentName={syndic?.name || ''}
+                    currentResidentId={userProfile?.uid || ''}
+                    currentResidentName={syndic?.name || userProfile?.displayName || ''}
                     currentApartmentNumber={tr('Bureau Syndic', 'مكتب السنديك')}
                     currentPhone={syndic?.phone || ''}
                     isResidentPortal={false}
@@ -547,7 +559,7 @@ const SyndicPortal: React.FC = () => {
               path="/analytics"
               element={
                 selectedBuilding ? (
-                  <Analytics building={selectedBuilding} />
+                  <Analytics key={selectedBuilding.id} building={selectedBuilding} />
                 ) : (
                   <Navigate to="/buildings" replace />
                 )

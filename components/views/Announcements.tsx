@@ -19,16 +19,18 @@ const Announcements: React.FC<AnnouncementsProps> = ({ building }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [newContent, setNewContent] = useState('');
+  const [newPriority, setNewPriority] = useState<'normal' | 'urgent'>('normal');
   const [saveError, setSaveError] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
   const addMutation = useMutation({
-    mutationFn: (data: { title: string; content: string }) =>
+    mutationFn: (data: { title: string; content: string; priority: 'normal' | 'urgent' }) =>
       addAnnouncement(building.id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['syndics'] });
       setNewTitle('');
       setNewContent('');
+      setNewPriority('normal');
       setSaveError(null);
       setIsModalOpen(false);
     },
@@ -46,7 +48,7 @@ const Announcements: React.FC<AnnouncementsProps> = ({ building }) => {
   const handleAddAnnouncement = async () => {
     if (!newTitle.trim() || !newContent.trim()) throw new Error(tr('Le titre et le contenu sont obligatoires.', 'العنوان والمحتوى مطلوبان.'));
     setSaveError(null);
-    return addMutation.mutateAsync({ title: newTitle.trim(), content: newContent.trim() });
+    return addMutation.mutateAsync({ title: newTitle.trim(), content: newContent.trim(), priority: newPriority });
   };
 
   const dateLocale = language === 'ar' ? 'ar-MA' : 'fr-FR';
@@ -63,9 +65,16 @@ const Announcements: React.FC<AnnouncementsProps> = ({ building }) => {
       <div className="space-y-4">
         {building.announcements && building.announcements.length > 0 ? (
           building.announcements.map((ann) => (
-            <Card key={ann.id} className="p-6">
+            <Card key={ann.id} className={`p-6 ${ann.priority === 'urgent' ? 'border-l-4 border-l-rose-500' : ''}`}>
               <div className="flex flex-col sm:flex-row sm:justify-between sm:items-baseline gap-1">
-                <h3 className="text-lg font-bold text-slate-900">{ann.title}</h3>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-lg font-bold text-slate-900">{ann.title}</h3>
+                  {ann.priority === 'urgent' && (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-rose-100 text-rose-800 border border-rose-200">
+                      {tr('Urgent', 'عاجل')}
+                    </span>
+                  )}
+                </div>
                 <p className="text-xs text-slate-400">
                   {new Date(ann.date).toLocaleDateString(dateLocale, {
                     year: 'numeric',
@@ -133,6 +142,21 @@ const Announcements: React.FC<AnnouncementsProps> = ({ building }) => {
               className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-xs focus:outline-hidden focus:ring-primary focus:border-primary sm:text-sm"
               placeholder={t('announcements.modal.titlePlaceholder')}
             />
+          </div>
+
+          <div>
+            <label htmlFor="priority" className="block text-sm font-medium text-slate-700">
+              {tr('Priorité', 'الأولوية')}
+            </label>
+            <select
+              id="priority"
+              value={newPriority}
+              onChange={(e) => setNewPriority(e.target.value as 'normal' | 'urgent')}
+              className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md shadow-xs focus:outline-hidden focus:ring-primary focus:border-primary sm:text-sm"
+            >
+              <option value="normal">{tr('Normale', 'عادية')}</option>
+              <option value="urgent">{tr('Urgente (alerte résidents)', 'عاجلة (تنبيه للسكان)')}</option>
+            </select>
           </div>
 
           <div>
