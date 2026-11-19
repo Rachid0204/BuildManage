@@ -22,19 +22,25 @@ const residents = ['one', 'peer'].map((name, index) => ({
   isOwner: true, hasAccount: true, mustChangePassword: false,
   buildingId: 'b-assembly', syndicId: 's-assembly', apartmentId: `lot-${name}`,
 }));
+const tenantResident = {
+  id: 'r-tenant', name: 'Tenant Viewer', email: 'tenant@assembly.invalid',
+  phone: '0600000099', cin: 'SYNTHETIC-CIN-tenant',
+  isOwner: false, hasAccount: true, mustChangePassword: false,
+  buildingId: 'b-assembly', syndicId: 's-assembly', apartmentId: 'lot-one',
+};
 const provider = {
   uid: 'user-prest-p-assembly', email: 'provider@assembly.invalid', displayName: 'Provider',
   role: 'provider', syndicId: 's-assembly', buildingId: 'b-assembly',
   prestataireId: 'p-assembly', emailVerified: true,
 };
-const residentProfiles = residents.map(resident => ({
+const residentProfiles = [...residents, tenantResident].map(resident => ({
   uid: `user-res-${resident.id}`, email: resident.email, displayName: resident.name,
   role: 'resident', residentId: resident.id, syndicId: resident.syndicId,
-  buildingId: resident.buildingId, emailVerified: true,
+  buildingId: resident.buildingId, isOwner: resident.isOwner, emailVerified: true,
 }));
 const apartments = residents.map((resident, index) => ({
   id: resident.apartmentId, number: String(index + 1), buildingId: resident.buildingId,
-  ownerId: resident.id, tenantId: null, floor: 1, area: 80, monthlyFees: 100,
+  ownerId: resident.id, tenantId: index === 0 ? tenantResident.id : null, floor: 1, area: 80, monthlyFees: 100,
   tantiemes: index === 0 ? 600 : 400,
 }));
 const financials = {
@@ -50,8 +56,10 @@ const historicalSnapshot = {
   })),
 };
 const attendees = residents.map((resident, index) => ({
-  residentId: resident.id, residentName: resident.name, apartmentNumber: String(index + 1),
-  tantiemes: index === 0 ? 300 : 700, status: 'present',
+  residentId: resident.id, residentName: resident.name, apartmentId: resident.apartmentId,
+  apartmentNumber: String(index + 1), tantiemes: index === 0 ? 300 : 700,
+  status: index === 1 ? 'represented' : 'present',
+  ...(index === 1 ? { proxyHolderName: 'Mandataire Confidentiel' } : {}),
 }));
 const previousVote = {
   residentId: residents[1].id, residentName: residents[1].name,
@@ -82,7 +90,7 @@ const seed = {
     buildings: [{
       id: 'b-assembly', syndicId: 's-assembly', name: 'Assembly building',
       address: 'Synthetic address', city: 'Casablanca', monthlySyndicFees: 100,
-      totalTantiemes: 1000, residents, apartments, financials, documents: [], announcements: [],
+      totalTantiemes: 1000, residents: [...residents, tenantResident], apartments, financials, documents: [], announcements: [],
     }],
   }],
   syndik_prod_prestataires_v1: [{
@@ -169,14 +177,40 @@ try {
       });
       continue;
     }
+    if (role === tenantResident.email) {
+      await test('non-owner tenant: excluded from syndik_prod_ag_v1 and blocked from voting', async () => {
+        const response = await call('/api/shared-state', token);
+        assert.equal(response.status, 200);
+        assert.deepEqual(response.data.store.syndik_prod_ag_v1, []);
+        const voteDenied = await call('/api/ag/vote', token, {
+          agId: 'ag-in_progress', resolutionId: 'resolution', choice: 'for',
+        });
+        assert.ok(voteDenied.status === 400 || voteDenied.status === 403, JSON.stringify(voteDenied.data));
+      });
+      continue;
+    }
+    const viewerResident = residents.find(r => r.email === role)!;
     for (const historical of legacyAssemblies) {
-      await test(`${role}: ${historical.status} legacy assembly hides all owner contacts and preserves voting history`, async () => {
+      await test(`${role}: ${historical.status} legacy assembly enforces ballot privacy while open and preserves closed PV`, async () => {
         const response = await call('/api/shared-state', token);
         assert.equal(response.status, 200);
         const assembly = response.data.store.syndik_prod_ag_v1.find((ag: any) => ag.id === historical.id);
         assertPrivateSnapshotAbsent(assembly);
-        for (const key of ['attendees', 'resolutions', 'totalTantiemes', 'presentTantiemes', 'quorumRequired', 'quorumReached']) {
+        for (const key of ['totalTantiemes', 'presentTantiemes', 'quorumRequired', 'quorumReached']) {
           assert.deepEqual(assembly[key], (historical as any)[key], `Preserve ${key}`);
+        }
+        if (historical.status === 'in_progress') {
+          // While open, peer ballots and proxyHolderName are redacted; viewer sees own ballots + aggregate tallies.
+          assert.ok(assembly.attendees.every((a: any) => a.proxyHolderName === undefined), 'proxyHolderName hidden while open');
+          const res = assembly.resolutions[0];
+          assert.equal(res.votesAgainst, 700, 'aggregate tallies preserved while open');
+          const expectedBallots = viewerResident.id === previousVote.residentId ? [previousVote] : [];
+          assert.deepEqual(res.voterChoices, expectedBallots, 'only viewer own ballots visible while open');
+          assert.deepEqual(res.voters, expectedBallots, 'only viewer own voters visible while open');
+        } else {
+          // Once closed/completed, full PV voter breakdown and proxy names are visible.
+          assert.deepEqual(assembly.attendees, historical.attendees, 'Preserve attendees in closed PV');
+          assert.deepEqual(assembly.resolutions, historical.resolutions, 'Preserve resolutions in closed PV');
         }
         assert.deepEqual(assembly.votingSnapshot.apartments.map((lot: any) => lot.tantiemes), [300, 700]);
         assert.equal(response.data.store.syndik_prod_ag_v1.find((ag: any) => ag.id === 'ag-without-snapshot').votingSnapshot, undefined);
@@ -192,6 +226,8 @@ try {
     for (const historical of legacyAssemblies) {
       const assembly = response.data.store.syndik_prod_ag_v1.find((ag: any) => ag.id === historical.id);
       assert.deepEqual(assembly.votingSnapshot, historical.votingSnapshot);
+      assert.deepEqual(assembly.resolutions, historical.resolutions);
+      assert.deepEqual(assembly.attendees, historical.attendees);
     }
     assert.deepEqual(disk().syndik_prod_ag_v1, persistedBeforeReads.syndik_prod_ag_v1);
     assert.deepEqual(disk().syndik_prod_syndics_v1[0].buildings[0].financials, financials);
@@ -208,9 +244,15 @@ try {
     assert.equal(assembly.presentTantiemes, 1000);
     assert.equal(assembly.quorumRequired, 501);
     assert.equal(assembly.quorumReached, true);
-    assert.deepEqual(assembly.resolutions[0].voterChoices.find((vote: any) => vote.residentId === residents[1].id), previousVote);
+    // Open assembly vote response hides peer r-peer's ballot from r-one while persisting both on disk.
+    assert.equal(assembly.resolutions[0].voterChoices.length, 1);
+    assert.equal(assembly.resolutions[0].voterChoices[0].residentId, residents[0].id);
+    assert.equal(assembly.resolutions[0].voterChoices[0].castByRole, 'resident');
+    const persistedOpen = disk().syndik_prod_ag_v1.find((ag: any) => ag.id === 'ag-in_progress');
+    assert.equal(persistedOpen.resolutions[0].voterChoices.length, 2);
+    assert.deepEqual(persistedOpen.resolutions[0].voterChoices.find((vote: any) => vote.residentId === residents[1].id), previousVote);
     assertPrivateSnapshotAbsent(assembly);
-    assert.deepEqual(disk().syndik_prod_ag_v1.find((ag: any) => ag.id === 'ag-in_progress').votingSnapshot, historicalSnapshot);
+    assert.deepEqual(persistedOpen.votingSnapshot, historicalSnapshot);
   });
   await test('Provider cannot cast an owner vote; closed legacy assemblies remain immutable', async () => {
     const denied = await call('/api/ag/vote', tokens.get('provider'), {

@@ -354,6 +354,9 @@ export interface AGVoteCast {
   comment?: string;
   votedAt?: string;
   castAt?: string;
+  castByRole?: 'resident' | 'syndic' | 'admin';
+  castByUid?: string;
+  proxyHolderName?: string;
 }
 
 export interface AGResolution {
@@ -387,6 +390,7 @@ export interface AGResolution {
 export interface AGAttendee {
   residentId: string;
   residentName: string;
+  apartmentId?: string;
   apartmentNumber: string;
   tantiemes: number;
   status: 'present' | 'represented' | 'absent';
@@ -408,6 +412,7 @@ export interface AssembleeGenerale {
   syndicId: string;
   title: string;
   type: 'ordinaire' | 'extraordinaire' | 'AGO' | 'AGE';
+  convocationNumber?: 1 | 2;
   date: string;
   time: string;
   location: string;

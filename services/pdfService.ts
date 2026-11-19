@@ -202,117 +202,527 @@ export const generateMiseEnDemeurePDF = (resident: Resident, apartment: Apartmen
 };
 
 // 4. GENERATE PROCÈS-VERBAL D'ASSEMBLÉE GÉNÉRALE (PV AG)
+const AG_MAJORITY_PDF_LABELS: Record<string, string> = {
+  simple: 'Majorité simple des voix exprimées (Loi 18-00 Art. 21)',
+  simple_24: 'Majorité simple des voix exprimées (Loi 18-00 Art. 21)',
+  absolute: 'Majorité absolue des tantièmes (Loi 18-00 Art. 21)',
+  absolue_25: 'Majorité absolue des tantièmes (Loi 18-00 Art. 21)',
+  three_quarters: 'Majorité des 3/4 des voix (Loi 18-00 Art. 22)',
+  trois_quarts_26: 'Majorité des 3/4 des voix (Loi 18-00 Art. 22)',
+  unanimity: 'Unanimité de tous les copropriétaires (Loi 18-00 Art. 24)',
+  unanimite: 'Unanimité de tous les copropriétaires (Loi 18-00 Art. 24)',
+};
+
+const formatAgMajorityLabel = (maj?: string) =>
+  AG_MAJORITY_PDF_LABELS[maj || 'simple'] || 'Majorité simple (Loi 18-00)';
+
+const formatAgTypeLabel = (type?: string) =>
+  type === 'AGE' || type === 'extraordinaire'
+    ? 'EXTRAORDINAIRE (AGE)'
+    : 'ORDINAIRE (AGO)';
+
 export const generatePvAgPDF = (ag: AssembleeGenerale, building: Building, syndic?: Syndic) => {
   const doc = new jsPDF();
+  const isClosed = ['completed', 'closed'].includes(ag.status);
+  const convocationNum = ag.convocationNumber === 2 ? 2 : 1;
+  const totalTant = ag.totalTantiemes || building.totalTantiemes || 1000;
+  const quorumReq = ag.quorumRequired ?? Math.floor(totalTant / 2) + 1;
+  const presentTant = ag.presentTantiemes || 0;
+  const attendancePct = totalTant > 0 ? Math.round((presentTant / totalTant) * 100) : 0;
+
+  const ensureSpace = (needed: number) => {
+    if (y + needed > 274) {
+      doc.addPage();
+      y = 20;
+    }
+  };
 
   // Header
   doc.setFillColor(15, 118, 110);
-  doc.rect(0, 0, 210, 32, 'F');
+  doc.rect(0, 0, 210, 34, 'F');
   doc.setTextColor(255, 255, 255);
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(16);
-  doc.text(sanitizePdfText(`PROCÈS-VERBAL D'ASSEMBLÉE GÉNÉRALE (${ag.type})`), 105, 18, { align: 'center' });
-  doc.setFontSize(10);
+  doc.setFontSize(15);
+  doc.text(sanitizePdfText(`PROCÈS-VERBAL D'ASSEMBLÉE GÉNÉRALE ${formatAgTypeLabel(ag.type)}`), 105, 15, { align: 'center' });
+  doc.setFontSize(9.5);
   doc.setFont("helvetica", "normal");
-  doc.text(sanitizePdfText(`Copropriété : ${building.name} - ${building.city}`), 105, 26, { align: 'center' });
+  doc.text(sanitizePdfText(`Copropriété : ${building.name} — ${building.city || ''}`), 105, 23, { align: 'center' });
+  doc.text(
+    sanitizePdfText(
+      `${convocationNum === 2 ? '2ème convocation (Art. 18 — sans condition de quorum)' : '1ère convocation'} · ${ag.title || ''}`,
+    ),
+    105,
+    29.5,
+    { align: 'center' },
+  );
 
-  let y = 44;
+  let y = 40;
+  if (!isClosed) {
+    doc.setFillColor(254, 243, 199);
+    doc.setDrawColor(217, 119, 6);
+    doc.rect(14, y, 182, 10, 'FD');
+    doc.setTextColor(146, 64, 14);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    doc.text(
+      sanitizePdfText('PROJET — ASSEMBLÉE NON CLÔTURÉE (DOCUMENT PROVISOIRE SANS VALEUR DE PV DÉFINITIF)'),
+      105,
+      y + 6.5,
+      { align: 'center' },
+    );
+    y += 15;
+  }
+
   doc.setTextColor(15, 23, 42);
-  doc.setFontSize(10);
+  doc.setFontSize(9.5);
   doc.setFont("helvetica", "bold");
-  doc.text(sanitizePdfText(`Date et heure : Le ${ag.date} à ${ag.time}`), 14, y);
-  doc.text(sanitizePdfText(`Lieu de réunion : ${ag.location}`), 14, y + 6);
-  doc.text(sanitizePdfText(`Président de séance : ${ag.presidentName || "Élu en séance"}`), 14, y + 12);
-  doc.text(sanitizePdfText(`Secrétaire de séance : ${ag.secretaryName || syndic?.name || "Le Syndic"}`), 14, y + 18);
+  doc.text(sanitizePdfText(`Date et heure : Le ${ag.date || '—'} à ${ag.time || '—'}`), 14, y);
+  doc.text(sanitizePdfText(`Lieu de réunion : ${ag.location || '—'}`), 14, y + 5.5);
+  doc.text(sanitizePdfText(`Président de séance : ${ag.presidentName || 'Élu en séance'}`), 14, y + 11);
+  doc.text(sanitizePdfText(`Secrétaire de séance : ${ag.secretaryName || syndic?.name || 'Le Syndic'}`), 14, y + 16.5);
 
   // Quorum section
-  y += 28;
+  y += 24;
   doc.setFillColor(241, 245, 249);
   doc.rect(14, y, 182, 24, 'F');
   doc.setFont("helvetica", "bold");
-  doc.text("CONSTATATION DU QUORUM LÉGAL (Loi 18-00 / Loi 106-12) :", 18, y + 6);
+  doc.setFontSize(9.5);
+  doc.text(sanitizePdfText('CONSTATATION DU QUORUM LÉGAL (Loi 18-00 / Loi 106-12) :'), 18, y + 6);
   doc.setFont("helvetica", "normal");
-  const totalTant = ag.totalTantiemes || 1;
-  const quorumText = `Tantièmes présents et représentés : ${ag.presentTantiemes} / ${ag.totalTantiemes} tantièmes (${Math.round((ag.presentTantiemes / totalTant) * 100)}%).`;
-  doc.text(quorumText, 18, y + 12.5);
+  doc.setFontSize(9);
+  doc.text(
+    sanitizePdfText(
+      `Tantièmes présents et représentés : ${presentTant} / ${totalTant} tantièmes (${attendancePct}%) — Seuil 1ère convocation : ${quorumReq} tantièmes.`,
+    ),
+    18,
+    y + 12.5,
+  );
   doc.setFont("helvetica", "bold");
-  doc.setTextColor(ag.quorumReached ? 15 : 185, ag.quorumReached ? 118 : 28, ag.quorumReached ? 110 : 28);
-  doc.text(ag.quorumReached ? "-> QUORUM ATTEINT : L'Assemblée peut valablement délibérer." : "-> QUORUM NON ATTEINT : Deuxième convocation requise.", 18, y + 19);
+  const canDeliberate = ag.quorumReached || convocationNum === 2;
+  doc.setTextColor(canDeliberate ? 15 : 185, canDeliberate ? 118 : 28, canDeliberate ? 110 : 28);
+  const quorumStatusLine = convocationNum === 2
+    ? "-> 2ÈME CONVOCATION (Art. 18) : L'Assemblée délibère valablement quel que soit le nombre de tantièmes présents."
+    : ag.quorumReached
+      ? "-> QUORUM ATTEINT : L'Assemblée peut valablement délibérer."
+      : "-> QUORUM NON ATTEINT : Deuxième convocation requise (Loi 18-00 Art. 18).";
+  doc.text(sanitizePdfText(quorumStatusLine), 18, y + 19);
 
-  // Order of business
-  y += 32;
+  // Feuille de présence (Art. 16-8)
+  y += 30;
   doc.setTextColor(15, 23, 42);
   doc.setFont("helvetica", "bold");
-  doc.text("ORDRE DU JOUR :", 14, y);
-  doc.setFont("helvetica", "normal");
-  y += 6;
-  (ag.agendaItems ?? []).forEach((item, index) => {
-    const agendaLines = doc.splitTextToSize(sanitizePdfText(`${index + 1}. ${item}`), 174);
-    if (y + agendaLines.length * 5 > 268) {
-      doc.addPage();
-      y = 20;
+  doc.setFontSize(10);
+  doc.text(sanitizePdfText('FEUILLE DE PRÉSENCE (Loi 18-00 Art. 16-8) :'), 14, y);
+  y += 5;
+
+  const attendees = ag.attendees || [];
+  if (attendees.length === 0) {
+    doc.setFont("helvetica", "italic");
+    doc.setFontSize(8.5);
+    doc.text(sanitizePdfText('Aucun copropriétaire inscrit sur la feuille de présence.'), 18, y + 3);
+    y += 9;
+  } else {
+    // Table header
+    doc.setFillColor(226, 232, 240);
+    doc.rect(14, y, 182, 6.5, 'F');
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8);
+    doc.text('Lot', 16, y + 4.5);
+    doc.text('Copropriétaire', 34, y + 4.5);
+    doc.text('Tantièmes', 102, y + 4.5);
+    doc.text('Statut / Mandataire', 126, y + 4.5);
+    y += 7;
+    doc.setFont("helvetica", "normal");
+    for (const att of attendees) {
+      ensureSpace(7);
+      const statusText =
+        att.status === 'present'
+          ? 'Présent'
+          : att.status === 'represented'
+            ? `Représenté (${att.proxyHolderName || 'Mandataire'})`
+            : 'Absent';
+      doc.setFontSize(8);
+      doc.setTextColor(15, 23, 42);
+      doc.text(sanitizePdfText(String(att.apartmentNumber || '—')).slice(0, 12), 16, y + 4);
+      doc.text(sanitizePdfText(String(att.residentName || '—')).slice(0, 34), 34, y + 4);
+      doc.text(sanitizePdfText(`${att.tantiemes || 0}`), 102, y + 4);
+      doc.text(sanitizePdfText(statusText).slice(0, 36), 126, y + 4);
+      doc.setDrawColor(226, 232, 240);
+      doc.line(14, y + 5.8, 196, y + 5.8);
+      y += 6.2;
     }
+    y += 3;
+  }
+
+  // Order of business
+  ensureSpace(16);
+  doc.setTextColor(15, 23, 42);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10);
+  doc.text('ORDRE DU JOUR :', 14, y);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  y += 5.5;
+  (ag.agendaItems ?? []).forEach((item, index) => {
+    const cleanItem = String(item || '').replace(/^\s*\d+[\.\-\)]\s*/, '').trim();
+    const agendaLines = doc.splitTextToSize(sanitizePdfText(`${index + 1}. ${cleanItem}`), 174);
+    ensureSpace(agendaLines.length * 4.8 + 2);
     doc.text(agendaLines, 18, y);
-    y += agendaLines.length * 5 + 1.5;
+    y += agendaLines.length * 4.8 + 1.5;
   });
 
   // Resolutions & Votes
-  y += 8;
-  if (y > 262) {
-    doc.addPage();
-    y = 20;
-  }
+  y += 6;
+  ensureSpace(16);
   doc.setFont("helvetica", "bold");
-  doc.text("DÉLIBÉRATIONS ET VOTES DES RÉSOLUTIONS :", 14, y);
+  doc.setFontSize(10);
+  doc.text('DÉLIBÉRATIONS ET VOTES DES RÉSOLUTIONS :', 14, y);
   y += 6;
 
-  ag.resolutions.forEach((res) => {
+  (ag.resolutions || []).forEach((res) => {
     doc.setFontSize(9.5);
-    const titleLines = doc.splitTextToSize(sanitizePdfText(`Résolution N° ${res.number} : ${res.title}`), 174);
-    doc.setFontSize(8.5);
-    const descLines = doc.splitTextToSize(sanitizePdfText(res.description || ''), 174);
-    const boxHeight = 14 + titleLines.length * 4.5 + descLines.length * 4.2;
-    if (y + boxHeight > 270) {
-      doc.addPage();
-      y = 20;
-    }
+    const titleLines = doc.splitTextToSize(
+      sanitizePdfText(`Résolution N° ${res.number} : ${res.title}`),
+      174,
+    );
+    doc.setFontSize(8);
+    const metaText = [
+      `Règle : ${formatAgMajorityLabel(res.majorityType)}`,
+      res.budgetAmount !== undefined && res.budgetAmount > 0
+        ? `Budget : ${Number(res.budgetAmount).toLocaleString('fr-MA')} MAD`
+        : '',
+    ]
+      .filter(Boolean)
+      .join('  |  ');
+    const metaLines = doc.splitTextToSize(sanitizePdfText(metaText), 174);
+    const descLines = res.description
+      ? doc.splitTextToSize(sanitizePdfText(res.description), 174)
+      : [];
+
+    // Art. 16-8 / 16-10: record dissenting/abstaining owners and reserves
+    const ballots = res.voterChoices ?? res.voters ?? [];
+    const dissenters = ballots.filter((v) => {
+      const c = v.choice || v.vote;
+      return c === 'against' || c === 'abstain' || Boolean(v.comment?.trim());
+    });
+    const dissenterLines = dissenters.length > 0
+      ? doc.splitTextToSize(
+          sanitizePdfText(
+            `Opposants / Abstentions / Réserves (Art. 16-8) : ${dissenters
+              .map((v) => {
+                const c = v.choice || v.vote;
+                const tag = c === 'against' ? 'CONTRE' : c === 'abstain' ? 'ABST.' : 'POUR';
+                const reserve = v.comment?.trim() ? ` — « ${v.comment.trim()} »` : '';
+                return `${v.residentName} (Lot ${v.apartmentNumber}, ${v.tantiemes} t.) [${tag}]${reserve}`;
+              })
+              .join(' ; ')}`,
+          ),
+          174,
+        )
+      : [];
+
+    const boxHeight =
+      18 +
+      titleLines.length * 4.5 +
+      metaLines.length * 3.8 +
+      descLines.length * 4.0 +
+      (dissenterLines.length > 0 ? dissenterLines.length * 3.8 + 2.5 : 0);
+
+    ensureSpace(boxHeight + 4);
     doc.setFillColor(248, 250, 252);
-    doc.rect(14, y, 182, boxHeight, 'F');
+    doc.setDrawColor(226, 232, 240);
+    doc.rect(14, y, 182, boxHeight, 'FD');
+
+    let curY = y + 5.5;
     doc.setTextColor(15, 23, 42);
     doc.setFont("helvetica", "bold");
     doc.setFontSize(9.5);
-    doc.text(titleLines, 18, y + 6);
-    const descY = y + 6 + titleLines.length * 4.5;
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(8.5);
-    doc.text(descLines, 18, descY);
-    const voteY = descY + descLines.length * 4.2 + 2;
+    doc.text(titleLines, 18, curY);
+    curY += titleLines.length * 4.5;
+
+    doc.setFont("helvetica", "italic");
+    doc.setFontSize(7.8);
+    doc.setTextColor(71, 85, 105);
+    doc.text(metaLines, 18, curY);
+    curY += metaLines.length * 3.8 + 0.8;
+
+    if (descLines.length > 0) {
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8.3);
+      doc.setTextColor(30, 41, 59);
+      doc.text(descLines, 18, curY);
+      curY += descLines.length * 4.0 + 1;
+    }
+
+    // Separate vote tallies line and outcome line cleanly so text never overlaps
     doc.setFont("helvetica", "bold");
-    doc.text(`Votes : POUR : ${res.votesFor}  |  CONTRE : ${res.votesAgainst}  |  ABSTENTION : ${res.votesAbstain}`, 18, voteY);
-    doc.setTextColor(res.status === 'approved' ? 15 : 185, res.status === 'approved' ? 118 : 28, res.status === 'approved' ? 110 : 28);
-    doc.text(`RÉSULTAT : ${res.status === 'approved' ? "ADOPTÉE" : "REJETÉE"}`, 192, voteY, { align: 'right' });
+    doc.setFontSize(8.3);
+    doc.setTextColor(15, 23, 42);
+    doc.text(
+      sanitizePdfText(
+        `Votes : POUR : ${res.votesFor}  |  CONTRE : ${res.votesAgainst}  |  ABSTENTION : ${res.votesAbstain}`,
+      ),
+      18,
+      curY + 1.5,
+    );
+    const statusLabel =
+      res.status === 'approved'
+        ? 'ADOPTÉE'
+        : res.status === 'rejected'
+          ? 'REJETÉE'
+          : 'EN DÉLIBÉRATION';
+    const [rCol, gCol, bCol] =
+      res.status === 'approved'
+        ? [15, 118, 110]
+        : res.status === 'rejected'
+          ? [185, 28, 28]
+          : [180, 83, 9];
+    doc.setTextColor(rCol, gCol, bCol);
+    doc.text(sanitizePdfText(`RÉSULTAT : ${statusLabel}`), 192, curY + 1.5, { align: 'right' });
+    curY += 6;
+
+    if (dissenterLines.length > 0) {
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(7.6);
+      doc.setTextColor(71, 85, 105);
+      doc.text(dissenterLines, 18, curY);
+    }
+
     doc.setTextColor(15, 23, 42);
     y += boxHeight + 4;
   });
 
-  // Signatures
-  y += 15;
-  if (y > 240) {
-    doc.addPage();
-    y = 20;
+  if (ag.pvSummary?.trim()) {
+    ensureSpace(22);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.setTextColor(15, 23, 42);
+    doc.text('OBSERVATIONS & SYNTHÈSE DU PROCÈS-VERBAL :', 14, y + 2);
+    y += 7;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8.5);
+    const summaryLines = doc.splitTextToSize(sanitizePdfText(ag.pvSummary.trim()), 178);
+    ensureSpace(summaryLines.length * 4.5 + 4);
+    doc.text(summaryLines, 16, y);
+    y += summaryLines.length * 4.5 + 4;
   }
+
+  // Signatures
+  y += 10;
+  ensureSpace(26);
   doc.setFontSize(9);
   doc.setFont("helvetica", "bold");
-  doc.text("Le Président de séance", 25, y);
-  doc.text("Le Secrétaire de séance", 85, y);
-  doc.text("Le Syndic", 150, y);
+  doc.setTextColor(15, 23, 42);
+  doc.text('Le Président de séance', 25, y);
+  doc.text('Le Secrétaire de séance', 85, y);
+  doc.text('Le Syndic', 150, y);
 
   doc.setFont("helvetica", "normal");
-  doc.text("(Signature)", 25, y + 14);
-  doc.text("(Signature)", 85, y + 14);
-  doc.text("(Signature & Cachet)", 150, y + 14);
+  doc.text('(Signature)', 25, y + 14);
+  doc.text('(Signature)', 85, y + 14);
+  doc.text('(Signature & Cachet)', 150, y + 14);
 
-  doc.save(`PV_Assemblee_Generale_${building.name.replace(/\s+/g, '_')}_${ag.date}.pdf`);
+  const safeName = (building.name || 'Immeuble').replace(/\s+/g, '_');
+  doc.save(`PV_Assemblee_Generale_${safeName}_${ag.date || 'session'}.pdf`);
+};
+
+// 4B. GENERATE CONVOCATION & BLANK PROCURATION PDF (LOI 18-00 ART. 16-2 & 16-6)
+export const generateConvocationAgPDF = (ag: AssembleeGenerale, building: Building, syndic?: Syndic) => {
+  const doc = new jsPDF();
+  const convocationNum = ag.convocationNumber === 2 ? 2 : 1;
+  const totalTant = ag.totalTantiemes || building.totalTantiemes || 1000;
+  const quorumReq = ag.quorumRequired ?? Math.floor(totalTant / 2) + 1;
+
+  let y = 16;
+  const ensureSpace = (needed: number) => {
+    if (y + needed > 274) {
+      doc.addPage();
+      y = 20;
+    }
+  };
+
+  // Header
+  doc.setFillColor(15, 118, 110);
+  doc.rect(0, 0, 210, 34, 'F');
+  doc.setTextColor(255, 255, 255);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(15);
+  doc.text(
+    sanitizePdfText(`CONVOCATION À L'ASSEMBLÉE GÉNÉRALE ${formatAgTypeLabel(ag.type)}`),
+    105,
+    14,
+    { align: 'center' },
+  );
+  doc.setFontSize(9.5);
+  doc.setFont("helvetica", "normal");
+  doc.text(
+    sanitizePdfText(
+      `Copropriété : ${building.name} — ${building.address || ''} ${building.city || ''}`,
+    ),
+    105,
+    22,
+    { align: 'center' },
+  );
+  doc.text(
+    sanitizePdfText(
+      `${convocationNum === 2 ? '2ème convocation (Art. 18)' : '1ère convocation'} · Conformité Loi n° 18-00 / 106-12 (Art. 16-2)`,
+    ),
+    105,
+    29,
+    { align: 'center' },
+  );
+
+  y = 42;
+  doc.setTextColor(15, 23, 42);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10);
+  doc.text(sanitizePdfText(`Objet : ${ag.title || 'Assemblée Générale des Copropriétaires'}`), 14, y);
+  y += 6;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.text(sanitizePdfText(`Syndic convoquant : ${syndic?.name || 'Le Syndic'}`), 14, y);
+  doc.text(sanitizePdfText(`Date d'émission : ${new Date().toLocaleDateString('fr-MA')}`), 196, y, { align: 'right' });
+  y += 7;
+
+  // Law 18-00 Art. 16-2 15-day notice check
+  const agTimestamp = Date.parse(ag.date || '');
+  const daysUntilAg = Number.isFinite(agTimestamp)
+    ? Math.floor((agTimestamp - Date.now()) / 86_400_000)
+    : null;
+  if (daysUntilAg !== null && daysUntilAg < 15) {
+    doc.setFillColor(254, 243, 199);
+    doc.setDrawColor(217, 119, 6);
+    doc.rect(14, y, 182, 11, 'FD');
+    doc.setTextColor(146, 64, 14);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8.2);
+    doc.text(
+      sanitizePdfText(
+        `Rappel légal (Art. 16-2) : le délai légal de convocation est de 15 jours francs (séance prévue dans ${Math.max(0, daysUntilAg)} jour(s)).`,
+      ),
+      18,
+      y + 7,
+    );
+    y += 15;
+  }
+
+  // Meeting details box
+  doc.setFillColor(241, 245, 249);
+  doc.rect(14, y, 182, 26, 'F');
+  doc.setTextColor(15, 23, 42);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9.5);
+  doc.text('INFORMATIONS PRATIQUES DE LA SÉANCE :', 18, y + 6);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.text(sanitizePdfText(`Date & Heure : Le ${ag.date || '—'} à ${ag.time || '—'}`), 18, y + 12.5);
+  doc.text(sanitizePdfText(`Lieu : ${ag.location || '—'}`), 18, y + 18);
+  doc.text(
+    sanitizePdfText(
+      convocationNum === 2
+        ? "Quorum : 2ème convocation — l'assemblée délibérera valablement quel que soit le nombre de tantièmes présents (Art. 18)."
+        : `Quorum requis (1ère convocation) : ${quorumReq} / ${totalTant} tantièmes (> 50%).`,
+    ),
+    18,
+    y + 23.5,
+  );
+  y += 32;
+
+  // Agenda & Draft resolutions
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10);
+  doc.text('ORDRE DU JOUR ET PROJETS DE RÉSOLUTIONS :', 14, y);
+  y += 6;
+
+  (ag.resolutions || []).forEach((res) => {
+    const titleLines = doc.splitTextToSize(
+      sanitizePdfText(`Résolution N° ${res.number} : ${res.title}`),
+      174,
+    );
+    const metaLine = sanitizePdfText(
+      `Majorité requise : ${formatAgMajorityLabel(res.majorityType)}${
+        res.budgetAmount && res.budgetAmount > 0
+          ? `  |  Budget proposé : ${Number(res.budgetAmount).toLocaleString('fr-MA')} MAD`
+          : ''
+      }`,
+    );
+    const descLines = res.description
+      ? doc.splitTextToSize(sanitizePdfText(res.description), 174)
+      : [];
+    const blockH = 10 + titleLines.length * 4.5 + descLines.length * 4.0;
+    ensureSpace(blockH + 4);
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    doc.setTextColor(15, 23, 42);
+    doc.text(titleLines, 18, y);
+    y += titleLines.length * 4.5;
+    doc.setFont("helvetica", "italic");
+    doc.setFontSize(7.8);
+    doc.setTextColor(71, 85, 105);
+    doc.text(metaLine, 18, y);
+    y += 4.2;
+    if (descLines.length > 0) {
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8.2);
+      doc.setTextColor(30, 41, 59);
+      doc.text(descLines, 18, y);
+      y += descLines.length * 4.0 + 1;
+    }
+    y += 3;
+  });
+
+  // Detachable blank Procuration / Pouvoir form (Art. 16-6)
+  ensureSpace(78);
+  y += 4;
+  doc.setDrawColor(148, 163, 184);
+  doc.setLineDashPattern([2, 2], 0);
+  doc.line(14, y, 196, y);
+  doc.setLineDashPattern([], 0);
+  y += 6;
+
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(203, 213, 225);
+  doc.rect(14, y, 182, 64, 'FD');
+  doc.setTextColor(15, 23, 42);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10);
+  doc.text('POUVOIR / PROCURATION (Loi n° 18-00 Art. 16-6)', 105, y + 7, { align: 'center' });
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  doc.text('Je soussigné(e) : ________________________________________________   CIN : ___________________', 18, y + 16);
+  doc.text(
+    sanitizePdfText(`Copropriétaire du lot N° : ___________  dans la copropriété ${building.name},`),
+    18,
+    y + 23,
+  );
+  doc.text('Donne par la présente pouvoir à M. / Mme : _________________________________________________', 18, y + 30);
+  doc.text(
+    sanitizePdfText(`Pour me représenter à l'Assemblée Générale du ${ag.date || '___/___/_____'} et prendre part à tous votes.`),
+    18,
+    y + 37,
+  );
+  doc.setFont("helvetica", "italic");
+  doc.setFontSize(7.5);
+  doc.setTextColor(100, 116, 139);
+  doc.text(
+    sanitizePdfText('Rappel Art. 16-6 : Un mandataire ne peut détenir plus de 3 procurations ni cumuler plus de 10% des voix.'),
+    18,
+    y + 44,
+  );
+  doc.text(
+    sanitizePdfText('Le syndic, son conjoint et ses préposés ne peuvent recevoir de procuration.'),
+    18,
+    y + 48.5,
+  );
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.5);
+  doc.setTextColor(15, 23, 42);
+  doc.text('Fait à ________________, le ___/___/20___', 18, y + 58);
+  doc.text('Signature précédée de « Bon pour pouvoir »', 192, y + 58, { align: 'right' });
+
+  const safeName = (building.name || 'Immeuble').replace(/\s+/g, '_');
+  doc.save(`Convocation_AG_${safeName}_${ag.date || 'session'}.pdf`);
 };
 
 // 5. GENERATE TRANSACTION ACCOUNTING VOUCHER (PIÈCE COMPTABLE LOI 18-00)

@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import { FileRepository } from '../server/repository';
 import { bindFirebaseAccount } from '../server/firebaseIdentity';
 import { evaluateResolutionStatus } from '../shared/domain/voting';
+import { applyResidentVote } from '../utils/agVoting';
 import { createCommandService } from '../server/domain/command.service';
 import { createSupportingService } from '../server/domain/supporting.service';
 import { buildingReport } from '../server/reports';
@@ -1276,5 +1277,157 @@ test('PR1 Hardening: credential provisioning sets emailVerified, guards archived
   const b2 = cmd.buildingFor(residentActor, 'bld-2', false);
   assert.equal(b2.id, 'bld-2');
 });
+
+test('PR 2 AG Governance: Law 18-00/106-12 quorum, 2nd convocation, open simple majority, multi-lot voting, proxy caps & override guard', async () => {
+  const state = baseState();
+  const bld = state.syndik_prod_syndics_v1[0].buildings[0];
+  // Build a 5-lot building (total 1000 tantiemes):
+  // res-1 owns apt-1 (60 t.) AND apt-1b (40 t.) -> multi-lot owner (100 t. total)
+  // res-2 owns apt-2 (50 t.)
+  // res-3 owns apt-3 (50 t.)
+  // res-4 owns apt-4 (50 t.)
+  // res-5 owns apt-5 (750 t.) -> single lot > 10% for Art. 16-6 exception test
+  bld.residents = [
+    { id: 'res-1', name: 'Owner Multi', email: 'm1@test.ma', isOwner: true, buildingId: 'bld-1', syndicId: 'cab-1', apartmentId: 'apt-1' },
+    { id: 'res-2', name: 'Owner Two', email: 'm2@test.ma', isOwner: true, buildingId: 'bld-1', syndicId: 'cab-1', apartmentId: 'apt-2' },
+    { id: 'res-3', name: 'Owner Three', email: 'm3@test.ma', isOwner: true, buildingId: 'bld-1', syndicId: 'cab-1', apartmentId: 'apt-3' },
+    { id: 'res-4', name: 'Owner Four', email: 'm4@test.ma', isOwner: true, buildingId: 'bld-1', syndicId: 'cab-1', apartmentId: 'apt-4' },
+    { id: 'res-5', name: 'Owner Big', email: 'm5@test.ma', isOwner: true, buildingId: 'bld-1', syndicId: 'cab-1', apartmentId: 'apt-5' },
+  ];
+  bld.apartments = [
+    { id: 'apt-1', number: 'A1', floor: 1, area: 60, ownerId: 'res-1', monthlyFees: 200, tantiemes: 60 },
+    { id: 'apt-1b', number: 'A1B', floor: 1, area: 40, ownerId: 'res-1', monthlyFees: 150, tantiemes: 40 },
+    { id: 'apt-2', number: 'A2', floor: 2, area: 50, ownerId: 'res-2', monthlyFees: 200, tantiemes: 50 },
+    { id: 'apt-3', number: 'A3', floor: 3, area: 50, ownerId: 'res-3', monthlyFees: 200, tantiemes: 50 },
+    { id: 'apt-4', number: 'A4', floor: 4, area: 50, ownerId: 'res-4', monthlyFees: 200, tantiemes: 50 },
+    { id: 'apt-5', number: 'A5', floor: 5, area: 500, ownerId: 'res-5', monthlyFees: 1000, tantiemes: 750 },
+  ];
+  bld.totalTantiemes = 1000;
+
+  const cmd = createCommandService(state);
+
+  // 1. Metadata validation rejects empty title & invalid convocationNumber
+  await assert.rejects(
+    cmd.runOperation(actor, 'createAssembleeGenerale', [{
+      buildingId: 'bld-1', title: '   ', type: 'AGO', date: '2026-06-01', time: '18:00', location: 'Hall',
+      resolutions: [{ title: 'R1', majorityType: 'simple' }],
+    }], 'op-pr2-bad-title'),
+    /titre/i,
+  );
+
+  // 2. Create 2nd convocation AG (Law 18-00 Art. 18 — deliberates without quorum)
+  const ag2 = await cmd.runOperation(actor, 'createAssembleeGenerale', [{
+    buildingId: 'bld-1',
+    title: 'AGO 2026 - 2ème Convocation',
+    type: 'AGO',
+    convocationNumber: 2,
+    date: '2026-06-15',
+    time: '18:00',
+    location: 'Hall',
+    resolutions: [{ id: 'res-simple', title: 'Approbation comptes', majorityType: 'simple' }],
+  }], 'op-pr2-create-ag2');
+  assert.equal(ag2.convocationNumber, 2);
+  assert.equal(ag2.quorumRequired, 501);
+  assert.equal(ag2.attendees.length, 6, 'One attendee row per owned lot including multi-lot owner');
+
+  // 3. Art. 16-6 proxy caps enforcement
+  await assert.rejects(
+    cmd.runOperation(actor, 'updateAGAttendee', [ag2.id, 'res-2', 'represented', '   '], 'op-pr2-proxy-empty'),
+    /mandataire/i,
+  );
+  await assert.rejects(
+    cmd.runOperation(actor, 'updateAGAttendee', [ag2.id, 'res-2', 'represented', 'Cabinet Test'], 'op-pr2-proxy-syndic'),
+    /syndic/i,
+  );
+  // Valid 1st & 2nd proxies to Mandataire Ali (50 + 50 = 100 <= 10% of 1000)
+  await cmd.runOperation(actor, 'updateAGAttendee', [ag2.id, 'res-2', 'represented', 'Mandataire Ali'], 'op-pr2-proxy-1');
+  await cmd.runOperation(actor, 'updateAGAttendee', [ag2.id, 'res-3', 'represented', 'Mandataire Ali'], 'op-pr2-proxy-2');
+  // 3rd proxy to Mandataire Ali would push cumulative tantiemes to 150 > 100 (10%) -> rejected!
+  await assert.rejects(
+    cmd.runOperation(actor, 'updateAGAttendee', [ag2.id, 'res-4', 'represented', 'Mandataire Ali'], 'op-pr2-proxy-10pct'),
+    /10%|Art\. 16-6/i,
+  );
+  // Single-mandant exception: 1 owner (res-5) with 750 t. (>10%) represented alone by a distinct mandataire IS allowed
+  await cmd.runOperation(actor, 'updateAGAttendee', [ag2.id, 'res-5', 'represented', 'Mandataire Solo'], 'op-pr2-proxy-solo');
+  // Adding a 2nd mandant to Mandataire Solo (750 + 50 = 800 > 10%) is rejected!
+  await assert.rejects(
+    cmd.runOperation(actor, 'updateAGAttendee', [ag2.id, 'res-4', 'represented', 'Mandataire Solo'], 'op-pr2-proxy-solo2'),
+    /10%|Art\. 16-6/i,
+  );
+  // Reset res-5 back to absent so quorumReached remains false (< 501) for our 2nd convocation test
+  await cmd.runOperation(actor, 'updateAGAttendee', [ag2.id, 'res-5', 'absent'], 'op-pr2-reset-r5');
+
+  // 4. Open voting -> convocationNumber becomes immutable
+  const opened = await cmd.runOperation(actor, 'toggleAGVoting', [ag2.id, true], 'op-pr2-open');
+  assert.equal(opened.isVotingOpen, true);
+  await assert.rejects(
+    cmd.runOperation(actor, 'saveAssembleeGenerale', [{ ...opened, convocationNumber: 1 }], 'op-pr2-mutate-conv'),
+    /convocation/i,
+  );
+
+  // 5. Manager cannot record a vote for an absent owner (res-4)
+  await assert.rejects(
+    cmd.runOperation(actor, 'recordAGVote', [ag2.id, 'res-simple', 'for', 50, {
+      residentId: 'res-4', residentName: 'Owner Four', apartmentId: 'apt-4', apartmentNumber: 'A4',
+    }], 'op-pr2-absent-vote'),
+    /absent|présence/i,
+  );
+
+  // 6. Multi-lot owner res-1 votes independently on apt-1 ('for', 60 t.) and apt-1b ('against', 40 t.)
+  const res1Actor = { uid: 'user-res-res-1', role: 'resident', syndicId: 'cab-1', buildingId: 'bld-1', residentId: 'res-1', email: 'm1@test.ma' };
+  const currentAg2 = state.syndik_prod_ag_v1.find((a: any) => a.id === ag2.id);
+  const afterLot1 = applyResidentVote(
+    currentAg2,
+    currentAg2.votingSnapshot,
+    'res-1',
+    'res-simple',
+    'for',
+    'apt-1',
+    'Réserve lot A1',
+    { actorRole: 'resident', actorUid: res1Actor.uid },
+  );
+  const afterLot1b = applyResidentVote(
+    afterLot1,
+    afterLot1.votingSnapshot!,
+    'res-1',
+    'res-simple',
+    'against',
+    'apt-1b',
+    'Contre sur lot A1B',
+    { actorRole: 'resident', actorUid: res1Actor.uid },
+  );
+  // Persist into state
+  const agIdx = state.syndik_prod_ag_v1.findIndex((a: any) => a.id === ag2.id);
+  state.syndik_prod_ag_v1[agIdx] = afterLot1b;
+  assert.equal(afterLot1b.resolutions[0].votesFor, 60);
+  assert.equal(afterLot1b.resolutions[0].votesAgainst, 40);
+  assert.equal(afterLot1b.resolutions[0].voterChoices?.length, 2, 'Distinct ballots for apt-1 and apt-1b');
+  // Partial simple-majority ballot while open MUST remain pending (not prematurely approved!)
+  assert.equal(afterLot1b.resolutions[0].status, 'pending', 'Open simple majority stays pending while unbeatable threshold not met');
+
+  // 7. Syndic cannot silently overwrite resident-cast ballot unless allowOverrideResidentVote: true
+  await assert.rejects(
+    cmd.runOperation(actor, 'recordAGVote', [ag2.id, 'res-simple', 'against', 60, {
+      residentId: 'res-1', residentName: 'Owner Multi', apartmentId: 'apt-1', apartmentNumber: 'A1',
+    }], 'op-pr2-silent-override'),
+    /déjà voté|rectification/i,
+  );
+  // With explicit override flag + comment, syndic override succeeds and preserves comment
+  const overridden = await cmd.runOperation(actor, 'recordAGVote', [ag2.id, 'res-simple', 'for', 60, {
+    residentId: 'res-1', residentName: 'Owner Multi', apartmentId: 'apt-1', apartmentNumber: 'A1',
+    comment: 'Confirmé en séance', allowOverrideResidentVote: true,
+  }], 'op-pr2-explicit-override');
+  const lot1Ballot = overridden.resolutions[0].voterChoices.find((v: any) => v.apartmentId === 'apt-1');
+  assert.equal(lot1Ballot.comment, 'Confirmé en séance');
+  assert.equal(lot1Ballot.castByRole, 'syndic');
+
+  // 8. Close 2nd-convocation AG with presentTantiemes = 200 (< 501): simple majority approves despite no 1st-convocation quorum!
+  assert.equal(overridden.quorumReached, false);
+  const closed = await cmd.runOperation(actor, 'saveAssembleeGenerale', [{
+    ...overridden, status: 'completed', isVotingOpen: false,
+  }], 'op-pr2-close-ag2');
+  assert.equal(closed.resolutions[0].status, 'approved', '2nd convocation approves simple majority without 1st-convocation quorum');
+});
+
 
 

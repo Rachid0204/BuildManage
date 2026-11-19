@@ -85,6 +85,12 @@ const syncControllers = new Set<AbortController>();
 
 export const getKnownServerRevision = () => lastKnownServerRevision;
 
+export const advanceKnownServerRevision = (revision: unknown) => {
+  if (typeof revision === 'number' && Number.isFinite(revision) && revision > lastKnownServerRevision) {
+    lastKnownServerRevision = revision;
+  }
+};
+
 function cacheServerStore(store: Record<string, unknown>) {
   for (const key of Object.values(STORAGE_KEYS)) {
     const value = store[key];

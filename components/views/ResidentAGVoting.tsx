@@ -1,12 +1,13 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import type { Building, Syndic, Resident, Apartment, AGResolution } from '../../types';
+import type { Building, Syndic, Resident, Apartment, AGResolution, AGVoteCast } from '../../types';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import Modal from '../common/Modal';
 import { AGIcon, DocumentsIcon } from '../icons/IconComponents';
 import { getAssembleesGeneralesForBuilding, castResidentAGVote } from '../../firebase/services';
-import { generatePvAgPDF } from '../../services/pdfOnDemand';
+import { generatePvAgPDF, generateConvocationAgPDF } from '../../services/pdfOnDemand';
+import { canonicalQuorum } from '../../shared/domain/voting';
 import Loading from '../common/Loading';
 import { useI18n } from '../../hooks/useI18n';
 import { useToast } from '../common/Toast';
@@ -15,19 +16,61 @@ interface ResidentAGVotingProps {
   building: Building;
   currentResident?: Resident;
   currentApartment?: Apartment;
+  myApartments?: Apartment[];
   syndic?: Syndic;
+}
+
+function getResolutionBallots(res: AGResolution): AGVoteCast[] {
+  return res.voterChoices ?? res.voters ?? [];
+}
+
+function formatMajorityLabel(
+  majorityType: AGResolution['majorityType'],
+  totalTantiemes: number,
+  tr: (fr: string, ar: string) => string
+): string {
+  const total = totalTantiemes || 1000;
+  const absThreshold = canonicalQuorum(total);
+  const threeQuartersThreshold = Math.ceil(total * 0.75);
+  switch (majorityType) {
+    case 'simple':
+    case 'simple_24':
+      return tr('Majorité simple (Art. 21) · Majorité des voix exprimées', 'الأغلبية البسيطة (المادة 21) · أغلبية الأصوات المعبر عنها');
+    case 'absolute':
+    case 'absolue_25':
+      return tr(
+        `Majorité absolue (Art. 22) · Au moins ${absThreshold} / ${total} tantièmes`,
+        `الأغلبية المطلقة (المادة 22) · على الأقل ${absThreshold} / ${total} جزء`
+      );
+    case 'three_quarters':
+    case 'trois_quarts_26':
+      return tr(
+        `Majorité 3/4 (Art. 22 · Loi 106-12) · Au moins ${threeQuartersThreshold} / ${total} tantièmes`,
+        `أغلبية 3/4 (المادة 22 · القانون 106-12) · على الأقل ${threeQuartersThreshold} / ${total} جزء`
+      );
+    case 'unanimity':
+    case 'unanimite':
+      return tr(
+        `Unanimité (Art. 23) · ${total} / ${total} tantièmes`,
+        `الإجماع (المادة 23) · ${total} / ${total} جزء`
+      );
+    default:
+      return tr('Majorité simple (Art. 21) · Majorité des voix exprimées', 'الأغلبية البسيطة (المادة 21) · أغلبية الأصوات المعبر عنها');
+  }
 }
 
 export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
   building,
   currentResident,
   currentApartment,
+  myApartments,
   syndic,
 }) => {
   const { tr, isAr } = useI18n();
   const { showToast } = useToast();
   const queryClient = useQueryClient();
   const [selectedAGId, setSelectedAGId] = useState<string | null>(null);
+  const [selectedApartmentId, setSelectedApartmentId] = useState<string | null>(null);
   const [editingResolutionId, setEditingResolutionId] = useState<string | null>(null);
   const [voteChoice, setVoteChoice] = useState<'for' | 'against' | 'abstain'>('for');
   const [voteComment, setVoteComment] = useState('');
@@ -44,16 +87,52 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
     ? agList.find((ag) => ag.id === selectedAGId) || agList[0]
     : agList[0];
 
-  const isVotingOpen = activeAG
-    ? activeAG.isVotingOpen === true && !['completed', 'closed'].includes(activeAG.status)
-    : false;
-  const isOwner = currentResident?.isOwner !== false;
-  const canVote = isVotingOpen && isOwner;
+  const ownedApartments = useMemo(() => {
+    const base = myApartments?.length
+      ? myApartments
+      : currentApartment
+      ? [currentApartment]
+      : [];
+    return base.filter((a) => !a.archivedAt);
+  }, [myApartments, currentApartment]);
 
-  // Resolve resident's tantièmes
-  const residentTantiemes = currentApartment?.tantiemes || 100;
-  const residentLotNumber = currentApartment?.number || 'A-102';
+  const activeApartment = useMemo(() => {
+    if (!ownedApartments.length) return undefined;
+    if (selectedApartmentId) {
+      return ownedApartments.find((a) => a.id === selectedApartmentId) || ownedApartments[0];
+    }
+    return ownedApartments[0];
+  }, [ownedApartments, selectedApartmentId]);
+
+  const isClosed = Boolean(activeAG && ['completed', 'closed'].includes(activeAG.status));
+  const isVotingOpen = Boolean(activeAG && activeAG.isVotingOpen === true && !isClosed);
+  const isOwner = currentResident?.isOwner === true;
+  const canVote = isVotingOpen && isOwner && Boolean(activeApartment);
+
+  const effectiveTotalTantiemes = activeAG?.totalTantiemes || building.totalTantiemes || 1000;
+  const effectiveQuorumRequired = activeAG?.quorumRequired || canonicalQuorum(effectiveTotalTantiemes);
+  const isSecondConvocation = activeAG?.convocationNumber === 2;
+
+  // Resolve resident's tantièmes from frozen votingSnapshot if available, otherwise from activeApartment
+  const snapshotLot = activeAG?.votingSnapshot?.apartments?.find(
+    (l) => activeApartment && l.id === activeApartment.id
+  );
+  const residentTantiemes = snapshotLot?.tantiemes ?? activeApartment?.tantiemes ?? 0;
+  const residentLotNumber = activeApartment?.number || '—';
   const residentName = currentResident?.name || tr('Copropriétaire', 'مالك مشترك');
+
+  const findMyVote = (resolution: AGResolution): AGVoteCast | undefined => {
+    if (!currentResident) return undefined;
+    const ballots = getResolutionBallots(resolution);
+    if (activeApartment) {
+      return ballots.find(
+        (v) =>
+          v.residentId === currentResident.id &&
+          (v.apartmentId ? v.apartmentId === activeApartment.id : v.apartmentNumber === activeApartment.number)
+      );
+    }
+    return ballots.find((v) => v.residentId === currentResident.id);
+  };
 
   // Digital Vote Mutation
   const voteMutation = useMutation({
@@ -68,10 +147,10 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
       vote: 'for' | 'against' | 'abstain';
       comment?: string;
     }) => {
-      if (!currentResident || !currentApartment) {
-        throw new Error(tr('Profil copropriétaire introuvable', 'ملف المالك المشترك غير موجود'));
+      if (!currentResident || !activeApartment) {
+        throw new Error(tr('Profil copropriétaire ou lot introuvable', 'ملف المالك المشترك أو الوحدة غير موجود'));
       }
-      if (currentResident.isOwner === false) {
+      if (currentResident.isOwner !== true) {
         throw new Error(
           tr(
             'Conformément à la Loi 18-00, seuls les copropriétaires (ou leurs mandataires) disposent du droit de vote en Assemblée Générale.',
@@ -84,8 +163,8 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
         resolutionId,
         currentResident.id,
         currentResident.name,
-        currentApartment.id,
-        currentApartment.number,
+        activeApartment.id,
+        activeApartment.number,
         residentTantiemes,
         vote,
         comment
@@ -102,7 +181,7 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
   });
 
   const handleStartVote = (resolution: AGResolution) => {
-    const existingVote = resolution.voters?.find((v) => v.residentId === currentResident?.id);
+    const existingVote = findMyVote(resolution);
     setVoteChoice(existingVote ? existingVote.choice || existingVote.vote || 'abstain' : 'for');
     setVoteComment(existingVote?.comment || '');
     setEditingResolutionId(resolution.id);
@@ -139,11 +218,9 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
     );
   }
 
-  // Count how many resolutions this resident has already voted on
+  // Count how many resolutions this lot has already voted on
   const totalResolutions = activeAG.resolutions.length;
-  const votedResolutionsCount = activeAG.resolutions.filter((r) =>
-    r.voters?.some((v) => v.residentId === currentResident?.id)
-  ).length;
+  const votedResolutionsCount = activeAG.resolutions.filter((r) => Boolean(findMyVote(r))).length;
   const isVotingCompleted = totalResolutions > 0 && votedResolutionsCount === totalResolutions;
 
   return (
@@ -154,7 +231,12 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
           <div className="space-y-2">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-[11px] font-bold uppercase tracking-wider bg-teal-700/80 text-teal-100 px-2.5 py-0.5 rounded-full border border-teal-500/30">
-                {tr('Loi n° 18-00 · Art. 21 à 24', 'القانون رقم 18-00 · المواد 21 إلى 24')}
+                {tr('Loi n° 18-00 · Art. 18 à 24', 'القانون رقم 18-00 · المواد 18 إلى 24')}
+              </span>
+              <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full border bg-indigo-500/20 text-indigo-200 border-indigo-400/30">
+                {isSecondConvocation
+                  ? tr('2ème convocation (Art. 18 · sans quorum)', 'الدعوة الثانية (المادة 18 · بدون نصاب)')
+                  : tr('1ère convocation (Art. 18)', 'الدعوة الأولى (المادة 18)')}
               </span>
               <span
                 className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full border flex items-center gap-1.5 ${
@@ -168,9 +250,11 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
                     isVotingOpen ? 'bg-emerald-400 animate-pulse' : 'bg-slate-400'
                   }`}
                 ></span>
-                {isVotingOpen
+                {isClosed
+                  ? tr('Assemblée Clôturée', 'الجمعية مغلقة')
+                  : isVotingOpen
                   ? tr('Vote Électronique Ouvert', 'التصويت الإلكتروني مفتوح')
-                  : tr('Vote Électronique Clôturé', 'التصويت الإلكتروني مغلق')}
+                  : tr('Vote Électronique Fermé', 'التصويت الإلكتروني مغلق')}
               </span>
               <span className="text-xs text-teal-200">
                 {activeAG.type === 'AGO'
@@ -178,6 +262,26 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
                   : tr('Assemblée Générale Extraordinaire', 'الجمع العام الاستثنائي')}
               </span>
             </div>
+
+            {agList.length > 1 && (
+              <div className="pt-1">
+                <select
+                  value={activeAG.id}
+                  onChange={(e) => {
+                    setSelectedAGId(e.target.value);
+                    setEditingResolutionId(null);
+                  }}
+                  aria-label={tr('Sélectionner une assemblée générale', 'اختر الجمعية العامة')}
+                  className="text-xs bg-teal-950/70 text-white border border-teal-500/50 rounded-lg px-2.5 py-1.5 font-medium"
+                >
+                  {agList.map((ag) => (
+                    <option key={ag.id} value={ag.id} className="bg-slate-900 text-white">
+                      {ag.title} ({ag.date})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             <h2 className="text-xl font-bold tracking-tight text-white">{activeAG.title}</h2>
             <p className="text-xs text-teal-100/90 leading-relaxed max-w-2xl">
@@ -209,14 +313,22 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
             </div>
           </div>
 
-          <div className="flex flex-col sm:flex-row md:flex-col items-end gap-2.5 shrink-0">
+          <div className="flex flex-col sm:flex-row md:flex-col items-end gap-2 shrink-0">
+            <Button
+              variant="secondary"
+              onClick={() => generateConvocationAgPDF(activeAG, building, syndic)}
+              className="text-xs bg-white/10 hover:bg-white/20 text-white border-white/20 flex items-center gap-1.5"
+            >
+              <DocumentsIcon />
+              <span>{tr('Convocation + Procuration (PDF)', 'الاستدعاء + الوكالة (PDF)')}</span>
+            </Button>
             <Button
               variant="secondary"
               onClick={() => generatePvAgPDF(activeAG, building, syndic)}
               className="text-xs bg-white/10 hover:bg-white/20 text-white border-white/20 flex items-center gap-1.5"
             >
               <DocumentsIcon />
-              <span>{tr('Télécharger le PV / Ordre du jour (PDF)', 'تحميل المحضر / جدول الأعمال (PDF)')}</span>
+              <span>{tr('Télécharger le PV Officiel (PDF)', 'تحميل المحضر الرسمي (PDF)')}</span>
             </Button>
             <button
               onClick={() => setShowLawInfoModal(true)}
@@ -233,26 +345,35 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
             <div className="flex justify-between items-center text-xs">
               <span className="text-teal-200 font-medium">{tr('Participation & Quorum légal en séance :', 'المشاركة والنصاب القانوني للجلسة:')}</span>
               <span className="font-mono font-bold text-white">
-                {activeAG.presentTantiemes} / {activeAG.totalTantiemes || 1000} {tr('tantièmes', 'جزء')} ({Math.round(((activeAG.presentTantiemes || 0) / (activeAG.totalTantiemes || 1000)) * 100)}%)
+                {activeAG.presentTantiemes} / {effectiveTotalTantiemes} {tr('tantièmes', 'جزء')} ({Math.round(((activeAG.presentTantiemes || 0) / effectiveTotalTantiemes) * 100)}%)
               </span>
             </div>
             <div className="w-full bg-teal-950/60 rounded-full h-2.5 overflow-hidden border border-teal-600/40">
               <div
                 className={`h-full transition-all duration-500 ${
-                  activeAG.quorumReached ? 'bg-emerald-400' : 'bg-amber-400'
+                  activeAG.quorumReached || isSecondConvocation ? 'bg-emerald-400' : 'bg-amber-400'
                 }`}
                 style={{
-                  width: `${Math.min(100, ((activeAG.presentTantiemes || 0) / (activeAG.totalTantiemes || 1000)) * 100)}%`,
+                  width: `${Math.min(100, ((activeAG.presentTantiemes || 0) / effectiveTotalTantiemes) * 100)}%`,
                 }}
               />
             </div>
             <div className="flex justify-between items-center text-[11px] text-teal-300">
               <span>
-                {activeAG.quorumReached
+                {isSecondConvocation
+                  ? tr('✓ 2ème convocation : délibération valable sans quorum (Art. 18)', '✓ الدعوة الثانية: المداولة صالحة بدون نصاب (المادة 18)')
+                  : activeAG.quorumReached
                   ? tr('✓ Quorum de 1ère convocation atteint (> 50%)', '✓ تم بلوغ النصاب القانوني للدعوة الأولى (> 50%)')
                   : tr('⚠ Quorum en cours de consolidation', '⚠ النصاب القانوني قيد الاستكمال')}
               </span>
-              <span>{tr('Seuil requis : 500/1000 tantièmes', 'العتبة المطلوبة: 500/1000 جزء')}</span>
+              <span>
+                {isSecondConvocation
+                  ? tr('Seuil : aucun (2ème convocation)', 'العتبة: بدون نصاب')
+                  : tr(
+                      `Seuil requis : ${effectiveQuorumRequired} / ${effectiveTotalTantiemes} tantièmes`,
+                      `العتبة المطلوبة: ${effectiveQuorumRequired} / ${effectiveTotalTantiemes} جزء`
+                    )}
+              </span>
             </div>
           </div>
 
@@ -260,6 +381,7 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
             <div>
               <span className="text-[10px] text-teal-300 uppercase tracking-wider block font-semibold">
                 {tr('Votre Avancement', 'تقدم تصويتك')}
+                {ownedApartments.length > 1 && activeApartment ? ` (${tr('Lot', 'شقة')} ${activeApartment.number})` : ''}
               </span>
               <span className="text-sm font-bold text-white">
                 {votedResolutionsCount} / {totalResolutions} {tr('résolutions votées', 'قرارات مصوت عليها')}
@@ -287,11 +409,29 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
             </div>
             <div>
               <div className="text-xs text-slate-500 font-medium">{tr('Votre Pouvoir de Vote Légal', 'قوتك التصويتية القانونية')}</div>
-              <div className="text-base font-bold text-slate-900 flex items-center gap-2">
+              <div className="text-base font-bold text-slate-900 flex flex-wrap items-center gap-2">
                 <span>{residentName}</span>
-                <span className="text-xs font-semibold text-teal-700 bg-teal-50 px-2 py-0.5 rounded border border-teal-200">
-                  {tr('Lot', 'شقة')} {residentLotNumber}
-                </span>
+                {ownedApartments.length > 1 ? (
+                  <select
+                    value={activeApartment?.id || ''}
+                    onChange={(e) => {
+                      setSelectedApartmentId(e.target.value);
+                      setEditingResolutionId(null);
+                    }}
+                    aria-label={tr('Sélectionner le lot pour voter', 'اختر الوحدة للتصويت')}
+                    className="text-xs font-semibold text-teal-800 bg-teal-50 px-2 py-0.5 rounded border border-teal-300"
+                  >
+                    {ownedApartments.map((apt) => (
+                      <option key={apt.id} value={apt.id}>
+                        {tr('Lot', 'شقة')} {apt.number} ({apt.tantiemes || 0} t.)
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <span className="text-xs font-semibold text-teal-700 bg-teal-50 px-2 py-0.5 rounded border border-teal-200">
+                    {tr('Lot', 'شقة')} {residentLotNumber}
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -300,13 +440,13 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
             <div className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-center">
               <span className="text-[10px] text-slate-400 block font-semibold uppercase">{tr('Tantièmes attribués', 'الأجزاء المخصصة')}</span>
               <span className="font-mono font-bold text-teal-800 text-base">{residentTantiemes}</span>
-              <span className="text-[10px] text-slate-500"> / 1000</span>
+              <span className="text-[10px] text-slate-500"> / {effectiveTotalTantiemes}</span>
             </div>
 
             <div className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-center">
               <span className="text-[10px] text-slate-400 block font-semibold uppercase">{tr('Poids relatif', 'الوزن النسبي')}</span>
               <span className="font-mono font-bold text-slate-900 text-base">
-                {((residentTantiemes / 1000) * 100).toFixed(1)}%
+                {((residentTantiemes / effectiveTotalTantiemes) * 100).toFixed(1)}%
               </span>
               <span className="text-[10px] text-slate-500"> {tr('du scrutin', 'من الاقتراع')}</span>
             </div>
@@ -353,8 +493,8 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
             <h3 className="font-bold text-slate-900 text-base">{tr('Ordre du Jour & Résolutions Soumises au Vote', 'جدول الأعمال والقرارات المعروضة للتصويت')}</h3>
             <p className="text-xs text-slate-500">
               {tr(
-                `Chaque vote est automatiquement comptabilisé et pondéré avec vos ${residentTantiemes} tantièmes`,
-                `يتم احتساب كل تصويت وترجيحه تلقائياً بحصتك البالغة ${residentTantiemes} جزء`
+                `Chaque vote est automatiquement comptabilisé et pondéré avec vos ${residentTantiemes} tantièmes (Lot ${residentLotNumber})`,
+                `يتم احتساب كل تصويت وترجيحه تلقائياً بحصتك البالغة ${residentTantiemes} جزء (شقة ${residentLotNumber})`
               )}
             </p>
           </div>
@@ -364,18 +504,14 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
         </div>
 
         {activeAG.resolutions.map((res) => {
+          const ballots = getResolutionBallots(res);
           const totalTantiemesCast = res.votesFor + res.votesAgainst + res.votesAbstain;
-          const myVote = res.voters?.find((v) => v.residentId === currentResident?.id);
+          const myVote = findMyVote(res);
+          const myVoteChoice = myVote ? (myVote.choice || myVote.vote || 'abstain') : undefined;
           const isEditing = editingResolutionId === res.id && canVote;
           const percentFor = totalTantiemesCast > 0 ? Math.round((res.votesFor / totalTantiemesCast) * 100) : 0;
           const percentAgainst = totalTantiemesCast > 0 ? Math.round((res.votesAgainst / totalTantiemesCast) * 100) : 0;
-
-          const majorityLabel =
-            res.majorityType === 'simple'
-              ? tr('Majorité simple (Art. 21) · Majorité des voix exprimées', 'الأغلبية البسيطة (المادة 21) · أغلبية الأصوات المعبر عنها')
-              : res.majorityType === 'absolute'
-              ? tr('Majorité absolue (Art. 22) · Au moins 501 / 1000 tantièmes', 'الأغلبية المطلقة (المادة 22) · على الأقل 501 / 1000 جزء')
-              : tr('Unanimité (Art. 23) · 1000 / 1000 tantièmes', 'الإجماع (المادة 23) · 1000 / 1000 جزء');
+          const majorityLabel = formatMajorityLabel(res.majorityType, effectiveTotalTantiemes, tr);
 
           return (
             <Card key={res.id} className="p-5 border border-slate-200 space-y-4 bg-white transition-all shadow-xs">
@@ -417,7 +553,7 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
               {/* Tally Bar (Weighted by Tantièmes) */}
               <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 space-y-2">
                 <div className="flex flex-wrap justify-between items-center text-xs font-mono">
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 flex-wrap">
                     <span className="font-bold text-emerald-700 flex items-center gap-1">
                       <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
                       {tr('POUR :', 'نعم:')} {res.votesFor} {tr('tantièmes', 'جزء')} ({percentFor}%)
@@ -431,7 +567,7 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
                     </span>
                   </div>
                   <span className="text-slate-500 text-[11px]">
-                    {tr('Total exprimé :', 'مجموع الأصوات:')} <strong>{totalTantiemesCast} / 1000</strong>
+                    {tr('Total exprimé :', 'مجموع الأصوات:')} <strong>{totalTantiemesCast} / {effectiveTotalTantiemes}</strong>
                   </span>
                 </div>
 
@@ -459,26 +595,28 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
                 {myVote && !isEditing ? (
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-teal-50/60 p-3.5 rounded-xl border border-teal-200">
                     <div className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold text-teal-900">{tr('Votre Vote Enregistré :', 'تصويتك المسجل:')}</span>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs font-bold text-teal-900">
+                          {tr('Votre Vote Enregistré', 'تصويتك المسجل')} ({tr('Lot', 'شقة')} {myVote.apartmentNumber}) :
+                        </span>
                         <span
                           className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${
-                            myVote.vote === 'for'
+                            myVoteChoice === 'for'
                               ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                              : myVote.vote === 'against'
+                              : myVoteChoice === 'against'
                               ? 'bg-rose-100 text-rose-800 border border-rose-300'
                               : 'bg-slate-200 text-slate-800'
                           }`}
                         >
-                          {myVote.vote === 'for'
+                          {myVoteChoice === 'for'
                             ? `✓ ${tr('POUR', 'موافق')} (+ ${myVote.tantiemes} ${tr('tantièmes', 'جزء')})`
-                            : myVote.vote === 'against'
+                            : myVoteChoice === 'against'
                             ? `✗ ${tr('CONTRE', 'معارض')} (+ ${myVote.tantiemes} ${tr('tantièmes', 'جزء')})`
                             : `— ${tr('ABSTENTION', 'امتناع')} (${myVote.tantiemes} ${tr('tantièmes', 'جزء')})`}
                         </span>
                       </div>
                       <p className="text-[11px] text-teal-800/80 font-mono">
-                        {tr('Validé le', 'تم التأكيد في')} {(myVote.castAt || myVote.votedAt) ? new Date((myVote.castAt || myVote.votedAt)!).toLocaleString(isAr ? 'ar-MA' : 'fr-MA') : '—'} · {tr('Pondération :', 'الوزن:')} {myVote.tantiemes}/1000
+                        {tr('Validé le', 'تم التأكيد في')} {(myVote.castAt || myVote.votedAt) ? new Date((myVote.castAt || myVote.votedAt)!).toLocaleString(isAr ? 'ar-MA' : 'fr-MA') : '—'} · {tr('Pondération :', 'الوزن:')} {myVote.tantiemes}/{effectiveTotalTantiemes}
                       </p>
                       {myVote.comment && (
                         <p className="text-xs text-slate-700 italic bg-white p-2 rounded border border-teal-100 mt-1">
@@ -500,7 +638,9 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
                         onClick={() => setViewVotersResolution(res)}
                         className="text-xs px-3 py-1.5 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg border border-slate-200 transition-colors"
                       >
-                        {tr('Votants', 'المصوتون')} ({res.voters?.length || 0})
+                        {isClosed
+                          ? `${tr('Votants', 'المصوتون')} (${ballots.length})`
+                          : tr('Mon bulletin', 'تصويتي')}
                       </button>
                     </div>
                   </div>
@@ -586,15 +726,13 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
 
                     {/* Action buttons */}
                     <div className="flex items-center justify-end gap-2 pt-1">
-                      {myVote && (
-                        <Button
-                          variant="secondary"
-                          onClick={() => setEditingResolutionId(null)}
-                          className="text-xs"
-                        >
-                          {tr('Annuler', 'إلغاء')}
-                        </Button>
-                      )}
+                      <Button
+                        variant="secondary"
+                        onClick={() => setEditingResolutionId(null)}
+                        className="text-xs"
+                      >
+                        {tr('Annuler', 'إلغاء')}
+                      </Button>
                       <Button
                         onClick={() => handleConfirmVote(res.id)}
                         disabled={voteMutation.isPending}
@@ -613,6 +751,8 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
                       <div className="text-xs font-bold text-amber-900">
                         {!isOwner
                           ? tr('Droit de vote réservé aux copropriétaires (Loi 18-00)', 'حق التصويت مخصص للملاك المشتركين (القانون 18-00)')
+                          : !activeApartment
+                          ? tr('Aucun lot privatif rattaché à votre compte', 'لا توجد وحدة مفرزة مرتبطة بحسابكم')
                           : !isVotingOpen
                           ? tr('Le scrutin électronique est actuellement fermé', 'التصويت الإلكتروني مغلق حالياً')
                           : tr("Votre vote n'a pas encore été enregistré sur cette résolution", 'لم يتم تسجيل تصويتك على هذا القرار بعد')}
@@ -620,12 +760,12 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
                       <p className="text-[11px] text-amber-800">
                         {canVote
                           ? tr(
-                              `Cliquez pour faire valoir vos ${residentTantiemes} tantièmes de copropriété.`,
-                              `اضغط للتصويت واستعمال حصتك البالغة ${residentTantiemes} جزء في الملكية المشتركة.`
+                              `Cliquez pour faire valoir vos ${residentTantiemes} tantièmes (Lot ${residentLotNumber}).`,
+                              `اضغط للتصويت واستعمال حصتك البالغة ${residentTantiemes} جزء (شقة ${residentLotNumber}).`
                             )
                           : tr(
-                              'Vous pouvez consulter les résultats et le détail des votes exprimés.',
-                              'يمكنك الاطلاع على النتائج وتفاصيل الأصوات المعبر عنها.'
+                              'Vous pouvez consulter les résultats et le détail officiel après clôture.',
+                              'يمكنك الاطلاع على النتائج والتفاصيل الرسمية بعد الإغلاق.'
                             )}
                       </p>
                     </div>
@@ -644,7 +784,9 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
                         onClick={() => setViewVotersResolution(res)}
                         className="text-xs px-3 py-1.5 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg border border-slate-200 transition-colors"
                       >
-                        {tr('Votants', 'المصوتون')} ({res.voters?.length || 0})
+                        {isClosed
+                          ? `${tr('Votants', 'المصوتون')} (${ballots.length})`
+                          : tr('Détails', 'التفاصيل')}
                       </button>
                     </div>
                   </div>
@@ -678,6 +820,15 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
               <p className="text-xs text-slate-600 mt-0.5">{viewVotersResolution.description}</p>
             </div>
 
+            {!isClosed && (
+              <div className="p-2.5 bg-teal-50 border border-teal-200 rounded-lg text-[11px] text-teal-900">
+                {tr(
+                  'Confidentialité du scrutin : pendant le vote, seul votre propre bulletin est affiché. Le détail nominal complet est publié dans le procès-verbal dès la clôture de l’assemblée (Loi 18-00 Art. 16-8).',
+                  'سرية الاقتراع: أثناء التصويت، يظهر تصويتك الشخصي فقط. يُنشر التفصيل الاسمي الكامل في المحضر فور إغلاق الجمعية العامة (المادة 16-8).'
+                )}
+              </div>
+            )}
+
             <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-slate-200 text-xs">
                 <thead className="bg-slate-50 text-slate-600 font-semibold">
@@ -690,44 +841,49 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
-                  {viewVotersResolution.voters?.map((v, i) => (
-                    <tr key={i} className="hover:bg-slate-50">
-                      <td className="px-3 py-2 font-medium text-slate-900">
-                        {v.residentName}
-                        {v.residentId === currentResident?.id && (
-                          <span className="ms-1.5 text-[10px] bg-teal-100 text-teal-800 px-1.5 py-0.2 rounded font-semibold">
-                            {tr('Vous', 'أنت')}
+                  {getResolutionBallots(viewVotersResolution).map((v, i) => {
+                    const choice = v.choice || v.vote || 'abstain';
+                    return (
+                      <tr key={v.apartmentId || `${v.residentId}-${i}`} className="hover:bg-slate-50">
+                        <td className="px-3 py-2 font-medium text-slate-900">
+                          {v.residentName}
+                          {v.residentId === currentResident?.id && (
+                            <span className="ms-1.5 text-[10px] bg-teal-100 text-teal-800 px-1.5 py-0.2 rounded font-semibold">
+                              {tr('Vous', 'أنت')}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 font-mono text-slate-700">{v.apartmentNumber}</td>
+                        <td className="px-3 py-2 text-center font-mono font-bold text-teal-800">
+                          {v.tantiemes} / {effectiveTotalTantiemes}
+                        </td>
+                        <td className="px-3 py-2 text-center">
+                          <span
+                            className={`px-2 py-0.5 rounded-full font-bold text-[11px] ${
+                              choice === 'for'
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                : choice === 'against'
+                                ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                                : 'bg-slate-100 text-slate-700'
+                            }`}
+                          >
+                            {choice === 'for' ? tr('POUR', 'موافق') : choice === 'against' ? tr('CONTRE', 'معارض') : tr('ABSTENTION', 'ممتنع')}
                           </span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 font-mono text-slate-700">{v.apartmentNumber}</td>
-                      <td className="px-3 py-2 text-center font-mono font-bold text-teal-800">
-                        {v.tantiemes} / 1000
-                      </td>
-                      <td className="px-3 py-2 text-center">
-                        <span
-                          className={`px-2 py-0.5 rounded-full font-bold text-[11px] ${
-                            v.vote === 'for'
-                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                              : v.vote === 'against'
-                              ? 'bg-rose-50 text-rose-700 border border-rose-200'
-                              : 'bg-slate-100 text-slate-700'
-                          }`}
-                        >
-                          {v.vote === 'for' ? tr('POUR', 'موافق') : v.vote === 'against' ? tr('CONTRE', 'معارض') : tr('ABSTENTION', 'ممتنع')}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2 text-slate-500 font-mono text-[11px]">
-                        {(v.castAt || v.votedAt) ? new Date((v.castAt || v.votedAt)!).toLocaleString(isAr ? 'ar-MA' : 'fr-MA') : '—'}
-                        {v.comment && <div className="text-slate-700 italic font-sans mt-0.5">« {v.comment} »</div>}
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                        <td className="px-3 py-2 text-slate-500 font-mono text-[11px]">
+                          {(v.castAt || v.votedAt) ? new Date((v.castAt || v.votedAt)!).toLocaleString(isAr ? 'ar-MA' : 'fr-MA') : '—'}
+                          {v.comment && <div className="text-slate-700 italic font-sans mt-0.5">« {v.comment} »</div>}
+                        </td>
+                      </tr>
+                    );
+                  })}
 
-                  {(!viewVotersResolution.voters || viewVotersResolution.voters.length === 0) && (
+                  {getResolutionBallots(viewVotersResolution).length === 0 && (
                     <tr>
                       <td colSpan={5} className="px-3 py-6 text-center text-slate-400">
-                        {tr("Aucun vote n'a encore été enregistré sur cette résolution.", 'لم يتم تسجيل أي تصويت على هذا القرار بعد.')}
+                        {!isClosed
+                          ? tr('Vous n’avez pas encore voté sur cette résolution.', 'لم تقم بالتصويت على هذا القرار بعد.')
+                          : tr("Aucun vote n'a été enregistré sur cette résolution.", 'لم يتم تسجيل أي تصويت على هذا القرار.')}
                       </td>
                     </tr>
                   )}
@@ -753,19 +909,19 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
           <div className="space-y-4 text-xs text-slate-700 leading-relaxed">
             <div className="p-3 bg-teal-50 rounded-lg border border-teal-200 text-teal-900">
               <p className="font-bold text-sm mb-1">
-                {tr('Article 21 - Principe de la pondération par tantièmes', 'المادة 21 - مبدأ الترجيح بالحصة الشائعة (الأجزاء)')}
+                {tr('Articles 18 & 21 - Quorum et pondération par tantièmes', 'المادتان 18 و 21 - النصاب والترجيح بالحصة الشائعة (الأجزاء)')}
               </p>
               <p>
                 {tr(
-                  "Chaque copropriétaire dispose d'un nombre de voix proportionnel à la quote-part de ses parties privatives dans l'ensemble de l'immeuble. La base de calcul usuelle est de 1 000 tantièmes.",
-                  'يتمتع كل مالك مشترك بعدد من الأصوات يتناسب مع حصة أجزائه المفرزة في مجموع العقار. قاعدة الحساب المعتمدة هي 1000 جزء.'
+                  `Chaque copropriétaire dispose d'un nombre de voix proportionnel à la quote-part de ses lots dans l'immeuble (base de votre résidence : ${effectiveTotalTantiemes} tantièmes ; quorum de 1ère convocation : ${effectiveQuorumRequired} tantièmes). En 2ème convocation (Art. 18), l'assemblée délibère valablement sans condition de quorum.`,
+                  `يتمتع كل مالك مشترك بعدد من الأصوات يتناسب مع حصة وحداته في العقار (قاعدة إقامتكم: ${effectiveTotalTantiemes} جزء؛ نصاب الدعوة الأولى: ${effectiveQuorumRequired} جزء). في الدعوة الثانية (المادة 18)، تتداول الجمعية بشكل صحيح بدون شرط النصاب.`
                 )}
               </p>
             </div>
 
             <div className="space-y-2">
               <h5 className="font-bold text-slate-900 text-sm">
-                {tr('Les Trois Régimes de Majorité Légale :', 'أنظمة الأغلبية القانونية الثلاثة:')}
+                {tr('Les Régimes de Majorité Légale :', 'أنظمة الأغلبية القانونية:')}
               </h5>
               <div className="border border-slate-200 rounded-lg p-2.5">
                 <span className="font-bold text-slate-900 block">
@@ -785,20 +941,32 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
                 </span>
                 <p className="text-slate-600 mt-0.5">
                   {tr(
-                    "Gros travaux d'amélioration, réfection étanchéité ou ascenseur, modification du règlement de copropriété. Nécessite au moins 501 / 1000 tantièmes de la totalité de la copropriété.",
-                    'أشغال التحسين الكبرى، إصلاح العزل المائي أو المصعد، تعديل نظام الملكية المشتركة. تتطلب على الأقل 501 / 1000 جزء من مجموع الملكية المشتركة.'
+                    `Désignation du syndic, travaux d'amélioration ou renouvellement d'équipements. Nécessite au moins ${effectiveQuorumRequired} / ${effectiveTotalTantiemes} tantièmes de l'ensemble de la copropriété.`,
+                    `تعيين السنديك، أشغال التحسين أو تجديد التجهيزات. تتطلب على الأقل ${effectiveQuorumRequired} / ${effectiveTotalTantiemes} جزء من مجموع الملكية المشتركة.`
                   )}
                 </p>
               </div>
 
               <div className="border border-slate-200 rounded-lg p-2.5">
                 <span className="font-bold text-slate-900 block">
-                  {tr('3. Unanimité (Article 23)', '3. الإجماع (المادة 23)')}
+                  {tr('3. Majorité des 3/4 (Article 22 · Loi 106-12)', '3. أغلبية ثلاثة أرباع 3/4 (المادة 22 · القانون 106-12)')}
                 </span>
                 <p className="text-slate-600 mt-0.5">
                   {tr(
-                    "Aliénation d'une partie commune, surélévation, changement de destination de l'immeuble. Requiert 1 000 / 1 000 tantièmes.",
-                    'تفويت جزء مشترك، تعلية البناء، أو تغيير الغرض المخصص له العقار. يتطلب إجماع 1000 / 1000 جزء.'
+                    `Modification du règlement de copropriété, gros travaux affectant les parties communes. Nécessite au moins ${Math.ceil(effectiveTotalTantiemes * 0.75)} / ${effectiveTotalTantiemes} tantièmes.`,
+                    `تعديل نظام الملكية المشتركة، الأشغال الكبرى المتعلقة بالأجزاء المشتركة. تتطلب على الأقل ${Math.ceil(effectiveTotalTantiemes * 0.75)} / ${effectiveTotalTantiemes} جزء.`
+                  )}
+                </p>
+              </div>
+
+              <div className="border border-slate-200 rounded-lg p-2.5">
+                <span className="font-bold text-slate-900 block">
+                  {tr('4. Unanimité (Article 23)', '4. الإجماع (المادة 23)')}
+                </span>
+                <p className="text-slate-600 mt-0.5">
+                  {tr(
+                    `Aliénation d'une partie commune, surélévation, changement de destination de l'immeuble. Requiert ${effectiveTotalTantiemes} / ${effectiveTotalTantiemes} tantièmes.`,
+                    `تفويت جزء مشترك، تعلية البناء، أو تغيير الغرض المخصص له العقار. يتطلب إجماع ${effectiveTotalTantiemes} / ${effectiveTotalTantiemes} جزء.`
                   )}
                 </p>
               </div>
