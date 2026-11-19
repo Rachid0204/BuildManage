@@ -6,10 +6,13 @@ export function evaluateResolutionStatus(resolution: AGResolution, ag: Assemblee
   const isUnanimity = maj === 'unanimity' || maj === 'unanimite';
   const isThreeQuarters = maj === 'three_quarters' || maj === 'trois_quarts_26';
   const isAbsolute = maj === 'absolute' || maj === 'absolue_25';
-  const unapprovedStatus: AGResolution['status'] = ['completed', 'closed'].includes(ag.status) ? 'rejected' : 'pending';
+  const isClosed = ['completed', 'closed'].includes(ag.status);
+  const isExplicitlyOpen = ['in_progress', 'planned', 'convocations_sent', 'upcoming'].includes(ag.status);
+  const unapprovedStatus: AGResolution['status'] = isClosed ? 'rejected' : 'pending';
+  const quorumWaived = ag.convocationNumber === 2;
 
-  // Audit Item 20: Resolution cannot be approved if quorum is not reached
-  if (!ag.quorumReached) {
+  // Audit Item 20 / Loi 18-00 Art. 18: 1st convocation requires quorum; 2nd convocation deliberates without quorum.
+  if (!ag.quorumReached && !quorumWaived) {
     if (isUnanimity && resolution.votesAgainst > 0) {
       return 'rejected';
     }
@@ -36,7 +39,13 @@ export function evaluateResolutionStatus(resolution: AGResolution, ag: Assemblee
     return unapprovedStatus;
   }
 
-  // Majorité simple (Art. 21): majorité des voix exprimées des présents ou représentés
+  // Majorité simple (Art. 21): majorité des voix exprimées des présents ou représentés.
+  // While open, only lock an outcome if it is mathematically unbeatable across all building tantièmes.
+  if (isExplicitlyOpen) {
+    if (resolution.votesFor > totalTantiemes / 2) return 'approved';
+    if (resolution.votesAgainst >= totalTantiemes / 2) return 'rejected';
+    return 'pending';
+  }
   const expressed = resolution.votesFor + resolution.votesAgainst;
   if (expressed > 0) {
     return resolution.votesFor > resolution.votesAgainst ? 'approved' : 'rejected';

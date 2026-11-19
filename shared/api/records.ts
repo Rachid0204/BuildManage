@@ -60,6 +60,7 @@ export interface CastAGVoteInput {
   choice?: 'for' | 'against' | 'abstain';
   vote?: 'for' | 'against' | 'abstain';
   comment?: string;
+  allowOverrideResidentVote?: boolean;
 }
 export interface PrestataireAccountRecord {
   prestataireId: string;

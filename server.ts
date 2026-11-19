@@ -800,8 +800,20 @@ function filterStoreForCaller(store: ServerStore, caller: AuthCallerContext) {
             )
           );
         }
-        if (key === "syndik_prod_ag_v1" && caller.role === "provider")
-          return false;
+        if (key === "syndik_prod_ag_v1") {
+          if (caller.role === "provider") return false;
+          if (caller.role === "resident") {
+            const building = (store.syndik_prod_syndics_v1 || [])
+              .flatMap((s: any) => s.buildings || [])
+              .find((b: any) => b.id === item.buildingId);
+            const residentRec = building?.residents?.find(
+              (r: any) =>
+                !r.archivedAt &&
+                (r.id === scope.callerResId || r.id === caller.uid),
+            );
+            if (!residentRec || residentRec.isOwner !== true) return false;
+          }
+        }
         if (key === "syndik_prod_maintenance_v1")
           return (
             managed ||
@@ -853,7 +865,11 @@ function filterStoreForCaller(store: ServerStore, caller: AuthCallerContext) {
   if (Array.isArray(result.syndik_prod_ag_v1))
     result.syndik_prod_ag_v1 = result.syndik_prod_ag_v1.map(
       (assembly: AssembleeGenerale) =>
-        projectAssemblyForRole(assembly, caller.role),
+        projectAssemblyForRole(
+          assembly,
+          caller.role,
+          caller.role === "resident" ? scope.callerResId : undefined,
+        ),
     );
   return clean(result);
 }
@@ -1708,12 +1724,27 @@ async function startServer() {
     });
   });
 
+  const CastVoteBodySchema = z.object({
+    agId: z.string().min(1).max(200),
+    resolutionId: z.string().min(1).max(200),
+    choice: z.enum(["for", "against", "abstain"]),
+    residentId: z.string().max(200).optional(),
+    apartmentId: z.string().max(200).optional(),
+    comment: z.string().max(1000).optional(),
+    allowOverrideResidentVote: z.boolean().optional(),
+  });
+
   api.post("/api/ag/vote", async (req, res) => {
     const caller = await extractAndVerifyCaller(req, sharedStore);
     if (!caller)
       return res.status(401).json({ error: "Authentification requise." });
+    assertOnboarded(caller, sharedStore);
+    const parsedBody = CastVoteBodySchema.safeParse(req.body);
+    if (!parsedBody.success)
+      return res.status(400).json({ error: "Paramètres de vote invalides." });
+    const body = parsedBody.data;
     const list: AssembleeGenerale[] = sharedStore.syndik_prod_ag_v1 || [];
-    const index = list.findIndex((a) => a.id === req.body.agId);
+    const index = list.findIndex((a) => a.id === body.agId);
     const ag = list[index];
     const scope = getAuthorizedScopeForCaller(sharedStore, caller);
     if (
@@ -1725,13 +1756,13 @@ async function startServer() {
       caller.role === "resident"
         ? scope.callerResId
         : ["admin", "syndic"].includes(caller.role)
-          ? String(req.body.residentId || "")
+          ? String(body.residentId || "")
           : "";
     if (
       !residentId ||
       (caller.role === "resident" &&
-        req.body.residentId &&
-        req.body.residentId !== residentId)
+        body.residentId &&
+        body.residentId !== residentId)
     ) {
       return res
         .status(403)
@@ -1751,21 +1782,34 @@ async function startServer() {
         ag,
         ag.votingSnapshot || building,
         residentId,
-        String(req.body.resolutionId || ""),
-        req.body.choice,
-        req.body.apartmentId,
-        typeof req.body.comment === "string" ? req.body.comment : undefined,
+        body.resolutionId,
+        body.choice,
+        body.apartmentId || undefined,
+        body.comment,
+        {
+          actorRole: caller.role as "resident" | "syndic" | "admin",
+          actorUid: caller.uid,
+          allowOverrideResidentVote: Boolean(body.allowOverrideResidentVote),
+        },
       );
       recomputeMeeting(result);
       appendAudit(sharedStore, caller, "castResidentAGVote", building.id, {
         agId: ag.id,
-        resolutionId: req.body.resolutionId,
+        resolutionId: body.resolutionId,
         residentId,
+        apartmentId: body.apartmentId || undefined,
       });
       list[index] = result;
       sharedStore.syndik_prod_ag_v1 = list;
 
-      return res.json({ ag: projectAssemblyForRole(result, caller.role), revision: sharedStore.__revision });
+      return res.json({
+        ag: projectAssemblyForRole(
+          result,
+          caller.role,
+          caller.role === "resident" ? scope.callerResId : undefined,
+        ),
+        revision: sharedStore.__revision,
+      });
     } catch (error) {
       return res.status(error instanceof OperationError ? error.status : 400).json({
         error: error instanceof Error ? error.message : "Vote invalide.",

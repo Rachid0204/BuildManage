@@ -236,6 +236,8 @@ export interface CoordinatedMethods {
       residentName: string;
       apartmentId?: string;
       apartmentNumber: string;
+      comment?: string;
+      allowOverrideResidentVote?: boolean;
     },
   ) => Promise<AssembleeGenerale>;
   updateAGAttendee: (

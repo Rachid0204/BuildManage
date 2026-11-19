@@ -42,6 +42,7 @@ import { normalizeMaintenanceRequestApartment } from '../utils/maintenanceDispla
 import { getAuthenticatedRequestHeaders } from '../utils/security';
 import { engineStorage } from './cache';
 import {
+  advanceKnownServerRevision,
   commandRequest,
   ephemeralInvitation,
   notifyStateUpdated,
@@ -672,7 +673,21 @@ export const getAssembleesGeneralesForBuilding = async (
 ): Promise<AssembleeGenerale[]> => {
   await syncAllSharedStateFromServer();
   const agList = readSnapshot<AssembleeGenerale[]>(STORAGE_KEYS.AG, []);
-  return agList.filter((ag) => ag.buildingId === buildingId);
+  const isOpen = (ag: AssembleeGenerale) =>
+    ag.isVotingOpen === true && !['completed', 'closed'].includes(ag.status);
+  const sortTimestamp = (ag: AssembleeGenerale) => {
+    const parsedDate = Date.parse(ag.date || '');
+    if (Number.isFinite(parsedDate)) return parsedDate;
+    const parsedCreated = Date.parse(ag.createdAt || '');
+    return Number.isFinite(parsedCreated) ? parsedCreated : 0;
+  };
+  return agList
+    .filter((ag) => ag.buildingId === buildingId)
+    .sort((a, b) => {
+      const openDiff = Number(isOpen(b)) - Number(isOpen(a));
+      if (openDiff !== 0) return openDiff;
+      return sortTimestamp(b) - sortTimestamp(a);
+    });
 };
 
 export const saveAssembleeGenerale = async (
@@ -697,25 +712,23 @@ export const castResidentAGVote = async (
   _suppliedTantiemes?: number,
   choiceArg?: 'for' | 'against' | 'abstain',
   commentArg?: string,
+  allowOverrideResidentVoteArg?: boolean,
 ): Promise<AssembleeGenerale> => {
   const isObjectCall =
     typeof residentIdOrPayload === 'object' && residentIdOrPayload !== null;
   const residentId: string = isObjectCall
     ? residentIdOrPayload.residentId
     : String(residentIdOrPayload);
-  const residentName = isObjectCall
-    ? residentIdOrPayload.residentName
-    : residentNameArg || 'Copropriétaire';
   const apartmentId = isObjectCall
     ? residentIdOrPayload.apartmentId || ''
     : apartmentIdArg || '';
-  const apartmentNumber = isObjectCall
-    ? residentIdOrPayload.apartmentNumber
-    : apartmentNumberArg || '';
   const choice: 'for' | 'against' | 'abstain' = isObjectCall
     ? residentIdOrPayload.choice || residentIdOrPayload.vote || 'for'
     : choiceArg || 'for';
   const comment = isObjectCall ? residentIdOrPayload.comment : commentArg;
+  const allowOverrideResidentVote = isObjectCall
+    ? residentIdOrPayload.allowOverrideResidentVote
+    : allowOverrideResidentVoteArg;
   const { response, data } = await commandRequest('/api/ag/vote', {
     method: 'POST',
     headers: getAuthenticatedRequestHeaders(),
@@ -723,13 +736,15 @@ export const castResidentAGVote = async (
       agId,
       resolutionId,
       residentId,
-      apartmentId,
+      apartmentId: apartmentId || undefined,
       choice,
       comment,
+      ...(allowOverrideResidentVote ? { allowOverrideResidentVote: true } : {}),
     }),
   });
   if (!response.ok || !isRecord(data.ag) || data.ag.id !== agId)
     throw new Error(data.error || 'Le vote a échoué.');
+  advanceKnownServerRevision(data.revision);
   const ag = sanitizeSnapshot(data.ag) as AssembleeGenerale;
   const list = readSnapshot<AssembleeGenerale[]>(STORAGE_KEYS.AG, []);
   const index = list.findIndex((a) => a.id === agId);
@@ -766,8 +781,10 @@ export const recordAGVote = async (
   voterInfo?: {
     residentId: string;
     residentName: string;
-    apartmentId: string;
+    apartmentId?: string;
     apartmentNumber: string;
+    comment?: string;
+    allowOverrideResidentVote?: boolean;
   },
 ): Promise<AssembleeGenerale> => {
   return remoteMutation('recordAGVote', [

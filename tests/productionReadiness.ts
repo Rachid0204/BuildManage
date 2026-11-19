@@ -608,6 +608,23 @@ try {
         { residentId: "r-o", apartmentId: "lot-o" },
       ])
     ).status,
+    400,
+  );
+  assert.equal(
+    (await command(base, o, "updateAGAttendee", [ag.id, "r-o", "present"]))
+      .status,
+    200,
+  );
+  assert.equal(
+    (
+      await command(base, o, "recordAGVote", [
+        ag.id,
+        "res-a",
+        "for",
+        99999,
+        { residentId: "r-o", apartmentId: "lot-o" },
+      ])
+    ).status,
     200,
   );
   assert.equal(

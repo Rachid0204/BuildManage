@@ -68,6 +68,16 @@ for (const c of cases) await test(c.name, async () => {
   };
   const before=await run(true),after=await run(false);
   assert.equal(Boolean(before.error),Boolean(c.rejected),JSON.stringify(before.error));
+  if (c.operation === 'toggleAGVoting' && !c.rejected) {
+    // PR 2 intentionally enriches AGAttendee with apartmentId for multi-lot owners;
+    // verify the field is populated and compare all remaining fields strictly against the a32 oracle.
+    for (const meeting of [...(after.result || []), ...(after.state?.syndik_prod_ag_v1 || [])]) {
+      for (const att of meeting?.attendees || []) {
+        assert.equal(att.apartmentId, 'lot');
+        delete att.apartmentId;
+      }
+    }
+  }
   assert.deepStrictEqual(after,before);
 });
 

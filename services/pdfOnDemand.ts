@@ -23,6 +23,7 @@ export const exportResidentsPDF = deferred('exportResidentsPDF');
 export const exportResidentStatementPDF = deferred('exportResidentStatementPDF');
 export const generateInvoicePDF = deferred('generateInvoicePDF');
 export const generateMiseEnDemeurePDF = deferred('generateMiseEnDemeurePDF');
+export const generateConvocationAgPDF = deferred('generateConvocationAgPDF');
 export const generatePvAgPDF = deferred('generatePvAgPDF');
 export const generateQuittancePDF = deferred('generateQuittancePDF');
 export const generateTransactionVoucherPDF = deferred('generateTransactionVoucherPDF');

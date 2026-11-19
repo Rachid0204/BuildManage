@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import type { Building, AssembleeGenerale, Syndic, AGResolution } from '../../types';
+import type { Building, AssembleeGenerale, Syndic, AGResolution, AGVoteCast } from '../../types';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import Modal from '../common/Modal';
@@ -15,13 +15,53 @@ import {
   toggleAGVoting,
   generateChargesFromAGResolution,
 } from '../../firebase/services';
-import { generatePvAgPDF } from '../../services/pdfOnDemand';
+import { generatePvAgPDF, generateConvocationAgPDF } from '../../services/pdfOnDemand';
+import { canonicalQuorum } from '../../shared/domain/voting';
 import Loading from '../common/Loading';
 import { useToast } from '../common/Toast';
 
 interface AssembleeGeneraleProps {
   building: Building;
   syndic?: Syndic;
+}
+
+function getResolutionBallots(res: AGResolution): AGVoteCast[] {
+  return res.voterChoices ?? res.voters ?? [];
+}
+
+function formatMajorityLabel(
+  majorityType: AGResolution['majorityType'],
+  totalTantiemes: number,
+  tr: (fr: string, ar: string) => string
+): string {
+  const total = totalTantiemes || 1000;
+  const absThreshold = canonicalQuorum(total);
+  const threeQuartersThreshold = Math.ceil(total * 0.75);
+  switch (majorityType) {
+    case 'simple':
+    case 'simple_24':
+      return tr('Majorité simple (Art. 21) · Pour > Contre', 'الأغلبية البسيطة (المادة 21) · نعم > لا');
+    case 'absolute':
+    case 'absolue_25':
+      return tr(
+        `Majorité absolue (Art. 22) · min. ${absThreshold} / ${total} tantièmes`,
+        `الأغلبية المطلقة (المادة 22) · ${absThreshold} / ${total} جزء على الأقل`
+      );
+    case 'three_quarters':
+    case 'trois_quarts_26':
+      return tr(
+        `Majorité 3/4 (Art. 22 · Loi 106-12) · min. ${threeQuartersThreshold} / ${total} tantièmes`,
+        `أغلبية 3/4 (المادة 22 · القانون 106-12) · ${threeQuartersThreshold} / ${total} جزء على الأقل`
+      );
+    case 'unanimity':
+    case 'unanimite':
+      return tr(
+        `Unanimité (Art. 23) · ${total} / ${total} tantièmes`,
+        `الإجماع (المادة 23) · ${total} / ${total} جزء`
+      );
+    default:
+      return tr('Majorité simple (Art. 21) · Pour > Contre', 'الأغلبية البسيطة (المادة 21) · نعم > لا');
+  }
 }
 
 function ResolutionBudgetEditor({ resolution, onSave }: {
@@ -72,6 +112,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [newType, setNewType] = useState<'AGO' | 'AGE'>('AGO');
+  const [newConvocationNumber, setNewConvocationNumber] = useState<1 | 2>(1);
   const [newDate, setNewDate] = useState(new Date().toISOString().split('T')[0]);
   const [newTime, setNewTime] = useState('18:30');
   const [newLocation, setNewLocation] = useState(`Hall d'entrée - ${building.name}`);
@@ -81,14 +122,17 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
 
   const [newBudgets, setNewBudgets] = useState<Record<number, string>>({});
   const [newWorksFundTargets, setNewWorksFundTargets] = useState<Record<number, NonNullable<AGResolution['worksFundTarget']>>>({});
+  const [newMajorityTypes, setNewMajorityTypes] = useState<Record<number, AGResolution['majorityType']>>({});
   const [issuingResolution, setIssuingResolution] = useState<string | null>(null);
+  const [isClosing, setIsClosing] = useState(false);
 
-  // In-session vote casting state
+  // In-session vote casting state (keyed per lot so multi-lot owners can vote per lot)
   const [isRecordVoteModalOpen, setIsRecordVoteModalOpen] = useState(false);
   const [selectedResolutionForVote, setSelectedResolutionForVote] = useState<AGResolution | null>(null);
-  const [selectedResidentIdForVote, setSelectedResidentIdForVote] = useState<string>('');
+  const [selectedLotKeyForVote, setSelectedLotKeyForVote] = useState<string>('');
   const [inSessionVoteChoice, setInSessionVoteChoice] = useState<'for' | 'against' | 'abstain'>('for');
   const [inSessionVoteComment, setInSessionVoteComment] = useState('');
+  const [allowOverrideResidentVote, setAllowOverrideResidentVote] = useState(false);
 
   // Resolution filtering & voters expansion state
   const [resolutionFilter, setResolutionFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
@@ -107,13 +151,26 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
     return agList[0];
   }, [agList, activeSessionId]);
 
+  const isClosed = Boolean(activeAG && ['completed', 'closed'].includes(activeAG.status));
+  const isVotingActive = Boolean(activeAG && activeAG.isVotingOpen === true && !isClosed);
+  const effectiveTotalTantiemes = activeAG?.totalTantiemes || building.totalTantiemes || 1000;
+  const effectiveQuorumRequired = activeAG?.quorumRequired || canonicalQuorum(effectiveTotalTantiemes);
+  const isSecondConvocation = activeAG?.convocationNumber === 2;
+
   const saveAGMutation = useMutation({
     mutationFn: createAssembleeGenerale,
-    onSuccess: () => {
+    onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ['ag', building.id] });
+      if (created?.id) setActiveSessionId(created.id);
       setIsCreateModalOpen(false);
+      setNewTitle('');
+      setNewConvocationNumber(1);
       setNewBudgets({});
       setNewWorksFundTargets({});
+      setNewMajorityTypes({});
+    },
+    onError: (err: Error) => {
+      showToast(err.message || tr("Impossible de créer l'assemblée générale.", 'تعذر إنشاء الجمعية العامة.'), 'error');
     },
   });
 
@@ -121,6 +178,9 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
     mutationFn: (data: { agId: string; residentId: string; status: 'present' | 'represented' | 'absent'; proxy?: string }) =>
       updateAGAttendee(data.agId, data.residentId, data.status, data.proxy),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['ag', building.id] }),
+    onError: (err: Error) => {
+      showToast(err.message || tr("Impossible de mettre à jour la présence.", 'تعذر تحديث الحضور.'), 'error');
+    },
   });
 
   const toggleVotingMutation = useMutation({
@@ -129,6 +189,9 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
       return toggleAGVoting(activeAG.id, isOpen);
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['ag', building.id] }),
+    onError: (err: Error) => {
+      showToast(err.message || tr("Impossible de modifier l'état du scrutin.", 'تعذر تغيير حالة التصويت.'), 'error');
+    },
   });
 
   const castVoteMutation = useMutation({
@@ -142,6 +205,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
       tantiemes: number;
       vote: 'for' | 'against' | 'abstain';
       comment?: string;
+      allowOverrideResidentVote?: boolean;
     }) =>
       castResidentAGVote(
         data.agId,
@@ -152,46 +216,139 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
         data.apartmentNumber,
         data.tantiemes,
         data.vote,
-        data.comment
+        data.comment,
+        data.allowOverrideResidentVote
       ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['ag', building.id] });
       setIsRecordVoteModalOpen(false);
       setInSessionVoteComment('');
+      setAllowOverrideResidentVote(false);
+    },
+    onError: (err: Error) => {
+      showToast(err.message || tr("Impossible d'enregistrer le vote.", 'تعذر تسجيل التصويت.'), 'error');
     },
   });
 
   const eligibleOwners = useMemo(
-    () => building.residents.filter((res) => res.isOwner !== false),
+    () => building.residents.filter((res) => res.isOwner === true && !res.archivedAt),
     [building.residents]
   );
 
+  // Per-lot eligible voters sourced from frozen votingSnapshot when open/closed, or from active attendees/building lots.
+  const votingLots = useMemo(() => {
+    const attendees = activeAG?.attendees || [];
+    if (activeAG?.votingSnapshot?.apartments?.length) {
+      const snapshotResidents = activeAG.votingSnapshot.residents || [];
+      return activeAG.votingSnapshot.apartments
+        .filter((lot) => Boolean(lot.ownerId))
+        .map((lot) => {
+          const owner = snapshotResidents.find((r) => r.id === lot.ownerId);
+          const attendee = attendees.find(
+            (a) => (a.apartmentId && a.apartmentId === lot.id) || (a.residentId === lot.ownerId && a.apartmentNumber === lot.number)
+          ) || attendees.find((a) => a.residentId === lot.ownerId);
+          return {
+            lotKey: lot.id || `${lot.ownerId}:${lot.number}`,
+            apartmentId: lot.id,
+            apartmentNumber: lot.number,
+            residentId: lot.ownerId!,
+            residentName: owner?.name || attendee?.residentName || tr('Copropriétaire', 'مالك مشترك'),
+            tantiemes: lot.tantiemes || 0,
+            attendanceStatus: attendee?.status ?? 'absent',
+            proxyHolderName: attendee?.proxyHolderName,
+          };
+        });
+    }
+    if (attendees.length > 0) {
+      return attendees.map((a) => {
+        const apt = building.apartments.find(
+          (ap) => (a.apartmentId && ap.id === a.apartmentId) || (ap.ownerId === a.residentId && ap.number === a.apartmentNumber)
+        );
+        return {
+          lotKey: a.apartmentId || apt?.id || `${a.residentId}:${a.apartmentNumber}`,
+          apartmentId: a.apartmentId || apt?.id || '',
+          apartmentNumber: a.apartmentNumber,
+          residentId: a.residentId,
+          residentName: a.residentName,
+          tantiemes: a.tantiemes,
+          attendanceStatus: a.status,
+          proxyHolderName: a.proxyHolderName,
+        };
+      });
+    }
+    return building.apartments
+      .filter((apt) => !apt.archivedAt && eligibleOwners.some((o) => o.id === apt.ownerId))
+      .map((apt) => {
+        const owner = eligibleOwners.find((o) => o.id === apt.ownerId)!;
+        return {
+          lotKey: apt.id,
+          apartmentId: apt.id,
+          apartmentNumber: apt.number,
+          residentId: owner.id,
+          residentName: owner.name,
+          tantiemes: apt.tantiemes || 0,
+          attendanceStatus: 'absent' as const,
+          proxyHolderName: undefined,
+        };
+      });
+  }, [activeAG, building.apartments, eligibleOwners, tr]);
+
   const handleOpenRecordVoteModal = (resolution: AGResolution) => {
     setSelectedResolutionForVote(resolution);
-    const defaultRes = eligibleOwners[0];
-    setSelectedResidentIdForVote(defaultRes?.id || '');
+    const defaultLot = votingLots.find((l) => l.attendanceStatus !== 'absent') || votingLots[0];
+    setSelectedLotKeyForVote(defaultLot?.lotKey || '');
     setInSessionVoteChoice('for');
     setInSessionVoteComment('');
+    setAllowOverrideResidentVote(false);
     setIsRecordVoteModalOpen(true);
   };
 
-  const handleConfirmInSessionVote = async () => {
-    if (!activeAG || !selectedResolutionForVote || !selectedResidentIdForVote) throw new Error(tr('Sélectionnez une résolution et un copropriétaire.', 'حدد قراراً ومالكاً مشتركاً.'));
-    const res = eligibleOwners.find((r) => r.id === selectedResidentIdForVote);
-    const apt = building.apartments.find((a) => a.ownerId === res?.id || a.id === res?.apartmentId);
-    if (!res || !apt) throw new Error(tr('Ce copropriétaire doit être associé à un lot.', 'يجب ربط هذا المالك بوحدة.'));
+  const selectedVoteLot = useMemo(
+    () => votingLots.find((l) => l.lotKey === selectedLotKeyForVote) || null,
+    [votingLots, selectedLotKeyForVote]
+  );
 
-    const tantiemes = apt?.tantiemes || 100;
+  const selectedLotExistingVote = useMemo(() => {
+    if (!selectedResolutionForVote || !selectedVoteLot) return undefined;
+    return getResolutionBallots(selectedResolutionForVote).find((v) =>
+      v.apartmentId && selectedVoteLot.apartmentId
+        ? v.apartmentId === selectedVoteLot.apartmentId
+        : v.residentId === selectedVoteLot.residentId && v.apartmentNumber === selectedVoteLot.apartmentNumber
+    );
+  }, [selectedResolutionForVote, selectedVoteLot]);
+
+  const handleConfirmInSessionVote = async () => {
+    if (!activeAG || !selectedResolutionForVote || !selectedVoteLot) {
+      throw new Error(tr('Sélectionnez une résolution et un lot.', 'حدد قراراً ووحدة.'));
+    }
+    if (selectedVoteLot.attendanceStatus === 'absent') {
+      throw new Error(
+        tr(
+          'Ce copropriétaire est marqué absent. Veuillez d’abord enregistrer sa présence ou sa procuration sur la feuille de présence.',
+          'هذا المالك مسجل كغائب. يرجى أولاً تسجيل حضوره أو وكالته في ورقة الحضور.'
+        )
+      );
+    }
+    if (selectedLotExistingVote?.castByRole === 'resident' && !allowOverrideResidentVote) {
+      throw new Error(
+        tr(
+          'Cochez la confirmation pour remplacer un vote déjà exprimé par le copropriétaire.',
+          'يرجى تأكيد استبدال تصويت سابق صادر عن المالك المشترك.'
+        )
+      );
+    }
+
     return castVoteMutation.mutateAsync({
       agId: activeAG.id,
       resolutionId: selectedResolutionForVote.id,
-      residentId: res.id,
-      residentName: res.name,
-      apartmentId: apt?.id || '',
-      apartmentNumber: apt?.number || 'Lot',
-      tantiemes,
+      residentId: selectedVoteLot.residentId,
+      residentName: selectedVoteLot.residentName,
+      apartmentId: selectedVoteLot.apartmentId,
+      apartmentNumber: selectedVoteLot.apartmentNumber,
+      tantiemes: selectedVoteLot.tantiemes,
       vote: inSessionVoteChoice,
       comment: inSessionVoteComment.trim() || undefined,
+      allowOverrideResidentVote: selectedLotExistingVote?.castByRole === 'resident' ? allowOverrideResidentVote : undefined,
     });
   };
 
@@ -200,18 +357,20 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
     if (!newDate || !newTime || !newLocation.trim()) throw new Error(tr('La date, l’heure et le lieu sont obligatoires.', 'التاريخ والوقت والمكان مطلوبة.'));
     if (!agendaInput.trim()) throw new Error(tr('Ajoutez au moins un point à l’ordre du jour.', 'أضف نقطة واحدة على الأقل لجدول الأعمال.'));
 
-    const attendeesPool = eligibleOwners;
-    const initialAttendees = attendeesPool.map((res) => {
-      const apt = building.apartments.find((a) => a.id === res.apartmentId || a.ownerId === res.id);
-      return {
-        residentId: res.id,
-        residentName: res.name,
-        apartmentId: apt?.id || '',
-        apartmentNumber: apt?.number || 'Lot',
-        tantiemes: apt?.tantiemes || 100,
-        status: 'absent' as const,
-      };
-    });
+    const ownerById = new Map(eligibleOwners.map((r) => [r.id, r]));
+    const initialAttendees = building.apartments
+      .filter((apt) => !apt.archivedAt && apt.ownerId && ownerById.has(apt.ownerId))
+      .map((apt) => {
+        const owner = ownerById.get(apt.ownerId!)!;
+        return {
+          residentId: owner.id,
+          residentName: owner.name,
+          apartmentId: apt.id,
+          apartmentNumber: apt.number,
+          tantiemes: apt.tantiemes || 0,
+          status: 'absent' as const,
+        };
+      });
 
     const parsedAgenda = agendaInput
       .split('\n')
@@ -221,15 +380,17 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
     for (const budget of Object.values(newBudgets))
       if (!Number.isFinite(Number(budget)) || Number(budget) <= 0)
         throw new Error(tr('Définissez un budget positif pour chaque appel de fonds.', 'حدد ميزانية موجبة لكل طلب مساهمة.'));
+
+    const buildingTotalTantiemes = building.totalTantiemes || 1000;
     const initialResolutions: AGResolution[] = parsedAgenda.map((item, idx) => ({
       id: `res-${Date.now()}-${idx}`,
       number: idx + 1,
       title: item.replace(/^\d+[\.\-]\s*/, ''),
       description: tr(
-        `Délibération et vote de l'assemblée concernant : ${item}`,
-        `مداولة وتصويت الجمعية العامة حول: ${item}`
+        `Délibération et vote de l'assemblée concernant : ${item.replace(/^\d+[\.\-]\s*/, '')}`,
+        `مداولة وتصويت الجمعية العامة حول: ${item.replace(/^\d+[\.\-]\s*/, '')}`
       ),
-      majorityType: idx === 0 || idx === 1 ? 'simple' : idx === 4 ? 'absolute' : 'simple',
+      majorityType: newMajorityTypes[idx] ?? (idx === 4 ? 'absolute' : 'simple'),
       ...(newBudgets[idx] !== undefined
         ? {
             generatesCharges: true,
@@ -249,15 +410,16 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
       id: `ag-${Date.now()}`,
       buildingId: building.id,
       syndicId: building.syndicId,
-      title: newTitle,
+      title: newTitle.trim(),
       type: newType,
+      convocationNumber: newConvocationNumber,
       date: newDate,
       time: newTime,
-      location: newLocation,
+      location: newLocation.trim(),
       status: 'planned',
       isVotingOpen: false,
-      quorumRequired: 500,
-      totalTantiemes: building.totalTantiemes || 1000,
+      quorumRequired: canonicalQuorum(buildingTotalTantiemes),
+      totalTantiemes: buildingTotalTantiemes,
       presentTantiemes: 0,
       quorumReached: false,
       agendaItems: parsedAgenda,
@@ -279,14 +441,15 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
 
   if (isLoading) return <Loading message={tr('Chargement des assemblées générales...', 'جاري تحميل الجمعيات العامة...')} />;
 
-  // Calculate global digital voting participation
-  const allVotersSet = new Set<string>();
+  // Calculate global digital voting participation per lot (multi-lot owners counted per lot)
+  const votedLotsSet = new Set<string>();
   let totalUniqueVoterTantiemes = 0;
   if (activeAG) {
     activeAG.resolutions.forEach((res) => {
-      res.voters?.forEach((v) => {
-        if (!allVotersSet.has(v.residentId)) {
-          allVotersSet.add(v.residentId);
+      getResolutionBallots(res).forEach((v) => {
+        const lotKey = v.apartmentId || `${v.residentId}:${v.apartmentNumber}`;
+        if (!votedLotsSet.has(lotKey)) {
+          votedLotsSet.add(lotKey);
           totalUniqueVoterTantiemes += v.tantiemes;
         }
       });
@@ -348,21 +511,28 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                     ? tr('Assemblée Générale Ordinaire', 'جمع عام عادي (AGO)')
                     : tr('Assemblée Générale Extraordinaire', 'جمع عام استثنائي (AGE)')}
                 </span>
+                <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full border bg-indigo-500/20 text-indigo-200 border-indigo-400/30">
+                  {isSecondConvocation
+                    ? tr('2ème convocation (Art. 18 · sans quorum)', 'الدعوة الثانية (المادة 18 · بدون نصاب)')
+                    : tr('1ère convocation (Art. 18)', 'الدعوة الأولى (المادة 18)')}
+                </span>
                 <span
                   className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full border flex items-center gap-1.5 ${
-                    activeAG.isVotingOpen !== false
+                    isVotingActive
                       ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
                       : 'bg-slate-700/60 text-slate-300 border-slate-600'
                   }`}
                 >
                   <span
                     className={`w-2 h-2 rounded-full ${
-                      activeAG.isVotingOpen !== false ? 'bg-emerald-400 animate-pulse' : 'bg-slate-400'
+                      isVotingActive ? 'bg-emerald-400 animate-pulse' : 'bg-slate-400'
                     }`}
                   ></span>
-                  {activeAG.isVotingOpen !== false
+                  {isClosed
+                    ? tr('Assemblée clôturée (PV validé)', 'جمعية مغلقة (محضر معتمد)')
+                    : isVotingActive
                     ? tr('Vote en ligne actif', 'التصويت الإلكتروني مفعل')
-                    : tr('Vote en ligne clôturé', 'التصويت الإلكتروني مغلق')}
+                    : tr('Vote en ligne fermé', 'التصويت الإلكتروني مغلق')}
                 </span>
                 <span className="text-xs text-teal-200">
                   {new Date(activeAG.date).toLocaleDateString(isAr ? 'ar-MA' : 'fr-MA', {
@@ -385,45 +555,73 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
 
             {/* Quick Actions */}
             <div className="flex flex-wrap items-center gap-2 shrink-0">
-              <button
-                onClick={() => toggleVotingMutation.mutate(!(activeAG.isVotingOpen !== false))}
-                disabled={toggleVotingMutation.isPending ||
-                  (!activeAG.isVotingOpen && activeAG.resolutions.some(r =>
-                    (r.generatesCharges || r.budgetAmount !== undefined) && (!Number.isFinite(r.budgetAmount) || (r.budgetAmount ?? 0) <= 0)))}
-                className={`text-xs px-3 py-1.5 rounded-lg font-bold transition-all shadow-xs ${
-                  activeAG.isVotingOpen !== false
-                    ? 'bg-amber-400 hover:bg-amber-500 text-slate-900'
-                    : 'bg-emerald-500 hover:bg-emerald-600 text-white'
-                }`}
-                title={tr(
-                  'Activer ou désactiver la possibilité pour les résidents de voter depuis leur portail',
-                  'تفعيل أو إيقاف التصويت الإلكتروني للساكنة من بوابتهم'
-                )}
-              >
-                {activeAG.isVotingOpen !== false
-                  ? tr('Clôturer le vote en ligne', 'إغلاق التصويت الإلكتروني')
-                  : !activeAG.votingSnapshot
-                  ? tr('Ouvrir le scrutin en ligne', 'فتح التصويت الإلكتروني')
-                  : tr('Ouvrir le vote en ligne', 'فتح التصويت الإلكتروني')}
-              </button>
-
-              {(activeAG.status === 'in_progress' ||
-                (Boolean(activeAG.votingSnapshot) && !['completed', 'closed'].includes(activeAG.status))) && (
+              {!isClosed && (
                 <button
-                  type="button"
-                  onClick={async () => {
-                    await saveAssembleeGenerale({
-                      ...activeAG,
-                      status: 'completed',
-                      isVotingOpen: false,
-                    });
-                    await queryClient.invalidateQueries({ queryKey: ['ag', building.id] });
-                  }}
-                  className="text-xs px-3 py-1.5 rounded-lg font-bold transition-all shadow-xs bg-teal-600 hover:bg-teal-500 text-white"
+                  onClick={() => toggleVotingMutation.mutate(!isVotingActive)}
+                  disabled={
+                    toggleVotingMutation.isPending ||
+                    isClosing ||
+                    (!isVotingActive &&
+                      activeAG.resolutions.some(
+                        (r) =>
+                          (r.generatesCharges || r.budgetAmount !== undefined) &&
+                          (!Number.isFinite(r.budgetAmount) || (r.budgetAmount ?? 0) <= 0)
+                      ))
+                  }
+                  className={`text-xs px-3 py-1.5 rounded-lg font-bold transition-all shadow-xs disabled:opacity-50 disabled:cursor-not-allowed ${
+                    isVotingActive
+                      ? 'bg-amber-400 hover:bg-amber-500 text-slate-900'
+                      : 'bg-emerald-500 hover:bg-emerald-600 text-white'
+                  }`}
+                  title={tr(
+                    'Activer ou désactiver la possibilité pour les résidents de voter depuis leur portail',
+                    'تفعيل أو إيقاف التصويت الإلكتروني للساكنة من بوابتهم'
+                  )}
                 >
-                  {tr('Clôturer l’AG (Valider le PV)', 'إغلاق الجمع العام (اعتماد المحضر)')}
+                  {isVotingActive
+                    ? tr('Clôturer le vote en ligne', 'إغلاق التصويت الإلكتروني')
+                    : !activeAG.votingSnapshot
+                    ? tr('Ouvrir le scrutin en ligne', 'فتح التصويت الإلكتروني')
+                    : tr('Ouvrir le vote en ligne', 'فتح التصويت الإلكتروني')}
                 </button>
               )}
+
+              {(activeAG.status === 'in_progress' || (Boolean(activeAG.votingSnapshot) && !isClosed)) && (
+                <button
+                  type="button"
+                  disabled={isClosing || toggleVotingMutation.isPending}
+                  onClick={async () => {
+                    setIsClosing(true);
+                    try {
+                      await saveAssembleeGenerale({
+                        ...activeAG,
+                        status: 'completed',
+                        isVotingOpen: false,
+                      });
+                      await queryClient.invalidateQueries({ queryKey: ['ag', building.id] });
+                      showToast(tr('Assemblée clôturée et PV validé.', 'تم إغلاق الجمع العام واعتماد المحضر.'), 'success');
+                    } catch (err: any) {
+                      showToast(err?.message || tr("Impossible de clôturer l'AG.", 'تعذر إغلاق الجمع العام.'), 'error');
+                    } finally {
+                      setIsClosing(false);
+                    }
+                  }}
+                  className="text-xs px-3 py-1.5 rounded-lg font-bold transition-all shadow-xs bg-teal-600 hover:bg-teal-500 text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isClosing
+                    ? tr('Clôture en cours...', 'جاري الإغلاق...')
+                    : tr('Clôturer l’AG (Valider le PV)', 'إغلاق الجمع العام (اعتماد المحضر)')}
+                </button>
+              )}
+
+              <Button
+                variant="secondary"
+                onClick={() => generateConvocationAgPDF(activeAG, building, syndic)}
+                className="text-xs bg-white/10 hover:bg-white/20 text-white border-white/20 flex items-center gap-1.5"
+              >
+                <DocumentsIcon />
+                <span>{tr('Convocation + Procuration (PDF)', 'الاستدعاء + الوكالة (PDF)')}</span>
+              </Button>
 
               <Button
                 variant="secondary"
@@ -441,33 +639,42 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
             <div className="md:col-span-7 space-y-1.5">
               <div className="flex justify-between items-center text-xs">
                 <span className="text-teal-200 font-medium">
-                  {tr('Quorum légal de copropriété (Loi 18-00 Art. 21) :', 'النصاب القانوني للملكية المشتركة (المادة 21 من القانون 18-00):')}
+                  {tr('Quorum légal de copropriété (Loi 18-00 Art. 18) :', 'النصاب القانوني للملكية المشتركة (المادة 18 من القانون 18-00):')}
                 </span>
                 <span className="font-mono font-bold text-white">
-                  {activeAG.presentTantiemes} / {activeAG.totalTantiemes || 1000} {tr('tantièmes', 'جزء')} (
-                  {Math.round(((activeAG.presentTantiemes || 0) / (activeAG.totalTantiemes || 1000)) * 100)}%)
+                  {activeAG.presentTantiemes} / {effectiveTotalTantiemes} {tr('tantièmes', 'جزء')} (
+                  {Math.round(((activeAG.presentTantiemes || 0) / effectiveTotalTantiemes) * 100)}%)
                 </span>
               </div>
               <div className="w-full bg-teal-950/60 rounded-full h-2.5 overflow-hidden border border-teal-600/40">
                 <div
                   className={`h-full transition-all duration-500 ${
-                    activeAG.quorumReached ? 'bg-emerald-400' : 'bg-amber-400'
+                    activeAG.quorumReached || isSecondConvocation ? 'bg-emerald-400' : 'bg-amber-400'
                   }`}
                   style={{
                     width: `${Math.min(
                       100,
-                      ((activeAG.presentTantiemes || 0) / (activeAG.totalTantiemes || 1000)) * 100
+                      ((activeAG.presentTantiemes || 0) / effectiveTotalTantiemes) * 100
                     )}%`,
                   }}
                 />
               </div>
               <div className="flex justify-between items-center text-[11px] text-teal-300">
                 <span>
-                  {activeAG.quorumReached
+                  {isSecondConvocation
+                    ? tr('✓ 2ème convocation : délibération valable sans quorum (Art. 18)', '✓ الدعوة الثانية: المداولة صالحة بدون نصاب (المادة 18)')
+                    : activeAG.quorumReached
                     ? tr('✓ Quorum de 1ère convocation atteint (> 50%)', '✓ تم بلوغ النصاب القانوني للدعوة الأولى (> 50%)')
                     : tr('⚠ Quorum non atteint (< 50% des tantièmes)', '⚠ لم يكتمل النصاب القانوني بعد (< 50% من الأجزاء)')}
                 </span>
-                <span>{tr('Seuil légal : 500 / 1000 tantièmes', 'العتبة القانونية: 500 / 1000 جزء')}</span>
+                <span>
+                  {isSecondConvocation
+                    ? tr('Seuil : aucun (2ème convocation)', 'العتبة: بدون نصاب (الدعوة الثانية)')
+                    : tr(
+                        `Seuil légal : ${effectiveQuorumRequired} / ${effectiveTotalTantiemes} tantièmes`,
+                        `العتبة القانونية: ${effectiveQuorumRequired} / ${effectiveTotalTantiemes} جزء`
+                      )}
+                </span>
               </div>
             </div>
 
@@ -477,7 +684,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                   {tr('Participation Digitale', 'المشاركة الرقمية')}
                 </span>
                 <span className="text-base font-bold text-white font-mono mt-0.5 block">
-                  {allVotersSet.size} {tr(allVotersSet.size > 1 ? 'votants' : 'votant', 'مصوت')} ({totalUniqueVoterTantiemes} t.)
+                  {votedLotsSet.size} {tr(votedLotsSet.size > 1 ? 'lots votants' : 'lot votant', 'وحدة مصوتة')} ({totalUniqueVoterTantiemes} t.)
                 </span>
               </div>
               <div className="bg-teal-950/40 p-2.5 rounded-lg border border-teal-600/30">
@@ -503,94 +710,102 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                 <div>
                   <h3 className="font-bold text-slate-900 text-sm">{tr('Feuille de Présence & Émargement', 'ورقة الحضور والتوقيع')}</h3>
                   <p className="text-xs text-slate-500">
-                    {tr('Pondération légale des droits de vote par copropriétaire', 'الوزن القانوني لحقوق التصويت لكل مالك مشترك')}
+                    {tr('Pondération légale des droits de vote par lot', 'الوزن القانوني لحقوق التصويت لكل وحدة')}
                   </p>
                 </div>
                 <span className="text-xs font-mono font-bold text-teal-800 bg-teal-50 px-2 py-0.5 rounded border border-teal-200">
-                  {activeAG.attendees.filter((a) => a.status !== 'absent').length} / {activeAG.attendees.length} {tr('votants', 'حاضرين')}
+                  {activeAG.attendees.filter((a) => a.status !== 'absent').length} / {activeAG.attendees.length} {tr('lots présents', 'حاضرين')}
                 </span>
               </div>
 
               <div className="divide-y divide-slate-100 mt-2 max-h-[560px] overflow-y-auto">
-                {activeAG.attendees.map((attendee) => (
-                  <div key={attendee.residentId} className="py-2.5 flex items-center justify-between gap-3 text-xs sm:text-sm">
-                    <div>
-                      <div className="font-bold text-slate-900 text-xs sm:text-sm flex items-center gap-1.5">
-                        <span>{attendee.residentName}</span>
-                        {allVotersSet.has(attendee.residentId) && (
-                          <span className="text-[10px] bg-emerald-100 text-emerald-800 px-1.5 py-0.2 rounded font-semibold">
-                            {tr('Vote en ligne ✓', 'تصويت إلكتروني ✓')}
+                {activeAG.attendees.map((attendee) => {
+                  const attendeeLotKey = attendee.apartmentId || `${attendee.residentId}:${attendee.apartmentNumber}`;
+                  return (
+                    <div key={attendeeLotKey} className="py-2.5 flex items-center justify-between gap-3 text-xs sm:text-sm">
+                      <div>
+                        <div className="font-bold text-slate-900 text-xs sm:text-sm flex items-center gap-1.5">
+                          <span>{attendee.residentName}</span>
+                          {votedLotsSet.has(attendeeLotKey) && (
+                            <span className="text-[10px] bg-emerald-100 text-emerald-800 px-1.5 py-0.2 rounded font-semibold">
+                              {tr('Vote enregistré ✓', 'تم التصويت ✓')}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-slate-500 flex items-center gap-1.5 mt-0.5 flex-wrap">
+                          <span className="font-semibold text-slate-700">{tr('Lot', 'شقة')} {attendee.apartmentNumber}</span>
+                          <span>·</span>
+                          <span className="font-mono text-teal-800 font-bold">
+                            {attendee.tantiemes} / {effectiveTotalTantiemes} {tr('tantièmes', 'جزء')}
                           </span>
-                        )}
+                          {attendee.proxyHolderName && (
+                            <span className="text-amber-700 bg-amber-50 px-1 rounded">
+                              {tr('Mandat:', 'وكالة:')} {attendee.proxyHolderName}
+                            </span>
+                          )}
+                        </div>
                       </div>
-                      <div className="text-[11px] text-slate-500 flex items-center gap-1.5 mt-0.5">
-                        <span className="font-semibold text-slate-700">{tr('Lot', 'شقة')} {attendee.apartmentNumber}</span>
-                        <span>·</span>
-                        <span className="font-mono text-teal-800 font-bold">{attendee.tantiemes} / 1000 {tr('tantièmes', 'جزء')}</span>
-                        {attendee.proxyHolderName && (
-                          <span className="text-amber-700 bg-amber-50 px-1 rounded">
-                            {tr('Mandat:', 'وكالة:')} {attendee.proxyHolderName}
-                          </span>
-                        )}
-                      </div>
-                    </div>
 
-                    {/* Segmented status buttons */}
-                    <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded text-xs shrink-0">
-                      <button
-                        onClick={() =>
-                          attendeeMutation.mutate({
-                            agId: activeAG.id,
-                            residentId: attendee.residentId,
-                            status: 'present',
-                          })
-                        }
-                        className={`px-2 py-1 rounded transition-colors ${
-                          attendee.status === 'present'
-                            ? 'bg-teal-700 text-white font-bold shadow-xs'
-                            : 'text-slate-600 hover:text-slate-900'
-                        }`}
-                        title={tr('Copropriétaire présent physiquement en séance', 'حاضر شخصياً في الجلسة')}
-                      >
-                        {tr('Présent', 'حاضر')}
-                      </button>
-                      <button
-                        onClick={() => {
-                          setProxyAttendee({
-                            residentId: attendee.residentId,
-                            residentName: attendee.residentName,
-                          });
-                          setProxyNameInput(attendee.proxyHolderName || '');
-                        }}
-                        className={`px-2 py-1 rounded transition-colors ${
-                          attendee.status === 'represented'
-                            ? 'bg-amber-600 text-white font-bold shadow-xs'
-                            : 'text-slate-600 hover:text-slate-900'
-                        }`}
-                        title={tr('Copropriétaire représenté par procuration', 'ممثل بتفويض قانوني')}
-                      >
-                        {tr('Représenté', 'ممثل')}
-                      </button>
-                      <button
-                        onClick={() =>
-                          attendeeMutation.mutate({
-                            agId: activeAG.id,
-                            residentId: attendee.residentId,
-                            status: 'absent',
-                          })
-                        }
-                        className={`px-2 py-1 rounded transition-colors ${
-                          attendee.status === 'absent'
-                            ? 'bg-slate-300 text-slate-800 font-bold'
-                            : 'text-slate-400 hover:text-slate-700'
-                        }`}
-                        title={tr('Absent et non représenté', 'غائب وغير ممثل')}
-                      >
-                        {tr('Absent', 'غائب')}
-                      </button>
+                      {/* Segmented status buttons */}
+                      <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded text-xs shrink-0">
+                        <button
+                          disabled={isClosed || attendeeMutation.isPending}
+                          onClick={() =>
+                            attendeeMutation.mutate({
+                              agId: activeAG.id,
+                              residentId: attendee.residentId,
+                              status: 'present',
+                            })
+                          }
+                          className={`px-2 py-1 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                            attendee.status === 'present'
+                              ? 'bg-teal-700 text-white font-bold shadow-xs'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                          title={tr('Copropriétaire présent physiquement en séance', 'حاضر شخصياً في الجلسة')}
+                        >
+                          {tr('Présent', 'حاضر')}
+                        </button>
+                        <button
+                          disabled={isClosed || attendeeMutation.isPending}
+                          onClick={() => {
+                            setProxyAttendee({
+                              residentId: attendee.residentId,
+                              residentName: attendee.residentName,
+                            });
+                            setProxyNameInput(attendee.proxyHolderName || '');
+                          }}
+                          className={`px-2 py-1 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                            attendee.status === 'represented'
+                              ? 'bg-amber-600 text-white font-bold shadow-xs'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                          title={tr('Copropriétaire représenté par procuration (Art. 16-6)', 'ممثل بتفويض قانوني (المادة 16-6)')}
+                        >
+                          {tr('Représenté', 'ممثل')}
+                        </button>
+                        <button
+                          disabled={isClosed || attendeeMutation.isPending}
+                          onClick={() =>
+                            attendeeMutation.mutate({
+                              agId: activeAG.id,
+                              residentId: attendee.residentId,
+                              status: 'absent',
+                            })
+                          }
+                          className={`px-2 py-1 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                            attendee.status === 'absent'
+                              ? 'bg-slate-300 text-slate-800 font-bold'
+                              : 'text-slate-400 hover:text-slate-700'
+                          }`}
+                          title={tr('Absent et non représenté', 'غائب وغير ممثل')}
+                        >
+                          {tr('Absent', 'غائب')}
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </Card>
           </div>
@@ -603,8 +818,8 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                   <h3 className="font-bold text-slate-900 text-sm">{tr('Délibérations & Vote des Résolutions', 'المداولات والتصويت على القرارات')}</h3>
                   <p className="text-xs text-slate-500">
                     {tr(
-                      'Calcul automatique des majorités légales selon la Loi 18-00 (Articles 21, 22 et 23)',
-                      'حساب تلقائي للأغلبيات القانونية وفق القانون 18-00 (المواد 21، 22 و 23)'
+                      'Calcul automatique des majorités légales selon la Loi 18-00 & 106-12 (Articles 21, 22 et 23)',
+                      'حساب تلقائي للأغلبيات القانونية وفق القانون 18-00 و 106-12 (المواد 21، 22 و 23)'
                     )}
                   </p>
                 </div>
@@ -657,16 +872,11 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
               {/* Resolutions List */}
               <div className="space-y-4 mt-4">
                 {filteredResolutions.map((res) => {
+                  const ballots = getResolutionBallots(res);
                   const totalVotes = res.votesFor + res.votesAgainst + res.votesAbstain;
                   const percentFor = totalVotes > 0 ? Math.round((res.votesFor / totalVotes) * 100) : 0;
                   const percentAgainst = totalVotes > 0 ? Math.round((res.votesAgainst / totalVotes) * 100) : 0;
-
-                  const majorityLabel =
-                    res.majorityType === 'simple'
-                      ? tr('Majorité simple (Art. 21) · Pour > Contre', 'الأغلبية البسيطة (المادة 21) · نعم > لا')
-                      : res.majorityType === 'absolute'
-                      ? tr('Majorité absolue (Art. 22) · min. 501 / 1000 tantièmes', 'الأغلبية المطلقة (المادة 22) · 501 / 1000 جزء على الأقل')
-                      : tr('Unanimité (Art. 23) · 1000 / 1000 tantièmes', 'الإجماع (المادة 23) · 1000 / 1000 جزء');
+                  const majorityLabel = formatMajorityLabel(res.majorityType, effectiveTotalTantiemes, tr);
 
                   return (
                     <div
@@ -739,7 +949,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                             {tr('ABSTENTION :', 'امتناع:')} {res.votesAbstain}
                           </span>
                           <span className="text-slate-400 text-[11px]">
-                            {tr('Exprimé :', 'المعبر عنه:')} <strong>{totalVotes} / 1000</strong>
+                            {tr('Exprimé :', 'المعبر عنه:')} <strong>{totalVotes} / {effectiveTotalTantiemes}</strong>
                           </span>
                         </div>
 
@@ -762,7 +972,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                             onClick={() => setViewVotersResolution(res)}
                             className="text-xs text-slate-600 hover:text-slate-900 hover:bg-slate-100 px-2 py-1 rounded border border-slate-200 font-medium transition-colors"
                           >
-                            {tr('Consulter les votants', 'عرض المصوتين')} ({res.voters?.length || 0})
+                            {tr('Consulter les votants', 'عرض المصوتين')} ({ballots.length})
                           </button>
                         </div>
 
@@ -770,8 +980,8 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                           {res.status === 'approved' && (res.generatesCharges || (res.budgetAmount ?? 0) > 0) && (
                             <Button
                               variant="secondary"
-                              disabled={!['completed', 'closed'].includes(activeAG.status) || !res.budgetAmount || !!res.chargesGeneratedAt || issuingResolution !== null}
-                              title={!['completed', 'closed'].includes(activeAG.status) ? tr('Clôturez l’assemblée avant émission.', 'أغلق الجمعية قبل الإصدار.') : undefined}
+                              disabled={!isClosed || !res.budgetAmount || !!res.chargesGeneratedAt || issuingResolution !== null}
+                              title={!isClosed ? tr('Clôturez l’assemblée avant émission.', 'أغلق الجمعية قبل الإصدار.') : undefined}
                               onClick={async () => {
                                 setIssuingResolution(res.id);
                                 try {
@@ -813,6 +1023,14 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                             </Button>
                           )}
                           <Button
+                            disabled={isClosed || !isVotingActive}
+                            title={
+                              isClosed
+                                ? tr('Assemblée clôturée', 'الجمعية مغلقة')
+                                : !isVotingActive
+                                ? tr('Ouvrez le scrutin en ligne pour enregistrer un vote.', 'افتح التصويت لتسجيل الأصوات.')
+                                : undefined
+                            }
                             onClick={() => handleOpenRecordVoteModal(res)}
                             className="text-xs bg-teal-700 hover:bg-teal-800 text-white font-bold px-3 py-1.5 flex items-center gap-1.5"
                           >
@@ -879,13 +1097,27 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
               <label className="block text-xs font-semibold text-slate-700 mb-1">{tr('Type de réunion', 'نوع الاجتماع')}</label>
               <select
                 value={newType}
-                onChange={(e) => setNewType(e.target.value as any)}
+                onChange={(e) => setNewType(e.target.value as 'AGO' | 'AGE')}
                 className="w-full px-3 py-2 border border-slate-300 rounded text-sm bg-white"
               >
                 <option value="AGO">{tr('Ordinaire (AGO - Bilan annuel & budget)', 'عادي (AGO - الحصيلة والميزانية السنوية)')}</option>
                 <option value="AGE">{tr('Extraordinaire (AGE - Travaux urgents)', 'استثنائي (AGE - أشغال مستعجلة)')}</option>
               </select>
             </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">{tr('Convocation (Loi 18-00 Art. 18)', 'الدعوة (القانون 18-00 المادة 18)')}</label>
+              <select
+                value={newConvocationNumber}
+                onChange={(e) => setNewConvocationNumber(Number(e.target.value) === 2 ? 2 : 1)}
+                className="w-full px-3 py-2 border border-slate-300 rounded text-sm bg-white"
+              >
+                <option value={1}>{tr('1ère convocation (Quorum > 50% requis)', 'الدعوة الأولى (نصاب > 50% مطلوب)')}</option>
+                <option value={2}>{tr('2ème convocation (Sans quorum · Art. 18)', 'الدعوة الثانية (بدون نصاب · المادة 18)')}</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3">
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">{tr('Date', 'التاريخ')}</label>
               <input
@@ -895,9 +1127,6 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                 className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
               />
             </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">{tr('Heure de début', 'ساعة البداية')}</label>
               <input
@@ -925,32 +1154,62 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
             <textarea
               rows={5}
               value={agendaInput}
-              onChange={(e) => { setAgendaInput(e.target.value); setNewBudgets({}); setNewWorksFundTargets({}); }}
+              onChange={(e) => {
+                setAgendaInput(e.target.value);
+                setNewBudgets({});
+                setNewWorksFundTargets({});
+                setNewMajorityTypes({});
+              }}
               className="w-full px-3 py-2 border border-slate-300 rounded text-xs font-mono"
             />
           </div>
-          {agendaInput.split('\n').map(line => line.trim()).filter(Boolean).map((line, index) => <div key={index} className="border rounded p-2 text-xs space-y-1.5">
-            <label><input type="checkbox" checked={newBudgets[index] !== undefined} onChange={e => setNewBudgets(old => {
-              const next = { ...old }; if (e.target.checked) next[index] = ''; else delete next[index]; return next;
-            })} /> {line} — {tr('Appel de fonds', 'طلب مساهمة')}</label>
-            {newBudgets[index] !== undefined && (
-              <div className="flex flex-wrap items-center gap-2 pt-1">
-                <label>{tr('Budget (MAD)', 'الميزانية (درهم)')}<input type="number" min="0.01" step="0.01" value={newBudgets[index]} onChange={e => setNewBudgets(old => ({ ...old, [index]: e.target.value }))} className="border rounded p-1 mx-2" /></label>
-                <label className="inline-flex items-center gap-1.5">
-                  <span>{tr('Affectation', 'التخصيص')}</span>
-                  <select
-                    value={newWorksFundTargets[index] ?? 'default'}
-                    onChange={e => setNewWorksFundTargets(old => ({ ...old, [index]: e.target.value as NonNullable<AGResolution['worksFundTarget']> }))}
-                    className="border rounded p-1 bg-white"
-                  >
-                    <option value="default">{tr('Taux de l’immeuble (défaut)', 'نسبة العمارة (افتراضي)')}</option>
-                    <option value="courant">{tr('Compte Courant (100%)', 'الحساب الجاري (100%)')}</option>
-                    <option value="reserve">{tr('Fonds de Réserve (100%)', 'صندوق الاحتياط (100%)')}</option>
-                  </select>
+          {agendaInput.split('\n').map(line => line.trim()).filter(Boolean).map((line, index) => (
+            <div key={index} className="border rounded p-2 text-xs space-y-1.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label className="flex items-center gap-1.5">
+                  <input
+                    type="checkbox"
+                    checked={newBudgets[index] !== undefined}
+                    onChange={e => setNewBudgets(old => {
+                      const next = { ...old };
+                      if (e.target.checked) next[index] = '';
+                      else delete next[index];
+                      return next;
+                    })}
+                  />
+                  <span>{line} — {tr('Appel de fonds', 'طلب مساهمة')}</span>
                 </label>
+                <select
+                  value={newMajorityTypes[index] ?? (index === 4 ? 'absolute' : 'simple')}
+                  onChange={e => setNewMajorityTypes(old => ({ ...old, [index]: e.target.value as AGResolution['majorityType'] }))}
+                  className="border rounded px-1.5 py-0.5 bg-white text-[11px]"
+                  aria-label={tr('Majorité requise', 'الأغلبية المطلوبة')}
+                >
+                  <option value="simple">{tr('Majorité simple (Art. 21)', 'الأغلبية البسيطة (المادة 21)')}</option>
+                  <option value="absolute">{tr('Majorité absolue (Art. 22)', 'الأغلبية المطلقة (المادة 22)')}</option>
+                  <option value="three_quarters">{tr('Majorité 3/4 (Loi 106-12)', 'أغلبية 3/4 (القانون 106-12)')}</option>
+                  <option value="unanimity">{tr('Unanimité (Art. 23)', 'الإجماع (المادة 23)')}</option>
+                </select>
               </div>
-            )}
-          </div>)}
+              {newBudgets[index] !== undefined && (
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <label>{tr('Budget (MAD)', 'الميزانية (درهم)')}<input type="number" min="0.01" step="0.01" value={newBudgets[index]} onChange={e => setNewBudgets(old => ({ ...old, [index]: e.target.value }))} className="border rounded p-1 mx-2" /></label>
+                  <label className="inline-flex items-center gap-1.5">
+                    <span>{tr('Affectation', 'التخصيص')}</span>
+                    <select
+                      value={newWorksFundTargets[index] ?? 'default'}
+                      onChange={e => setNewWorksFundTargets(old => ({ ...old, [index]: e.target.value as NonNullable<AGResolution['worksFundTarget']> }))}
+                      className="border rounded p-1 bg-white"
+                    >
+                      <option value="default">{tr('Taux de l’immeuble (défaut)', 'نسبة العمارة (افتراضي)')}</option>
+                      <option value="courant">{tr('Compte Courant (100%)', 'الحساب الجاري (100%)')}</option>
+                      <option value="reserve">{tr('Fonds de Réserve (100%)', 'صندوق الاحتياط (100%)')}</option>
+                    </select>
+                  </label>
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       </Modal>
 
@@ -960,7 +1219,10 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
           isOpen={isRecordVoteModalOpen}
           onSubmit={handleConfirmInSessionVote}
           busy={castVoteMutation.isPending}
-          onClose={() => setIsRecordVoteModalOpen(false)}
+          onClose={() => {
+            setIsRecordVoteModalOpen(false);
+            setAllowOverrideResidentVote(false);
+          }}
           title={tr(
             `Enregistrer un Vote · Résolution N° ${selectedResolutionForVote.number}`,
             `تسجيل تصويت · القرار رقم ${selectedResolutionForVote.number}`
@@ -972,7 +1234,12 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
               </Button>
               <Button
                 type="submit"
-                disabled={castVoteMutation.isPending}
+                disabled={
+                  castVoteMutation.isPending ||
+                  !selectedVoteLot ||
+                  selectedVoteLot.attendanceStatus === 'absent' ||
+                  (selectedLotExistingVote?.castByRole === 'resident' && !allowOverrideResidentVote)
+                }
                 className="bg-teal-700 hover:bg-teal-800 text-white font-bold"
               >
                 {castVoteMutation.isPending
@@ -991,22 +1258,34 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
               <p className="text-xs text-slate-600 mt-0.5">{selectedResolutionForVote.description}</p>
             </div>
 
-            {/* Select Resident */}
+            {/* Select Lot / Owner */}
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
-                {tr('Copropriétaire Votant (ou représenté par procuration) :', 'المالك المشترك المصوت (أو الممثل بوكالة):')}
+                {tr('Lot & Copropriétaire Votant (ou représenté par procuration) :', 'الوحدة والمالك المشترك المصوت (أو الممثل بوكالة):')}
               </label>
               <select
-                value={selectedResidentIdForVote}
-                onChange={(e) => setSelectedResidentIdForVote(e.target.value)}
+                value={selectedLotKeyForVote}
+                onChange={(e) => {
+                  setSelectedLotKeyForVote(e.target.value);
+                  setAllowOverrideResidentVote(false);
+                }}
                 className="w-full px-3 py-2 border border-slate-300 rounded text-xs bg-white text-slate-900"
               >
-                {eligibleOwners.map((res) => {
-                  const apt = building.apartments.find((a) => a.ownerId === res.id || a.id === res.apartmentId);
-                  const existingVote = selectedResolutionForVote.voters?.find((v) => v.residentId === res.id);
+                {votingLots.map((lot) => {
+                  const existingVote = getResolutionBallots(selectedResolutionForVote).find((v) =>
+                    v.apartmentId && lot.apartmentId
+                      ? v.apartmentId === lot.apartmentId
+                      : v.residentId === lot.residentId && v.apartmentNumber === lot.apartmentNumber
+                  );
+                  const statusTag =
+                    lot.attendanceStatus === 'present'
+                      ? tr('Présent', 'حاضر')
+                      : lot.attendanceStatus === 'represented'
+                      ? `${tr('Représenté', 'ممثل')}${lot.proxyHolderName ? ` (${lot.proxyHolderName})` : ''}`
+                      : tr('Absent', 'غائب');
                   return (
-                    <option key={res.id} value={res.id}>
-                      {res.name} — {tr('Lot', 'شقة')} {apt?.number || 'Lot'} ({apt?.tantiemes || 100}/1000 {tr('tantièmes', 'جزء')})
+                    <option key={lot.lotKey} value={lot.lotKey}>
+                      {lot.residentName} — {tr('Lot', 'شقة')} {lot.apartmentNumber} ({lot.tantiemes}/{effectiveTotalTantiemes} {tr('tantièmes', 'جزء')}) · {statusTag}
                       {existingVote ? ` [${tr('Vote actuel:', 'التصويت الحالي:')} ${(existingVote.choice || existingVote.vote || 'abstain').toUpperCase()}]` : ` [${tr('Non voté', 'لم يصوت')}]`}
                     </option>
                   );
@@ -1014,31 +1293,59 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
               </select>
             </div>
 
-            {/* Resolved Tantièmes Indicator */}
-            {(() => {
-              const res = eligibleOwners.find((r) => r.id === selectedResidentIdForVote);
-              const apt = building.apartments.find((a) => a.ownerId === res?.id || a.id === res?.apartmentId);
-              const tantiemes = apt?.tantiemes || 100;
+            {selectedVoteLot?.attendanceStatus === 'absent' && (
+              <div className="p-3 bg-amber-50 border border-amber-300 rounded-lg text-xs text-amber-900">
+                {tr(
+                  'Ce copropriétaire est actuellement marqué « Absent ». Marquez-le « Présent » ou « Représenté » sur la feuille de présence avant d’enregistrer un vote en séance.',
+                  'هذا المالك مسجل حالياً كـ «غائب». يرجى تسجيله كـ «حاضر» أو «ممثل» في ورقة الحضور قبل تسجيل التصويت.'
+                )}
+              </div>
+            )}
 
-              return (
-                <div className="p-3 bg-teal-50 rounded-lg border border-teal-200 flex justify-between items-center text-xs">
-                  <div>
-                    <span className="font-bold text-teal-900 block">
-                      {tr('Pondération Légale Automatique :', 'الترجيح القانوني التلقائي:')}
-                    </span>
-                    <span className="text-teal-800">
-                      {tr(
-                        `Ce vote comptera pour exactement ${tantiemes} tantièmes (${((tantiemes / 1000) * 100).toFixed(1)}% des voix de la copropriété).`,
-                        `سيُحتسب هذا التصويت بوزن ${tantiemes} جزء (${((tantiemes / 1000) * 100).toFixed(1)}% من مجموع أصوات الملكية المشتركة).`
-                      )}
-                    </span>
-                  </div>
-                  <span className="font-mono font-bold text-lg text-teal-900 px-3 py-1 bg-white rounded-md border border-teal-300">
-                    {tantiemes} / 1000
+            {selectedLotExistingVote?.castByRole === 'resident' && (
+              <div className="p-3 bg-rose-50 border border-rose-300 rounded-lg text-xs text-rose-900 space-y-2">
+                <p className="font-semibold">
+                  {tr(
+                    'Attention : ce copropriétaire a déjà exprimé son vote personnellement depuis son portail.',
+                    'تنبيه: لقد سبق لهذا المالك أن عبّر عن تصويته شخصياً عبر بوابتـه.'
+                  )}
+                </p>
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={allowOverrideResidentVote}
+                    onChange={(e) => setAllowOverrideResidentVote(e.target.checked)}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    {tr(
+                      'Je confirme remplacer le vote électronique du copropriétaire suite à une instruction en séance.',
+                      'أؤكد استبدال التصويت الإلكتروني للمالك بناءً على تعليمات في الجلسة.'
+                    )}
+                  </span>
+                </label>
+              </div>
+            )}
+
+            {/* Resolved Tantièmes Indicator */}
+            {selectedVoteLot && (
+              <div className="p-3 bg-teal-50 rounded-lg border border-teal-200 flex justify-between items-center text-xs">
+                <div>
+                  <span className="font-bold text-teal-900 block">
+                    {tr('Pondération Légale Automatique :', 'الترجيح القانوني التلقائي:')}
+                  </span>
+                  <span className="text-teal-800">
+                    {tr(
+                      `Ce vote comptera pour exactement ${selectedVoteLot.tantiemes} tantièmes (${((selectedVoteLot.tantiemes / effectiveTotalTantiemes) * 100).toFixed(1)}% des voix de la copropriété).`,
+                      `سيُحتسب هذا التصويت بوزن ${selectedVoteLot.tantiemes} جزء (${((selectedVoteLot.tantiemes / effectiveTotalTantiemes) * 100).toFixed(1)}% من مجموع أصوات الملكية المشتركة).`
+                    )}
                   </span>
                 </div>
-              );
-            })()}
+                <span className="font-mono font-bold text-lg text-teal-900 px-3 py-1 bg-white rounded-md border border-teal-300 shrink-0">
+                  {selectedVoteLot.tantiemes} / {effectiveTotalTantiemes}
+                </span>
+              </div>
+            )}
 
             {/* 3 Option Choice */}
             <div>
@@ -1139,34 +1446,49 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
-                  {viewVotersResolution.voters?.map((v, i) => (
-                    <tr key={i} className="hover:bg-slate-50">
-                      <td className="px-3 py-2 font-bold text-slate-900">{v.residentName}</td>
-                      <td className="px-3 py-2 font-mono text-slate-700">{v.apartmentNumber}</td>
-                      <td className="px-3 py-2 text-center font-mono font-bold text-teal-800">
-                        {v.tantiemes} / 1000
-                      </td>
-                      <td className="px-3 py-2 text-center">
-                        <span
-                          className={`px-2 py-0.5 rounded-full font-bold text-[11px] ${
-                            v.vote === 'for'
-                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                              : v.vote === 'against'
-                              ? 'bg-rose-50 text-rose-700 border border-rose-200'
-                              : 'bg-slate-100 text-slate-700'
-                          }`}
-                        >
-                          {v.vote === 'for' ? tr('POUR', 'موافق') : v.vote === 'against' ? tr('CONTRE', 'معارض') : tr('ABSTENTION', 'ممتنع')}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2 text-slate-500 font-mono text-[11px]">
-                        {(v.castAt || v.votedAt) ? new Date((v.castAt || v.votedAt)!).toLocaleString(isAr ? 'ar-MA' : 'fr-MA') : '—'}
-                        {v.comment && <div className="text-slate-700 italic font-sans mt-0.5">« {v.comment} »</div>}
-                      </td>
-                    </tr>
-                  ))}
+                  {getResolutionBallots(viewVotersResolution).map((v, i) => {
+                    const choice = v.choice || v.vote || 'abstain';
+                    return (
+                      <tr key={v.apartmentId || `${v.residentId}-${i}`} className="hover:bg-slate-50">
+                        <td className="px-3 py-2 font-bold text-slate-900">
+                          <div>{v.residentName}</div>
+                          {v.proxyHolderName && (
+                            <div className="text-[10px] font-normal text-amber-700">
+                              {tr('Mandataire :', 'الوكيل:')} {v.proxyHolderName}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 font-mono text-slate-700">{v.apartmentNumber}</td>
+                        <td className="px-3 py-2 text-center font-mono font-bold text-teal-800">
+                          {v.tantiemes} / {effectiveTotalTantiemes}
+                        </td>
+                        <td className="px-3 py-2 text-center">
+                          <span
+                            className={`px-2 py-0.5 rounded-full font-bold text-[11px] ${
+                              choice === 'for'
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                : choice === 'against'
+                                ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                                : 'bg-slate-100 text-slate-700'
+                            }`}
+                          >
+                            {choice === 'for' ? tr('POUR', 'موافق') : choice === 'against' ? tr('CONTRE', 'معارض') : tr('ABSTENTION', 'ممتنع')}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 text-slate-500 font-mono text-[11px]">
+                          {(v.castAt || v.votedAt) ? new Date((v.castAt || v.votedAt)!).toLocaleString(isAr ? 'ar-MA' : 'fr-MA') : '—'}
+                          {v.castByRole && v.castByRole !== 'resident' && (
+                            <span className="ms-1.5 text-[10px] bg-slate-100 text-slate-600 px-1 rounded font-sans">
+                              {tr('Saisi en séance', 'مسجل في الجلسة')}
+                            </span>
+                          )}
+                          {v.comment && <div className="text-slate-700 italic font-sans mt-0.5">« {v.comment} »</div>}
+                        </td>
+                      </tr>
+                    );
+                  })}
 
-                  {(!viewVotersResolution.voters || viewVotersResolution.voters.length === 0) && (
+                  {getResolutionBallots(viewVotersResolution).length === 0 && (
                     <tr>
                       <td colSpan={5} className="px-3 py-6 text-center text-slate-400">
                         {tr("Aucun vote n'a encore été enregistré sur cette résolution.", 'لم يتم تسجيل أي تصويت على هذا القرار بعد.')}
@@ -1187,15 +1509,18 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
             setProxyAttendee(null);
             setProxyNameInput('');
           }}
-          title={tr('Mandataire (Procuration écrite)', 'الوكيل (تفويض كتابي)')}
+          title={tr('Mandataire (Procuration écrite · Art. 16-6)', 'الوكيل (تفويض كتابي · المادة 16-6)')}
           maxWidthClass="max-w-md"
-          onSubmit={(e) => {
-            e.preventDefault();
-            attendeeMutation.mutate({
+          onSubmit={async () => {
+            const trimmed = proxyNameInput.trim();
+            if (!trimmed) {
+              throw new Error(tr('Veuillez saisir le nom complet du mandataire.', 'يرجى إدخال الاسم الكامل للوكيل.'));
+            }
+            await attendeeMutation.mutateAsync({
               agId: activeAG.id,
               residentId: proxyAttendee.residentId,
               status: 'represented',
-              proxy: proxyNameInput.trim(),
+              proxy: trimmed,
             });
             setProxyAttendee(null);
             setProxyNameInput('');
@@ -1205,8 +1530,8 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
           <div className="space-y-4">
             <p className="text-xs text-slate-600">
               {tr(
-                `Saisissez le nom complet du mandataire représentant ${proxyAttendee.residentName} :`,
-                `أدخل الاسم الكامل للوكيل الذي يمثل ${proxyAttendee.residentName}:`
+                `Saisissez le nom complet du mandataire représentant ${proxyAttendee.residentName} (Loi 106-12 Art. 16-6 : max 3 mandats et 10% des voix, hors syndic) :`,
+                `أدخل الاسم الكامل للوكيل الذي يمثل ${proxyAttendee.residentName} (القانون 106-12 المادة 16-6: حد أقصى 3 وكالات و 10% من الأصوات، باستثناء السنديك):`
               )}
             </p>
             <div>

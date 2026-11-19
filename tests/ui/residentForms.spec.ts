@@ -1652,7 +1652,14 @@ test('owner and tenant can visit every resident module and cannot enter admin or
   page.on('pageerror', error => errors.push(error.message));
   for (const profile of [1, 2]) {
     await login(page, profile);
-    for (const name of ['Mon Logement & Finances', 'AG & Vote Digital', 'Incidents & Suivi', 'Chat Résidence', 'Prestataires & Artisans', 'Souk Voisins']) {
+    const isOwnerProfile = profile === 1;
+    const modules = isOwnerProfile
+      ? ['Mon Logement & Finances', 'AG & Vote Digital', 'Incidents & Suivi', 'Chat Résidence', 'Prestataires & Artisans', 'Souk Voisins']
+      : ['Mon Logement & Finances', 'Incidents & Suivi', 'Chat Résidence', 'Prestataires & Artisans', 'Souk Voisins'];
+    if (!isOwnerProfile) {
+      await expect(page.getByRole('button', { name: /AG & Vote Digital/ })).toHaveCount(0);
+    }
+    for (const name of modules) {
       await page.getByRole('button', { name: new RegExp(name) }).first().click();
       await expect(page.getByRole('button', { name: 'Déconnexion' }).first()).toBeVisible();
       await expect(page.getByText('Une erreur est survenue lors du chargement du module')).toHaveCount(0);

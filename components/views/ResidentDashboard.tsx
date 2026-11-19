@@ -195,18 +195,54 @@ const ResidentDashboard: React.FC = () => {
     enabled: !!currentResident,
   });
 
-  // Fetch Assemblées Générales & Digital Voting Sessions
+  const ownedApartments = useMemo(
+    () =>
+      myApartments.filter(
+        (a) =>
+          !a.archivedAt &&
+          isOwnerResident &&
+          (!currentResident || a.ownerId === currentResident.id || a.id === currentResident.apartmentId)
+      ),
+    [myApartments, isOwnerResident, currentResident]
+  );
+
+  const totalOwnedTantiemes = useMemo(
+    () => ownedApartments.reduce((sum, a) => sum + (a.tantiemes || 0), 0),
+    [ownedApartments]
+  );
+
+  // Fetch Assemblées Générales & Digital Voting Sessions (owners only per Law 18-00)
   const { data: agSessions = [] } = useQuery({
     queryKey: ['ag', activeBuilding?.id],
     queryFn: () => (activeBuilding ? getAssembleesGeneralesForBuilding(activeBuilding.id) : []),
-    enabled: !!activeBuilding,
+    enabled: !!activeBuilding && isOwnerResident,
   });
 
-  const activeAGSession = agSessions[0];
+  const activeAGSession =
+    agSessions.find((ag) => ag.isVotingOpen === true && !['completed', 'closed'].includes(ag.status)) ||
+    agSessions[0];
+  const isActiveAGVotingOpen = Boolean(
+    activeAGSession &&
+      activeAGSession.isVotingOpen === true &&
+      !['completed', 'closed'].includes(activeAGSession.status)
+  );
   const unvotedResolutionsCount =
-    activeAGSession?.resolutions.filter(
-      (r) => !r.voters?.some((v) => v.residentId === currentResident?.id)
-    ).length || 0;
+    isOwnerResident && isActiveAGVotingOpen && activeAGSession
+      ? activeAGSession.resolutions.filter((r) => {
+          const ballots = r.voterChoices ?? r.voters ?? [];
+          if (!ownedApartments.length) {
+            return !ballots.some((v) => v.residentId === currentResident?.id);
+          }
+          return ownedApartments.some(
+            (apt) =>
+              !ballots.some(
+                (v) =>
+                  v.residentId === currentResident?.id &&
+                  (v.apartmentId ? v.apartmentId === apt.id : v.apartmentNumber === apt.number)
+              )
+          );
+        }).length
+      : 0;
 
   const reportMutation = useMutation({
     mutationFn: (data: any) =>
@@ -443,26 +479,28 @@ const ResidentDashboard: React.FC = () => {
               <span>{t('residentPortal.tabOverview')}</span>
             </button>
 
-            <button
-              onClick={() => setActiveTab('voting')}
-              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap ${
-                activeTab === 'voting'
-                  ? 'bg-slate-900 text-white shadow-sm'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              <span>🗳️</span>
-              <span>{t('residentPortal.tabAg')}</span>
-              {unvotedResolutionsCount > 0 ? (
-                <span className="text-[10px] bg-emerald-500 text-white px-2 py-0.5 rounded-full font-bold animate-pulse">
-                  {unvotedResolutionsCount}
-                </span>
-              ) : (
-                <span className="text-[10px] bg-teal-100 text-teal-800 px-1.5 py-0.2 rounded font-bold">
-                  18-00
-                </span>
-              )}
-            </button>
+            {isOwnerResident && (
+              <button
+                onClick={() => setActiveTab('voting')}
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap ${
+                  activeTab === 'voting'
+                    ? 'bg-slate-900 text-white shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+              >
+                <span>🗳️</span>
+                <span>{t('residentPortal.tabAg')}</span>
+                {unvotedResolutionsCount > 0 ? (
+                  <span className="text-[10px] bg-emerald-500 text-white px-2 py-0.5 rounded-full font-bold animate-pulse">
+                    {unvotedResolutionsCount}
+                  </span>
+                ) : (
+                  <span className="text-[10px] bg-teal-100 text-teal-800 px-1.5 py-0.2 rounded font-bold">
+                    18-00
+                  </span>
+                )}
+              </button>
+            )}
 
             <button
               onClick={() => setActiveTab('maintenance')}
@@ -568,11 +606,12 @@ const ResidentDashboard: React.FC = () => {
             />
           )}
 
-          {activeTab === 'voting' && activeBuilding && (
+          {activeTab === 'voting' && activeBuilding && isOwnerResident && (
             <ResidentAGVoting
               building={activeBuilding}
               currentResident={currentResident}
-              currentApartment={currentApartment}
+              currentApartment={ownedApartments[0] || currentApartment}
+              myApartments={ownedApartments}
               syndic={activeSyndic}
             />
           )}
@@ -594,8 +633,8 @@ const ResidentDashboard: React.FC = () => {
 
         {activeTab === 'overview' && (
           <>
-            {/* AG Digital Voting Banner if session is active */}
-            {activeAGSession && (
+            {/* AG Digital Voting Banner if session is actively open for owner residents */}
+            {isOwnerResident && isActiveAGVotingOpen && activeAGSession && (
               <Card className="p-4 bg-gradient-to-r from-teal-900 to-slate-900 text-white border-none shadow-sm">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
@@ -612,7 +651,7 @@ const ResidentDashboard: React.FC = () => {
                       <p className="text-xs text-teal-100 mt-1">
                         {tr('Vous disposez de', 'تتوفرون على')}{' '}
                         <strong>
-                          {currentApartment?.tantiemes ?? 0} {tr('tantièmes', 'جزءاً عقارياً')}
+                          {totalOwnedTantiemes} {tr('tantièmes', 'جزءاً عقارياً')}
                         </strong>{' '}
                         {tr('de copropriété pour voter.', 'من الملكية المشتركة للتصويت.')}
                         {unvotedResolutionsCount > 0 ? (

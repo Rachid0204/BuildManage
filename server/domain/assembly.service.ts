@@ -188,6 +188,27 @@ import type { CommandDependencies } from './dependencies';
 import type { Actor } from './errors';
 
 
+const AGMetadataSchema = z.object({
+  title: z.string().trim().min(1, "Titre d'assemblée requis.").max(300, "Titre d'assemblée trop long.").optional(),
+  type: z.enum(["ordinaire", "extraordinaire", "AGO", "AGE"]).optional(),
+  convocationNumber: z.union([z.literal(1), z.literal(2)]).optional(),
+  date: z.string().max(40).optional(),
+  time: z.string().max(20).optional(),
+  location: z.string().max(300).optional(),
+  presidentName: z.string().max(200).optional(),
+  secretaryName: z.string().max(200).optional(),
+  agendaItems: z.array(z.string().max(500)).max(100).optional(),
+  pvSummary: z.string().max(20000).optional(),
+});
+
+const normalizePersonName = (value: unknown) =>
+  String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+
 export function createAssemblyCommands(transactionState: State, dependencies: CommandDependencies) {
 const state=transactionState;
 const check: CommandDependencies['check'] = dependencies.check;
@@ -214,12 +235,15 @@ function roll(building: any, previous: any[] = []) {
   check(totalTantiemes > 0, "Tantièmes invalides.", 400);
   const attendees = lots.map((a: any) => {
     const old = previous.find(
-      (p) => p.residentId === a.ownerId && p.apartmentNumber === a.number,
+      (p) =>
+        p.residentId === a.ownerId &&
+        (p.apartmentId ? p.apartmentId === a.id : p.apartmentNumber === a.number),
     );
     return {
       residentId: a.ownerId,
       residentName: building.residents.find((r: any) => r.id === a.ownerId)
         .name,
+      apartmentId: a.id,
       apartmentNumber: a.number,
       tantiemes: a.tantiemes,
       status: old?.status || "absent",
@@ -242,7 +266,7 @@ function recomputeMeeting(ag: any) {
   Object.assign(ag, roll(ag.votingSnapshot, ag.attendees));
   for (const r of ag.resolutions) {
     const unique = new Map();
-    for (const v of r.voterChoices || []) {
+    for (const v of r.voterChoices ?? r.voters ?? []) {
       const lot = ag.votingSnapshot.apartments.find(
         (a: any) =>
           (v.apartmentId ? a.id === v.apartmentId : a.number === v.apartmentNumber) &&
@@ -253,7 +277,7 @@ function recomputeMeeting(ag: any) {
         "Historique de vote incohérent.",
         409,
       );
-      unique.set(lot.id, { ...v, tantiemes: lot.tantiemes });
+      unique.set(lot.id, { ...v, apartmentId: lot.id, tantiemes: lot.tantiemes });
     }
     r.voterChoices = [...unique.values()];
     r.voters = r.voterChoices;
@@ -287,9 +311,10 @@ async function meetingOperation(actor: Actor, operation: string, args: any[]) {
       "Assemblée clôturée.",
       409,
     );
-    const metadata = pick(input, [
+    const rawMetadata = pick(input, [
       "title",
       "type",
+      "convocationNumber",
       "date",
       "time",
       "location",
@@ -298,6 +323,18 @@ async function meetingOperation(actor: Actor, operation: string, args: any[]) {
       "agendaItems",
       "pvSummary",
     ]);
+    const parsedMetadata = AGMetadataSchema.safeParse(rawMetadata);
+    check(
+      parsedMetadata.success,
+      parsedMetadata.success
+        ? ""
+        : parsedMetadata.error.issues[0]?.message || "Métadonnées d'assemblée invalides.",
+      400,
+    );
+    const metadata = parsedMetadata.data;
+    if (operation === "createAssembleeGenerale") {
+      check(Boolean(metadata.title), "Titre d'assemblée requis.", 400);
+    }
     if (metadata.date !== undefined && String(metadata.date).trim() !== "") {
       try {
         metadata.date = bankDate(String(metadata.date));
@@ -330,6 +367,16 @@ async function meetingOperation(actor: Actor, operation: string, args: any[]) {
         "Résolutions figées après ouverture.",
         409,
       );
+      if (
+        metadata.convocationNumber !== undefined &&
+        metadata.convocationNumber !== (old.convocationNumber ?? 1)
+      ) {
+        check(
+          false,
+          "Le numéro de convocation ne peut être modifié après ouverture du vote.",
+          409,
+        );
+      }
       Object.assign(old, metadata);
       ag = old;
       if (input.status === "completed") {
@@ -352,48 +399,55 @@ async function meetingOperation(actor: Actor, operation: string, args: any[]) {
         .array(z.any())
         .max(100)
         .parse(input.resolutions || [])
-        .map((r: any, i: number) => ({
-          id: r.id ? str(r.id, 100) : randomUUID(),
-          number: i + 1,
-          title: str(r.title, 300),
-          description: String(r.description || "").slice(0, 10000),
-          majorityType: z
-            .enum([
-              "simple",
-              "absolute",
-              "three_quarters",
-              "unanimity",
-              "simple_24",
-              "absolue_25",
-              "trois_quarts_26",
-              "unanimite",
-            ])
-            .parse(r.majorityType),
-          ...(r.generatesCharges !== undefined ? { generatesCharges: z.boolean().parse(r.generatesCharges) } : {}),
-          ...(r.worksFundTarget !== undefined
-            ? {
-                worksFundTarget: z
-                  .enum(["default", "courant", "reserve"])
-                  .parse(r.worksFundTarget),
-              }
-            : {}),
-          budgetAmount:
+        .map((r: any, i: number) => {
+          const parsedBudget =
             r.budgetAmount === undefined
               ? undefined
-              : cents(r.budgetAmount) / 100,
-          votesFor: 0,
-          votesAgainst: 0,
-          votesAbstain: 0,
-          voterChoices: [],
-          voters: [],
-          status: "pending",
-        }));
+              : cents(r.budgetAmount) / 100;
+          if (parsedBudget !== undefined) {
+            check(parsedBudget >= 0, "Le budget d'une résolution ne peut pas être négatif.", 400);
+          }
+          return {
+            id: r.id ? str(r.id, 100) : randomUUID(),
+            number: i + 1,
+            title: str(r.title, 300),
+            description: String(r.description || "").slice(0, 10000),
+            majorityType: z
+              .enum([
+                "simple",
+                "absolute",
+                "three_quarters",
+                "unanimity",
+                "simple_24",
+                "absolue_25",
+                "trois_quarts_26",
+                "unanimite",
+              ])
+              .parse(r.majorityType),
+            ...(r.generatesCharges !== undefined ? { generatesCharges: z.boolean().parse(r.generatesCharges) } : {}),
+            ...(r.worksFundTarget !== undefined
+              ? {
+                  worksFundTarget: z
+                    .enum(["default", "courant", "reserve"])
+                    .parse(r.worksFundTarget),
+                }
+              : {}),
+            budgetAmount: parsedBudget,
+            votesFor: 0,
+            votesAgainst: 0,
+            votesAbstain: 0,
+            voterChoices: [],
+            voters: [],
+            status: "pending",
+          };
+        });
       check(
         new Set(resolutions.map((r) => r.id)).size === resolutions.length,
         "Résolutions en double.",
         409,
       );
       ag = {
+        convocationNumber: old?.convocationNumber ?? 1,
         ...metadata,
         id: old?.id || randomUUID(),
         buildingId: b.id,
@@ -454,17 +508,33 @@ async function meetingOperation(actor: Actor, operation: string, args: any[]) {
     }
     if (operation === "recordAGVote") {
       const voter = object(args[4]);
-      Object.assign(
-        ag,
-        applyResidentVote(
+      const comment =
+        typeof voter.comment === "string"
+          ? voter.comment
+          : typeof args[5] === "string"
+            ? args[5]
+            : undefined;
+      try {
+        Object.assign(
           ag,
-          ag.votingSnapshot || b,
-          str(voter.residentId),
-          str(args[1]),
-          args[2],
-          voter.apartmentId ? str(voter.apartmentId) : undefined,
-        ),
-      );
+          applyResidentVote(
+            ag,
+            ag.votingSnapshot || b,
+            str(voter.residentId),
+            str(args[1]),
+            args[2],
+            voter.apartmentId ? str(voter.apartmentId) : undefined,
+            comment,
+            {
+              actorRole: actor.role as "resident" | "syndic" | "admin",
+              actorUid: actor.uid,
+              allowOverrideResidentVote: Boolean(voter.allowOverrideResidentVote),
+            },
+          ),
+        );
+      } catch (err: any) {
+        check(false, err?.message || "Vote invalide.", err?.status || 400);
+      }
       recomputeMeeting(ag);
     }
     if (operation === "updateAGAttendee") {
@@ -481,15 +551,79 @@ async function meetingOperation(actor: Actor, operation: string, args: any[]) {
       if (args[2] === "absent")
         check(
           !ag.resolutions.some((r: any) =>
-            r.voterChoices?.some((v: any) => v.residentId === args[1]),
+            (r.voterChoices ?? r.voters ?? []).some(
+              (v: any) => v.residentId === args[1],
+            ),
           ),
           "Un votant ne peut être retiré après son vote.",
           409,
         );
+      let trimmedProxyName: string | undefined;
+      if (args[2] === "represented") {
+        trimmedProxyName = str(args[3], 200).trim();
+        check(
+          trimmedProxyName.length > 0,
+          "Le nom du mandataire est requis pour une procuration.",
+          400,
+        );
+        const normalizedProxy = normalizePersonName(trimmedProxyName);
+        // Law 18-00 / 106-12 Art. 16-6: Syndic (or secretary/cabinet) cannot hold proxies.
+        const cabinet = (state.syndik_prod_syndics_v1 || []).find(
+          (s: any) => s.id === b.syndicId,
+        );
+        const forbiddenHolders = [
+          cabinet?.name,
+          ag.secretaryName,
+          "le syndic",
+          "syndic",
+        ]
+          .map(normalizePersonName)
+          .filter(Boolean);
+        check(
+          !forbiddenHolders.includes(normalizedProxy),
+          "Conformément à la Loi 18-00 (Art. 16-6), le syndic ou le secrétaire de séance ne peut recevoir de procuration.",
+          400,
+        );
+        // Count distinct mandants (owners) already represented by this mandataire (excluding target owner).
+        const otherMandants = new Set<string>();
+        let otherRepresentedTantiemes = 0;
+        for (const a of ag.attendees) {
+          if (
+            a.residentId !== args[1] &&
+            a.status === "represented" &&
+            normalizePersonName(a.proxyHolderName) === normalizedProxy
+          ) {
+            otherMandants.add(a.residentId);
+            otherRepresentedTantiemes += Number(a.tantiemes) || 0;
+          }
+        }
+        const totalMandants = otherMandants.size + 1;
+        check(
+          totalMandants <= 3,
+          "Conformément à la Loi 18-00 (Art. 16-6), un mandataire ne peut détenir plus de 3 procurations.",
+          400,
+        );
+        const targetTantiemes = attendees.reduce(
+          (sum: number, a: any) => sum + (Number(a.tantiemes) || 0),
+          0,
+        );
+        const totalRepresentedTantiemes =
+          otherRepresentedTantiemes + targetTantiemes;
+        const maxProxyTantiemes = (Number(ag.totalTantiemes) || 1000) * 0.1;
+        // Law 18-00 Art. 16-6: Cap at 10% of total votes, allowing single-mandant exception when one represented lot already exceeds 10%.
+        const singleOwnerException =
+          totalMandants === 1 && targetTantiemes > maxProxyTantiemes;
+        check(
+          totalRepresentedTantiemes <= maxProxyTantiemes + 1e-9 ||
+            singleOwnerException,
+          "Conformément à la Loi 18-00 (Art. 16-6), un mandataire ne peut cumuler des procurations dépassant 10% des tantièmes de la copropriété.",
+          400,
+        );
+      }
       for (const a of attendees) {
         a.status = args[2];
         a.proxyHolderName =
-          args[2] === "represented" ? str(args[3], 200) : undefined;
+          args[2] === "represented" ? trimmedProxyName : undefined;
       }
       if (ag.votingSnapshot) recomputeMeeting(ag);
       else Object.assign(ag, roll(b, ag.attendees));
