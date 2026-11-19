@@ -148,12 +148,17 @@ const ResidentDashboard: React.FC = () => {
     if (!foundBuilding && foundSyndic && userProfile?.buildingId) {
       foundBuilding = foundSyndic.buildings.find((b) => b.id === userProfile.buildingId);
     }
-    const foundApts = (foundBuilding?.apartments || []).filter(
-      (a) =>
-        (foundResident?.apartmentId && a.id === foundResident.apartmentId) ||
-        (userProfile?.apartmentId && a.id === userProfile.apartmentId) ||
-        (foundResident && (a.ownerId === foundResident.id || a.tenantId === foundResident.id))
-    );
+    const foundApts = (foundBuilding?.apartments || []).filter((a) => {
+      if (a.archivedAt) return false;
+      if (foundResident) {
+        if (a.ownerId === foundResident.id || a.tenantId === foundResident.id) return true;
+        if (foundResident.apartmentId && a.id === foundResident.apartmentId) {
+          return foundResident.isOwner ? !a.ownerId : !a.tenantId;
+        }
+        return false;
+      }
+      return Boolean(userProfile?.apartmentId && a.id === userProfile.apartmentId);
+    });
     const foundApt = foundApts[0];
 
     return {

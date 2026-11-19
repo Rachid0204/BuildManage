@@ -20,6 +20,7 @@ type ApartmentModalProps = {
   residents: Resident[];
   apartments: Apartment[];
   monthlySyndicFees: number;
+  totalTantiemes?: number;
 };
 
 const ApartmentModal: React.FC<ApartmentModalProps> = ({
@@ -30,6 +31,7 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
   residents,
   apartments,
   monthlySyndicFees,
+  totalTantiemes = 1000,
 }) => {
   const { t, tr } = useI18n();
   const [number, setNumber] = useState('');
@@ -85,6 +87,7 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
     if (!number.trim()) newErrors.number = t('apartments.modal.validation.numberRequired');
     const numberExists = apartments.some(
       (apt) =>
+        !apt.archivedAt &&
         apt.number.trim().toLowerCase() === number.trim().toLowerCase() &&
         apt.id !== existingApartment?.id
     );
@@ -134,6 +137,11 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
   const getResidentLabel = (resident: Resident) => {
     return `${resident.name} (${resident.phone})`;
   };
+
+  const activeResidents = useMemo(
+    () => residents.filter((r) => !r.archivedAt),
+    [residents]
+  );
 
   return (
     <Modal
@@ -186,6 +194,7 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
             >
               <option value="apartment">{tr('Appartement', 'شقة سكنية')}</option>
               <option value="duplex">{tr('Duplex / Penthouse', 'دوبلكس / بنتهاوس')}</option>
+              <option value="villa">{tr('Villa / Maison', 'فيلا / منزل')}</option>
               <option value="commercial">{tr('Local Commercial', 'محل تجاري')}</option>
               <option value="parking">{tr('Place de Parking', 'موقف سيارة')}</option>
               <option value="box">{tr('Box / Garage', 'مرآب / مستودع')}</option>
@@ -217,6 +226,8 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
             </label>
             <input
               type="number"
+              step="any"
+              min={0}
               required
               value={area}
               onChange={(e) => handleAreaChange(e.target.value)}
@@ -230,15 +241,19 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
 
           <div>
             <label className="block text-xs font-semibold text-teal-800 mb-1">
-              {tr('Tantièmes (/1000)', 'الحصص العقارية (/1000)')}
+              {tr(`Tantièmes (/${totalTantiemes})`, `الحصص العقارية (/${totalTantiemes})`)}
             </label>
             <input
               type="number"
+              min={0}
               value={tantiemes}
               onChange={(e) => setTantiemes(e.target.value)}
               placeholder="Ex: 100"
-              className="w-full px-3 py-2 border border-teal-300 rounded text-sm font-mono font-bold bg-teal-50 text-teal-900"
+              className={`w-full px-3 py-2 border rounded text-sm font-mono font-bold bg-teal-50 text-teal-900 ${
+                errors.tantiemes ? 'border-red-500' : 'border-teal-300'
+              }`}
             />
+            {errors.tantiemes && <p className="text-xs text-red-600 mt-1">{errors.tantiemes}</p>}
           </div>
 
           <div>
@@ -247,11 +262,16 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
             </label>
             <input
               type="number"
+              min={0}
+              step="any"
               value={monthlyFees}
               onChange={(e) => setMonthlyFees(e.target.value)}
               placeholder="Ex: 250"
-              className="w-full px-3 py-2 border border-slate-300 rounded text-sm font-mono"
+              className={`w-full px-3 py-2 border rounded text-sm font-mono ${
+                errors.monthlyFees ? 'border-red-500' : 'border-slate-300'
+              }`}
             />
+            {errors.monthlyFees && <p className="text-xs text-red-600 mt-1">{errors.monthlyFees}</p>}
           </div>
         </div>
 
@@ -267,7 +287,7 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
             <option value="">
               {tr('-- Lot non assigné / Sans copropriétaire --', '-- وحدة غير معينة / بدون مالك --')}
             </option>
-            {residents
+            {activeResidents
               .filter((r) => r.isOwner)
               .map((r) => (
                 <option key={r.id} value={r.id}>
@@ -315,7 +335,7 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
                 '-- بدون مكتري (مشغولة من المالك أو شاغرة) --'
               )}
             </option>
-            {residents
+            {activeResidents
               .filter((r) => !r.isOwner)
               .map((r) => (
                 <option key={r.id} value={r.id}>
@@ -343,12 +363,26 @@ type DraftBulkApartment = {
   coproType: Apartment['coproType'];
 };
 
+const MAX_BULK_LOTS = 500;
+
+function toAlphaSuffix(indexOneBased: number): string {
+  let n = Math.max(1, indexOneBased);
+  let out = '';
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    out = String.fromCharCode(65 + rem) + out;
+    n = Math.floor((n - 1) / 26);
+  }
+  return out;
+}
+
 type BulkApartmentModalProps = {
   isOpen: boolean;
   onClose: () => void;
   onBulkCreate: (apartments: Omit<Apartment, 'id' | 'buildingId'>[]) => Promise<unknown> | void;
   existingApartments: Apartment[];
   defaultMonthlyFees: number;
+  totalTantiemes?: number;
 };
 
 const BulkApartmentModal: React.FC<BulkApartmentModalProps> = ({
@@ -357,6 +391,7 @@ const BulkApartmentModal: React.FC<BulkApartmentModalProps> = ({
   onBulkCreate,
   existingApartments,
   defaultMonthlyFees,
+  totalTantiemes = 1000,
 }) => {
   const { tr } = useI18n();
   const [prefix, setPrefix] = useState('');
@@ -368,36 +403,58 @@ const BulkApartmentModal: React.FC<BulkApartmentModalProps> = ({
   >('floor_num');
   const [coproType, setCoproType] = useState<Apartment['coproType']>('apartment');
   const [defaultArea, setDefaultArea] = useState('85');
-  const [monthlyFees, setMonthlyFees] = useState(String(defaultMonthlyFees || 250));
+  const [monthlyFees, setMonthlyFees] = useState(String(defaultMonthlyFees ?? 250));
   const [distributeTantiemes, setDistributeTantiemes] = useState(true);
   const [fixedTantiemes, setFixedTantiemes] = useState('50');
   const [previewRows, setPreviewRows] = useState<DraftBulkApartment[]>([]);
+  const [wasCapped, setWasCapped] = useState(false);
 
   const existingNumbersSet = useMemo(
-    () => new Set(existingApartments.map((a) => a.number.trim().toLowerCase())),
+    () =>
+      new Set(
+        existingApartments
+          .filter((a) => !a.archivedAt)
+          .map((a) => a.number.trim().toLowerCase())
+      ),
     [existingApartments]
   );
 
   const generateDrafts = () => {
     const startF = parseInt(floorStart, 10);
     const endF = parseInt(floorEnd, 10);
-    const perFloor = Math.max(1, Math.min(30, parseInt(unitsPerFloor, 10) || 1));
-    const areaVal = Math.max(1, parseFloat(defaultArea) || 80);
-    const feesVal = Math.max(0, parseFloat(monthlyFees) || defaultMonthlyFees || 250);
+    const perFloor = Math.max(1, Math.min(100, parseInt(unitsPerFloor, 10) || 1));
+    const parsedArea = parseFloat(defaultArea);
+    const areaVal = Number.isFinite(parsedArea) && parsedArea >= 0 ? parsedArea : 80;
+    const parsedFees = parseFloat(monthlyFees);
+    const feesVal =
+      Number.isFinite(parsedFees) && parsedFees >= 0
+        ? parsedFees
+        : (defaultMonthlyFees ?? 250);
+    const parsedFixed = parseInt(fixedTantiemes, 10);
+    const fixedTantiemeVal = Number.isFinite(parsedFixed) && parsedFixed >= 0 ? parsedFixed : 50;
 
-    if (isNaN(startF) || isNaN(endF) || endF < startF) return;
+    if (isNaN(startF) || isNaN(endF) || endF < startF) {
+      setPreviewRows([]);
+      setWasCapped(false);
+      return;
+    }
 
-    const totalUnits = (endF - startF + 1) * perFloor;
-    const autoTantieme =
-      distributeTantiemes && totalUnits > 0
-        ? Math.max(1, Math.round(1000 / totalUnits))
-        : Math.max(1, parseInt(fixedTantiemes, 10) || 50);
+    const rawTotalUnits = (endF - startF + 1) * perFloor;
+    const totalUnits = Math.min(MAX_BULK_LOTS, rawTotalUnits);
+    setWasCapped(rawTotalUnits > MAX_BULK_LOTS);
+
+    const targetTotal = totalTantiemes > 0 ? totalTantiemes : 1000;
+    const baseTantieme =
+      distributeTantiemes && totalUnits > 0 ? Math.floor(targetTotal / totalUnits) : fixedTantiemeVal;
+    const remainderTantiemes =
+      distributeTantiemes && totalUnits > 0 ? targetTotal - baseTantieme * totalUnits : 0;
 
     const rows: DraftBulkApartment[] = [];
-    let seqCounter = existingApartments.length + 1;
+    let seqCounter = existingApartments.filter((a) => !a.archivedAt).length + 1;
+    let unitIndex = 0;
 
-    for (let fl = startF; fl <= endF; fl++) {
-      for (let u = 1; u <= perFloor; u++) {
+    for (let fl = startF; fl <= endF && rows.length < MAX_BULK_LOTS; fl++) {
+      for (let u = 1; u <= perFloor && rows.length < MAX_BULK_LOTS; u++) {
         let numStr = '';
         if (numberingPattern === 'floor_num') {
           const flPrefix = fl === 0 ? 'RDC-' : `${fl}`;
@@ -406,19 +463,24 @@ const BulkApartmentModal: React.FC<BulkApartmentModalProps> = ({
               ? `${prefix}${flPrefix}${u}`
               : `${prefix}${fl}${u < 10 ? `0${u}` : u}`;
         } else if (numberingPattern === 'floor_alpha') {
-          const letter = String.fromCharCode(64 + ((u - 1) % 26) + 1);
+          const letter = toAlphaSuffix(u);
           numStr = `${prefix}${fl}${letter}`;
         } else {
           numStr = `${prefix}${seqCounter}`;
         }
         seqCounter++;
 
+        const rowTantiemes = distributeTantiemes
+          ? baseTantieme + (unitIndex < remainderTantiemes ? 1 : 0)
+          : fixedTantiemeVal;
+        unitIndex++;
+
         rows.push({
           tempId: `draft-${fl}-${u}-${Math.random().toString(36).slice(2, 6)}`,
           number: numStr,
           floor: fl,
           area: areaVal,
-          tantiemes: autoTantieme,
+          tantiemes: rowTantiemes,
           monthlyFees: feesVal,
           coproType: coproType || 'apartment',
         });
@@ -443,6 +505,7 @@ const BulkApartmentModal: React.FC<BulkApartmentModalProps> = ({
     monthlyFees,
     distributeTantiemes,
     fixedTantiemes,
+    totalTantiemes,
   ]);
 
   const handleRowChange = (
@@ -459,27 +522,50 @@ const BulkApartmentModal: React.FC<BulkApartmentModalProps> = ({
     setPreviewRows((prev) => prev.filter((r) => r.tempId !== tempId));
   };
 
-  const validNonDuplicateRows = useMemo(
-    () =>
-      previewRows.filter(
-        (r) =>
-          r.number.trim() !== '' &&
-          !existingNumbersSet.has(r.number.trim().toLowerCase())
-      ),
-    [previewRows, existingNumbersSet]
-  );
+  const { validNonDuplicateRows, duplicateReasonById } = useMemo(() => {
+    const seenInBatch = new Set<string>();
+    const reasonMap = new Map<string, 'existing' | 'batch' | 'empty'>();
+    const valid: DraftBulkApartment[] = [];
+    for (const r of previewRows) {
+      const key = r.number.trim().toLowerCase();
+      if (!key) {
+        reasonMap.set(r.tempId, 'empty');
+      } else if (existingNumbersSet.has(key)) {
+        reasonMap.set(r.tempId, 'existing');
+      } else if (seenInBatch.has(key)) {
+        reasonMap.set(r.tempId, 'batch');
+      } else {
+        seenInBatch.add(key);
+        valid.push(r);
+      }
+    }
+    return { validNonDuplicateRows: valid, duplicateReasonById: reasonMap };
+  }, [previewRows, existingNumbersSet]);
 
   const duplicateCount = previewRows.length - validNonDuplicateRows.length;
 
   const handleConfirmBulk = async () => {
-    if (validNonDuplicateRows.length === 0) throw new Error(tr('Aucun lot valide à créer. Vérifiez les numéros et les doublons.', 'لا توجد وحدات صالحة للإنشاء. تحقق من الأرقام والتكرارات.'));
+    if (validNonDuplicateRows.length === 0)
+      throw new Error(
+        tr(
+          'Aucun lot valide à créer. Vérifiez les numéros et les doublons.',
+          'لا توجد وحدات صالحة للإنشاء. تحقق من الأرقام والتكرارات.'
+        )
+      );
+    if (validNonDuplicateRows.length > MAX_BULK_LOTS)
+      throw new Error(
+        tr(
+          `Maximum ${MAX_BULK_LOTS} lots par création en masse.`,
+          `الحد الأقصى هو ${MAX_BULK_LOTS} وحدة في كل إنشاء جماعي.`
+        )
+      );
     await onBulkCreate(
       validNonDuplicateRows.map((r) => ({
         number: r.number.trim(),
         floor: Number(r.floor),
-        area: Number(r.area),
-        tantiemes: Number(r.tantiemes),
-        monthlyFees: Number(r.monthlyFees),
+        area: Math.max(0, Number(r.area)),
+        tantiemes: Math.max(0, Number(r.tantiemes)),
+        monthlyFees: Math.max(0, Number(r.monthlyFees)),
         coproType: r.coproType,
         ownerId: null,
         tenantId: null,
@@ -526,6 +612,14 @@ const BulkApartmentModal: React.FC<BulkApartmentModalProps> = ({
       }
     >
       <div className="space-y-4">
+        {wasCapped && (
+          <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-800">
+            {tr(
+              `La génération a été plafonnée à ${MAX_BULK_LOTS} lots par lot de création.`,
+              `تم تحديد التوليد في حد أقصى قدره ${MAX_BULK_LOTS} وحدة لكل عملية إنشاء.`
+            )}
+          </div>
+        )}
         <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div>
@@ -569,7 +663,7 @@ const BulkApartmentModal: React.FC<BulkApartmentModalProps> = ({
               <input
                 type="number"
                 min={1}
-                max={30}
+                max={100}
                 value={unitsPerFloor}
                 onChange={(e) => setUnitsPerFloor(e.target.value)}
                 className="w-full px-2.5 py-1.5 border border-slate-300 rounded text-xs bg-white"
@@ -603,6 +697,7 @@ const BulkApartmentModal: React.FC<BulkApartmentModalProps> = ({
               >
                 <option value="apartment">{tr('Appartement', 'شقة')}</option>
                 <option value="duplex">{tr('Duplex', 'دوبلكس')}</option>
+                <option value="villa">{tr('Villa', 'فيلا')}</option>
                 <option value="commercial">{tr('Commercial', 'محل تجاري')}</option>
                 <option value="parking">{tr('Parking', 'موقف سيارة')}</option>
                 <option value="box">{tr('Box / Garage', 'مرآب')}</option>
@@ -614,6 +709,8 @@ const BulkApartmentModal: React.FC<BulkApartmentModalProps> = ({
               </label>
               <input
                 type="number"
+                min={0}
+                step="any"
                 value={defaultArea}
                 onChange={(e) => setDefaultArea(e.target.value)}
                 className="w-full px-2.5 py-1.5 border border-slate-300 rounded text-xs bg-white"
@@ -625,6 +722,8 @@ const BulkApartmentModal: React.FC<BulkApartmentModalProps> = ({
               </label>
               <input
                 type="number"
+                min={0}
+                step="any"
                 value={monthlyFees}
                 onChange={(e) => setMonthlyFees(e.target.value)}
                 className="w-full px-2.5 py-1.5 border border-slate-300 rounded text-xs bg-white"
@@ -642,8 +741,8 @@ const BulkApartmentModal: React.FC<BulkApartmentModalProps> = ({
               />
               <span>
                 {tr(
-                  'Répartir automatiquement 1000 tantièmes sur la série générée',
-                  'توزيع 1000 حصة عقارية تلقائياً على المجموعة المُنشأة'
+                  `Répartir automatiquement ${totalTantiemes} tantièmes sur la série générée`,
+                  `توزيع ${totalTantiemes} حصة عقارية تلقائياً على المجموعة المُنشأة`
                 )}
               </span>
             </label>
@@ -654,6 +753,7 @@ const BulkApartmentModal: React.FC<BulkApartmentModalProps> = ({
                 </span>
                 <input
                   type="number"
+                  min={0}
                   value={fixedTantiemes}
                   onChange={(e) => setFixedTantiemes(e.target.value)}
                   className="w-20 px-2 py-1 border border-slate-300 rounded text-xs bg-white font-mono"
@@ -687,7 +787,8 @@ const BulkApartmentModal: React.FC<BulkApartmentModalProps> = ({
               </thead>
               <tbody className="divide-y divide-slate-100 bg-white">
                 {previewRows.map((row) => {
-                  const isDup = existingNumbersSet.has(row.number.trim().toLowerCase());
+                  const dupReason = duplicateReasonById.get(row.tempId);
+                  const isDup = Boolean(dupReason);
                   return (
                     <tr
                       key={row.tempId}
@@ -704,9 +805,19 @@ const BulkApartmentModal: React.FC<BulkApartmentModalProps> = ({
                             isDup ? 'border-amber-500 text-amber-800' : 'border-slate-200'
                           }`}
                         />
-                        {isDup && (
+                        {dupReason === 'existing' && (
                           <span className="block text-[10px] text-amber-700">
                             {tr('Existe déjà', 'موجود مسبقاً')}
+                          </span>
+                        )}
+                        {dupReason === 'batch' && (
+                          <span className="block text-[10px] text-amber-700">
+                            {tr('Doublon dans la série', 'مكرر في القائمة')}
+                          </span>
+                        )}
+                        {dupReason === 'empty' && (
+                          <span className="block text-[10px] text-rose-600">
+                            {tr('Numéro requis', 'الرقم مطلوب')}
                           </span>
                         )}
                       </td>
@@ -727,42 +838,50 @@ const BulkApartmentModal: React.FC<BulkApartmentModalProps> = ({
                       <td className="px-2.5 py-1.5">
                         <input
                           type="number"
+                          min={0}
+                          step="any"
                           value={row.area}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            const v = parseFloat(e.target.value);
                             handleRowChange(
                               row.tempId,
                               'area',
-                              parseFloat(e.target.value) || 0
-                            )
-                          }
+                              Number.isFinite(v) && v >= 0 ? v : 0
+                            );
+                          }}
                           className="w-16 px-2 py-1 border border-slate-200 rounded text-xs font-mono"
                         />
                       </td>
                       <td className="px-2.5 py-1.5">
                         <input
                           type="number"
+                          min={0}
                           value={row.tantiemes}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            const v = parseInt(e.target.value, 10);
                             handleRowChange(
                               row.tempId,
                               'tantiemes',
-                              parseInt(e.target.value, 10) || 0
-                            )
-                          }
+                              Number.isFinite(v) && v >= 0 ? v : 0
+                            );
+                          }}
                           className="w-16 px-2 py-1 border border-teal-200 bg-teal-50/50 rounded text-xs font-mono font-bold text-teal-900"
                         />
                       </td>
                       <td className="px-2.5 py-1.5">
                         <input
                           type="number"
+                          min={0}
+                          step="any"
                           value={row.monthlyFees}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            const v = parseFloat(e.target.value);
                             handleRowChange(
                               row.tempId,
                               'monthlyFees',
-                              parseFloat(e.target.value) || 0
-                            )
-                          }
+                              Number.isFinite(v) && v >= 0 ? v : 0
+                            );
+                          }}
                           className="w-20 px-2 py-1 border border-slate-200 rounded text-xs font-mono"
                         />
                       </td>
@@ -815,26 +934,40 @@ const Apartments: React.FC<ApartmentsProps> = ({
   const queryClient = useQueryClient();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
-  const [selectedApartment, setSelectedApartment] = useState<Apartment | null>(null);
+  const [selectedApartmentId, setSelectedApartmentId] = useState<string | null>(null);
   const [deletingApartment, setDeletingApartment] = useState<Apartment | null>(null);
 
-  const residentMap = useMemo(
-    () => new Map(residents.map((r) => [r.id, r.name])),
+  const activeApartments = useMemo(
+    () => building.apartments.filter((a) => !a.archivedAt),
+    [building.apartments]
+  );
+  const activeResidents = useMemo(
+    () => residents.filter((r) => !r.archivedAt),
     [residents]
   );
-  const totalCount = building.apartments.length;
+  const selectedApartment = useMemo(
+    () => (selectedApartmentId ? activeApartments.find((a) => a.id === selectedApartmentId) || null : null),
+    [activeApartments, selectedApartmentId]
+  );
+
+  const residentMap = useMemo(
+    () => new Map(activeResidents.map((r) => [r.id, r.name])),
+    [activeResidents]
+  );
+  const targetTantiemes = building.totalTantiemes || 1000;
+  const totalCount = activeApartments.length;
   const totalTantiemesSum = useMemo(
-    () => building.apartments.reduce((sum, a) => sum + (a.tantiemes || 0), 0),
-    [building.apartments]
+    () => activeApartments.reduce((sum, a) => sum + (a.tantiemes ?? 0), 0),
+    [activeApartments]
   );
 
   const handleEdit = (apartment: Apartment) => {
-    setSelectedApartment(apartment);
+    setSelectedApartmentId(apartment.id);
     setIsModalOpen(true);
   };
 
   const handleAdd = () => {
-    setSelectedApartment(null);
+    setSelectedApartmentId(null);
     setIsModalOpen(true);
   };
 
@@ -848,6 +981,7 @@ const Apartments: React.FC<ApartmentsProps> = ({
   const typeLabels: Record<string, string> = {
     apartment: tr('Appartement', 'شقة'),
     duplex: tr('Duplex', 'دوبلكس'),
+    villa: tr('Villa', 'فيلا'),
     commercial: tr('Commercial', 'تجاري'),
     parking: tr('Parking', 'موقف سيارة'),
     box: tr('Box / Garage', 'مرآب'),
@@ -857,10 +991,13 @@ const Apartments: React.FC<ApartmentsProps> = ({
     <div className="space-y-6">
       <ApartmentModal
         isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
+        onClose={() => {
+          setIsModalOpen(false);
+          setSelectedApartmentId(null);
+        }}
         onSave={async (apartment, ownerTransferReason) => {
           if ('id' in apartment) {
-            const prevApt = building.apartments.find((a) => a.id === apartment.id);
+            const prevApt = activeApartments.find((a) => a.id === apartment.id);
             const prevOwner = prevApt?.ownerId || null;
             const nextOwner = apartment.ownerId || null;
             let ownerAfterTransfer = nextOwner;
@@ -894,9 +1031,10 @@ const Apartments: React.FC<ApartmentsProps> = ({
           }
         }}
         existingApartment={selectedApartment}
-        residents={residents}
-        apartments={building.apartments}
+        residents={activeResidents}
+        apartments={activeApartments}
         monthlySyndicFees={building.monthlySyndicFees}
+        totalTantiemes={targetTantiemes}
       />
 
       {onAddApartmentsBulk && (
@@ -904,31 +1042,33 @@ const Apartments: React.FC<ApartmentsProps> = ({
           isOpen={isBulkModalOpen}
           onClose={() => setIsBulkModalOpen(false)}
           onBulkCreate={onAddApartmentsBulk}
-          existingApartments={building.apartments}
+          existingApartments={activeApartments}
           defaultMonthlyFees={building.monthlySyndicFees}
+          totalTantiemes={targetTantiemes}
         />
       )}
 
-      {/* Delete Confirmation Modal */}
+      {/* Archive Confirmation Modal */}
       <Modal
         isOpen={!!deletingApartment}
         onClose={() => setDeletingApartment(null)}
-        title={`${tr('Supprimer le lot', 'حذف الشقة / الوحدة')} ${deletingApartment?.number || ''}`}
+        onSubmit={confirmDelete}
+        title={`${tr('Archiver le lot', 'أرشفة الشقة / الوحدة')} ${deletingApartment?.number || ''}`}
         footer={
           <>
             <Button variant="secondary" onClick={() => setDeletingApartment(null)}>
               {tr('Annuler', 'إلغاء')}
             </Button>
-            <Button variant="danger" onClick={confirmDelete} className="ms-3">
-              {tr('Supprimer le lot', 'حذف الوحدة')}
+            <Button variant="danger" type="submit" className="ms-3">
+              {tr('Archiver le lot', 'أرشفة الوحدة')}
             </Button>
           </>
         }
       >
         <p className="text-sm text-slate-600">
           {tr(
-            `Confirmez-vous la suppression du lot ${deletingApartment?.number} (Étage ${deletingApartment?.floor}) ? Les résidents rattachés seront automatiquement désassignés de ce lot.`,
-            `هل تؤكدون حذف الشقة / الوحدة ${deletingApartment?.number} (الطابق ${deletingApartment?.floor})؟ سيتم إلغاء ربط السكان المسجلين بهذه الوحدة تلقائياً.`
+            `Confirmez-vous l'archivage du lot ${deletingApartment?.number} (Étage ${deletingApartment?.floor}) ? Les résidents rattachés seront désassignés de ce lot et l'historique sera conservé.`,
+            `هل تؤكدون أرشفة الشقة / الوحدة ${deletingApartment?.number} (الطابق ${deletingApartment?.floor})؟ سيتم إلغاء ربط السكان المسجلين مع الاحتفاظ بالسجل التاريخي.`
           )}
         </p>
       </Modal>
@@ -949,8 +1089,8 @@ const Apartments: React.FC<ApartmentsProps> = ({
         <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="secondary"
-            onClick={() => exportApartmentsPDF(building, residents)}
-            disabled={building.apartments.length === 0}
+            onClick={() => exportApartmentsPDF(building, activeResidents)}
+            disabled={activeApartments.length === 0}
             className="flex items-center gap-1.5 text-xs sm:text-sm"
             title={tr(
               "Exporter l'inventaire des lots et tantièmes en PDF (Loi 18-00)",
@@ -962,8 +1102,8 @@ const Apartments: React.FC<ApartmentsProps> = ({
           </Button>
           <Button
             variant="secondary"
-            onClick={() => exportApartmentsCSV(building, residents)}
-            disabled={building.apartments.length === 0}
+            onClick={() => exportApartmentsCSV(building, activeResidents)}
+            disabled={activeApartments.length === 0}
             className="flex items-center gap-1.5 text-xs sm:text-sm"
             title={tr(
               "Exporter l'inventaire des lots au format CSV (Excel)",
@@ -999,7 +1139,7 @@ const Apartments: React.FC<ApartmentsProps> = ({
             {totalCount} {tr('lots', 'شقة')}
           </p>
           <p className="text-[11px] text-slate-500 mt-0.5">
-            {building.apartments.filter((a) => a.ownerId || a.tenantId).length}{' '}
+            {activeApartments.filter((a) => a.ownerId || a.tenantId).length}{' '}
             {tr('lots occupés / assignés', 'وحدة مشغولة / معينة')}
           </p>
         </Card>
@@ -1011,27 +1151,27 @@ const Apartments: React.FC<ApartmentsProps> = ({
                 {tr('Total Tantièmes Enregistrés', 'مجموع الحصص العقارية المسجلة')}
               </p>
               <p className="text-2xl font-bold font-mono text-indigo-900 mt-1">
-                {totalTantiemesSum} / 1000
+                {totalTantiemesSum} / {targetTantiemes}
               </p>
             </div>
-            {totalTantiemesSum !== 1000 && totalCount > 0 && onRebalanceTantiemes && (
+            {totalTantiemesSum !== targetTantiemes && totalCount > 0 && onRebalanceTantiemes && (
               <button
                 type="button"
                 onClick={onRebalanceTantiemes}
                 className="px-2.5 py-1 text-[11px] font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-md transition-colors"
                 title={tr(
-                  'Répartir proportionnellement à la superficie sur 1000',
-                  'توزيع الحصص تناسبياً حسب المساحة على 1000'
+                  `Répartir proportionnellement à la superficie sur ${targetTantiemes}`,
+                  `توزيع الحصص تناسبياً حسب المساحة على ${targetTantiemes}`
                 )}
               >
-                {tr('Équilibrer / 1000', 'موازنة / 1000')}
+                {tr(`Équilibrer / ${targetTantiemes}`, `موازنة / ${targetTantiemes}`)}
               </button>
             )}
           </div>
           <p className="text-[11px] text-slate-500 mt-0.5">
-            {totalTantiemesSum === 1000
-              ? tr('✓ Total exact (1000/1000)', '✓ المجموع مضبوط (1000/1000)')
-              : tr('⚠ À équilibrer sur 1000 millièmes', '⚠ يجب موازنة المجموع على 1000 جزء')}
+            {totalTantiemesSum === targetTantiemes
+              ? tr(`✓ Total exact (${targetTantiemes}/${targetTantiemes})`, `✓ المجموع مضبوط (${targetTantiemes}/${targetTantiemes})`)
+              : tr(`⚠ À équilibrer sur ${targetTantiemes} quotes-parts`, `⚠ يجب موازنة المجموع على ${targetTantiemes} حصة`)}
           </p>
         </Card>
 
@@ -1040,7 +1180,7 @@ const Apartments: React.FC<ApartmentsProps> = ({
             {tr('Superficie Totale Privative', 'المساحة الإجمالية الخاصة')}
           </p>
           <p className="text-2xl font-bold font-mono text-emerald-800 mt-1">
-            {building.apartments.reduce((sum, a) => sum + (a.area || 0), 0)} m²
+            {activeApartments.reduce((sum, a) => sum + (a.area || 0), 0)} m²
           </p>
           <p className="text-[11px] text-slate-500 mt-0.5">
             {tr('Base du calcul de répartition', 'أساس احتساب توزيع التكاليف')}
@@ -1050,7 +1190,7 @@ const Apartments: React.FC<ApartmentsProps> = ({
 
       {/* Mobile Card List (< md) */}
       <div className="md:hidden space-y-3">
-        {building.apartments.map((apartment: Apartment) => (
+        {activeApartments.map((apartment: Apartment) => (
           <Card key={apartment.id} className="p-4 border border-slate-200">
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -1059,7 +1199,7 @@ const Apartments: React.FC<ApartmentsProps> = ({
                     {tr('Lot', 'شقة')} {apartment.number}
                   </span>
                   <span className="text-xs text-slate-500">
-                    · {typeLabels[apartment.coproType || 'apartment']} · {tr('Étage', 'الطابق')}{' '}
+                    · {typeLabels[apartment.coproType || 'apartment'] || apartment.coproType} · {tr('Étage', 'الطابق')}{' '}
                     {apartment.floor}
                   </span>
                 </div>
@@ -1089,7 +1229,7 @@ const Apartments: React.FC<ApartmentsProps> = ({
                   type="button"
                   onClick={() => setDeletingApartment(apartment)}
                   className="p-2 text-slate-500 hover:text-rose-600 rounded-lg hover:bg-rose-50 min-w-[40px] min-h-[40px] flex items-center justify-center"
-                  title={tr('Supprimer', 'حذف')}
+                  title={tr('Archiver', 'أرشفة')}
                 >
                   <TrashIcon />
                 </button>
@@ -1109,7 +1249,7 @@ const Apartments: React.FC<ApartmentsProps> = ({
                   {tr('Tantièmes', 'الحصص')}
                 </span>
                 <span className="font-mono font-bold text-teal-700">
-                  {apartment.tantiemes || 100} / 1000
+                  {apartment.tantiemes ?? 100} / {targetTantiemes}
                 </span>
               </div>
               <div className="text-end">
@@ -1145,7 +1285,7 @@ const Apartments: React.FC<ApartmentsProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white">
-              {building.apartments.map((apartment: Apartment) => (
+              {activeApartments.map((apartment: Apartment) => (
                 <tr
                   key={apartment.id}
                   className="hover:bg-slate-50 transition-colors h-11"
@@ -1154,7 +1294,7 @@ const Apartments: React.FC<ApartmentsProps> = ({
                     {apartment.number}
                   </td>
                   <td className="px-4 py-2 text-slate-600">
-                    {typeLabels[apartment.coproType || 'apartment']}
+                    {typeLabels[apartment.coproType || 'apartment'] || apartment.coproType}
                   </td>
                   <td className="px-4 py-2 text-slate-600">{apartment.floor}</td>
                   <td className="px-4 py-2 font-medium text-slate-900">
@@ -1175,13 +1315,14 @@ const Apartments: React.FC<ApartmentsProps> = ({
                     {apartment.area} m²
                   </td>
                   <td className="px-4 py-2 text-end font-mono font-bold text-teal-700">
-                    {apartment.tantiemes || 100} / 1000
+                    {apartment.tantiemes ?? 100} / {targetTantiemes}
                   </td>
                   <td className="px-4 py-2 text-end font-mono text-slate-800">
                     {apartment.monthlyFees} MAD
                   </td>
                   <td className="px-4 py-2 text-end space-x-1.5 whitespace-nowrap">
                     <button
+                      type="button"
                       onClick={() => handleEdit(apartment)}
                       className="p-1 text-slate-400 hover:text-slate-600 rounded"
                       title={tr('Modifier', 'تعديل')}
@@ -1189,16 +1330,17 @@ const Apartments: React.FC<ApartmentsProps> = ({
                       <PencilIcon />
                     </button>
                     <button
+                      type="button"
                       onClick={() => setDeletingApartment(apartment)}
                       className="p-1 text-slate-400 hover:text-rose-600 rounded"
-                      title={tr('Supprimer', 'حذف')}
+                      title={tr('Archiver', 'أرشفة')}
                     >
                       <TrashIcon />
                     </button>
                   </td>
                 </tr>
               ))}
-              {building.apartments.length === 0 && (
+              {activeApartments.length === 0 && (
                 <tr>
                   <td colSpan={9} className="px-4 py-8 text-center text-slate-400">
                     {tr(

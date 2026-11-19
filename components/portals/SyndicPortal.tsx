@@ -7,12 +7,13 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth, getHomeRouteForRole } from '../../contexts/AuthContext';
 import { getBuildingCapacity } from '../../utils/subscriptionPolicy';
 import { useBuilding } from '../../contexts/BuildingContext';
+import { useToast } from '../common/Toast';
 import { useI18n } from '../../hooks/useI18n';
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import Loading from '../../components/common/Loading';
 
 import { saveSyndic, addBuilding, updateBuilding, deleteBuilding, addResident, updateResident, deleteResident, regenerateResidentCredentials, addApartment, addApartmentsBulk, rebalanceBuildingTantiemes, updateApartment, deleteApartment, generateMonthlyCharges, addAnnouncement } from '../../firebase/services';
-import type { Building, Resident, Apartment, View } from '../../types';
+import type { Building, Resident, Apartment, View, Syndic } from '../../types';
 
 import RouteErrorBoundary from '../common/RouteErrorBoundary';
 // Lazy load views for performance
@@ -52,14 +53,15 @@ const VIEW_TO_ROUTE: Record<View, string> = {
 
 const SyndicPortal: React.FC = () => {
   const { userProfile } = useAuth();
-  const { selectedBuilding: storedBuilding, setSelectedBuilding, syndic } = useBuilding();
+  const { selectedBuilding: storedBuilding, selectedBuildingId, setSelectedBuilding, syndic, setSyndicData } = useBuilding();
+  const { showToast } = useToast();
   const activeBuildings = (syndic?.buildings || []).filter((b) => !b.archivedAt);
   const selectedBuilding = storedBuilding || activeBuildings[0] || null;
   React.useEffect(() => {
-    if (!storedBuilding && activeBuildings[0]) {
+    if (!selectedBuildingId && !storedBuilding && activeBuildings[0]) {
       setSelectedBuilding(activeBuildings[0]);
     }
-  }, [storedBuilding, activeBuildings, setSelectedBuilding]);
+  }, [selectedBuildingId, storedBuilding, activeBuildings, setSelectedBuilding]);
   const { tr } = useI18n();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -81,10 +83,33 @@ const SyndicPortal: React.FC = () => {
       > & { apartments?: Omit<Apartment, 'id' | 'buildingId'>[] };
     }) => addBuilding(data.syndicId, data.building),
     onSuccess: (created) => {
-      queryClient.invalidateQueries({ queryKey: ['syndics'] });
       if (created && 'id' in created) {
-        setSelectedBuilding(created as Building);
+        const createdBuilding = created as Building;
+        queryClient.setQueryData<Syndic[]>(['syndics'], (prev) =>
+          Array.isArray(prev)
+            ? prev.map((s) =>
+                s.id === createdBuilding.syndicId
+                  ? {
+                      ...s,
+                      buildings: s.buildings.some((b) => b.id === createdBuilding.id)
+                        ? s.buildings
+                        : [...s.buildings, createdBuilding],
+                    }
+                  : s
+              )
+            : prev
+        );
+        if (syndic && syndic.id === createdBuilding.syndicId) {
+          setSyndicData({
+            ...syndic,
+            buildings: syndic.buildings.some((b) => b.id === createdBuilding.id)
+              ? syndic.buildings
+              : [...syndic.buildings, createdBuilding],
+          });
+        }
+        setSelectedBuilding(createdBuilding);
       }
+      queryClient.invalidateQueries({ queryKey: ['syndics'] });
     },
   });
 
@@ -149,7 +174,13 @@ const SyndicPortal: React.FC = () => {
 
   const rebalanceTantiemesMutation = useMutation({
     mutationFn: rebalanceBuildingTantiemes,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['syndics'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['syndics'] });
+      showToast(tr('Tantièmes rééquilibrés avec succès.', 'تمت إعادة موازنة الأسهم بنجاح.'), 'success');
+    },
+    onError: (err: Error) => {
+      showToast(err.message || tr('Impossible de rééquilibrer les tantièmes.', 'تعذرت إعادة موازنة الأسهم.'), 'error');
+    },
   });
 
   const updateApartmentMutation = useMutation({
@@ -215,7 +246,10 @@ const SyndicPortal: React.FC = () => {
     const generatedApartments: Omit<Apartment, 'id' | 'buildingId'>[] = [];
     const safeFloors = Math.max(1, floorsCount || 4);
     const unitsPerFloor = Math.max(1, Math.ceil(numApartments / safeFloors));
-    const baseTantieme = numApartments > 0 ? Math.floor(1000 / numApartments) : 100;
+    const targetTotal = buildingData.totalTantiemes || 1000;
+    const baseTantieme = numApartments > 0 ? Math.floor(targetTotal / numApartments) : 100;
+    const remainderTantiemes =
+      numApartments > 0 ? targetTotal - baseTantieme * numApartments : 0;
 
     for (let i = 1; i <= numApartments; i++) {
       const floorIndex = Math.min(
@@ -241,10 +275,7 @@ const SyndicPortal: React.FC = () => {
         number,
         floor: floorIndex,
         area: 80,
-        tantiemes:
-          i === 1
-            ? baseTantieme + (1000 - baseTantieme * numApartments)
-            : baseTantieme,
+        tantiemes: baseTantieme + (i <= remainderTantiemes ? 1 : 0),
         coproType: 'apartment',
         ownerId: null,
         tenantId: null,

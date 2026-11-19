@@ -135,6 +135,8 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
       newErrors.reserveFundRate = tr('Le fonds de réserve doit être compris entre 0 et 100 %.', 'نسبة الاحتياطي يجب أن تكون بين 0 و100٪.');
     if (!existingBuilding && (!Number.isInteger(Number(floorsCount)) || Number(floorsCount) < 1))
       newErrors.floorsCount = tr('Indiquez un nombre entier de niveaux supérieur à zéro.', 'أدخل عدداً صحيحاً موجباً للطوابق.');
+    if (bankRib.trim() && !/^\d{24}$/.test(bankRib.replace(/\s/g, '')))
+      newErrors.bankRib = tr('Le RIB doit contenir exactement 24 chiffres.', 'يجب أن يتكون رقم الحساب البنكي RIB من 24 رقماً بالضبط.');
     setErrors(newErrors);
     if (Object.keys(newErrors).length) throw new Error(Object.values(newErrors).join("\n"));
     return true;
@@ -143,24 +145,33 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
   const handleSave = async () => {
     if (!validate()) return;
 
-    const payload: BuildingFormPayload = {
-      name: name.trim(),
-      address: address.trim(),
-      city: city.trim(),
-      monthlySyndicFees: parseFloat(monthlyFees),
-      reserveFundRate: Number(reserveFundRate),
-      bankName: bankName.trim() || undefined,
-      bankRib: bankRib.trim() || undefined,
-      managerName: managerName.trim() || undefined,
-      managerPhone: managerPhone.trim() || undefined,
-    };
-
+    const cleanRib = bankRib.replace(/\s/g, '').trim();
     if (existingBuilding && onSaveUpdate) {
+      // Send empty strings for cleared optional fields so the server removes them instead of ignoring omitted keys.
       await onSaveUpdate(existingBuilding.id, {
-        ...payload,
+        name: name.trim(),
+        address: address.trim(),
+        city: city.trim(),
+        monthlySyndicFees: parseFloat(monthlyFees),
+        reserveFundRate: Number(reserveFundRate),
+        bankName: bankName.trim(),
+        bankRib: cleanRib,
+        managerName: managerName.trim(),
+        managerPhone: managerPhone.trim(),
         syncApartmentFees,
       });
     } else {
+      const payload: BuildingFormPayload = {
+        name: name.trim(),
+        address: address.trim(),
+        city: city.trim(),
+        monthlySyndicFees: parseFloat(monthlyFees),
+        reserveFundRate: Number(reserveFundRate),
+        bankName: bankName.trim() || undefined,
+        bankRib: cleanRib || undefined,
+        managerName: managerName.trim() || undefined,
+        managerPhone: managerPhone.trim() || undefined,
+      };
       await onSaveCreate(
         payload,
         Math.max(0, parseInt(numApartments, 10) || 0),
@@ -304,8 +315,11 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
                   value={floorsCount}
                   onChange={(e) => setFloorsCount(e.target.value)}
                   placeholder="Ex: 4"
-                  className="block w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
+                  className={`block w-full px-3 py-2 border rounded-md text-sm bg-white ${
+                    errors.floorsCount ? 'border-red-500' : 'border-slate-300'
+                  }`}
                 />
+                {renderError('floorsCount')}
               </div>
               <div>
                 <label
@@ -356,6 +370,8 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
             <input
               type="number"
               id="bld-monthly-fees"
+              min={0}
+              step="any"
               value={monthlyFees}
               onChange={(e) => setMonthlyFees(e.target.value)}
               placeholder={t('buildings.modal.monthlyFeesPlaceholder')}
@@ -434,8 +450,11 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
               value={bankRib}
               onChange={(e) => setBankRib(e.target.value)}
               placeholder="Ex: 007 780 0001234567890123 45"
-              className="block w-full px-3 py-2 border border-slate-300 rounded-md text-sm font-mono"
+              className={`block w-full px-3 py-2 border rounded-md text-sm font-mono ${
+                errors.bankRib ? 'border-red-500' : 'border-slate-300'
+              }`}
             />
+            {renderError('bankRib')}
           </div>
         </div>
 
@@ -678,12 +697,14 @@ const Buildings: React.FC<{
 
   const handleOpenEdit = (e: React.MouseEvent, bld: Building) => {
     e.stopPropagation();
+    if (isExpired) return;
     setEditingBuilding(bld);
     setIsModalOpen(true);
   };
 
   const handleOpenDelete = (e: React.MouseEvent, bld: Building) => {
     e.stopPropagation();
+    if (isExpired) return;
     setDeletingBuilding(bld);
   };
 
@@ -771,7 +792,9 @@ const Buildings: React.FC<{
       {activeBuildings.length > 0 ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {activeBuildings.map((building) => {
-            const occupiedLots = building.apartments.filter(
+            const activeApts = building.apartments.filter((a) => !a.archivedAt);
+            const activeResidents = building.residents.filter((r) => !r.archivedAt);
+            const occupiedLots = activeApts.filter(
               (a) => a.ownerId || a.tenantId
             ).length;
             return (
@@ -791,18 +814,36 @@ const Buildings: React.FC<{
                     <div className="flex items-center gap-1 shrink-0">
                       <button
                         type="button"
+                        disabled={isExpired}
                         onClick={(e) => handleOpenEdit(e, building)}
-                        className="p-2 text-slate-400 hover:text-teal-700 hover:bg-slate-100 rounded-lg transition-colors"
-                        title={tr("Modifier l'immeuble", 'تعديل العمارة')}
+                        className={`p-2 rounded-lg transition-colors ${
+                          isExpired
+                            ? 'text-slate-300 cursor-not-allowed opacity-50'
+                            : 'text-slate-400 hover:text-teal-700 hover:bg-slate-100'
+                        }`}
+                        title={
+                          isExpired
+                            ? t('subscription.expired')
+                            : tr("Modifier l'immeuble", 'تعديل العمارة')
+                        }
                       >
                         <PencilIcon />
                       </button>
                       {onDeleteBuilding && (
                         <button
                           type="button"
+                          disabled={isExpired}
                           onClick={(e) => handleOpenDelete(e, building)}
-                          className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-                          title={tr("Archiver l'immeuble", 'أرشفة العمارة')}
+                          className={`p-2 rounded-lg transition-colors ${
+                            isExpired
+                              ? 'text-slate-300 cursor-not-allowed opacity-50'
+                              : 'text-slate-400 hover:text-rose-600 hover:bg-rose-50'
+                          }`}
+                          title={
+                            isExpired
+                              ? t('subscription.expired')
+                              : tr("Archiver l'immeuble", 'أرشفة العمارة')
+                          }
                         >
                           <TrashIcon />
                         </button>
@@ -841,11 +882,11 @@ const Buildings: React.FC<{
 
                 <div className="mt-4 pt-3 border-t border-slate-200 flex items-center justify-between text-xs text-slate-600">
                   <span className="font-medium">
-                    <strong className="text-slate-900">{building.apartments.length}</strong>{' '}
+                    <strong className="text-slate-900">{activeApts.length}</strong>{' '}
                     {tr('lots', 'شقق')} ({occupiedLots} {tr('assignés', 'مُعيّنة')})
                   </span>
                   <span className="font-medium">
-                    <strong className="text-slate-900">{building.residents.length}</strong>{' '}
+                    <strong className="text-slate-900">{activeResidents.length}</strong>{' '}
                     {tr('résidents', 'سكان')}
                   </span>
                 </div>
