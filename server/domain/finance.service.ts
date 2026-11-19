@@ -3,6 +3,8 @@ import type {
   CreateQuittanceCommand,
   PostIncomeCommand,
 } from '../../shared/domain/commands';
+import { syncBuildingFinancialBalances } from '../../shared/domain/balances';
+import { parseIsoBillingPeriod } from '../../shared/domain/billingPeriod';
 import {
   allocateBudgetInCentimes,
   centimes,
@@ -12,6 +14,7 @@ import {
   splitChargeReserveAndOperating,
 } from '../../shared/domain/money';
 import { bankDate } from '../../shared/domain/paymentDates';
+import { resolveOpenStatus } from '../../shared/moroccoDate';
 import type {
   Building,
   Charge,
@@ -100,10 +103,15 @@ export function createFinanceService(context: DomainContext) {
       return empty;
     }
     const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, []);
-    const [billingYear, billingMonth] = normalizedPeriodKey
-      .split('-')
-      .map(Number);
-    const dueDate = new Date(Date.UTC(billingYear, billingMonth - 1, 5))
+    const parsedPeriod = parseIsoBillingPeriod(normalizedPeriodKey);
+    if (!parsedPeriod) {
+      throw new Error(
+        'Période de facturation invalide. Utilisez un mois valide (ex. 2026-04 ou Avril 2026).',
+      );
+    }
+    const dueDate = new Date(
+      Date.UTC(parsedPeriod.year, parsedPeriod.month - 1, 5),
+    )
       .toISOString()
       .split('T')[0];
     const totalTantiemes = building.totalTantiemes ?? 1000;
@@ -301,11 +309,19 @@ export function createFinanceService(context: DomainContext) {
     options: PaymentPostingOptions = {},
   ): Promise<{
     approvedCount: number;
+    skippedCount: number;
+    skippedProofIds: string[];
     totalAmountMad: number;
     quittances: Quittance[];
   }> => {
     if (Array.isArray(proofIds) && proofIds.length === 0) {
-      return { approvedCount: 0, totalAmountMad: 0, quittances: [] };
+      return {
+        approvedCount: 0,
+        skippedCount: 0,
+        skippedProofIds: [],
+        totalAmountMad: 0,
+        quittances: [],
+      };
     }
     const proofs = getLocalItem<PaymentProof[]>(STORAGE_KEYS.PROOFS, []);
     const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, []);
@@ -329,6 +345,7 @@ export function createFinanceService(context: DomainContext) {
     });
     let approvedCount = 0;
     let totalAmountCents = 0;
+    const skippedProofIds: string[] = [];
     const quittances: Quittance[] = [];
     for (const cand of candidates) {
       const currentChg = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, []).find(
@@ -340,7 +357,10 @@ export function createFinanceService(context: DomainContext) {
             centimes(currentChg.amount) - centimes(currentChg.paidAmount || 0),
           )
         : 0;
-      if (centimes(cand.amount) > remCents) continue;
+      if (centimes(cand.amount) > remCents) {
+        skippedProofIds.push(cand.id);
+        continue;
+      }
       const res = await reviewPaymentProof(
         cand.id,
         'approved',
@@ -351,10 +371,14 @@ export function createFinanceService(context: DomainContext) {
         approvedCount += 1;
         totalAmountCents += centimes(cand.amount);
         if (res.quittance) quittances.push(res.quittance);
+      } else {
+        skippedProofIds.push(cand.id);
       }
     }
     return {
       approvedCount,
+      skippedCount: skippedProofIds.length,
+      skippedProofIds,
       totalAmountMad: totalAmountCents / 100,
       quittances,
     };
@@ -682,15 +706,15 @@ export function createFinanceService(context: DomainContext) {
         throw new Error('Facture liée incompatible avec ce paiement.');
       }
       charge.paidAmount = (centimes(paidAmount(charge)) + amount) / 100;
-      charge.status = outstanding(charge) === 0 ? 'paid' : 'unpaid';
+      charge.status = resolveOpenStatus(charge.dueDate, outstanding(charge));
       charge.paidAt = core.paymentDate;
       charge.paymentMethod = core.paymentMethod;
       if (invoice) {
         invoice.paidAmount = (centimes(invoice.paidAmount ?? 0) + amount) / 100;
-        invoice.status =
-          centimes(invoice.paidAmount) === centimes(invoice.totalAmount)
-            ? 'paid'
-            : 'unpaid';
+        invoice.status = resolveOpenStatus(
+          invoice.dueDate,
+          centimes(invoice.totalAmount) - centimes(invoice.paidAmount),
+        );
         invoice.paymentIds = [...(invoice.paymentIds || []), paymentId!];
         charge.invoiceId = invoice.id;
       }
@@ -896,17 +920,7 @@ export function createFinanceService(context: DomainContext) {
         fundType,
       });
     }
-    building.financials.balance =
-      Math.round(
-        ((building.financials.balance ?? 0) + split.chargesCourantesAmount) *
-          100,
-      ) / 100;
-    building.financials.reserveFundBalance =
-      Math.round(
-        ((building.financials.reserveFundBalance ?? 0) +
-          split.reserveFundAmount) *
-          100,
-      ) / 100;
+    syncBuildingFinancialBalances(building);
     return split;
   }
 
@@ -969,6 +983,22 @@ export function createFinanceService(context: DomainContext) {
     }>;
     matchedCount: number;
     unmatchedCount: number;
+    unmatchedRows?: Array<{
+      date: string;
+      amount: number;
+      label: string;
+      reference?: string;
+      reason: 'non_positive' | 'duplicate' | 'no_match' | 'ambiguous';
+      candidates?: Array<{
+        chargeId?: string;
+        invoiceId?: string;
+        invoiceNumber?: string;
+        residentId: string;
+        residentName: string;
+        apartmentNumber: string;
+        remainingAmount: number;
+      }>;
+    }>;
     totalReconciledMad: number;
     quittances: Quittance[];
   }> => {
@@ -1011,9 +1041,14 @@ export function createFinanceService(context: DomainContext) {
         totalReconciledMad: 0,
         quittances: [],
       };
-    const charges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, []).filter(
-      (c) => c.buildingId === buildingId && c.status !== 'paid',
-    );
+    const openInvoices = () =>
+      getLocalItem<Invoice[]>(STORAGE_KEYS.INVOICES, []).filter(
+        (inv) =>
+          inv.buildingId === buildingId &&
+          inv.status !== 'paid' &&
+          inv.status !== 'cancelled' &&
+          centimes(inv.totalAmount) - centimes(inv.paidAmount ?? 0) > 0,
+      );
     const existingProofs = getLocalItem<PaymentProof[]>(
       STORAGE_KEYS.PROOFS,
       [],
@@ -1036,22 +1071,92 @@ export function createFinanceService(context: DomainContext) {
         )
         .map((t) => t.reference!.trim().toUpperCase())
         .filter(Boolean),
+      ...(targetBuilding.financials?.transactions || [])
+        .filter(
+          (t) =>
+            t.type === 'income' &&
+            t.paymentId &&
+            !reversedPaymentIds.has(t.paymentId),
+        )
+        .map((t) => t.paymentId!.trim().toUpperCase())
+        .filter(Boolean),
     ]);
     let matchedCount = 0;
     let unmatchedCount = 0;
     let totalReconciledMad = 0;
     const generatedQuittances: Quittance[] = [];
+    const unmatchedRows: Array<{
+      date: string;
+      amount: number;
+      label: string;
+      reference?: string;
+      reason: 'non_positive' | 'duplicate' | 'no_match' | 'ambiguous';
+      candidates?: Array<{
+        chargeId?: string;
+        invoiceId?: string;
+        invoiceNumber?: string;
+        residentId: string;
+        residentName: string;
+        apartmentNumber: string;
+        remainingAmount: number;
+      }>;
+    }> = [];
     const batchKeyOccurrences = new Map<string, number>();
+
+    const tokenMatch = (label: string, value: string) => {
+      const escaped = value
+        .trim()
+        .toUpperCase()
+        .replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return (
+        escaped.length > 0 &&
+        new RegExp(
+          `(^|[^\\p{L}\\p{N}])${escaped}($|[^\\p{L}\\p{N}])`,
+          'u',
+        ).test(label)
+      );
+    };
+    const lotMatch = (label: string, aptNumber: string) => {
+      const clean = aptNumber.trim().toUpperCase();
+      if (!clean) return false;
+      const escaped = clean.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (/^\d{1,2}$/.test(clean)) {
+        return (
+          label.trim() === clean ||
+          new RegExp(
+            `(^|[^\\p{L}\\p{N}])(?:LOT|APT|APP(?:ARTEMENT)?|STUDIO|VILLA|BOX|PARKING|N°|NO|#)\\s*0*${escaped}($|[^\\p{L}\\p{N}])`,
+            'u',
+          ).test(label)
+        );
+      }
+      return tokenMatch(label, clean);
+    };
+
     for (const { row, dates } of datedRows) {
       const rawAmt = Number(row.amount);
       // Reject non-positive (debit/zero/NaN) rows — never Math.abs() a bank debit into an income receipt
       if (!Number.isFinite(rawAmt) || rawAmt <= 0) {
         unmatchedCount += 1;
+        unmatchedRows.push({
+          date: dates.bankTransactionDate || row.date,
+          amount: Number.isFinite(rawAmt) ? rawAmt : 0,
+          label: row.label,
+          reference: row.reference,
+          reason: 'non_positive',
+        });
         continue;
       }
       const cleanAmt = Math.round(rawAmt * 100) / 100;
-      if (cleanAmt <= 0) {
+      const cleanAmtCents = Math.round(cleanAmt * 100);
+      if (cleanAmtCents <= 0) {
         unmatchedCount += 1;
+        unmatchedRows.push({
+          date: dates.bankTransactionDate || row.date,
+          amount: 0,
+          label: row.label,
+          reference: row.reference,
+          reason: 'non_positive',
+        });
         continue;
       }
       const upperLabel = (row.label || '').trim().toUpperCase();
@@ -1068,58 +1173,85 @@ export function createFinanceService(context: DomainContext) {
       // Bank-event idempotency: never reconcile the same bank row twice across repeated imports or within the same file
       if (seenBankEventKeys.has(bankEventKey)) {
         unmatchedCount += 1;
+        unmatchedRows.push({
+          date: dates.bankTransactionDate || row.date,
+          amount: cleanAmt,
+          label: row.label,
+          reference: row.reference,
+          reason: 'duplicate',
+        });
         continue;
       }
-      const tokenMatch = (label: string, value: string) => {
-        const escaped = value
-          .trim()
-          .toUpperCase()
-          .replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+      // Priority 1: Match explicit invoice number (e.g. FAC-2026-0001) in label or reference
+      const matchingInvoices = openInvoices().filter((inv) => {
+        const invNum = (inv.invoiceNumber || '').trim().toUpperCase();
+        if (!invNum) return false;
+        const remainingInvCents =
+          centimes(inv.totalAmount) - centimes(inv.paidAmount ?? 0);
+        if (remainingInvCents < cleanAmtCents) return false;
         return (
-          escaped.length > 0 &&
-          new RegExp(
-            `(^|[^\\p{L}\\p{N}])${escaped}($|[^\\p{L}\\p{N}])`,
-            'u',
-          ).test(label)
+          cleanRef === invNum ||
+          tokenMatch(upperLabel, invNum) ||
+          (cleanRef.length > 0 && tokenMatch(cleanRef, invNum))
         );
-      };
-      const lotMatch = (label: string, aptNumber: string) => {
-        const clean = aptNumber.trim().toUpperCase();
-        if (!clean) return false;
-        const escaped = clean.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        if (/^\d{1,2}$/.test(clean)) {
-          return (
-            label.trim() === clean ||
-            new RegExp(
-              `(^|[^\\p{L}\\p{N}])(?:LOT|APT|APP(?:ARTEMENT)?|STUDIO|VILLA|BOX|PARKING|N°|NO|#)\\s*0*${escaped}($|[^\\p{L}\\p{N}])`,
-              'u',
-            ).test(label)
-          );
-        }
-        return tokenMatch(label, clean);
-      };
-      const eligible = charges.filter(
+      });
+      if (matchingInvoices.length === 1) {
+        const matchedInv = matchingInvoices[0];
+        seenBankEventKeys.add(bankEventKey);
+        await recordPayment(
+          matchedInv,
+          cleanAmt,
+          'virement',
+          bankEventKey,
+          {
+            ...options,
+            bankTransactionDate: dates.bankTransactionDate,
+          },
+        );
+        const createdReceipts = getLocalItem<Quittance[]>(
+          STORAGE_KEYS.QUITTANCES,
+          [],
+        ).filter(
+          (q) =>
+            q.buildingId === buildingId &&
+            !q.voidedAt &&
+            q.paymentId === bankEventKey,
+        );
+        generatedQuittances.push(...createdReceipts);
+        matchedCount += 1;
+        totalReconciledMad =
+          Math.round((totalReconciledMad + cleanAmt) * 100) / 100;
+        continue;
+      }
+
+      const openCharges = getLocalItem<Charge[]>(STORAGE_KEYS.CHARGES, []).filter(
         (c) =>
+          c.buildingId === buildingId &&
           c.status !== 'paid' &&
-          Math.round((c.amount - (c.paidAmount || 0)) * 100) ===
-            Math.round(cleanAmt * 100),
+          outstanding(c) > 0,
       );
-      const lots = eligible.filter((c) =>
+
+      // Priority 2: Exact single-charge match by lot number or resident name
+      const exactAmountCharges = openCharges.filter(
+        (c) => outstanding(c) === cleanAmtCents,
+      );
+      const exactLots = exactAmountCharges.filter((c) =>
         lotMatch(
           upperLabel,
           targetBuilding!.apartments.find((a) => a.id === c.apartmentId)
             ?.number || '',
         ),
       );
-      const names = lots.length
-        ? lots
-        : eligible.filter((c) => {
+      const exactNames = exactLots.length
+        ? exactLots
+        : exactAmountCharges.filter((c) => {
             const name =
               targetBuilding!.residents.find((r) => r.id === c.residentId)
                 ?.name || '';
             return name.trim().length >= 3 && tokenMatch(upperLabel, name);
           });
-      const matchedCharge = names.length === 1 ? names[0] : undefined;
+      const matchedCharge = exactNames.length === 1 ? exactNames[0] : undefined;
       if (matchedCharge) {
         seenBankEventKeys.add(bankEventKey);
         const apt = targetBuilding.apartments.find(
@@ -1151,18 +1283,132 @@ export function createFinanceService(context: DomainContext) {
           options,
         );
         if (approved.quittance) generatedQuittances.push(approved.quittance);
-        matchedCharge.status = 'paid';
         matchedCount += 1;
         totalReconciledMad =
           Math.round((totalReconciledMad + cleanAmt) * 100) / 100;
-      } else {
-        unmatchedCount += 1;
+        continue;
       }
+
+      // Priority 3: Unambiguous multi-charge combined transfer for a single lot/resident (oldest-first prefix sum)
+      const lotScopedOpen = openCharges.filter((c) =>
+        lotMatch(
+          upperLabel,
+          targetBuilding!.apartments.find((a) => a.id === c.apartmentId)
+            ?.number || '',
+        ),
+      );
+      const scopedOpen = lotScopedOpen.length
+        ? lotScopedOpen
+        : openCharges.filter((c) => {
+            const name =
+              targetBuilding!.residents.find((r) => r.id === c.residentId)
+                ?.name || '';
+            return name.trim().length >= 3 && tokenMatch(upperLabel, name);
+          });
+      const distinctResidents = new Set(scopedOpen.map((c) => c.residentId));
+      let multiMatched: Charge[] | undefined;
+      if (scopedOpen.length > 1 && distinctResidents.size === 1) {
+        const sorted = [...scopedOpen].sort((a, b) =>
+          String(a.dueDate || a.createdAt).localeCompare(
+            String(b.dueDate || b.createdAt),
+          ),
+        );
+        let running = 0;
+        const prefix: Charge[] = [];
+        for (const chg of sorted) {
+          running += outstanding(chg);
+          prefix.push(chg);
+          if (running === cleanAmtCents) {
+            multiMatched = prefix;
+            break;
+          }
+          if (running > cleanAmtCents) break;
+        }
+      }
+
+      if (multiMatched && multiMatched.length > 1) {
+        seenBankEventKeys.add(bankEventKey);
+        for (let idx = 0; idx < multiMatched.length; idx += 1) {
+          const chg = multiMatched[idx];
+          const chgRem = outstanding(chg) / 100;
+          const apt = targetBuilding.apartments.find(
+            (a) => a.id === chg.apartmentId,
+          );
+          const res = targetBuilding.residents.find(
+            (r) => r.id === chg.residentId,
+          );
+          const subRef = `${bankEventKey}-${idx + 1}`;
+          seenBankEventKeys.add(subRef);
+          const submitted = await submitPaymentProof({
+            bankTransactionDate: dates.bankTransactionDate,
+            chargeId: chg.id,
+            buildingId,
+            syndicId: targetSyndic?.id,
+            residentId: chg.residentId,
+            residentName: res?.name || 'Copropriétaire',
+            apartmentId: chg.apartmentId,
+            apartmentNumber: apt?.number || 'Lot',
+            amount: chgRem,
+            paymentMethod: 'virement',
+            bankName:
+              row.bankName || targetBuilding.bankName || 'Banque Copropriété',
+            referenceNumber: subRef,
+            receiptNote: `Rapprochement CSV multi-échéances : ${row.label}`,
+          });
+          const approved = await reviewPaymentProof(
+            submitted.id,
+            'approved',
+            undefined,
+            options,
+          );
+          if (approved.quittance) generatedQuittances.push(approved.quittance);
+        }
+        matchedCount += 1;
+        totalReconciledMad =
+          Math.round((totalReconciledMad + cleanAmt) * 100) / 100;
+        continue;
+      }
+
+      // Unmatched: surface structured diagnostics + candidate suggestions for manual reconciliation
+      unmatchedCount += 1;
+      const candidatePool =
+        exactNames.length > 1
+          ? exactNames
+          : scopedOpen.length > 0
+            ? scopedOpen
+            : exactAmountCharges;
+      const reason: 'ambiguous' | 'no_match' =
+        exactNames.length > 1 || matchingInvoices.length > 1
+          ? 'ambiguous'
+          : 'no_match';
+      unmatchedRows.push({
+        date: dates.bankTransactionDate || row.date,
+        amount: cleanAmt,
+        label: row.label,
+        reference: row.reference,
+        reason,
+        candidates: candidatePool.slice(0, 5).map((c) => {
+          const apt = targetBuilding!.apartments.find(
+            (a) => a.id === c.apartmentId,
+          );
+          const res = targetBuilding!.residents.find(
+            (r) => r.id === c.residentId,
+          );
+          return {
+            chargeId: c.id,
+            residentId: c.residentId,
+            residentName: res?.name || 'Copropriétaire',
+            apartmentNumber: apt?.number || 'Lot',
+            remainingAmount: outstanding(c) / 100,
+          };
+        }),
+      });
     }
     return {
       preview,
       matchedCount,
       unmatchedCount,
+      unmatchedRows,
       totalReconciledMad,
       quittances: generatedQuittances,
     };
@@ -1272,16 +1518,7 @@ export function createFinanceService(context: DomainContext) {
         }
         bld.financials.transactions.unshift(newTrx);
         // Separate operating fund vs mandatory reserve fund (Law 106-12)
-        if (targetFund === 'reserve') {
-          bld.financials.reserveFundBalance =
-            Math.round(
-              ((bld.financials.reserveFundBalance ?? 0) + newTrx.amount) * 100,
-            ) / 100;
-        } else {
-          bld.financials.balance =
-            Math.round(((bld.financials.balance ?? 0) + newTrx.amount) * 100) /
-            100;
-        }
+        syncBuildingFinancialBalances(bld);
         setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
         return newTrx;
       }
@@ -1451,15 +1688,15 @@ export function createFinanceService(context: DomainContext) {
           amount: allocated / 100,
         });
       charge.paidAmount = (centimes(paidAmount(charge)) + allocated) / 100;
-      charge.status = outstanding(charge) === 0 ? 'paid' : 'unpaid';
+      charge.status = resolveOpenStatus(charge.dueDate, outstanding(charge));
       charge.invoiceId = current.id;
       remaining -= allocated;
     }
     current.paidAmount = (centimes(current.paidAmount ?? 0) + cents) / 100;
-    current.status =
-      centimes(current.paidAmount) === centimes(current.totalAmount)
-        ? 'paid'
-        : 'unpaid';
+    current.status = resolveOpenStatus(
+      current.dueDate,
+      centimes(current.totalAmount) - centimes(current.paidAmount),
+    );
     current.paymentIds = [...(current.paymentIds || []), paymentId];
     const receipts = getLocalItem<Quittance[]>(STORAGE_KEYS.QUITTANCES, []);
     const allocationSplits = paymentAllocations.map((allocation) => {
@@ -1723,6 +1960,8 @@ function financialOperation(
         "Arriéré initial déjà saisi.",
         409,
       );
+      const dueDate = `${period}-01`;
+      const amountCents = cents(row.amount);
       charges.push({
         id,
         buildingId: b.id,
@@ -1731,10 +1970,10 @@ function financialOperation(
         residentId: row.residentId,
         period,
         periodKey: period,
-        amount: cents(row.amount) / 100,
+        amount: amountCents / 100,
         paidAmount: 0,
-        status: "unpaid",
-        dueDate: `${period}-01`,
+        status: resolveOpenStatus(dueDate, amountCents),
+        dueDate,
         chargeType: "opening_arrears",
         openingArrears: true,
         description: str(row.description || "Arriéré initial"),
@@ -1745,6 +1984,11 @@ function financialOperation(
     return true;
   }
   if (operation === "reversePayment") {
+    check(
+      b.financials?.openingBalancesRecordedAt,
+      "Confirmez les soldes initiaux dans les outils financiers.",
+      409,
+    );
     const paymentId = str(args[1]),
       reason = str(args[2]),
       journal = b.financials?.transactions || [];
@@ -1809,14 +2053,25 @@ function financialOperation(
         409,
       );
     }
+    const nowIso = new Date().toISOString();
     for (const { charge, amount } of allocatedCharges) {
-      charge.paidAmount = (cents(charge.paidAmount) - amount) / 100;
-      charge.status = "unpaid";
-      delete charge.paidAt;
+      const remainingPaidCents = cents(charge.paidAmount) - amount;
+      charge.paidAmount = remainingPaidCents / 100;
+      charge.status = resolveOpenStatus(
+        charge.dueDate,
+        cents(charge.amount) - remainingPaidCents,
+      );
+      if (remainingPaidCents <= 0) {
+        delete charge.paidAt;
+      }
     }
     if (invoice) {
-      invoice.paidAmount = (cents(invoice.paidAmount) - total) / 100;
-      invoice.status = "unpaid";
+      const remainingInvPaidCents = cents(invoice.paidAmount) - total;
+      invoice.paidAmount = remainingInvPaidCents / 100;
+      invoice.status = resolveOpenStatus(
+        invoice.dueDate,
+        cents(invoice.totalAmount) - remainingInvPaidCents,
+      );
       if (Array.isArray(invoice.paymentIds)) {
         invoice.paymentIds = invoice.paymentIds.filter((id: string) => id !== paymentId);
       }
@@ -1832,6 +2087,7 @@ function financialOperation(
       if (proof) {
         proof.status = "rejected";
         proof.rejectionReason = reason;
+        proof.reviewedAt = nowIso;
       }
     }
     for (const t of original) {
@@ -1845,13 +2101,11 @@ function financialOperation(
         type: "expense",
         amount: -originalAbsCents / 100,
         description: `Contrepassation : ${reason}`,
-        date: new Date().toISOString(),
+        date: nowIso,
       };
       journal.unshift(inverse);
-      const field = t.fundType === "reserve" ? "reserveFundBalance" : "balance";
-      b.financials[field] =
-        (cents(b.financials[field] || 0) - originalAbsCents) / 100;
     }
+    const syncedBalances = syncBuildingFinancialBalances(b);
     for (const receipt of transactionState.syndik_prod_quittances_v1 || [])
       if (
         inScope(receipt) &&
@@ -1859,13 +2113,20 @@ function financialOperation(
         (!receipt.paymentId &&
           allocations.some((a: any) => a.chargeId === receipt.chargeId)))
       ) {
-        receipt.voidedAt = new Date().toISOString();
+        receipt.voidedAt = nowIso;
         receipt.voidReason = reason;
       }
     appendAudit(transactionState, actor, operation, b.id, {
       paymentId,
       reason,
       total: total / 100,
+      ...(syncedBalances.workingBalance < 0 || syncedBalances.reserveBalance < 0
+        ? {
+            resultingNegativeBalance: true,
+            workingBalance: syncedBalances.workingBalance,
+            reserveBalance: syncedBalances.reserveBalance,
+          }
+        : {}),
     });
     return true;
   }
@@ -2023,8 +2284,7 @@ function financialOperation(
       paymentId: `expense-reversal:${operationId}`,
     };
     journal.unshift(reversalTx);
-    const field = fund === "reserve" ? "reserveFundBalance" : "balance";
-    b.financials[field] = (cents(b.financials[field] || 0) + absCents) / 100;
+    syncBuildingFinancialBalances(b);
     appendAudit(transactionState, actor, operation, b.id, {
       transactionId: original.id,
       reversalId: reversalTx.id,

@@ -54,6 +54,7 @@ export default function FinancialTools({ building }: { building: Building }) {
     [reversalReason, setReversalReason] = useState(""),
     [arrearsDescription, setArrearsDescription] = useState(""),
     [period, setPeriod] = useState(new Date().toISOString().slice(0, 7)),
+    [arrearsPeriod, setArrearsPeriod] = useState(new Date().toISOString().slice(0, 7)),
     [payment, setPayment] = useState(""),
     [lot, setLot] = useState(""),
     [arrears, setArrears] = useState("");
@@ -359,6 +360,11 @@ export default function FinancialTools({ building }: { building: Building }) {
                           (t: any) =>
                             t.type === "income" &&
                             t.paymentId &&
+                            !t.transferId &&
+                            !t.reversalOf &&
+                            (Boolean(t.sourceChargeId) ||
+                              (Array.isArray(t.paymentAllocations) &&
+                                t.paymentAllocations.length > 0)) &&
                             !report.ledger.some(
                               (r: any) => r.reversalOf === t.paymentId,
                             ),
@@ -423,13 +429,22 @@ export default function FinancialTools({ building }: { building: Building }) {
                 >
                   <option value="">{tr("Choisir", "اختر")}</option>
                   {building.apartments
-                    .filter((a) => a.ownerId || a.tenantId)
+                    .filter((a) => !a.archivedAt && (a.ownerId || a.tenantId))
                     .map((a) => (
                       <option key={a.id} value={a.id}>
                         {a.number}
                       </option>
                     ))}
                 </select>
+              </label>
+              <label>
+                {tr("Période de l'arriéré", "فترة المتأخرات")}
+                <input
+                  className="border rounded p-2 block"
+                  type="month"
+                  value={arrearsPeriod}
+                  onChange={(e) => setArrearsPeriod(e.target.value)}
+                />
               </label>
               <label>
                 {tr("Montant MAD", "المبلغ MAD")}
@@ -453,7 +468,7 @@ export default function FinancialTools({ building }: { building: Building }) {
               </label>
               <button
                 className={button}
-                disabled={busy || !lot || Number(arrears) <= 0}
+                disabled={busy || !lot || !arrearsPeriod || Number(arrears) <= 0}
                 onClick={() =>
                   void run(async () => {
                     const a = building.apartments.find((a) => a.id === lot);
@@ -465,7 +480,7 @@ export default function FinancialTools({ building }: { building: Building }) {
                         {
                           apartmentId: lot,
                           residentId,
-                          period,
+                          period: arrearsPeriod,
                           amount: Number(arrears),
                           description:
                             arrearsDescription.trim() || tr("Arriéré initial", "متأخرات افتتاحية"),

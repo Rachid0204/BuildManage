@@ -658,6 +658,9 @@ export interface SubscriptionPayment {
   createdAt: string;
   subscriptionExpiry?: string;
   subscriptionStatus?: SubscriptionStatus;
+  previousSubscriptionPlan?: SubscriptionPlan;
+  previousSubscriptionStatus?: SubscriptionStatus;
+  previousSubscriptionExpiry?: string;
   voidedAt?: string;
   voidReason?: string;
   voidedBy?: string;

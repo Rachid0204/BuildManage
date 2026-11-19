@@ -550,6 +550,8 @@ export const approvePaymentProofsBatch = async (
   options?: PaymentPostingOptions,
 ): Promise<{
   approvedCount: number;
+  skippedCount?: number;
+  skippedProofIds?: string[];
   totalAmountMad: number;
   quittances: Quittance[];
 }> => {
@@ -558,6 +560,23 @@ export const approvePaymentProofsBatch = async (
     options === undefined ? [buildingId, proofIds] : [buildingId, proofIds, options],
   );
 };
+
+export interface UnmatchedBankCsvRow {
+  date: string;
+  amount: number;
+  label: string;
+  reference?: string;
+  reason: 'non_positive' | 'duplicate' | 'no_match' | 'ambiguous';
+  candidates?: Array<{
+    chargeId?: string;
+    invoiceId?: string;
+    invoiceNumber?: string;
+    residentId: string;
+    residentName: string;
+    apartmentNumber: string;
+    remainingAmount: number;
+  }>;
+}
 
 export const reconcileBankStatementCSV = async (
   buildingId: string,
@@ -572,6 +591,7 @@ export const reconcileBankStatementCSV = async (
   }>;
   matchedCount: number;
   unmatchedCount: number;
+  unmatchedRows?: UnmatchedBankCsvRow[];
   totalReconciledMad: number;
   quittances: Quittance[];
 }> => {
@@ -608,10 +628,15 @@ export const reviewPaymentProof = async (
 
 export const getQuittancesForBuilding = async (
   buildingId: string,
+  options?: { includeVoided?: boolean },
 ): Promise<Quittance[]> => {
   await syncAllSharedStateFromServer();
   const quittances = readSnapshot<Quittance[]>(STORAGE_KEYS.QUITTANCES, []);
-  return quittances.filter((q) => q.buildingId === buildingId && !q.voidedAt);
+  return quittances.filter(
+    (q) =>
+      q.buildingId === buildingId &&
+      (options?.includeVoided ? true : !q.voidedAt),
+  );
 };
 
 export const getQuittancesForResident = async (

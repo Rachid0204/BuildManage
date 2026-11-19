@@ -714,11 +714,23 @@ async function runOperation(
       const meta = transactionState.__files?.[rawUrl.slice("/api/uploads/".length)];
       check(meta?.buildingId === b.id, "Justificatif non lié à cet immeuble.");
     }
+    const pendingProofsCents = (
+      transactionState.syndik_prod_proofs_v1 || []
+    )
+      .filter(
+        (p: any) =>
+          p.chargeId === charge.id &&
+          p.buildingId === b.id &&
+          p.status === "pending",
+      )
+      .reduce((sum: number, p: any) => sum + cents(p.amount), 0);
+    const availableCents =
+      cents(charge.amount) - cents(charge.paidAmount || 0) - pendingProofsCents;
     check(
-      cents(proof.amount) > 0 &&
-        cents(proof.amount) <=
-          cents(charge.amount) - cents(charge.paidAmount || 0),
-      "Montant supérieur au solde.",
+      cents(proof.amount) > 0 && cents(proof.amount) <= availableCents,
+      pendingProofsCents > 0
+        ? "Montant supérieur au solde disponible (des justificatifs sont déjà en attente de validation)."
+        : "Montant supérieur au solde.",
       400,
     );
     const resident = b.residents.find((r: any) => r.id === charge.residentId),

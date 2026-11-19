@@ -60,4 +60,23 @@ export function computeBuildingFinancialBalances(building?: Building | null): {
 
 export const computeBuildingFundBalances = computeBuildingFinancialBalances;
 
+/**
+ * Recomputes cached building fund totals from opening balances + signed ledger movements
+ * so incremental mutations cannot drift from the canonical ledger projection.
+ */
+export function syncBuildingFinancialBalances(building?: Building | null): {
+  workingBalance: number;
+  reserveBalance: number;
+} {
+  if (!building) return { workingBalance: 0, reserveBalance: 0 };
+  if (!building.financials) {
+    building.financials = { balance: 0, reserveFundBalance: 0, transactions: [] };
+  }
+  const { workingBalance, reserveBalance } = computeBuildingFinancialBalances(building);
+  building.financials.balance = workingBalance;
+  building.financials.reserveFundBalance = reserveBalance;
+  return { workingBalance, reserveBalance };
+}
+
+
 

@@ -41,7 +41,7 @@ import type {
   Building,
   Resident,
 } from '../../types';
-import { generateQuittancePDF } from '../../services/pdfOnDemand';
+import { generateQuittancePDF, exportResidentStatementPDF } from '../../services/pdfOnDemand';
 import { getRecordedReserveSplit } from '../../utils/security';
 import Loading from '../common/Loading';
 
@@ -111,7 +111,7 @@ const ResidentDashboard: React.FC = () => {
   });
 
   // Dynamically resolve exact Syndic, Building, Resident, and Apartment across all buildings
-  const { activeSyndic, activeBuilding, currentResident, currentApartment } = useMemo(() => {
+  const { activeSyndic, activeBuilding, currentResident, currentApartment, myApartments } = useMemo(() => {
     let foundSyndic: Syndic | undefined;
     let foundBuilding: Building | undefined;
     let foundResident: Resident | undefined;
@@ -148,18 +148,20 @@ const ResidentDashboard: React.FC = () => {
     if (!foundBuilding && foundSyndic && userProfile?.buildingId) {
       foundBuilding = foundSyndic.buildings.find((b) => b.id === userProfile.buildingId);
     }
-    const foundApt = foundBuilding?.apartments.find(
+    const foundApts = (foundBuilding?.apartments || []).filter(
       (a) =>
         (foundResident?.apartmentId && a.id === foundResident.apartmentId) ||
         (userProfile?.apartmentId && a.id === userProfile.apartmentId) ||
         (foundResident && (a.ownerId === foundResident.id || a.tenantId === foundResident.id))
     );
+    const foundApt = foundApts[0];
 
     return {
       activeSyndic: foundSyndic,
       activeBuilding: foundBuilding,
       currentResident: foundResident,
       currentApartment: foundApt,
+      myApartments: foundApts,
     };
   }, [syndics, userProfile]);
 
@@ -645,26 +647,40 @@ const ResidentDashboard: React.FC = () => {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
               {/* My Lot Card */}
               <Card className="p-5 border-s-4 border-s-teal-600 bg-white">
-                <div className="flex justify-between items-start">
+                <div className="flex justify-between items-start gap-2">
                   <div>
                     <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                      {tr('Mon Logement', 'وحدتي السكنية')}
+                      {myApartments.length > 1
+                        ? tr('Mes Lots', 'وحداتي السكنية')
+                        : tr('Mon Logement', 'وحدتي السكنية')}
                     </p>
                     <h3 className="text-xl font-bold text-slate-900 mt-1">
                       {activeBuilding?.name || tr('Résidence', 'الإقامة')}
                     </h3>
-                    <p className="text-sm text-teal-800 font-semibold mt-0.5">
-                      {tr('Appartement Lot', 'شقة رقم')} {currentApartment?.number || '—'} (
-                      {tr('Étage', 'الطابق')} {currentApartment?.floor ?? '—'})
-                    </p>
+                    {myApartments.length > 1 ? (
+                      <p className="text-sm text-teal-800 font-semibold mt-0.5">
+                        {tr('Lots', 'الوحدات')}{' '}
+                        {myApartments.map((a) => a.number).join(', ')} ({myApartments.length})
+                      </p>
+                    ) : (
+                      <p className="text-sm text-teal-800 font-semibold mt-0.5">
+                        {tr('Appartement Lot', 'شقة رقم')} {currentApartment?.number || '—'} (
+                        {tr('Étage', 'الطابق')} {currentApartment?.floor ?? '—'})
+                      </p>
+                    )}
                   </div>
-                  <span className="text-xs font-mono font-bold text-teal-700 bg-teal-50 px-2.5 py-1 rounded">
-                    {currentApartment?.tantiemes || 260} / 1000
+                  <span className="text-xs font-mono font-bold text-teal-700 bg-teal-50 px-2.5 py-1 rounded shrink-0">
+                    {myApartments.reduce((sum, a) => sum + (a.tantiemes || 0), 0)} /{' '}
+                    {activeBuilding?.totalTantiemes || 1000}
                   </span>
                 </div>
                 <div className="mt-4 pt-3 border-t border-slate-100 flex justify-between text-xs text-slate-600 font-mono">
                   <span>
-                    {tr('Superficie :', 'المساحة :')} {currentApartment?.area ?? '—'} m²
+                    {tr('Superficie :', 'المساحة :')}{' '}
+                    {myApartments.length > 0
+                      ? myApartments.reduce((sum, a) => sum + (a.area || 0), 0)
+                      : '—'}{' '}
+                    m²
                   </span>
                   <span>
                     {tr('Statut :', 'الصفة :')}{' '}
@@ -739,10 +755,30 @@ const ResidentDashboard: React.FC = () => {
                     <QuittanceIcon />
                   </div>
                 </div>
-                <div className="mt-4 pt-3 border-t border-slate-100 text-xs text-emerald-700 font-medium">
-                  {tr(
-                    'Téléchargeables pour notaire ou archivage',
-                    'قابلة للتحميل بصيغة PDF للتوثيق أو الأرشفة'
+                <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between gap-2 text-xs text-emerald-700 font-medium">
+                  <span>
+                    {tr(
+                      'Téléchargeables pour notaire ou archivage',
+                      'قابلة للتحميل بصيغة PDF للتوثيق أو الأرشفة'
+                    )}
+                  </span>
+                  {activeBuilding && currentResident && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void exportResidentStatementPDF(
+                          activeBuilding,
+                          activeSyndic,
+                          currentResident,
+                          myApartments,
+                          myCharges,
+                          myQuittances
+                        );
+                      }}
+                      className="text-xs font-bold text-teal-700 hover:text-teal-900 underline shrink-0"
+                    >
+                      {tr('Relevé PDF', 'كشف الحساب PDF')}
+                    </button>
                   )}
                 </div>
               </Card>

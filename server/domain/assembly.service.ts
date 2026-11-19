@@ -82,7 +82,9 @@ export function createAssemblyService(context: DomainContext) {
           ...payerLot,
           tantiemes: snapApt.tantiemes ?? liveApt?.tantiemes ?? 100,
         },
-        residentId: billingPayer(targetBuilding!, payerLot),
+        residentId: billingPayer(targetBuilding!, payerLot, {
+          ownerOnly: true,
+        }),
       };
     });
     targets.forEach(({ apt, residentId }) =>
