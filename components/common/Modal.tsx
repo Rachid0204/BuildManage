@@ -48,6 +48,13 @@ const Modal: React.FC<ModalProps> = ({
     const focusTimer = window.setTimeout(() => {
       const container = modalRef.current;
       if (!container) return;
+      if (
+        document.activeElement instanceof HTMLElement &&
+        document.activeElement !== container &&
+        container.contains(document.activeElement)
+      ) {
+        return;
+      }
       const focusable = container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
       if (focusable.length > 0) {
         focusable[0].focus();
