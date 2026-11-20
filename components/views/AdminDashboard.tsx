@@ -1,6 +1,7 @@
-import React, { useMemo, useState } from 'react';
+import React, { Suspense, useMemo, useState } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { HelpCircle } from 'lucide-react';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import Modal from '../common/Modal';
@@ -65,6 +66,8 @@ type StatusFilter = 'all' | SubscriptionStatus | 'archived';
 type PlanFilter = 'all' | SubscriptionPlan;
 type QueueFilter = 'all' | 'virement' | 'cash';
 
+const AdminHelpDrawer = React.lazy(() => import('../help/HelpDrawer'));
+
 const AdminDashboard: React.FC = () => {
   const { userProfile, logout } = useAuth();
   const { t, tr, language } = useI18n();
@@ -72,6 +75,7 @@ const AdminDashboard: React.FC = () => {
   const queryClient = useQueryClient();
 
   const [activeTab, setActiveTab] = useState<AdminTab>('cabinets');
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [cabinetSearch, setCabinetSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [planFilter, setPlanFilter] = useState<PlanFilter>('all');
@@ -1071,6 +1075,15 @@ const AdminDashboard: React.FC = () => {
               <span className="text-xs sm:text-sm text-slate-300 font-mono hidden sm:inline">
                 {userProfile?.email}
               </span>
+              <button
+                type="button"
+                onClick={() => setIsHelpOpen(true)}
+                aria-label={tr('Guide Admin', 'دليل الإدارة')}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-teal-200 border border-slate-700 text-xs font-bold"
+              >
+                <HelpCircle className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">{tr('Guide', 'الدليل')}</span>
+              </button>
               <LanguageToggle variant="dark" />
               <button
                 type="button"
@@ -3253,6 +3266,23 @@ const AdminDashboard: React.FC = () => {
             </div>
           </div>
         </Modal>
+      )}
+      {isHelpOpen && (
+        <Suspense fallback={null}>
+          <AdminHelpDrawer
+            isOpen={isHelpOpen}
+            onClose={() => setIsHelpOpen(false)}
+            role="admin"
+            contextKey={activeTab}
+            onOpenFullCenter={(articleId) =>
+              navigate(
+                articleId
+                  ? `/guide?role=admin&article=${encodeURIComponent(articleId)}`
+                  : '/guide?role=admin',
+              )
+            }
+          />
+        </Suspense>
       )}
     </div>
   );

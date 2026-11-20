@@ -22,6 +22,7 @@ import {
   ChatIcon,
   MarketplaceIcon,
 } from './icons/IconComponents';
+import { HelpCircle } from 'lucide-react';
 
 type View =
   | 'dashboard'
@@ -37,7 +38,8 @@ type View =
   | 'chat'
   | 'marketplace'
   | 'analytics'
-  | 'settings';
+  | 'settings'
+  | 'help';
 
 interface SidebarProps {
   syndic: Syndic;
@@ -208,7 +210,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   isOpen = false,
   onClose,
 }) => {
-  const { t } = useI18n();
+  const { t, tr } = useI18n();
 
   const navItems = [
     {
@@ -293,6 +295,12 @@ const Sidebar: React.FC<SidebarProps> = ({
       id: 'settings',
       label: t('sidebar.settings'),
       icon: <SettingsIcon />,
+      requiresBuilding: false,
+    },
+    {
+      id: 'help',
+      label: tr('Guide & Aide', 'الدليل والمساعدة'),
+      icon: <HelpCircle className="w-5 h-5" />,
       requiresBuilding: false,
     },
   ];

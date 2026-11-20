@@ -33,6 +33,7 @@ const CommunityChat = React.lazy(() => import('../../components/views/CommunityC
 const MarketplaceView = React.lazy(() => import('../../components/views/MarketplaceView'));
 const Analytics = React.lazy(() => import('../../components/views/Analytics'));
 const Settings = React.lazy(() => import('../../components/views/Settings'));
+const HelpCenter = React.lazy(() => import('../../components/views/HelpCenter'));
 
 const VIEW_TO_ROUTE: Record<View, string> = {
   dashboard: '/',
@@ -49,6 +50,7 @@ const VIEW_TO_ROUTE: Record<View, string> = {
   marketplace: '/marketplace',
   analytics: '/analytics',
   settings: '/settings',
+  help: '/help',
 };
 
 const SyndicPortal: React.FC = () => {
@@ -578,6 +580,11 @@ const SyndicPortal: React.FC = () => {
                   <Loading />
                 )
               }
+            />
+
+            <Route
+              path="/help"
+              element={<HelpCenter mode="portal" defaultRole="syndic" />}
             />
 
             <Route path="*" element={<Navigate to="/" replace />} />

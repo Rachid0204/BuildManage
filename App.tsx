@@ -26,6 +26,7 @@ const AdminPortal = React.lazy(() => import('./components/views/AdminDashboard')
 const ResidentDashboard = React.lazy(() => import('./components/views/ResidentDashboard'));
 const SyndicPortal = React.lazy(() => import('./components/portals/SyndicPortal'));
 const PrestatairePortal = React.lazy(() => import('./components/portals/PrestatairePortal'));
+const HelpCenter = React.lazy(() => import('./components/views/HelpCenter'));
 
 const SyndicDataProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
@@ -420,6 +421,10 @@ const App: React.FC = () => {
             <Route
               path="/welcome"
               element={<LandingRouteWrapper onDone={() => setShowLanding(false)} />}
+            />
+            <Route
+              path="/guide"
+              element={<HelpCenter mode="public" />}
             />
 
             <Route

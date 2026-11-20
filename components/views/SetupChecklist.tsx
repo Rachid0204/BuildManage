@@ -59,9 +59,24 @@ export default function SetupChecklist({ building }: { building: Building }) {
   if (checks.every((c) => c.ok)) return null;
   return (
     <aside className="rounded-xl bg-amber-50 border border-amber-200 p-4 mb-4">
-      <h2 className="font-bold text-sm">
-        {tr("Préparer cet immeuble", "تجهيز هذه العمارة")}
-      </h2>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="font-bold text-sm">
+          {tr("Préparer cet immeuble", "تجهيز هذه العمارة")}
+        </h2>
+        <button
+          type="button"
+          onClick={() =>
+            window.dispatchEvent(
+              new CustomEvent("syndik-open-help", {
+                detail: { articleId: "syndic-quickstart" },
+              }),
+            )
+          }
+          className="text-xs font-bold text-teal-800 hover:underline"
+        >
+          {tr("Guide pas à pas (captures) →", "دليل الإعداد بالصور ←")}
+        </button>
+      </div>
       <div className="flex gap-3 flex-wrap text-sm mt-2">
         {checks.map((c) => (
           <Link className="underline" key={c.to + c.label} to={c.to}>

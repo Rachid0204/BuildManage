@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Link } from 'react-router-dom';
 import Button from '../common/Button';
 import LanguageToggle from '../common/LanguageToggle';
 import { useI18n } from '../../hooks/useI18n';
@@ -313,6 +314,12 @@ const LandingPage: React.FC<LandingPageProps> = ({
               >
                 {tr('FAQ', 'أسئلة شائعة')}
               </button>
+              <Link
+                to="/guide"
+                className="hover:text-teal-700 transition-colors"
+              >
+                {tr('Guide', 'الدليل')}
+              </Link>
             </nav>
 
             <div className="flex items-center gap-2.5 sm:gap-3">
@@ -1309,10 +1316,18 @@ const LandingPage: React.FC<LandingPageProps> = ({
               )}
             </span>
           </div>
-          <p className="text-xs sm:text-sm text-slate-400">
-            &copy; {new Date().getFullYear()} Syndik Maroc.{' '}
-            {language === 'ar' ? 'جميع الحقوق محفوظة.' : 'Tous droits réservés.'}
-          </p>
+          <div className="flex flex-wrap items-center gap-4 text-xs sm:text-sm text-slate-400">
+            <Link
+              to="/guide"
+              className="text-teal-300 hover:text-white font-semibold underline"
+            >
+              {tr('Guide d’utilisation (captures)', 'دليل الاستخدام بالصور')}
+            </Link>
+            <span>
+              &copy; {new Date().getFullYear()} Syndik Maroc.{' '}
+              {language === 'ar' ? 'جميع الحقوق محفوظة.' : 'Tous droits réservés.'}
+            </span>
+          </div>
         </div>
       </footer>
     </div>
