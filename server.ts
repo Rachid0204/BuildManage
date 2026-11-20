@@ -3979,6 +3979,7 @@ async function startServer() {
   } else {
     const distPath = path.join(process.cwd(), "dist");
     const assetsPath = path.join(distPath, "assets") + path.sep;
+    const guidesPath = path.join(distPath, "guides", "screenshots") + path.sep;
     // The HTML shell must be revalidated so a new release is picked up at once, and
     // it should not be framed by other origins. Vite content-hashes everything under
     // /assets, so those files never change in place and can be cached indefinitely.
@@ -3994,6 +3995,8 @@ async function startServer() {
           res.setHeader("X-Content-Type-Options", "nosniff");
           if (filePath.startsWith(assetsPath))
             res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+          else if (filePath.startsWith(guidesPath))
+            res.setHeader("Cache-Control", "public, max-age=86400");
           else if (filePath.endsWith(".html")) shellHeaders(res);
         },
       }),
@@ -4007,7 +4010,10 @@ async function startServer() {
       // A hashed file that no longer exists (an open tab from the previous release
       // lazy-loading a chunk) must fail as a 404. Answering with index.html and a
       // 200 turns it into an opaque "Unexpected token <" script error.
-      if (req.path.startsWith("/assets/"))
+      if (
+        req.path.startsWith("/assets/") ||
+        req.path.startsWith("/guides/screenshots/")
+      )
         return res.status(404).type("text/plain").send("Not found");
       shellHeaders(res);
       res.sendFile(path.join(distPath, "index.html"));
