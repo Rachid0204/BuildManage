@@ -16,13 +16,18 @@ import type {
   Apartment,
   AssembleeGenerale,
   Building,
+  CashChannel,
   Charge,
   ChatMessage,
+  CmiCurrencyCode,
+  CmiEnv,
   Document,
+  GatewayEventRecord,
   Invoice,
   MaintenanceRequest,
   MarketplaceItem,
   Notification,
+  OfflineRequestType,
   PayPalCurrency,
   PaymentPostingOptions,
   PaymentProof,
@@ -33,7 +38,9 @@ import type {
   Resident,
   SubscriptionBankTransferRequest,
   SubscriptionPayment,
+  SubscriptionPaymentMethod,
   SubscriptionPlan,
+  SubscriptionPromoCode,
   Syndic,
   Transaction,
 } from '../types';
@@ -127,9 +134,14 @@ export const recordSubscriptionPayment = async (input: {
   syndicId: string;
   plan: SubscriptionPlan;
   months: number;
-  reference: string;
-  amount: number;
-}) => {
+  reference?: string;
+  amount?: number;
+  method?: SubscriptionPaymentMethod;
+  cashChannel?: CashChannel;
+  agencyLocation?: string;
+  promoCode?: string;
+  notes?: string;
+}): Promise<SubscriptionPayment> => {
   return remoteMutation('recordSubscriptionPayment', [input]);
 };
 
@@ -173,8 +185,12 @@ export const submitSubscriptionBankTransfer = async (input: {
   plan: SubscriptionPlan;
   months: number;
   transferReference: string;
-  bankName: string;
+  bankName?: string;
   transferDate: string;
+  requestType?: OfflineRequestType;
+  cashChannel?: CashChannel;
+  agencyLocation?: string;
+  promoCode?: string;
   proofUrl?: string;
   notes?: string;
 }): Promise<SubscriptionBankTransferRequest> => {
@@ -273,11 +289,228 @@ export const testPayPalBillingConnection = async (overrides?: {
   );
 };
 
+export const testCmiBillingConnection = async (overrides?: {
+  env?: CmiEnv;
+  clientId?: string;
+  storeKey?: string;
+  currencyCode?: CmiCurrencyCode;
+}): Promise<{
+  ok: boolean;
+  env: CmiEnv;
+  gatewayUrl: string;
+  hashPreview: string;
+  message: string;
+}> => {
+  return billingJsonRequest('/api/admin/billing-config/test-cmi', {
+    method: 'POST',
+    headers: getAuthenticatedRequestHeaders(),
+    body: JSON.stringify(overrides || {}),
+  });
+};
+
+export const createCmiSubscriptionPayment = async (input: {
+  syndicId: string;
+  plan: SubscriptionPlan;
+  months: number;
+  lang?: 'fr' | 'ar';
+  promoCode?: string;
+}): Promise<{
+  ok: boolean;
+  oid: string;
+  amountMad: number;
+  currency: 'MAD' | 'EUR' | 'USD';
+  gatewayUrl: string;
+  fields: Record<string, string>;
+}> => {
+  return billingJsonRequest('/api/subscription/cmi/create-payment', {
+    method: 'POST',
+    headers: getAuthenticatedRequestHeaders(),
+    body: JSON.stringify(input),
+  });
+};
+
+export interface SubscriptionPricingPreview {
+  baseAmountMad: number;
+  multiMonthDiscountPct: number;
+  multiMonthDiscountMad: number;
+  promoCode?: string;
+  promoDiscountMad: number;
+  totalDiscountMad: number;
+  amountMad: number;
+  amountMadCents: number;
+  cmiAmountString: string;
+  vatRate: number;
+  totalHtMad: number;
+  vatAmountMad: number;
+  paypalCurrency: PayPalCurrency;
+  paypalCents: number;
+  paypalAmount: number;
+  paypalAmountString: string;
+}
+
+export const validateSubscriptionPromoCode = async (input: {
+  plan: SubscriptionPlan;
+  months: number;
+  promoCode?: string;
+}): Promise<{
+  ok: boolean;
+  pricing: SubscriptionPricingPreview;
+  promo?: {
+    code: string;
+    discountType: 'percent' | 'fixed_mad';
+    discountValue: number;
+    description: string;
+  };
+}> => {
+  return billingJsonRequest('/api/subscription/validate-promo', {
+    method: 'POST',
+    headers: getAuthenticatedRequestHeaders(),
+    body: JSON.stringify(input),
+  });
+};
+
+export const getAdminPromos = async (): Promise<SubscriptionPromoCode[]> => {
+  const data = await billingJsonRequest<{
+    ok: boolean;
+    promos: SubscriptionPromoCode[];
+  }>('/api/admin/promos', {
+    method: 'GET',
+    headers: getAuthenticatedRequestHeaders(),
+    cache: 'no-store',
+  });
+  return data.promos || [];
+};
+
+export const createAdminPromo = async (input: {
+  code: string;
+  discountType: 'percent' | 'fixed_mad';
+  discountValue: number;
+  active?: boolean;
+  applicablePlans?: SubscriptionPlan[];
+  minMonths?: number;
+  maxUses?: number;
+  validUntil?: string;
+  description?: string;
+}): Promise<SubscriptionPromoCode> => {
+  const data = await billingJsonRequest<{
+    ok: boolean;
+    promo: SubscriptionPromoCode;
+  }>('/api/admin/promos', {
+    method: 'POST',
+    headers: getAuthenticatedRequestHeaders(),
+    body: JSON.stringify(input),
+  });
+  return data.promo;
+};
+
+export const updateAdminPromo = async (
+  id: string,
+  patch: {
+    active?: boolean;
+    description?: string;
+    validUntil?: string;
+    maxUses?: number | null;
+  },
+): Promise<SubscriptionPromoCode> => {
+  const data = await billingJsonRequest<{
+    ok: boolean;
+    promo: SubscriptionPromoCode;
+  }>(`/api/admin/promos/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: getAuthenticatedRequestHeaders(),
+    body: JSON.stringify(patch),
+  });
+  return data.promo;
+};
+
+export const deleteAdminPromo = async (id: string): Promise<void> => {
+  await billingJsonRequest(`/api/admin/promos/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: getAuthenticatedRequestHeaders(),
+  });
+};
+
+export interface AdminAuditEntry {
+  id: string;
+  actorUid?: string;
+  actorRole?: string;
+  syndicId?: string;
+  buildingId?: string;
+  operation: string;
+  detail?: Record<string, unknown>;
+  createdAt: string;
+}
+
+export const getAdminAuditLogs = async (params?: {
+  limit?: number;
+  operation?: string;
+  q?: string;
+}): Promise<{ logs: AdminAuditEntry[]; total: number }> => {
+  const qs = new URLSearchParams();
+  if (params?.limit) qs.set('limit', String(params.limit));
+  if (params?.operation) qs.set('operation', params.operation);
+  if (params?.q) qs.set('q', params.q);
+  const query = qs.toString();
+  const data = await billingJsonRequest<{
+    ok: boolean;
+    logs: AdminAuditEntry[];
+    total: number;
+  }>(`/api/admin/audit-logs${query ? `?${query}` : ''}`, {
+    method: 'GET',
+    headers: getAuthenticatedRequestHeaders(),
+    cache: 'no-store',
+  });
+  return { logs: data.logs || [], total: data.total || 0 };
+};
+
+export const getAdminGatewayEvents = async (params?: {
+  limit?: number;
+  gateway?: string;
+  status?: string;
+}): Promise<{ events: GatewayEventRecord[]; total: number }> => {
+  const qs = new URLSearchParams();
+  if (params?.limit) qs.set('limit', String(params.limit));
+  if (params?.gateway) qs.set('gateway', params.gateway);
+  if (params?.status) qs.set('status', params.status);
+  const query = qs.toString();
+  const data = await billingJsonRequest<{
+    ok: boolean;
+    events: GatewayEventRecord[];
+    total: number;
+  }>(`/api/admin/gateway-events${query ? `?${query}` : ''}`, {
+    method: 'GET',
+    headers: getAuthenticatedRequestHeaders(),
+    cache: 'no-store',
+  });
+  return { events: data.events || [], total: data.total || 0 };
+};
+
+export const sendCabinetRenewalReminder = async (
+  syndicId: string,
+): Promise<{
+  ok: boolean;
+  email: string;
+  sentAt: string;
+  emailQueued: boolean;
+  inAppRecipients: number;
+  message: string;
+}> => {
+  return billingJsonRequest(
+    `/api/admin/cabinets/${encodeURIComponent(syndicId)}/send-reminder`,
+    {
+      method: 'POST',
+      headers: getAuthenticatedRequestHeaders(),
+      body: '{}',
+    },
+  );
+};
+
 export const createPayPalSubscriptionOrder = async (input: {
   syndicId: string;
   plan: SubscriptionPlan;
   months: number;
   paymentSourceHint?: 'paypal' | 'card';
+  promoCode?: string;
 }): Promise<{
   ok: boolean;
   orderId: string;

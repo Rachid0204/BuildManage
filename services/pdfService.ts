@@ -15,6 +15,8 @@ import type {
   Charge,
   MaintenanceRequest,
   Document as BuildingDocument,
+  PlatformIssuerProfile,
+  SubscriptionPayment,
 } from "../types";
 
 const currencyFormatter = new Intl.NumberFormat('fr-MA', {
@@ -2648,6 +2650,349 @@ export const exportResidentStatementPDF = (
     `Releve_Compte_${sanitizePdfText(resident.name).replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`
   );
 };
+
+// 14. OFFICIAL MOROCCAN SAAS SUBSCRIPTION INVOICE & CASH RECEIPT PDF (FACTURE / RECU DE CAISSE)
+export const generateSubscriptionInvoicePDF = (
+  payment: SubscriptionPayment,
+  syndic?: Partial<Syndic> | null,
+  issuer?: Partial<PlatformIssuerProfile> | null,
+) => {
+  const doc = new jsPDF();
+  const isCashReceipt = Boolean(
+    payment.receiptNumber ||
+      ['cash', 'wafacash', 'cashplus', 'baridcash', 'check'].includes(
+        String(payment.method || ''),
+      ),
+  );
+  const docTitle = payment.voidedAt
+    ? 'AVOIR / FACTURE ANNULEE'
+    : isCashReceipt
+      ? 'FACTURE & RECU DE CAISSE'
+      : 'FACTURE D\'ABONNEMENT SAAS';
+  const docNumber =
+    payment.invoiceNumber ||
+    payment.receiptNumber ||
+    `FAC-${payment.id.slice(0, 8).toUpperCase()}`;
+
+  // Header Banner
+  doc.setFillColor(15, 23, 42);
+  doc.rect(0, 0, 210, 36, 'F');
+  doc.setFillColor(15, 118, 110);
+  doc.rect(0, 36, 210, 3, 'F');
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(15);
+  doc.text(sanitizePdfText(issuer?.companyName || 'ImmoGest Maroc'), 14, 15);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.setTextColor(203, 213, 225);
+  const legalLine = [issuer?.legalForm, issuer?.city || 'Casablanca', 'Maroc']
+    .filter(Boolean)
+    .join(' · ');
+  doc.text(sanitizePdfText(legalLine), 14, 22);
+  if (issuer?.address) {
+    doc.text(sanitizePdfText(issuer.address).slice(0, 70), 14, 28);
+  }
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(12);
+  doc.text(docTitle, 196, 15, { align: 'right' });
+  doc.setFontSize(9.5);
+  doc.text(`N° ${sanitizePdfText(docNumber)}`, 196, 22, { align: 'right' });
+  if (payment.receiptNumber && payment.receiptNumber !== docNumber) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.5);
+    doc.text(`Recu : ${sanitizePdfText(payment.receiptNumber)}`, 196, 28, {
+      align: 'right',
+    });
+  }
+
+  // Issuer vs Client Boxes
+  let y = 48;
+  doc.setDrawColor(226, 232, 240);
+  doc.setFillColor(248, 250, 252);
+  doc.roundedRect(14, y, 88, 42, 2, 2, 'FD');
+  doc.roundedRect(108, y, 88, 42, 2, 2, 'FD');
+
+  doc.setTextColor(15, 118, 110);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.text('EMETTEUR (PRESTATAIRE SAAS)', 18, y + 6);
+  doc.text('CLIENT (CABINET SYNDIC)', 112, y + 6);
+
+  doc.setTextColor(15, 23, 42);
+  doc.setFontSize(9);
+  doc.text(
+    sanitizePdfText(
+      `${issuer?.companyName || 'ImmoGest Maroc'}${issuer?.legalForm ? ` ${issuer.legalForm}` : ''}`,
+    ).slice(0, 42),
+    18,
+    y + 13,
+  );
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  const issuerMeta = [
+    issuer?.ice ? `ICE : ${issuer.ice}` : null,
+    issuer?.rc ? `RC : ${issuer.rc}` : null,
+    issuer?.ifNumber ? `IF : ${issuer.ifNumber}` : null,
+    issuer?.patente ? `Patente : ${issuer.patente}` : null,
+    issuer?.phone ? `Tel : ${issuer.phone}` : null,
+    issuer?.email ? `Email : ${issuer.email}` : null,
+  ].filter(Boolean) as string[];
+  issuerMeta.slice(0, 5).forEach((line, idx) => {
+    doc.text(sanitizePdfText(line).slice(0, 46), 18, y + 19 + idx * 4.4);
+  });
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text(
+    sanitizePdfText(
+      payment.syndicName || syndic?.name || payment.syndicId,
+    ).slice(0, 42),
+    112,
+    y + 13,
+  );
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  const clientMeta = [
+    syndic?.address
+      ? `${syndic.address}${syndic.city ? `, ${syndic.city}` : ''}`
+      : syndic?.city || null,
+    syndic?.ice ? `ICE : ${syndic.ice}` : null,
+    syndic?.rc ? `RC : ${syndic.rc}` : null,
+    syndic?.taxId ? `IF : ${syndic.taxId}` : null,
+    payment.syndicEmail || syndic?.email
+      ? `Email : ${payment.syndicEmail || syndic?.email}`
+      : null,
+  ].filter(Boolean) as string[];
+  clientMeta.slice(0, 5).forEach((line, idx) => {
+    doc.text(sanitizePdfText(line).slice(0, 46), 112, y + 19 + idx * 4.4);
+  });
+
+  // Payment metadata strip
+  y += 49;
+  const methodLabels: Record<string, string> = {
+    cmi: 'Carte Bancaire Maroc (CMI 3DS)',
+    card: 'Carte Bancaire (PayPal)',
+    paypal: 'PayPal',
+    virement: 'Virement Bancaire Maroc',
+    cash: 'Especes (Guichet / Bureau)',
+    wafacash: 'Especes — Agence Wafacash',
+    cashplus: 'Especes — Agence Cash Plus',
+    baridcash: 'Especes — Barid Cash',
+    check: 'Cheque Bancaire',
+    manual: 'Reglement Manuel',
+  };
+  const dateLabel = payment.createdAt
+    ? new Date(payment.createdAt).toLocaleDateString('fr-MA')
+    : new Date().toLocaleDateString('fr-MA');
+  const expiryLabel = payment.subscriptionExpiry
+    ? new Date(payment.subscriptionExpiry).toLocaleDateString('fr-MA')
+    : '—';
+
+  doc.setFillColor(240, 253, 250);
+  doc.setDrawColor(153, 246, 228);
+  doc.roundedRect(14, y, 182, 18, 2, 2, 'FD');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(15, 118, 110);
+  doc.text('Date d\'emission', 18, y + 6);
+  doc.text('Mode de reglement', 58, y + 6);
+  doc.text('Reference', 118, y + 6);
+  doc.text('Valide jusqu\'au', 165, y + 6);
+  doc.setTextColor(15, 23, 42);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.text(dateLabel, 18, y + 13);
+  doc.text(
+    sanitizePdfText(methodLabels[String(payment.method || 'manual')] || 'Manuel').slice(0, 32),
+    58,
+    y + 13,
+  );
+  doc.text(sanitizePdfText(payment.reference).slice(0, 24), 118, y + 13);
+  doc.text(expiryLabel, 165, y + 13);
+
+  // Line-items table
+  y += 26;
+  doc.setFillColor(15, 23, 42);
+  doc.rect(14, y, 182, 8.5, 'F');
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.text('DESIGNATION', 18, y + 5.7);
+  doc.text('DUREE', 120, y + 5.7, { align: 'right' });
+  doc.text('MONTANT (MAD)', 192, y + 5.7, { align: 'right' });
+
+  y += 14;
+  const planNames: Record<string, string> = {
+    starter: 'Forfait Essentiel (Starter)',
+    professional: 'Forfait Pro (Professionnel)',
+    enterprise: 'Forfait Entreprise (Illimite)',
+  };
+  const subtotal = Number(payment.subtotalMad ?? payment.amount ?? 0);
+  const discount = Number(payment.discountMad ?? 0);
+  const totalTtc = Number(payment.amount ?? 0);
+  const vatRate = Number(payment.vatRate ?? 0);
+  const totalHt = Number(
+    payment.totalHtMad ??
+      (vatRate > 0 ? totalTtc / (1 + vatRate / 100) : totalTtc),
+  );
+  const vatAmount = Number(payment.vatAmountMad ?? totalTtc - totalHt);
+
+  doc.setTextColor(15, 23, 42);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text(
+    sanitizePdfText(`Abonnement plateforme SaaS — ${planNames[payment.plan] || payment.plan}`),
+    18,
+    y,
+  );
+  doc.setFont('helvetica', 'normal');
+  doc.text(`${payment.months} mois`, 120, y, { align: 'right' });
+  doc.text(`${subtotal.toFixed(2)} MAD`, 192, y, { align: 'right' });
+  doc.setDrawColor(226, 232, 240);
+  doc.line(14, y + 4, 196, y + 4);
+  y += 10;
+
+  if (discount > 0) {
+    const discountLabelParts = [];
+    if (payment.multiMonthDiscountPct) {
+      discountLabelParts.push(`Remise duree -${payment.multiMonthDiscountPct}%`);
+    }
+    if (payment.promoCode) {
+      discountLabelParts.push(`Code promo ${payment.promoCode}`);
+    }
+    doc.setTextColor(15, 118, 110);
+    doc.text(
+      sanitizePdfText(
+        discountLabelParts.length > 0
+          ? `Remise commerciale (${discountLabelParts.join(' + ')})`
+          : 'Remise commerciale',
+      ),
+      18,
+      y,
+    );
+    doc.text(`-${discount.toFixed(2)} MAD`, 192, y, { align: 'right' });
+    doc.line(14, y + 4, 196, y + 4);
+    y += 10;
+  }
+
+  // Totals Box
+  y += 4;
+  const boxX = 114;
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(203, 213, 225);
+  doc.roundedRect(boxX, y, 82, 32, 2, 2, 'FD');
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.setTextColor(71, 85, 105);
+  doc.text('Total HT', boxX + 4, y + 7);
+  doc.text(`${totalHt.toFixed(2)} MAD`, boxX + 78, y + 7, { align: 'right' });
+
+  doc.text(vatRate > 0 ? `TVA (${vatRate}%)` : 'TVA (Exonere 0%)', boxX + 4, y + 14);
+  doc.text(`${vatAmount.toFixed(2)} MAD`, boxX + 78, y + 14, { align: 'right' });
+
+  doc.setDrawColor(15, 118, 110);
+  doc.line(boxX + 4, y + 18, boxX + 78, y + 18);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10.5);
+  doc.setTextColor(15, 23, 42);
+  doc.text('NET PAYE TTC', boxX + 4, y + 26);
+  doc.setTextColor(15, 118, 110);
+  doc.text(`${totalTtc.toFixed(2)} MAD`, boxX + 78, y + 26, { align: 'right' });
+
+  // Amount in words & metadata notes
+  y += 40;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.setTextColor(15, 23, 42);
+  doc.text('Arretee la presente facture a la somme de :', 14, y);
+  doc.setFont('helvetica', 'normal');
+  doc.text(sanitizePdfText(numberToFrenchWords(totalTtc)), 14, y + 5.5);
+  y += 14;
+
+  if (
+    payment.currency &&
+    payment.currency !== 'MAD' &&
+    payment.chargedAmount !== undefined
+  ) {
+    doc.setFontSize(8);
+    doc.setTextColor(71, 85, 105);
+    doc.text(
+      `Equivalent debite sur passerelle internationale : ${payment.chargedAmount.toFixed(2)} ${payment.currency}`,
+      14,
+      y,
+    );
+    y += 6;
+  }
+  if (payment.agencyLocation) {
+    doc.setFontSize(8);
+    doc.setTextColor(71, 85, 105);
+    doc.text(
+      sanitizePdfText(`Agence / Guichet d'encaissement : ${payment.agencyLocation}`),
+      14,
+      y,
+    );
+    y += 6;
+  }
+  if (payment.notes) {
+    doc.setFontSize(8);
+    doc.setTextColor(71, 85, 105);
+    doc.text(sanitizePdfText(`Observations : ${payment.notes}`).slice(0, 110), 14, y);
+    y += 6;
+  }
+
+  if (payment.voidedAt) {
+    doc.setTextColor(185, 28, 28);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(14);
+    doc.text('DOCUMENT ANNULE / AVOIR', 105, y + 14, { align: 'center' });
+    if (payment.voidReason) {
+      doc.setFontSize(8.5);
+      doc.setFont('helvetica', 'normal');
+      doc.text(
+        sanitizePdfText(`Motif : ${payment.voidReason}`).slice(0, 95),
+        105,
+        y + 21,
+        { align: 'center' },
+      );
+    }
+  } else {
+    doc.setDrawColor(16, 185, 129);
+    doc.setFillColor(236, 253, 245);
+    doc.roundedRect(14, y + 4, 62, 12, 2, 2, 'FD');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(4, 120, 87);
+    doc.text('STATUT : PAYE & ACQUITTE', 45, y + 11.5, { align: 'center' });
+  }
+
+  // Footer
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(100, 116, 139);
+  const footerLegal = [
+    issuer?.companyName || 'ImmoGest Maroc',
+    issuer?.ice ? `ICE ${issuer.ice}` : null,
+    issuer?.rc ? `RC ${issuer.rc}` : null,
+    issuer?.ifNumber ? `IF ${issuer.ifNumber}` : null,
+    issuer?.patente ? `TP ${issuer.patente}` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  doc.text(sanitizePdfText(footerLegal), 105, 282, { align: 'center' });
+  doc.text('Document comptable genere electroniquement — Valable sans signature manuscrite', 105, 287, {
+    align: 'center',
+  });
+
+  const safeNum = sanitizePdfText(docNumber).replace(/[^A-Za-z0-9_-]/g, '_');
+  doc.save(`${isCashReceipt ? 'Recu_Facture' : 'Facture_SaaS'}_${safeNum}.pdf`);
+  return doc;
+};
+
 
 
 
