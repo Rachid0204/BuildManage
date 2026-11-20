@@ -50,7 +50,10 @@
     "test:financial-invariants": "node --import ./tests/helpers/networkGuard.mjs --import tsx --test tests/financialInvariants.test.ts",
     "test:backend-domain": "node --import ./tests/helpers/networkGuard.mjs --import tsx tests/backendDomainParity.test.ts",
     "test:transport": "node --import ./tests/helpers/networkGuard.mjs --import tsx --test tests/transportBoundaries.test.ts",
-    "test:live-sync": "node --import ./tests/helpers/networkGuard.mjs --import tsx --test tests/liveSync.test.ts"
+    "test:live-sync": "node --import ./tests/helpers/networkGuard.mjs --import tsx --test tests/liveSync.test.ts",
+    "test:user-guides": "node --import tsx --test tests/userGuidesIntegrity.test.ts",
+    "docs:screenshots": "node --import tsx scripts/captureUserGuides.ts",
+    "docs:guides": "node --import tsx scripts/exportGuidesMarkdown.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.28.4",
