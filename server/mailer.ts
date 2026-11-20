@@ -110,6 +110,10 @@ export function reencryptDurableState(state: State) {
       }
     }
   }
+  const cmiConfig = state.__platformBillingConfig?.cmi;
+  if (cmiConfig && typeof cmiConfig.encryptedStoreKey === "string" && needsEncryptionRotation(cmiConfig.encryptedStoreKey)) {
+    cmiConfig.encryptedStoreKey = encrypt(decrypt(cmiConfig.encryptedStoreKey));
+  }
   return changed;
 }
 

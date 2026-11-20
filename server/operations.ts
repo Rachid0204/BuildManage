@@ -6,6 +6,7 @@ import { subscriptionCanWrite } from '../utils/subscriptionPolicy';
 import { DependencyError } from './dependencyErrors';
 import { createCommandService } from './domain/command.service';
 import { OperationError,type Actor } from './domain/errors';
+import { resolvePlatformBillingConfig } from './paypalBilling';
 import { currentState,type State,type StateRepository } from './repository';
 export { OperationError } from './domain/errors';
 export type { Actor } from './domain/errors';
@@ -114,7 +115,10 @@ export async function generateScheduledMonthlyCharges(repository: StateRepositor
         const owner = (state.syndik_prod_registered_users_v1 || []).find((u: any) => u.uid === cabinet.createdBy);
         if (owner?.disabled || owner?.profile?.emailVerified === false || owner?.profile?.mustChangePassword)
           return skipped('onboarding');
-        if (!subscriptionCanWrite(cabinet)) return skipped('inactive');
+        const graceDays =
+          resolvePlatformBillingConfig(state).publicConfig.commercialPolicy
+            ?.gracePeriodDays ?? 0;
+        if (!subscriptionCanWrite(cabinet, graceDays)) return skipped('inactive');
         if (building.archivedAt) return skipped('archived');
         if (!building.address?.trim() || !building.city?.trim()) return skipped('setup');
         for (const lot of building.apartments.filter((a: any) => !a.archivedAt)) {

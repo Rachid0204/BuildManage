@@ -641,12 +641,111 @@ export type SubscriptionPaymentMethod =
   | 'manual'
   | 'virement'
   | 'paypal'
-  | 'card';
+  | 'card'
+  | 'cmi'
+  | 'cash'
+  | 'wafacash'
+  | 'cashplus'
+  | 'baridcash'
+  | 'check';
 
 export type PayPalCheckoutMode = 'standard' | 'expanded';
 export type PayPalEnv = 'sandbox' | 'live';
 export type PayPalCurrency = 'EUR' | 'USD';
 export type BillingConfigSource = 'admin' | 'env' | 'default' | 'none';
+
+export type CmiEnv = 'test' | 'production';
+export type CmiCurrencyCode = '504' | '978' | '840';
+export type CashChannel =
+  | 'office'
+  | 'wafacash'
+  | 'cashplus'
+  | 'baridcash'
+  | 'check';
+export type OfflineRequestType = 'virement' | 'cash' | 'check';
+export type PromoDiscountType = 'percent' | 'fixed_mad';
+
+export interface SubscriptionPromoCode {
+  id: string;
+  code: string;
+  discountType: PromoDiscountType;
+  discountValue: number;
+  active: boolean;
+  applicablePlans?: SubscriptionPlan[];
+  minMonths?: number;
+  maxUses?: number;
+  usedCount: number;
+  validUntil?: string;
+  description?: string;
+  createdAt: string;
+  createdBy?: string;
+}
+
+export interface GatewayEventRecord {
+  id: string;
+  gateway: 'paypal' | 'cmi' | 'bank_transfer' | 'cash' | 'system';
+  eventType: string;
+  status: 'ok' | 'ignored' | 'rejected' | 'error';
+  httpStatus: number;
+  syndicId?: string;
+  reference?: string;
+  orderId?: string;
+  message: string;
+  createdAt: string;
+}
+
+export interface PlatformIssuerProfile {
+  companyName: string;
+  legalForm: string;
+  ice: string;
+  rc: string;
+  ifNumber: string;
+  patente: string;
+  cnss: string;
+  address: string;
+  city: string;
+  email: string;
+  phone: string;
+  whatsapp: string;
+  vatRate: 0 | 20;
+  invoicePrefix: string;
+  receiptPrefix: string;
+}
+
+export interface PlatformCommercialPolicy {
+  gracePeriodDays: number;
+  multiMonthDiscounts: {
+    m3: number;
+    m6: number;
+    m12: number;
+  };
+}
+
+export interface PublicCmiConfig {
+  enabled: boolean;
+  env: CmiEnv;
+  clientId: string;
+  currencyCode: CmiCurrencyCode;
+  currencyLabel: 'MAD' | 'EUR' | 'USD';
+  storeType: '3D_PAY_HOSTING';
+  lang: 'fr' | 'ar';
+  shopUrl: string;
+  gatewayUrl: string;
+}
+
+export interface PublicCashPaymentConfig {
+  enabled: boolean;
+  acceptedChannels: CashChannel[];
+  beneficiaryName: string;
+  officeAddress: string;
+  officeHours: string;
+  contactPhone: string;
+  whatsapp: string;
+  maxCashAmountMad: number;
+  requireProofUpload: boolean;
+  instructionsFr: string;
+  instructionsAr: string;
+}
 
 export interface SubscriptionPayment {
   id: string;
@@ -660,6 +759,18 @@ export interface SubscriptionPayment {
   method?: SubscriptionPaymentMethod;
   currency?: 'MAD' | 'EUR' | 'USD';
   chargedAmount?: number;
+  invoiceNumber?: string;
+  receiptNumber?: string;
+  subtotalMad?: number;
+  discountMad?: number;
+  promoCode?: string;
+  multiMonthDiscountPct?: number;
+  vatRate?: number;
+  vatAmountMad?: number;
+  totalHtMad?: number;
+  cashChannel?: CashChannel;
+  agencyLocation?: string;
+  notes?: string;
   externalOrderId?: string;
   externalCaptureId?: string;
   proofUrl?: string;
@@ -684,6 +795,12 @@ export interface SubscriptionBankTransferRequest {
   plan: SubscriptionPlan;
   months: number;
   amount: number;
+  subtotalMad?: number;
+  discountMad?: number;
+  promoCode?: string;
+  requestType?: OfflineRequestType;
+  cashChannel?: CashChannel;
+  agencyLocation?: string;
   transferReference: string;
   bankName: string;
   transferDate: string;
@@ -719,14 +836,21 @@ export interface PublicPlatformBillingConfig {
     instructionsFr: string;
     instructionsAr: string;
   };
+  cmi?: PublicCmiConfig;
+  cashPayment?: PublicCashPaymentConfig;
+  issuerProfile?: PlatformIssuerProfile;
+  commercialPolicy?: PlatformCommercialPolicy;
 }
 
 export interface AdminPlatformBillingConfig extends PublicPlatformBillingConfig {
   paypal: PublicPlatformBillingConfig['paypal'] & {
     hasClientSecret: boolean;
     clientSecretSource: BillingConfigSource;
+    clientSecretFingerprint?: string;
     hasWebhookId: boolean;
     webhookIdSource: BillingConfigSource;
+    webhookIdFingerprint?: string;
+    allowLiveWithoutWebhook?: boolean;
     envDefaults: {
       enabled: boolean;
       env: PayPalEnv;
@@ -741,8 +865,78 @@ export interface AdminPlatformBillingConfig extends PublicPlatformBillingConfig 
   bankTransfer: PublicPlatformBillingConfig['bankTransfer'] & {
     source: 'admin' | 'env' | 'default';
   };
+  cmi: PublicCmiConfig & {
+    hasStoreKey: boolean;
+    storeKeySource: BillingConfigSource;
+    storeKeyFingerprint?: string;
+    envDefaults: {
+      enabled: boolean;
+      env: CmiEnv;
+      clientId: string;
+      hasStoreKey: boolean;
+      currencyCode: CmiCurrencyCode;
+    };
+  };
+  cashPayment: PublicCashPaymentConfig & {
+    source: 'admin' | 'env' | 'default';
+  };
+  issuerProfile: PlatformIssuerProfile;
+  commercialPolicy: PlatformCommercialPolicy;
+  readinessWarnings: string[];
   updatedAt?: string;
   updatedBy?: string;
+}
+
+export interface AdminBillingConfigCmiInput {
+  enabled: boolean;
+  env: CmiEnv;
+  clientId: string;
+  storeKey?: string;
+  clearStoreKey?: boolean;
+  currencyCode?: CmiCurrencyCode;
+  lang?: 'fr' | 'ar';
+  shopUrl?: string;
+}
+
+export interface AdminBillingConfigCashInput {
+  enabled: boolean;
+  acceptedChannels: CashChannel[];
+  beneficiaryName: string;
+  officeAddress?: string;
+  officeHours?: string;
+  contactPhone?: string;
+  whatsapp?: string;
+  maxCashAmountMad?: number;
+  requireProofUpload?: boolean;
+  instructionsFr?: string;
+  instructionsAr?: string;
+}
+
+export interface AdminBillingConfigIssuerInput {
+  companyName?: string;
+  legalForm?: string;
+  ice?: string;
+  rc?: string;
+  ifNumber?: string;
+  patente?: string;
+  cnss?: string;
+  address?: string;
+  city?: string;
+  email?: string;
+  phone?: string;
+  whatsapp?: string;
+  vatRate?: 0 | 20;
+  invoicePrefix?: string;
+  receiptPrefix?: string;
+}
+
+export interface AdminBillingConfigCommercialInput {
+  gracePeriodDays?: number;
+  multiMonthDiscounts?: {
+    m3?: number;
+    m6?: number;
+    m12?: number;
+  };
 }
 
 export type AdminBillingConfigUpdateInput =
@@ -757,6 +951,7 @@ export type AdminBillingConfigUpdateInput =
         clearClientSecret?: boolean;
         webhookId?: string;
         clearWebhookId?: boolean;
+        allowLiveWithoutWebhook?: boolean;
         currency: PayPalCurrency;
         madPerUnit: number;
         planPrices?: Partial<Record<SubscriptionPlan, number>>;
@@ -772,6 +967,10 @@ export type AdminBillingConfigUpdateInput =
         instructionsFr?: string;
         instructionsAr?: string;
       };
+      cmi?: AdminBillingConfigCmiInput;
+      cashPayment?: AdminBillingConfigCashInput;
+      issuerProfile?: AdminBillingConfigIssuerInput;
+      commercialPolicy?: AdminBillingConfigCommercialInput;
     }
   | {
       resetToEnv?: false;
@@ -784,6 +983,7 @@ export type AdminBillingConfigUpdateInput =
         clearClientSecret?: boolean;
         webhookId?: string;
         clearWebhookId?: boolean;
+        allowLiveWithoutWebhook?: boolean;
         currency: PayPalCurrency;
         madPerUnit: number;
         planPrices?: Partial<Record<SubscriptionPlan, number>>;
@@ -799,5 +999,10 @@ export type AdminBillingConfigUpdateInput =
         instructionsFr?: string;
         instructionsAr?: string;
       };
+      cmi?: AdminBillingConfigCmiInput;
+      cashPayment?: AdminBillingConfigCashInput;
+      issuerProfile?: AdminBillingConfigIssuerInput;
+      commercialPolicy?: AdminBillingConfigCommercialInput;
     };
+
 

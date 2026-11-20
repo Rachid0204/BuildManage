@@ -31,6 +31,7 @@ import {
   deliverOutbox,
   encrypt,
   mailIsConfigured,
+  queueMail,
 } from './server/mailer';
 import { monthlyBillingJob } from './server/monthlyBillingJob';
 import {
@@ -92,11 +93,20 @@ import {
   voidPlatformSubscriptionPayment,
 } from './server/domain/building.service';
 import {
+  buildCmiCheckoutPayload,
+  normalizeCmiCurrencyCode,
+  normalizeCmiEnv,
+  runCmiSelfTest,
+  verifyCmiCallbackHash,
+} from './server/cmiBilling';
+import {
   capturePayPalOrder,
   computeSubscriptionPricing,
   createPayPalOrder,
   getPayPalAccessToken,
   getPayPalOrder,
+  recordGatewayEvent,
+  resolveAndValidatePromoCode,
   resolvePlatformBillingConfig,
   updatePlatformBillingConfig,
   verifyPayPalWebhookSignature,
@@ -107,6 +117,7 @@ import type {
   AssembleeGenerale,
   Building,
   SubscriptionPlan,
+  SubscriptionPromoCode,
 } from './types';
 import { applyResidentVote } from './utils/agVoting';
 import {
@@ -2203,7 +2214,7 @@ async function startServer() {
     }, false),
   );
 
-  // Platform Subscription Billing Configuration & PayPal Checkout / Webhook Routes
+  // Platform Subscription Billing Configuration, PayPal, CMI Morocco, Cash, Promos & Observability Routes
   const AdminBillingConfigPaypalSchema = z.object({
     enabled: z.boolean(),
     env: z.enum(["sandbox", "live"]),
@@ -2213,6 +2224,7 @@ async function startServer() {
     clearClientSecret: z.boolean().optional(),
     webhookId: z.string().max(200).optional(),
     clearWebhookId: z.boolean().optional(),
+    allowLiveWithoutWebhook: z.boolean().optional(),
     currency: z.enum(["EUR", "USD"]),
     madPerUnit: z.number().positive().max(1_000_000),
     planPrices: z
@@ -2234,18 +2246,102 @@ async function startServer() {
     instructionsFr: z.string().max(1500).optional(),
     instructionsAr: z.string().max(1500).optional(),
   });
+  const AdminBillingConfigCmiSchema = z.object({
+    enabled: z.boolean(),
+    env: z.enum(["test", "production"]),
+    clientId: z.string().max(120),
+    storeKey: z.string().max(256).optional(),
+    clearStoreKey: z.boolean().optional(),
+    currencyCode: z.enum(["504", "978", "840"]).optional(),
+    lang: z.enum(["fr", "ar"]).optional(),
+    shopUrl: z.string().max(300).optional(),
+  });
+  const AdminBillingConfigCashSchema = z.object({
+    enabled: z.boolean(),
+    acceptedChannels: z.array(
+      z.enum(["office", "wafacash", "cashplus", "baridcash", "check"]),
+    ),
+    beneficiaryName: z.string().max(160),
+    officeAddress: z.string().max(300).optional(),
+    officeHours: z.string().max(120).optional(),
+    contactPhone: z.string().max(40).optional(),
+    whatsapp: z.string().max(40).optional(),
+    maxCashAmountMad: z.number().min(0).max(1_000_000).optional(),
+    requireProofUpload: z.boolean().optional(),
+    instructionsFr: z.string().max(1500).optional(),
+    instructionsAr: z.string().max(1500).optional(),
+  });
+  const AdminBillingConfigIssuerSchema = z.object({
+    companyName: z.string().max(160).optional(),
+    legalForm: z.string().max(40).optional(),
+    ice: z.string().max(40).optional(),
+    rc: z.string().max(40).optional(),
+    ifNumber: z.string().max(40).optional(),
+    patente: z.string().max(40).optional(),
+    cnss: z.string().max(40).optional(),
+    address: z.string().max(250).optional(),
+    city: z.string().max(80).optional(),
+    email: z.string().max(120).optional(),
+    phone: z.string().max(40).optional(),
+    whatsapp: z.string().max(40).optional(),
+    vatRate: z.union([z.literal(0), z.literal(20)]).optional(),
+    invoicePrefix: z.string().max(12).optional(),
+    receiptPrefix: z.string().max(12).optional(),
+  });
+  const AdminBillingConfigCommercialSchema = z.object({
+    gracePeriodDays: z.number().int().min(0).max(30).optional(),
+    multiMonthDiscounts: z
+      .object({
+        m3: z.number().min(0).max(50).optional(),
+        m6: z.number().min(0).max(50).optional(),
+        m12: z.number().min(0).max(50).optional(),
+      })
+      .optional(),
+  });
   const AdminBillingConfigSchema = z.union([
     z.object({
       resetToEnv: z.literal(true),
       paypal: AdminBillingConfigPaypalSchema.optional(),
       bankTransfer: AdminBillingConfigBankSchema.optional(),
+      cmi: AdminBillingConfigCmiSchema.optional(),
+      cashPayment: AdminBillingConfigCashSchema.optional(),
+      issuerProfile: AdminBillingConfigIssuerSchema.optional(),
+      commercialPolicy: AdminBillingConfigCommercialSchema.optional(),
     }),
     z.object({
       resetToEnv: z.literal(false).optional(),
       paypal: AdminBillingConfigPaypalSchema,
       bankTransfer: AdminBillingConfigBankSchema,
+      cmi: AdminBillingConfigCmiSchema.optional(),
+      cashPayment: AdminBillingConfigCashSchema.optional(),
+      issuerProfile: AdminBillingConfigIssuerSchema.optional(),
+      commercialPolicy: AdminBillingConfigCommercialSchema.optional(),
     }),
   ]);
+
+  const resolvePublicOrigin = (req: express.Request, configuredShopUrl?: string): string => {
+    if (configuredShopUrl && /^https?:\/\//i.test(configuredShopUrl.trim())) {
+      try {
+        return new URL(configuredShopUrl.trim()).origin;
+      } catch {
+        // fallback below
+      }
+    }
+    const envOrigin = String(process.env.PUBLIC_APP_URL || "").trim();
+    if (envOrigin && /^https?:\/\//i.test(envOrigin)) {
+      try {
+        return new URL(envOrigin).origin;
+      } catch {
+        // fallback below
+      }
+    }
+    const proto =
+      String(req.headers["x-forwarded-proto"] || req.protocol || "http")
+        .split(",")[0]
+        .trim() || "http";
+    const host = String(req.headers["x-forwarded-host"] || req.get("host") || "localhost").split(",")[0].trim();
+    return `${proto}://${host}`;
+  };
 
   api.get("/api/subscription/billing-config", async (req, res) => {
     const caller = await extractAndVerifyCaller(req, sharedStore);
@@ -2253,6 +2349,7 @@ async function startServer() {
       return res.status(401).json({ error: "Authentification requise." });
     if (!["admin", "syndic"].includes(caller.role))
       return res.status(403).json({ error: "Opération réservée au syndic." });
+    assertOnboarded(caller, sharedStore);
     const resolved = resolvePlatformBillingConfig(sharedStore);
     return res.json({ ok: true, config: resolved.publicConfig });
   });
@@ -2263,6 +2360,7 @@ async function startServer() {
       return res.status(401).json({ error: "Authentification requise." });
     if (caller.role !== "admin")
       return res.status(403).json({ error: "Administration uniquement." });
+    assertOnboarded(caller, sharedStore);
     const resolved = resolvePlatformBillingConfig(sharedStore);
     return res.json({ ok: true, config: resolved.adminConfig });
   });
@@ -2275,6 +2373,7 @@ async function startServer() {
         return res.status(401).json({ error: "Authentification requise." });
       if (caller.role !== "admin")
         return res.status(403).json({ error: "Administration uniquement." });
+      assertOnboarded(caller, sharedStore);
       const parsed = AdminBillingConfigSchema.parse(
         req.body,
       ) as AdminBillingConfigUpdateInput;
@@ -2283,6 +2382,17 @@ async function startServer() {
         caller.uid,
         parsed,
       );
+      recordGatewayEvent(sharedStore, {
+        gateway: "system",
+        eventType: parsed.resetToEnv
+          ? "BILLING_CONFIG_RESET_TO_ENV"
+          : "BILLING_CONFIG_UPDATED",
+        status: "ok",
+        httpStatus: 200,
+        message: parsed.resetToEnv
+          ? "Configuration passerelles réinitialisée aux variables d’environnement."
+          : `Passerelles mises à jour (CMI:${updated.cmi.enabled ? "ON" : "OFF"}, PayPal:${updated.paypal.enabled ? "ON" : "OFF"}, Virement:${updated.bankTransfer.enabled ? "ON" : "OFF"}, Espèces:${updated.cashPayment.enabled ? "ON" : "OFF"}).`,
+      });
       appendAudit(
         sharedStore,
         caller,
@@ -2294,6 +2404,11 @@ async function startServer() {
           paypalCheckoutMode: updated.paypal.checkoutMode,
           paypalCurrency: updated.paypal.currency,
           bankTransferEnabled: updated.bankTransfer.enabled,
+          cmiEnabled: updated.cmi.enabled,
+          cmiEnv: updated.cmi.env,
+          cashPaymentEnabled: updated.cashPayment.enabled,
+          gracePeriodDays: updated.commercialPolicy.gracePeriodDays,
+          vatRate: updated.issuerProfile.vatRate,
         },
       );
       return res.json({ ok: true, config: updated });
@@ -2308,6 +2423,7 @@ async function startServer() {
         if (!caller) throw new OperationError("Authentification requise.", 401);
         if (caller.role !== "admin")
           throw new OperationError("Administration uniquement.", 403);
+        assertOnboarded(caller, state);
         const resolved = resolvePlatformBillingConfig(state).paypalSecrets;
         const bodyEnv =
           req.body?.env === "live" || req.body?.env === "sandbox"
@@ -2333,11 +2449,89 @@ async function startServer() {
     }, false),
   );
 
+  app.post(
+    "/api/admin/billing-config/test-cmi",
+    wrap(async (req, res) => {
+      const preflight = await repository.transaction(async (state) => {
+        const caller = await extractAndVerifyCaller(req, state);
+        if (!caller) throw new OperationError("Authentification requise.", 401);
+        if (caller.role !== "admin")
+          throw new OperationError("Administration uniquement.", 403);
+        assertOnboarded(caller, state);
+        const resolved = resolvePlatformBillingConfig(state).cmiSecrets;
+        const env =
+          req.body?.env === "production" || req.body?.env === "test"
+            ? normalizeCmiEnv(req.body.env)
+            : resolved.env;
+        const clientId =
+          typeof req.body?.clientId === "string" && req.body.clientId.trim()
+            ? req.body.clientId.trim()
+            : resolved.clientId;
+        const storeKey =
+          typeof req.body?.storeKey === "string" && req.body.storeKey.trim()
+            ? req.body.storeKey.trim()
+            : resolved.storeKey;
+        const currencyCode = req.body?.currencyCode
+          ? normalizeCmiCurrencyCode(req.body.currencyCode)
+          : resolved.currencyCode;
+        return { env, clientId, storeKey, currencyCode };
+      });
+      const result = runCmiSelfTest(preflight);
+      return res.json(result);
+    }, false),
+  );
+
+  const ValidatePromoSchema = z.object({
+    plan: z.enum(["starter", "professional", "enterprise"]),
+    months: z.number().int().min(1).max(12),
+    promoCode: z.string().max(64).optional(),
+  });
+
+  api.post("/api/subscription/validate-promo", async (req, res) => {
+    const caller = await extractAndVerifyCaller(req, sharedStore);
+    if (!caller)
+      return res.status(401).json({ error: "Authentification requise." });
+    if (!["admin", "syndic"].includes(caller.role))
+      return res.status(403).json({ error: "Opération réservée au syndic." });
+    assertOnboarded(caller, sharedStore);
+    const body = ValidatePromoSchema.parse(req.body);
+    const billing = resolvePlatformBillingConfig(sharedStore).publicConfig;
+    const promo = body.promoCode?.trim()
+      ? resolveAndValidatePromoCode(
+          sharedStore,
+          body.promoCode,
+          body.plan as SubscriptionPlan,
+          body.months,
+        )
+      : undefined;
+    const pricing = computeSubscriptionPricing(
+      billing,
+      body.plan as SubscriptionPlan,
+      body.months,
+      promo,
+    );
+    return res.json({
+      ok: true,
+      pricing,
+      ...(promo
+        ? {
+            promo: {
+              code: promo.code,
+              discountType: promo.discountType,
+              discountValue: promo.discountValue,
+              description: promo.description || "",
+            },
+          }
+        : {}),
+    });
+  });
+
   const CreatePayPalOrderSchema = z.object({
     syndicId: z.string().min(1).max(200),
     plan: z.enum(["starter", "professional", "enterprise"]),
     months: z.number().int().min(1).max(12),
     paymentSourceHint: z.enum(["paypal", "card"]).optional(),
+    promoCode: z.string().max(64).optional(),
   });
 
   app.post(
@@ -2349,21 +2543,7 @@ async function startServer() {
         if (!caller) throw new OperationError("Authentification requise.", 401);
         if (!["admin", "syndic"].includes(caller.role))
           throw new OperationError("Opération réservée au syndic.", 403);
-        const user = (state.syndik_prod_registered_users_v1 || []).find(
-          (u: any) => u.uid === caller.uid,
-        );
-        if (
-          (caller as any).emailVerified === false ||
-          user?.profile?.emailVerified === false
-        ) {
-          throw new OperationError("Vérifiez votre adresse email.", 403);
-        }
-        if (user?.profile?.mustChangePassword || (caller as any).mustChangePassword) {
-          throw new OperationError(
-            "Changez votre mot de passe initial avant de continuer.",
-            403,
-          );
-        }
+        assertOnboarded(caller, state);
         const s = (state.syndik_prod_syndics_v1 || []).find(
           (cab: any) => cab.id === body.syndicId,
         );
@@ -2394,10 +2574,19 @@ async function startServer() {
             400,
           );
         }
+        const promo = body.promoCode?.trim()
+          ? resolveAndValidatePromoCode(
+              state,
+              body.promoCode,
+              body.plan as SubscriptionPlan,
+              body.months,
+            )
+          : undefined;
         const pricing = computeSubscriptionPricing(
           billing.publicConfig,
           body.plan as SubscriptionPlan,
           body.months,
+          promo,
         );
         const intentId = `sub-${crypto.randomUUID()}`;
         const intents = (state.__paypalIntents ??= {});
@@ -2417,6 +2606,7 @@ async function startServer() {
           amountMad: pricing.amountMad,
           paypalCurrency: pricing.paypalCurrency,
           paypalCents: pricing.paypalCents,
+          ...(promo ? { promoCode: promo.code } : {}),
           ...(body.paymentSourceHint
             ? { paymentSourceHint: body.paymentSourceHint }
             : {}),
@@ -2641,6 +2831,7 @@ async function startServer() {
           method,
           currency: intent.paypalCurrency,
           chargedAmount: Number(intent.paypalCents) / 100,
+          ...(intent.promoCode ? { promoCode: String(intent.promoCode) } : {}),
           externalOrderId: capture.orderId,
           ...(capture.captureId ? { externalCaptureId: capture.captureId } : {}),
           auditOperation: "paypalCaptureSubscription",
@@ -2650,6 +2841,16 @@ async function startServer() {
         intent.orderId = capture.orderId;
         intent.paymentId = payment.id;
         (state.__paypalOrders ??= {})[capture.orderId] = intentKey;
+        recordGatewayEvent(state, {
+          gateway: "paypal",
+          eventType: "CAPTURE_ORDER_COMPLETED",
+          status: "ok",
+          httpStatus: 200,
+          syndicId: intent.syndicId,
+          orderId: capture.orderId,
+          reference: payment.reference,
+          message: `Capture PayPal (${method}) réussie — ${payment.amount} MAD (${payment.invoiceNumber || payment.id}).`,
+        });
 
         return {
           alreadyCaptured: false,
@@ -2691,6 +2892,15 @@ async function startServer() {
         !transmissionSig ||
         !transmissionTime
       ) {
+        await repository.transaction(async (state) => {
+          recordGatewayEvent(state, {
+            gateway: "paypal",
+            eventType: String(req.body?.event_type || "WEBHOOK"),
+            status: "rejected",
+            httpStatus: 400,
+            message: "En-têtes de signature PayPal manquants.",
+          });
+        });
         return res
           .status(400)
           .json({ error: "En-têtes de signature PayPal manquants." });
@@ -2733,6 +2943,15 @@ async function startServer() {
         },
       );
       if (!verified) {
+        await repository.transaction(async (state) => {
+          recordGatewayEvent(state, {
+            gateway: "paypal",
+            eventType: String(req.body?.event_type || "WEBHOOK"),
+            status: "rejected",
+            httpStatus: 401,
+            message: "Signature webhook PayPal invalide.",
+          });
+        });
         return res
           .status(401)
           .json({ error: "Signature webhook PayPal invalide." });
@@ -2774,6 +2993,15 @@ async function startServer() {
                 (intentPaymentId && p.id === intentPaymentId)),
           );
           if (!match) {
+            recordGatewayEvent(state, {
+              gateway: "paypal",
+              eventType,
+              status: "ignored",
+              httpStatus: 200,
+              orderId: relatedOrderId || undefined,
+              reference: linkedCaptureId || refundId || undefined,
+              message: "Paiement introuvable ou déjà annulé.",
+            });
             return { ignored: true, reason: "payment_not_found_or_already_voided" };
           }
           const reason =
@@ -2787,6 +3015,16 @@ async function startServer() {
             reason,
             "paypalWebhookRefundSubscription",
           );
+          recordGatewayEvent(state, {
+            gateway: "paypal",
+            eventType,
+            status: "ok",
+            httpStatus: 200,
+            syndicId: match.syndicId,
+            orderId: relatedOrderId || undefined,
+            reference: match.reference,
+            message: reason,
+          });
           return { ignored: false, voidedPaymentId: match.id };
         });
         return res.json({ ok: true, eventType, ...outcome });
@@ -2818,12 +3056,31 @@ async function startServer() {
           ? state.__paypalIntents?.[intentKey]
           : undefined;
         if (!intent) {
+          recordGatewayEvent(state, {
+            gateway: "paypal",
+            eventType,
+            status: "ignored",
+            httpStatus: 200,
+            orderId: relatedOrderId || undefined,
+            reference: captureId || undefined,
+            message: "Intent PayPal inconnu.",
+          });
           return { ignored: true, reason: "unknown_intent" };
         }
         if (
           currency !== intent.paypalCurrency ||
           amountCents !== intent.paypalCents
         ) {
+          recordGatewayEvent(state, {
+            gateway: "paypal",
+            eventType,
+            status: "rejected",
+            httpStatus: 400,
+            syndicId: intent.syndicId,
+            orderId: relatedOrderId || undefined,
+            reference: captureId || undefined,
+            message: "Montant ou devise webhook PayPal incohérent.",
+          });
           throw new OperationError(
             "Montant ou devise webhook PayPal incohérent.",
             400,
@@ -2841,6 +3098,7 @@ async function startServer() {
             method: intent.paymentSourceHint === "card" ? "card" : "paypal",
             currency: intent.paypalCurrency,
             chargedAmount: Number(intent.paypalCents) / 100,
+            ...(intent.promoCode ? { promoCode: String(intent.promoCode) } : {}),
             externalOrderId: relatedOrderId || intent.orderId || captureId,
             ...(captureId ? { externalCaptureId: captureId } : {}),
             auditOperation: "paypalWebhookSubscription",
@@ -2852,10 +3110,604 @@ async function startServer() {
           (state.__paypalOrders ??= {})[relatedOrderId] = intentKey;
         }
         intent.paymentId = payment.id;
+        recordGatewayEvent(state, {
+          gateway: "paypal",
+          eventType,
+          status: "ok",
+          httpStatus: 200,
+          syndicId: intent.syndicId,
+          orderId: relatedOrderId || intent.orderId || undefined,
+          reference: payment.reference,
+          message: `Abonnement activé via webhook PayPal (${payment.invoiceNumber || payment.id}).`,
+        });
         return { ignored: false, paymentId: payment.id };
       });
 
       return res.json({ ok: true, ...outcome });
+    }, false),
+  );
+
+  // --- Moroccan CMI 3D-Secure Hosted Payment Page & Callback Engine ---
+  const CreateCmiPaymentSchema = z.object({
+    syndicId: z.string().min(1).max(200),
+    plan: z.enum(["starter", "professional", "enterprise"]),
+    months: z.number().int().min(1).max(12),
+    lang: z.enum(["fr", "ar"]).optional(),
+    promoCode: z.string().max(64).optional(),
+  });
+
+  app.post(
+    "/api/subscription/cmi/create-payment",
+    wrap(async (req, res) => {
+      const body = CreateCmiPaymentSchema.parse(req.body);
+      const prepared = await repository.transaction(async (state) => {
+        const caller = await extractAndVerifyCaller(req, state);
+        if (!caller) throw new OperationError("Authentification requise.", 401);
+        if (!["admin", "syndic"].includes(caller.role))
+          throw new OperationError("Opération réservée au syndic.", 403);
+        assertOnboarded(caller, state);
+        const s = (state.syndik_prod_syndics_v1 || []).find(
+          (cab: any) => cab.id === body.syndicId,
+        );
+        if (
+          !s ||
+          (caller.role !== "admin" &&
+            s.createdBy !== caller.uid &&
+            caller.syndicId !== s.id)
+        ) {
+          throw new OperationError("Cabinet non autorisé.", 403);
+        }
+        if (s.archivedAt) {
+          throw new OperationError(
+            "Cabinet archivé : impossible de renouveler l'abonnement.",
+            409,
+          );
+        }
+        if (caller.role !== "admin" && s.subscriptionStatus === "cancelled") {
+          throw new OperationError(
+            "Votre compte est suspendu. Contactez l'administration.",
+            403,
+          );
+        }
+        const activeBuildings = (s.buildings || []).filter(
+          (b: any) => !b.archivedAt,
+        ).length;
+        const planLimit = PLANS[body.plan].buildings;
+        if (activeBuildings > planLimit) {
+          throw new OperationError(
+            `Impossible de passer au forfait ${body.plan} : ${activeBuildings} immeuble(s) actif(s) pour une limite de ${planLimit}.`,
+            409,
+          );
+        }
+        const billing = resolvePlatformBillingConfig(state);
+        if (!billing.cmiSecrets.enabled) {
+          throw new OperationError(
+            "Le paiement par carte marocaine (CMI) n'est pas configuré.",
+            400,
+          );
+        }
+        const promo = body.promoCode?.trim()
+          ? resolveAndValidatePromoCode(
+              state,
+              body.promoCode,
+              body.plan as SubscriptionPlan,
+              body.months,
+            )
+          : undefined;
+        const pricing = computeSubscriptionPricing(
+          billing.publicConfig,
+          body.plan as SubscriptionPlan,
+          body.months,
+          promo,
+        );
+
+        const oid = `CMI-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
+        const intents = (state.__cmiIntents ??= {});
+        const cutoff = Date.now() - 30 * 86_400_000;
+        for (const [k, v] of Object.entries(intents) as [string, any][]) {
+          if (v?.createdAt && Date.parse(v.createdAt) < cutoff) {
+            delete intents[k];
+          }
+        }
+        intents[oid] = {
+          oid,
+          syndicId: s.id,
+          actorUid: caller.uid,
+          plan: body.plan,
+          months: body.months,
+          amountMad: pricing.amountMad,
+          amountMadCents: pricing.amountMadCents,
+          currencyCode: billing.cmiSecrets.currencyCode,
+          currencyLabel: billing.cmiSecrets.currencyLabel,
+          ...(promo ? { promoCode: promo.code } : {}),
+          status: "created",
+          createdAt: new Date().toISOString(),
+        };
+
+        const origin = resolvePublicOrigin(req, billing.cmiSecrets.shopUrl);
+        const checkout = buildCmiCheckoutPayload({
+          env: billing.cmiSecrets.env,
+          clientId: billing.cmiSecrets.clientId,
+          storeKey: billing.cmiSecrets.storeKey,
+          oid,
+          amountValue: pricing.cmiAmountString,
+          currencyCode: billing.cmiSecrets.currencyCode,
+          lang: body.lang || billing.cmiSecrets.lang,
+          okUrl: `${origin}/api/subscription/cmi/return?status=ok&oid=${encodeURIComponent(oid)}`,
+          failUrl: `${origin}/api/subscription/cmi/return?status=fail&oid=${encodeURIComponent(oid)}`,
+          shopUrl: billing.cmiSecrets.shopUrl || `${origin}/`,
+          callbackUrl: `${origin}/api/webhooks/cmi`,
+          billToName: String(s.name || "Cabinet Syndic"),
+          email: String(s.email || caller.email || ""),
+          tel: String(s.phone || ""),
+          description: `Abonnement ${body.plan} (${body.months} mois)`,
+        });
+
+        recordGatewayEvent(state, {
+          gateway: "cmi",
+          eventType: "CMI_CHECKOUT_INITIATED",
+          status: "ok",
+          httpStatus: 200,
+          syndicId: s.id,
+          orderId: oid,
+          message: `Session CMI initialisée (${pricing.amountMad} MAD · ${body.plan} × ${body.months}m).`,
+        });
+
+        return {
+          oid,
+          amountMad: pricing.amountMad,
+          currency: billing.cmiSecrets.currencyLabel,
+          gatewayUrl: checkout.gatewayUrl,
+          fields: checkout.fields,
+        };
+      });
+
+      return res.json({ ok: true, ...prepared });
+    }, false),
+  );
+
+  // CMI redirects the user's browser via HTTP POST to okUrl / failUrl; convert safely to 303 SPA redirect.
+  const handleCmiBrowserReturn = (req: express.Request, res: express.Response) => {
+    const rawStatus = String(
+      req.query.status || req.body?.Response || "",
+    ).toLowerCase();
+    const status = rawStatus === "ok" || rawStatus === "approved" ? "ok" : "fail";
+    const oid = String(req.query.oid || req.body?.oid || "")
+      .replace(/[^A-Za-z0-9_-]/g, "")
+      .slice(0, 64);
+    const params = new URLSearchParams({ cmi_return: status });
+    if (oid) params.set("oid", oid);
+    return res.redirect(303, `/?${params.toString()}`);
+  };
+  app.post(
+    "/api/subscription/cmi/return",
+    express.urlencoded({ extended: false }),
+    handleCmiBrowserReturn,
+  );
+  app.get("/api/subscription/cmi/return", handleCmiBrowserReturn);
+
+  // Official CMI Server-to-Server Callback (expects plain-text ACTION=POSTAUTH / APPROVED / FAILURE)
+  app.post(
+    "/api/webhooks/cmi",
+    express.urlencoded({ extended: false }),
+    wrap(async (req, res) => {
+      const payload = (req.body && typeof req.body === "object"
+        ? req.body
+        : {}) as Record<string, unknown>;
+      const oid = String(payload.oid || "").trim();
+      const procReturnCode = String(payload.ProcReturnCode || "").trim();
+      const responseLabel = String(payload.Response || "").trim();
+      const transId = String(
+        payload.TransId || payload.AuthCode || payload.transid || "",
+      ).trim();
+      const callbackAmount = Number(payload.amount);
+      const callbackAmountCents = Number.isFinite(callbackAmount)
+        ? Math.round(callbackAmount * 100)
+        : -1;
+      const callbackCurrency = String(payload.currency || "").trim();
+
+      const replyPlain = (code: number, token: "ACTION=POSTAUTH" | "APPROVED" | "FAILURE") => {
+        res.status(code).type("text/plain").send(token);
+      };
+
+      const outcome = await repository.transaction(async (state) => {
+        const cmiSecrets = resolvePlatformBillingConfig(state).cmiSecrets;
+        if (!cmiSecrets.storeKey || !cmiSecrets.clientId) {
+          recordGatewayEvent(state, {
+            gateway: "cmi",
+            eventType: "CMI_CALLBACK",
+            status: "error",
+            httpStatus: 503,
+            orderId: oid || undefined,
+            message: "Passerelle CMI non configurée sur ce serveur.",
+          });
+          return { code: 503, token: "FAILURE" as const };
+        }
+
+        if (!verifyCmiCallbackHash(payload, cmiSecrets.storeKey)) {
+          recordGatewayEvent(state, {
+            gateway: "cmi",
+            eventType: "CMI_CALLBACK_INVALID_HASH",
+            status: "rejected",
+            httpStatus: 200,
+            orderId: oid || undefined,
+            reference: transId || undefined,
+            message: "Signature SHA-512 CMI (HASH) invalide — transaction rejetée.",
+          });
+          return { code: 200, token: "FAILURE" as const };
+        }
+
+        const intent = oid ? state.__cmiIntents?.[oid] : undefined;
+        if (!intent) {
+          recordGatewayEvent(state, {
+            gateway: "cmi",
+            eventType: "CMI_CALLBACK_UNKNOWN_OID",
+            status: "rejected",
+            httpStatus: 200,
+            orderId: oid || undefined,
+            message: "Commande CMI (oid) introuvable.",
+          });
+          return { code: 200, token: "FAILURE" as const };
+        }
+
+        if (procReturnCode !== "00") {
+          intent.status = "failed";
+          intent.lastProcReturnCode = procReturnCode;
+          recordGatewayEvent(state, {
+            gateway: "cmi",
+            eventType: "CMI_PAYMENT_DECLINED",
+            status: "ignored",
+            httpStatus: 200,
+            syndicId: intent.syndicId,
+            orderId: oid,
+            reference: transId || undefined,
+            message: `Paiement CMI refusé (ProcReturnCode=${procReturnCode || "?"}, Response=${responseLabel || "?"}).`,
+          });
+          return { code: 200, token: "APPROVED" as const };
+        }
+
+        if (
+          callbackAmountCents !== Number(intent.amountMadCents) ||
+          (callbackCurrency && callbackCurrency !== String(intent.currencyCode))
+        ) {
+          recordGatewayEvent(state, {
+            gateway: "cmi",
+            eventType: "CMI_AMOUNT_MISMATCH",
+            status: "rejected",
+            httpStatus: 200,
+            syndicId: intent.syndicId,
+            orderId: oid,
+            reference: transId || undefined,
+            message: `Montant ou devise CMI incohérent (reçu ${callbackAmount} / ${callbackCurrency}, attendu ${intent.amountMad} / ${intent.currencyCode}).`,
+          });
+          return { code: 200, token: "FAILURE" as const };
+        }
+
+        const payment = activatePlatformSubscription(
+          state,
+          { uid: "cmi:webhook", role: "admin" },
+          {
+            syndicId: intent.syndicId,
+            plan: intent.plan as SubscriptionPlan,
+            months: Number(intent.months),
+            reference: transId || oid,
+            amountMad: Number(intent.amountMad),
+            method: "cmi",
+            currency: (intent.currencyLabel || "MAD") as "MAD" | "EUR" | "USD",
+            chargedAmount: Number(intent.amountMad),
+            ...(intent.promoCode ? { promoCode: String(intent.promoCode) } : {}),
+            externalOrderId: oid,
+            ...(transId ? { externalCaptureId: transId } : {}),
+            auditOperation: "cmiWebhookSubscription",
+          },
+        );
+
+        intent.status = "completed";
+        intent.paymentId = payment.id;
+        intent.transId = transId || undefined;
+        recordGatewayEvent(state, {
+          gateway: "cmi",
+          eventType: "CMI_PAYMENT_POSTAUTH",
+          status: "ok",
+          httpStatus: 200,
+          syndicId: intent.syndicId,
+          orderId: oid,
+          reference: payment.reference,
+          message: `Paiement CMI validé (ACTION=POSTAUTH) — ${payment.amount} MAD (${payment.invoiceNumber || payment.id}).`,
+        });
+        return { code: 200, token: "ACTION=POSTAUTH" as const };
+      });
+
+      return replyPlain(outcome.code, outcome.token);
+    }, false),
+  );
+
+  // --- Admin Promo Code CRUD ---
+  const PromoCreateSchema = z.object({
+    code: z
+      .string()
+      .trim()
+      .min(3)
+      .max(32)
+      .regex(/^[A-Za-z0-9_-]+$/),
+    discountType: z.enum(["percent", "fixed_mad"]),
+    discountValue: z.number().positive().max(100_000),
+    active: z.boolean().optional(),
+    applicablePlans: z
+      .array(z.enum(["starter", "professional", "enterprise"]))
+      .optional(),
+    minMonths: z.number().int().min(1).max(12).optional(),
+    maxUses: z.number().int().min(1).max(100_000).optional(),
+    validUntil: z.string().max(40).optional(),
+    description: z.string().max(240).optional(),
+  });
+
+  api.get("/api/admin/promos", async (req, res) => {
+    const caller = await extractAndVerifyCaller(req, sharedStore);
+    if (!caller)
+      return res.status(401).json({ error: "Authentification requise." });
+    if (caller.role !== "admin")
+      return res.status(403).json({ error: "Administration uniquement." });
+    assertOnboarded(caller, sharedStore);
+    const promos: SubscriptionPromoCode[] = sharedStore.__subscriptionPromos || [];
+    return res.json({ ok: true, promos: [...promos].reverse() });
+  });
+
+  api.post("/api/admin/promos", async (req, res) => {
+    const caller = await extractAndVerifyCaller(req, sharedStore);
+    if (!caller)
+      return res.status(401).json({ error: "Authentification requise." });
+    if (caller.role !== "admin")
+      return res.status(403).json({ error: "Administration uniquement." });
+    assertOnboarded(caller, sharedStore);
+    const parsed = PromoCreateSchema.parse(req.body);
+    if (parsed.discountType === "percent" && parsed.discountValue > 95) {
+      throw new OperationError("La remise en pourcentage ne peut dépasser 95%.", 400);
+    }
+    const normalizedCode = parsed.code.trim().toUpperCase();
+    const promos: SubscriptionPromoCode[] = (sharedStore.__subscriptionPromos ??= []);
+    if (promos.some((p) => p.code.toUpperCase() === normalizedCode)) {
+      throw new OperationError("Ce code promotionnel existe déjà.", 409);
+    }
+    const promo: SubscriptionPromoCode = {
+      id: crypto.randomUUID(),
+      code: normalizedCode,
+      discountType: parsed.discountType,
+      discountValue: Number(parsed.discountValue.toFixed(2)),
+      active: parsed.active ?? true,
+      ...(parsed.applicablePlans?.length
+        ? { applicablePlans: parsed.applicablePlans }
+        : {}),
+      ...(parsed.minMonths ? { minMonths: parsed.minMonths } : {}),
+      ...(parsed.maxUses ? { maxUses: parsed.maxUses } : {}),
+      usedCount: 0,
+      ...(parsed.validUntil?.trim() ? { validUntil: parsed.validUntil.trim() } : {}),
+      ...(parsed.description?.trim()
+        ? { description: parsed.description.trim() }
+        : {}),
+      createdAt: new Date().toISOString(),
+      createdBy: caller.uid,
+    };
+    promos.push(promo);
+    appendAudit(sharedStore, caller, "adminCreatePromoCode", undefined, {
+      promoId: promo.id,
+      code: promo.code,
+      discountType: promo.discountType,
+      discountValue: promo.discountValue,
+    });
+    return res.json({ ok: true, promo });
+  });
+
+  app.patch(
+    "/api/admin/promos/:id",
+    wrap(async (req, res) => {
+      const caller = await extractAndVerifyCaller(req, sharedStore);
+      if (!caller)
+        return res.status(401).json({ error: "Authentification requise." });
+      if (caller.role !== "admin")
+        return res.status(403).json({ error: "Administration uniquement." });
+      assertOnboarded(caller, sharedStore);
+      const promos: SubscriptionPromoCode[] = sharedStore.__subscriptionPromos || [];
+      const promo = promos.find((p) => p.id === req.params.id);
+      if (!promo) throw new OperationError("Code promo introuvable.", 404);
+      if (typeof req.body?.active === "boolean") {
+        promo.active = req.body.active;
+      }
+      if (typeof req.body?.description === "string") {
+        promo.description = req.body.description.trim().slice(0, 240);
+      }
+      if (typeof req.body?.validUntil === "string") {
+        const trimmed = req.body.validUntil.trim();
+        if (trimmed) promo.validUntil = trimmed;
+        else delete promo.validUntil;
+      }
+      if (req.body?.maxUses !== undefined) {
+        const n = Number(req.body.maxUses);
+        if (Number.isInteger(n) && n >= 1) promo.maxUses = n;
+        else if (req.body.maxUses === null || req.body.maxUses === "") delete promo.maxUses;
+      }
+      appendAudit(sharedStore, caller, "adminUpdatePromoCode", undefined, {
+        promoId: promo.id,
+        code: promo.code,
+        active: promo.active,
+      });
+      return res.json({ ok: true, promo });
+    }, true),
+  );
+
+  app.delete(
+    "/api/admin/promos/:id",
+    wrap(async (req, res) => {
+      const caller = await extractAndVerifyCaller(req, sharedStore);
+      if (!caller)
+        return res.status(401).json({ error: "Authentification requise." });
+      if (caller.role !== "admin")
+        return res.status(403).json({ error: "Administration uniquement." });
+      assertOnboarded(caller, sharedStore);
+      const promos: SubscriptionPromoCode[] = sharedStore.__subscriptionPromos || [];
+      const idx = promos.findIndex((p) => p.id === req.params.id);
+      if (idx < 0) throw new OperationError("Code promo introuvable.", 404);
+      const [removed] = promos.splice(idx, 1);
+      appendAudit(sharedStore, caller, "adminDeletePromoCode", undefined, {
+        promoId: removed.id,
+        code: removed.code,
+      });
+      return res.json({ ok: true });
+    }, true),
+  );
+
+  // --- Admin Audit Trail & Gateway Webhook Monitor ---
+  api.get("/api/admin/audit-logs", async (req, res) => {
+    const caller = await extractAndVerifyCaller(req, sharedStore);
+    if (!caller)
+      return res.status(401).json({ error: "Authentification requise." });
+    if (caller.role !== "admin")
+      return res.status(403).json({ error: "Administration uniquement." });
+    assertOnboarded(caller, sharedStore);
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 100));
+    const operation = String(req.query.operation || "").trim().toLowerCase();
+    const search = String(req.query.q || "").trim().toLowerCase();
+    const all = [...(sharedStore.syndik_prod_audit_v1 || [])].reverse();
+    const filtered = all
+      .filter((entry: any) => {
+        if (operation && String(entry.operation || "").toLowerCase() !== operation) {
+          return false;
+        }
+        if (!search) return true;
+        return JSON.stringify(entry).toLowerCase().includes(search);
+      })
+      .slice(0, limit);
+    return res.json({ ok: true, logs: filtered, total: all.length });
+  });
+
+  api.get("/api/admin/gateway-events", async (req, res) => {
+    const caller = await extractAndVerifyCaller(req, sharedStore);
+    if (!caller)
+      return res.status(401).json({ error: "Authentification requise." });
+    if (caller.role !== "admin")
+      return res.status(403).json({ error: "Administration uniquement." });
+    assertOnboarded(caller, sharedStore);
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 100));
+    const gateway = String(req.query.gateway || "").trim().toLowerCase();
+    const status = String(req.query.status || "").trim().toLowerCase();
+    const all = [...(sharedStore.__gatewayEvents || [])].reverse();
+    const filtered = all
+      .filter((ev: any) => {
+        if (gateway && String(ev.gateway || "").toLowerCase() !== gateway) return false;
+        if (status && String(ev.status || "").toLowerCase() !== status) return false;
+        return true;
+      })
+      .slice(0, limit);
+    return res.json({ ok: true, events: filtered, total: all.length });
+  });
+
+  // --- Admin Renewal Dunning Reminder (with 24h anti-spam cooldown) ---
+  app.post(
+    "/api/admin/cabinets/:id/send-reminder",
+    wrap(async (req, res) => {
+      const dispatched = await repository.transaction(async (state) => {
+        const caller = await extractAndVerifyCaller(req, state);
+        if (!caller) throw new OperationError("Authentification requise.", 401);
+        if (caller.role !== "admin")
+          throw new OperationError("Administration uniquement.", 403);
+        assertOnboarded(caller, state);
+        const syndic = (state.syndik_prod_syndics_v1 || []).find(
+          (s: any) => s.id === req.params.id,
+        );
+        if (!syndic) throw new OperationError("Cabinet introuvable.", 404);
+        if (syndic.archivedAt)
+          throw new OperationError("Cabinet archivé.", 409);
+        const targetEmail = String(syndic.email || "").trim();
+        if (!targetEmail || !/^\S+@\S+\.\S+$/.test(targetEmail)) {
+          throw new OperationError(
+            "Ce cabinet ne dispose pas d'une adresse email valide.",
+            400,
+          );
+        }
+        const sentMap = (state.__renewalRemindersSent ??= {});
+        const lastSentIso = sentMap[syndic.id];
+        const cooldownMs = 24 * 3600 * 1000;
+        if (lastSentIso && Date.now() - Date.parse(lastSentIso) < cooldownMs) {
+          throw new OperationError(
+            "Un rappel a déjà été envoyé à ce cabinet au cours des dernières 24 heures.",
+            429,
+          );
+        }
+        const billing = resolvePlatformBillingConfig(state).publicConfig;
+        const expiryFormatted = syndic.subscriptionExpiry
+          ? new Date(syndic.subscriptionExpiry).toLocaleDateString("fr-MA")
+          : "—";
+        const planPrice =
+          PLANS[syndic.subscriptionPlan as SubscriptionPlan]?.price ?? 390;
+        const subject = `Rappel de renouvellement — Abonnement ${billing.issuerProfile?.companyName || "Syndik"} (${syndic.name})`;
+        const bodyLines = [
+          `Bonjour ${syndic.name},`,
+          "",
+          `Votre abonnement (${syndic.subscriptionPlan} — ${planPrice} MAD/mois) arrive à échéance le ${expiryFormatted}.`,
+          "Connectez-vous à votre espace Syndic pour renouveler votre abonnement (Carte CMI Maroc, PayPal, Virement RIB ou Espèces / Agence).",
+          ...(billing.issuerProfile?.phone
+            ? [`Support : ${billing.issuerProfile.phone}`]
+            : []),
+          "",
+          `Cordialement,`,
+          billing.issuerProfile?.companyName || "Équipe Syndik",
+        ];
+        const mailReady = mailIsConfigured();
+        if (mailReady) {
+          queueMail(state, targetEmail, subject, bodyLines.join("\n"));
+        }
+        const nowIso = new Date().toISOString();
+        const notifs = (state.syndik_prod_notifications_v1 ??= []);
+        const targetUsers = (state.syndik_prod_registered_users_v1 || []).filter(
+          (u: any) =>
+            !u.disabled &&
+            u.profile?.role === "syndic" &&
+            (u.uid === syndic.createdBy || u.profile?.syndicId === syndic.id),
+        );
+        const notifiedUids = new Set<string>(
+          targetUsers.map((u: any) => String(u.uid)),
+        );
+        if (syndic.createdBy) notifiedUids.add(String(syndic.createdBy));
+        for (const uid of notifiedUids) {
+          notifs.push({
+            id: crypto.randomUUID(),
+            userId: uid,
+            title: "Rappel de renouvellement d'abonnement",
+            message: `Votre abonnement (${syndic.subscriptionPlan}) arrive à échéance le ${expiryFormatted}. Renouvelez par CMI, PayPal, Virement ou Espèces.`,
+            type: "warning",
+            read: false,
+            link: "/settings",
+            createdAt: nowIso,
+          });
+        }
+        sentMap[syndic.id] = nowIso;
+        appendAudit(state, caller, "adminSendRenewalReminder", undefined, {
+          syndicId: syndic.id,
+          email: targetEmail,
+          emailQueued: mailReady,
+          inAppRecipients: notifiedUids.size,
+          subscriptionExpiry: syndic.subscriptionExpiry,
+        });
+        return {
+          email: targetEmail,
+          sentAt: nowIso,
+          emailQueued: mailReady,
+          inAppRecipients: notifiedUids.size,
+        };
+      });
+      if (dispatched.emailQueued) {
+        await deliverOutbox(repository, 5).catch(() => {});
+      }
+      return res.json({
+        ok: true,
+        email: dispatched.email,
+        sentAt: dispatched.sentAt,
+        emailQueued: dispatched.emailQueued,
+        inAppRecipients: dispatched.inAppRecipients,
+        message: dispatched.emailQueued
+          ? `Rappel envoyé par email (${dispatched.email}) et notification portail.`
+          : `Notification de renouvellement envoyée dans le portail du cabinet (SMTP/SendGrid non configuré).`,
+      });
     }, false),
   );
 

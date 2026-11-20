@@ -12,6 +12,7 @@ TransactionSchema,
 import { allAttachmentValues, privateAttachments } from '../attachments';
 import { fileIsReferenced } from '../lifecycle';
 import { mailIsConfigured,queueMail } from "../mailer";
+import { resolvePlatformBillingConfig } from "../paypalBilling";
 import { type State } from "../repository";
 import { firebaseLinkedResidentIds,LINKED_RESIDENT_EMAIL_CODE,LINKED_RESIDENT_EMAIL_MESSAGE } from '../residentIdentity';
 import { createAssemblyCommands } from './assembly.service';
@@ -122,8 +123,11 @@ function canWrite(actor: Actor, b: any) {
   if (actor.role !== "admin") {
     const cab = cabinetFor(actor, b.syndicId);
     check(!cab.archivedAt, "Cabinet archivé.", 409);
+    const graceDays =
+      resolvePlatformBillingConfig(transactionState).publicConfig
+        .commercialPolicy?.gracePeriodDays ?? 0;
     check(
-      subscriptionCanWrite(cab),
+      subscriptionCanWrite(cab, graceDays),
       "Abonnement expiré : consultation et export disponibles.",
       402,
     );
@@ -510,8 +514,11 @@ async function runOperation(
     const input = object(args[0]),
       s = cabinetFor(actor, str(input.id));
     check(!s.archivedAt, "Cabinet archivé.", 409);
+    const graceDays =
+      resolvePlatformBillingConfig(transactionState).publicConfig
+        .commercialPolicy?.gracePeriodDays ?? 0;
     check(
-      actor.role === "admin" || subscriptionCanWrite(s),
+      actor.role === "admin" || subscriptionCanWrite(s, graceDays),
       "Abonnement expiré : consultation et export disponibles.",
       402,
     );
@@ -569,8 +576,11 @@ async function runOperation(
   if (operation === "addBuilding") {
     manager(actor);
     const s = cabinetFor(actor, str(args[0]));
+    const graceDays =
+      resolvePlatformBillingConfig(transactionState).publicConfig
+        .commercialPolicy?.gracePeriodDays ?? 0;
     check(
-      actor.role === "admin" || subscriptionCanWrite(s),
+      actor.role === "admin" || subscriptionCanWrite(s, graceDays),
       "Abonnement expiré.",
       402,
     );

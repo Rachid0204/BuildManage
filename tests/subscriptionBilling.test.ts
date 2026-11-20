@@ -13,6 +13,18 @@ import {
   formatMoroccanRib,
   getPayPalApiBase,
 } from '../server/paypalBilling';
+import {
+  computeCmiHashVer3,
+  getCmiGatewayUrl,
+  runCmiSelfTest,
+  verifyCmiCallbackHash,
+} from '../server/cmiBilling';
+import {
+  getEffectiveSubscriptionStatus,
+  getGraceDaysRemaining,
+  isInGracePeriod,
+  subscriptionCanWrite,
+} from '../utils/subscriptionPolicy';
 import type { PublicPlatformBillingConfig } from '../types';
 
 const root = resolve(import.meta.dirname, '..');
@@ -434,7 +446,7 @@ const killTimer = setTimeout(() => child.kill(), 90_000);
 async function httpCall(
   route: string,
   opts: {
-    method?: 'GET' | 'POST' | 'PUT';
+    method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
     token?: string;
     body?: unknown;
     headers?: Record<string, string>;
@@ -1225,6 +1237,527 @@ try {
       captureHits.includes('PP-CRASH-RECOVERY-1'),
       'Crash-recovery order must be captured after read-only ownership proof',
     );
+  });
+
+  await test('pure CMI ver3 SHA-512 Base64 hash, gateway host enforcement, and grace-period policy helpers', () => {
+    const storeKey = 'My|Secret\\StoreKey2026!';
+    const params = {
+      oid: 'CMI-TEST-001',
+      amount: '390.00',
+      clientid: '600001234',
+      currency: '504',
+      BillToName: 'Cabinet | Alpha\\Beta',
+      encoding: 'UTF-8',
+    };
+    const hash = computeCmiHashVer3(params, storeKey);
+    assert.ok(hash.length > 40);
+    assert.equal(verifyCmiCallbackHash({ ...params, HASH: hash }, storeKey), true);
+    assert.equal(
+      verifyCmiCallbackHash({ ...params, amount: '1.00', HASH: hash }, storeKey),
+      false,
+    );
+    assert.equal(
+      verifyCmiCallbackHash({ ...params, HASH: 'tampered-hash' }, storeKey),
+      false,
+    );
+
+    const selfTest = runCmiSelfTest({
+      env: 'test',
+      clientId: '600001234',
+      storeKey,
+      currencyCode: '504',
+    });
+    assert.equal(selfTest.ok, true);
+    assert.equal(selfTest.gatewayUrl, 'https://testpayment.cmi.co.ma/fim/est3Dgate');
+
+    const origEnv = process.env.NODE_ENV;
+    const origCmiUrl = process.env.CMI_GATEWAY_URL;
+    try {
+      process.env.CMI_GATEWAY_URL = 'http://127.0.0.1:9998/cmi';
+      process.env.NODE_ENV = 'test';
+      assert.equal(getCmiGatewayUrl('production'), 'http://127.0.0.1:9998/cmi');
+      process.env.NODE_ENV = 'production';
+      assert.equal(getCmiGatewayUrl('production'), 'https://payment.cmi.co.ma/fim/est3Dgate');
+      assert.equal(getCmiGatewayUrl('test'), 'https://testpayment.cmi.co.ma/fim/est3Dgate');
+    } finally {
+      process.env.NODE_ENV = origEnv;
+      if (origCmiUrl === undefined) delete process.env.CMI_GATEWAY_URL;
+      else process.env.CMI_GATEWAY_URL = origCmiUrl;
+    }
+
+    // Grace period policy: 0-day default strictly expires; 7-day grace keeps active cabinet writable
+    const now = Date.now();
+    const expired3DaysAgo = {
+      subscriptionStatus: 'active',
+      subscriptionExpiry: new Date(now - 3 * 86_400_000).toISOString(),
+    };
+    assert.equal(getEffectiveSubscriptionStatus(expired3DaysAgo, now, 0), 'expired');
+    assert.equal(subscriptionCanWrite(expired3DaysAgo, 0), false);
+    assert.equal(isInGracePeriod(expired3DaysAgo, 7, now), true);
+    assert.equal(getGraceDaysRemaining(expired3DaysAgo, 7, now), 4);
+    assert.equal(getEffectiveSubscriptionStatus(expired3DaysAgo, now, 7), 'active');
+    assert.equal(subscriptionCanWrite(expired3DaysAgo, 7), true);
+    // Cancelled cabinets never get grace period
+    const cancelledCab = {
+      subscriptionStatus: 'cancelled',
+      subscriptionExpiry: new Date(now - 2 * 86_400_000).toISOString(),
+    };
+    assert.equal(isInGracePeriod(cancelledCab, 7, now), false);
+    assert.equal(subscriptionCanWrite(cancelledCab, 7), false);
+  });
+
+  await test('hardened gateway settings enforce IBAN/SWIFT/ICE, PayPal Live webhook guard, CMI encrypted storeKey, Cash & Issuer/Commercial policies', async () => {
+    const validBase = {
+      paypal: {
+        enabled: true,
+        env: 'sandbox' as const,
+        checkoutMode: 'expanded' as const,
+        clientId: 'env-pp-client',
+        currency: 'EUR' as const,
+        madPerUnit: 10,
+      },
+      bankTransfer: {
+        enabled: true,
+        bankName: 'Attijariwafa Bank',
+        accountHolder: 'ImmoGest Maroc SARL',
+        rib: '007780000123456789012345',
+        iban: 'MA64007780000123456789012345',
+        swift: 'BCMAMAMC',
+        ice: '001234567000089',
+      },
+    };
+
+    // Invalid Moroccan IBAN -> 400
+    const badIban = await httpCall('/api/admin/billing-config', {
+      method: 'PUT',
+      token: adminToken,
+      body: {
+        ...validBase,
+        bankTransfer: { ...validBase.bankTransfer, iban: 'MA12345' },
+      },
+    });
+    assert.equal(badIban.status, 400, JSON.stringify(badIban.data));
+
+    // Invalid SWIFT -> 400
+    const badSwift = await httpCall('/api/admin/billing-config', {
+      method: 'PUT',
+      token: adminToken,
+      body: {
+        ...validBase,
+        bankTransfer: { ...validBase.bankTransfer, swift: 'BAD' },
+      },
+    });
+    assert.equal(badSwift.status, 400, JSON.stringify(badSwift.data));
+
+    // Invalid 15-digit ICE -> 400
+    const badIce = await httpCall('/api/admin/billing-config', {
+      method: 'PUT',
+      token: adminToken,
+      body: {
+        ...validBase,
+        bankTransfer: { ...validBase.bankTransfer, ice: '12345' },
+      },
+    });
+    assert.equal(badIce.status, 400, JSON.stringify(badIce.data));
+
+    // PayPal Live enabled without Webhook ID -> 400
+    const liveNoWebhook = await httpCall('/api/admin/billing-config', {
+      method: 'PUT',
+      token: adminToken,
+      body: {
+        ...validBase,
+        paypal: {
+          ...validBase.paypal,
+          env: 'live',
+          clearWebhookId: true,
+        },
+      },
+    });
+    assert.equal(liveNoWebhook.status, 400, JSON.stringify(liveNoWebhook.data));
+
+    // Save full CMI + Hybrid Cash + Issuer Profile + Commercial Policy
+    const saved = await httpCall('/api/admin/billing-config', {
+      method: 'PUT',
+      token: adminToken,
+      body: {
+        ...validBase,
+        cmi: {
+          enabled: true,
+          env: 'test',
+          clientId: '600009999',
+          storeKey: 'CmiSuperSecretStoreKey#2026',
+          currencyCode: '504',
+          lang: 'fr',
+        },
+        cashPayment: {
+          enabled: true,
+          acceptedChannels: ['office', 'wafacash', 'cashplus', 'check'],
+          beneficiaryName: 'ImmoGest Maroc SARL',
+          officeAddress: '45 Bd d’Anfa, Casablanca',
+          officeHours: 'Lun-Ven 09h-17h30',
+          contactPhone: '+212 5 22 00 00 00',
+          whatsapp: '+212 6 00 00 00 00',
+          maxCashAmountMad: 2000,
+          requireProofUpload: true,
+        },
+        issuerProfile: {
+          companyName: 'ImmoGest Maroc',
+          legalForm: 'SARL',
+          ice: '001234567000089',
+          rc: 'RC-412345',
+          ifNumber: '40123456',
+          patente: '34567890',
+          address: '45 Bd d’Anfa',
+          city: 'Casablanca',
+          vatRate: 20,
+          invoicePrefix: 'FAC',
+          receiptPrefix: 'REC',
+        },
+        commercialPolicy: {
+          gracePeriodDays: 7,
+          multiMonthDiscounts: { m3: 5, m6: 10, m12: 20 },
+        },
+      },
+    });
+    assert.equal(saved.status, 200, JSON.stringify(saved.data));
+    assert.equal(saved.data.config.cmi.enabled, true);
+    assert.equal(saved.data.config.cmi.hasStoreKey, true);
+    assert.equal(saved.data.config.cmi.storeKeySource, 'admin');
+    assert.equal(saved.data.config.cmi.storeKeyFingerprint, '••••2026');
+    assert.equal(saved.data.config.cmi.storeKey, undefined);
+    assert.equal(saved.data.config.cashPayment.enabled, true);
+    assert.equal(saved.data.config.issuerProfile.vatRate, 20);
+    assert.equal(saved.data.config.commercialPolicy.gracePeriodDays, 7);
+
+    // Ensure CMI storeKey is encrypted at rest on disk
+    const disk = readDiskState();
+    const encCmiKey = disk.__platformBillingConfig?.cmi?.encryptedStoreKey;
+    assert.ok(typeof encCmiKey === 'string' && encCmiKey.startsWith('v2:'));
+    assert.ok(!encCmiKey.includes('CmiSuperSecretStoreKey'));
+
+    // Self-test CMI endpoint works with saved encrypted secret
+    const cmiTest = await httpCall('/api/admin/billing-config/test-cmi', {
+      method: 'POST',
+      token: adminToken,
+      body: {},
+    });
+    assert.equal(cmiTest.status, 200, JSON.stringify(cmiTest.data));
+    assert.equal(cmiTest.data.ok, true);
+  });
+
+  await test('full Moroccan CMI 3DS checkout, promo discount, 303 return redirect, and ver3 callback (POSTAUTH / FAILURE / APPROVED)', async () => {
+    // 1. Admin creates a 10% promo code (max 2 uses)
+    const promoRes = await httpCall('/api/admin/promos', {
+      method: 'POST',
+      token: adminToken,
+      body: {
+        code: 'MAROC10',
+        discountType: 'percent',
+        discountValue: 10,
+        maxUses: 2,
+        minMonths: 3,
+        description: 'Offre lancement Maroc',
+      },
+    });
+    assert.equal(promoRes.status, 200, JSON.stringify(promoRes.data));
+    const promoId = promoRes.data.promo.id as string;
+
+    // Non-admin cannot access /api/admin/promos
+    const forbiddenPromo = await httpCall('/api/admin/promos', {
+      method: 'GET',
+      token: syndicAToken,
+    });
+    assert.equal(forbiddenPromo.status, 403);
+
+    // Syndic validates promo (starter 190 * 6 = 1140; -10% multi-month = 1026; -10% promo = 923.40 MAD)
+    const previewRes = await httpCall('/api/subscription/validate-promo', {
+      method: 'POST',
+      token: syndicAToken,
+      body: { plan: 'starter', months: 6, promoCode: 'maroc10' },
+    });
+    assert.equal(previewRes.status, 200, JSON.stringify(previewRes.data));
+    assert.equal(previewRes.data.pricing.baseAmountMad, 1140);
+    assert.equal(previewRes.data.pricing.multiMonthDiscountPct, 10);
+    assert.equal(previewRes.data.pricing.amountMad, 923.4);
+    assert.equal(previewRes.data.pricing.vatRate, 20);
+
+    // 2. Syndic initiates CMI payment
+    const initRes = await httpCall('/api/subscription/cmi/create-payment', {
+      method: 'POST',
+      token: syndicAToken,
+      body: { syndicId: 'cab-a', plan: 'starter', months: 6, promoCode: 'MAROC10' },
+    });
+    assert.equal(initRes.status, 200, JSON.stringify(initRes.data));
+    assert.equal(initRes.data.amountMad, 923.4);
+    assert.equal(initRes.data.fields.currency, '504');
+    assert.equal(initRes.data.fields.hashAlgorithm, 'ver3');
+    assert.equal(initRes.data.fields.storetype, '3D_PAY_HOSTING');
+    assert.equal(
+      verifyCmiCallbackHash(initRes.data.fields, 'CmiSuperSecretStoreKey#2026'),
+      true,
+    );
+    const oid = initRes.data.oid as string;
+
+    // 3. Browser POST return from CMI redirects 303 cleanly to SPA
+    const returnRes = await fetch(
+      `http://127.0.0.1:${serverPort}/api/subscription/cmi/return?status=ok&oid=${encodeURIComponent(oid)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ oid, Response: 'Approved' }).toString(),
+        redirect: 'manual',
+      },
+    );
+    assert.equal(returnRes.status, 303);
+    assert.ok(
+      returnRes.headers.get('location')?.includes(`cmi_return=ok&oid=${oid}`),
+      `Unexpected redirect: ${returnRes.headers.get('location')}`,
+    );
+
+    // 4. Invalid HASH callback -> FAILURE
+    const postCmiWebhook = async (fields: Record<string, string>) => {
+      const r = await fetch(`http://127.0.0.1:${serverPort}/api/webhooks/cmi`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams(fields).toString(),
+      });
+      return { status: r.status, text: await r.text() };
+    };
+
+    const badHashCb = await postCmiWebhook({
+      oid,
+      amount: '923.40',
+      currency: '504',
+      ProcReturnCode: '00',
+      TransId: 'CMI-TX-BAD',
+      HASH: 'invalid-signature',
+    });
+    assert.equal(badHashCb.text, 'FAILURE');
+
+    // 5. Tampered amount with valid HASH -> FAILURE
+    const tamperedFields: Record<string, string> = {
+      oid,
+      amount: '10.00',
+      currency: '504',
+      ProcReturnCode: '00',
+      TransId: 'CMI-TX-TAMPER',
+      Response: 'Approved',
+      encoding: 'UTF-8',
+    };
+    tamperedFields.HASH = computeCmiHashVer3(tamperedFields, 'CmiSuperSecretStoreKey#2026');
+    const tamperCb = await postCmiWebhook(tamperedFields);
+    assert.equal(tamperCb.text, 'FAILURE');
+
+    // 6. Valid signed callback (ProcReturnCode=00) -> ACTION=POSTAUTH & activates subscription with FAC invoice
+    const validFields: Record<string, string> = {
+      oid,
+      amount: '923.40',
+      currency: '504',
+      ProcReturnCode: '00',
+      TransId: 'CMI-TX-9001',
+      Response: 'Approved',
+      encoding: 'UTF-8',
+    };
+    validFields.HASH = computeCmiHashVer3(validFields, 'CmiSuperSecretStoreKey#2026');
+    const okCb = await postCmiWebhook(validFields);
+    assert.equal(okCb.status, 200);
+    assert.equal(okCb.text, 'ACTION=POSTAUTH');
+
+    // 7. Replay callback is idempotent -> ACTION=POSTAUTH without double-recording payment
+    const replayCb = await postCmiWebhook(validFields);
+    assert.equal(replayCb.text, 'ACTION=POSTAUTH');
+
+    const diskAfterCmi = readDiskState();
+    const cmiPayments = (diskAfterCmi.syndik_prod_subscription_payments_v1 || []).filter(
+      (p: any) => p.externalOrderId === oid,
+    );
+    assert.equal(cmiPayments.length, 1);
+    assert.equal(cmiPayments[0].method, 'cmi');
+    assert.equal(cmiPayments[0].amount, 923.4);
+    assert.equal(cmiPayments[0].promoCode, 'MAROC10');
+    assert.ok(String(cmiPayments[0].invoiceNumber || '').startsWith('FAC-'));
+    assert.equal(cmiPayments[0].vatRate, 20);
+    assert.equal(
+      (diskAfterCmi.__subscriptionPromos || []).find((p: any) => p.id === promoId)?.usedCount,
+      1,
+    );
+
+    // 8. Declined CMI payment -> APPROVED (stops CMI retries without activating)
+    const initDeclined = await httpCall('/api/subscription/cmi/create-payment', {
+      method: 'POST',
+      token: syndicBToken,
+      body: { syndicId: 'cab-b', plan: 'starter', months: 1 },
+    });
+    const declinedFields: Record<string, string> = {
+      oid: initDeclined.data.oid,
+      amount: '190.00',
+      currency: '504',
+      ProcReturnCode: '05',
+      Response: 'Declined',
+      encoding: 'UTF-8',
+    };
+    declinedFields.HASH = computeCmiHashVer3(declinedFields, 'CmiSuperSecretStoreKey#2026');
+    const declinedCb = await postCmiWebhook(declinedFields);
+    assert.equal(declinedCb.text, 'APPROVED');
+  });
+
+  await test('hybrid Moroccan cash flow (Wafacash proof & cap enforcement, Admin approval, counter Cash with auto-ref & void promo rollback)', async () => {
+    const today = new Date().toISOString().slice(0, 10);
+
+    // 1. Cash request exceeding maxCashAmountMad (2000 MAD) -> 400 (enterprise 790 * 3 = 2370 - 5% = 2251.50 > 2000)
+    const overCap = await command(syndicBToken, 'submitSubscriptionBankTransfer', [
+      {
+        syndicId: 'cab-b',
+        plan: 'enterprise',
+        months: 3,
+        requestType: 'cash',
+        cashChannel: 'wafacash',
+        transferReference: 'WAFA-OVERCAP-01',
+        transferDate: today,
+      },
+    ]);
+    assert.equal(overCap.status, 400, JSON.stringify(overCap.data));
+
+    // 2. Cash request without proof when requireProofUpload=true -> 400
+    const missingProof = await command(syndicBToken, 'submitSubscriptionBankTransfer', [
+      {
+        syndicId: 'cab-b',
+        plan: 'starter',
+        months: 1,
+        requestType: 'cash',
+        cashChannel: 'wafacash',
+        transferReference: 'WAFA-NOPROOF-01',
+        transferDate: today,
+      },
+    ]);
+    assert.equal(missingProof.status, 400, JSON.stringify(missingProof.data));
+
+    // 3. Upload subscription cash receipt proof & submit Wafacash request
+    const uploadProof = await httpCall('/api/subscription/upload-proof', {
+      method: 'POST',
+      token: syndicBToken,
+      body: {
+        syndicId: 'cab-b',
+        name: 'wafacash-receipt.pdf',
+        dataUrl: `data:application/pdf;base64,${Buffer.from('%PDF-1.4\nWAFACASH-RECEIPT').toString('base64')}`,
+      },
+    });
+    assert.equal(uploadProof.status, 200, JSON.stringify(uploadProof.data));
+
+    const cashReqRes = await command(syndicBToken, 'submitSubscriptionBankTransfer', [
+      {
+        syndicId: 'cab-b',
+        plan: 'professional',
+        months: 1,
+        requestType: 'cash',
+        cashChannel: 'wafacash',
+        agencyLocation: 'Agence Maarif Casablanca',
+        transferReference: 'WAFA-2026-8811',
+        transferDate: today,
+        proofUrl: uploadProof.data.url,
+      },
+    ]);
+    assert.equal(cashReqRes.status, 200, JSON.stringify(cashReqRes.data));
+    assert.equal(cashReqRes.data.result.requestType, 'cash');
+    assert.equal(cashReqRes.data.result.cashChannel, 'wafacash');
+
+    // 4. Admin approves Wafacash request -> payment has method=wafacash, invoiceNumber=FAC-..., receiptNumber=REC-...
+    const approveCash = await command(adminToken, 'reviewSubscriptionBankTransfer', [
+      { requestId: cashReqRes.data.result.id, action: 'approve' },
+    ]);
+    assert.equal(approveCash.status, 200, JSON.stringify(approveCash.data));
+    const approvedPay = approveCash.data.result.payment;
+    assert.equal(approvedPay.method, 'wafacash');
+    assert.ok(String(approvedPay.invoiceNumber || '').startsWith('FAC-'));
+    assert.ok(String(approvedPay.receiptNumber || '').startsWith('REC-'));
+
+    // 5. Admin direct counter cash payment with auto-generated ESP reference & MAROC10 promo (2nd use)
+    const counterCash = await command(adminToken, 'recordSubscriptionPayment', [
+      {
+        syndicId: 'cab-b',
+        plan: 'starter',
+        months: 3,
+        method: 'cash',
+        promoCode: 'MAROC10',
+        agencyLocation: 'Bureau Casablanca',
+        notes: 'Encaissé en espèces au guichet',
+      },
+    ]);
+    assert.equal(counterCash.status, 200, JSON.stringify(counterCash.data));
+    const counterPay = counterCash.data.result;
+    assert.equal(counterPay.method, 'cash');
+    assert.ok(String(counterPay.reference || '').startsWith('ESP-'));
+    assert.ok(String(counterPay.receiptNumber || '').startsWith('REC-'));
+    assert.equal(counterPay.promoCode, 'MAROC10');
+
+    // Promo MAROC10 now hit maxUses (2/2) -> 3rd validation fails with 409
+    const maxedOut = await httpCall('/api/subscription/validate-promo', {
+      method: 'POST',
+      token: syndicBToken,
+      body: { plan: 'starter', months: 3, promoCode: 'MAROC10' },
+    });
+    assert.equal(maxedOut.status, 409, JSON.stringify(maxedOut.data));
+
+    // 6. Void counter cash payment -> promo usedCount rolls back (1/2) so MAROC10 works again
+    const voidRes = await command(adminToken, 'voidSubscriptionPayment', [
+      counterPay.id,
+      'Erreur de caisse',
+    ]);
+    assert.equal(voidRes.status, 200, JSON.stringify(voidRes.data));
+    const usableAgain = await httpCall('/api/subscription/validate-promo', {
+      method: 'POST',
+      token: syndicBToken,
+      body: { plan: 'starter', months: 3, promoCode: 'MAROC10' },
+    });
+    assert.equal(usableAgain.status, 200, JSON.stringify(usableAgain.data));
+  });
+
+  await test('Admin audit logs, gateway event monitor RBAC, and renewal dunning reminder with 24h cooldown', async () => {
+    // RBAC: syndic/resident blocked on admin observability & dunning endpoints
+    for (const route of [
+      '/api/admin/audit-logs',
+      '/api/admin/gateway-events',
+    ]) {
+      const r1 = await httpCall(route, { token: syndicAToken });
+      assert.equal(r1.status, 403);
+      const r2 = await httpCall(route, { token: residentToken });
+      assert.equal(r2.status, 403);
+    }
+    const rDunningForb = await httpCall('/api/admin/cabinets/cab-a/send-reminder', {
+      method: 'POST',
+      token: syndicAToken,
+    });
+    assert.equal(rDunningForb.status, 403);
+
+    // Admin retrieves gateway events (CMI, Cash, System logged)
+    const gwRes = await httpCall('/api/admin/gateway-events?limit=50', {
+      token: adminToken,
+    });
+    assert.equal(gwRes.status, 200, JSON.stringify(gwRes.data));
+    const eventTypes = (gwRes.data.events || []).map((e: any) => e.eventType);
+    assert.ok(eventTypes.includes('CMI_PAYMENT_POSTAUTH'));
+    assert.ok(eventTypes.includes('CMI_CALLBACK_INVALID_HASH'));
+    assert.ok(eventTypes.includes('CMI_AMOUNT_MISMATCH'));
+    assert.ok(eventTypes.includes('CASH_REQUEST_APPROVED'));
+
+    // Admin retrieves audit logs
+    const auditRes = await httpCall('/api/admin/audit-logs?limit=50', {
+      token: adminToken,
+    });
+    assert.equal(auditRes.status, 200, JSON.stringify(auditRes.data));
+    assert.ok((auditRes.data.logs || []).length > 0);
+
+    // Admin sends renewal dunning reminder -> 200, immediate repeat -> 429 cooldown
+    const remind1 = await httpCall('/api/admin/cabinets/cab-exp-vir/send-reminder', {
+      method: 'POST',
+      token: adminToken,
+    });
+    assert.equal(remind1.status, 200, JSON.stringify(remind1.data));
+    const remind2 = await httpCall('/api/admin/cabinets/cab-exp-vir/send-reminder', {
+      method: 'POST',
+      token: adminToken,
+    });
+    assert.equal(remind2.status, 429, JSON.stringify(remind2.data));
   });
 } finally {
   clearTimeout(killTimer);
