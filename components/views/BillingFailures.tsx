@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { syncAllSharedStateFromServer } from '../../firebase/transport';
 import { getAuthenticatedRequestHeaders } from '../../utils/security';
+import { apiUrl } from '../../utils/apiBase';
 import { useI18n } from '../../hooks/useI18n';
 import type { Building } from '../../types';
 
@@ -14,7 +15,7 @@ export default function BillingFailures({ building }: { building: Building }) {
     queryKey: ['billing-runs', building.syndicId, building.id],
     queryFn: async () => {
       const params = new URLSearchParams({ syndicId: building.syndicId, buildingId: building.id });
-      const response = await fetch(`/api/billing-runs?${params}`, { headers: getAuthenticatedRequestHeaders() });
+      const response = await fetch(apiUrl(`/api/billing-runs?${params}`), { headers: getAuthenticatedRequestHeaders() });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || tr('Chargement des échecs impossible.', 'تعذر تحميل سجل الإخفاقات.'));
       return data.runs as Array<{ id: string; period: string; startedAt: string; resolved: boolean;
@@ -24,7 +25,7 @@ export default function BillingFailures({ building }: { building: Building }) {
   async function retry(runId: string) {
     setBusy(runId); setMessage('');
     try {
-      const response = await fetch('/api/billing-runs/retry', { method: 'POST', headers: getAuthenticatedRequestHeaders(),
+      const response = await fetch(apiUrl('/api/billing-runs/retry'), { method: 'POST', headers: getAuthenticatedRequestHeaders(),
         body: JSON.stringify({ runId, syndicId: building.syndicId, buildingId: building.id }) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.ok) throw new Error(data.results?.find((r: any) => r.status === 'failed')?.reason || data.error || tr('La relance a échoué.', 'فشلت إعادة المحاولة.'));

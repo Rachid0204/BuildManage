@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Download, Share, X } from 'lucide-react';
 import { useI18n } from '../../hooks/useI18n';
+import { isNativeApp } from '../../utils/nativeBridge';
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -11,7 +12,7 @@ const DISMISS_STORAGE_KEY = 'syndik_pwa_install_dismissed_at';
 const DISMISS_COOLDOWN_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 function isStandaloneMode(): boolean {
-  if (typeof window === 'undefined') return true;
+  if (typeof window === 'undefined' || isNativeApp()) return true;
   if (window.matchMedia?.('(display-mode: standalone)').matches) return true;
   if ((window.navigator as Navigator & { standalone?: boolean }).standalone === true) {
     return true;

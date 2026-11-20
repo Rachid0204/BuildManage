@@ -5,6 +5,7 @@ import {
   isInGracePeriod,
   subscriptionCanWrite,
 } from '../../utils/subscriptionPolicy';
+import { isIosNativeApp } from '../../utils/nativeBridge';
 import React, { Suspense, useEffect, useState } from 'react';
 import { Outlet, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -252,9 +253,11 @@ const DashboardLayout: React.FC = () => {
                                                     : 'bg-rose-700 text-white hover:bg-rose-800'
                                         }`}
                                     >
-                                        {inGrace
-                                            ? tr('Renouveler maintenant →', 'تجديد الآن ←')
-                                            : tr('Renouveler / Payer →', 'تجديد / دفع ←')}
+                                        {isIosNativeApp()
+                                            ? tr('Abonnement & Factures →', 'الاشتراك والفواتير ←')
+                                            : inGrace
+                                              ? tr('Renouveler maintenant →', 'تجديد الآن ←')
+                                              : tr('Renouveler / Payer →', 'تجديد / دفع ←')}
                                     </button>
                                 )}
                             </div>

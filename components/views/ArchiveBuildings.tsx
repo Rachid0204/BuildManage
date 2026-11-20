@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { remoteMutation } from "../../firebase/services";
 import { getAuthenticatedRequestHeaders } from "../../utils/security";
+import { apiUrl } from "../../utils/apiBase";
 import { useI18n } from "../../hooks/useI18n";
 
 export default function ArchiveBuildings() {
@@ -11,7 +12,7 @@ export default function ArchiveBuildings() {
   const { data: items = [], refetch, isFetching, error } = useQuery({
     queryKey: ['archivedBuildings'],
     queryFn: async ({ signal }): Promise<Array<{ id: string; name: string }>> => {
-      const response = await fetch('/api/archives', { headers: getAuthenticatedRequestHeaders(), signal, cache: 'no-store' });
+      const response = await fetch(apiUrl('/api/archives'), { headers: getAuthenticatedRequestHeaders(), signal, cache: 'no-store' });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error);
       return data.buildings;

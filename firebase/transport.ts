@@ -6,6 +6,7 @@ import type {
 import { STORAGE_KEYS } from '../shared/api/records';
 import { notifyOperation, readableError } from '../utils/formFeedback';
 import { getAuthenticatedRequestHeaders } from '../utils/security';
+import { apiUrl } from '../utils/apiBase';
 import { clearBusinessCache, engineStorage } from './cache';
 import {
   operationHash,
@@ -158,10 +159,11 @@ export async function syncAllSharedStateFromServer(
   const timeout = setTimeout(() => controller.abort(), 15000);
   const task = (async () => {
     try {
-      const url =
+      const url = apiUrl(
         lastKnownServerRevision > 0
           ? `/api/shared-state?sinceRevision=${lastKnownServerRevision}`
-          : '/api/shared-state';
+          : '/api/shared-state',
+      );
       const res = await fetch(url, {
         method: 'GET',
         headers,

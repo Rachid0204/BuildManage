@@ -22,12 +22,19 @@ import type { Prestataire, SubscriptionPlan, Syndic, UserRole } from './types';
 
 import RouteErrorBoundary from './components/common/RouteErrorBoundary';
 import PortalSkeleton from './components/common/PortalSkeleton';
+import { initNativeShell } from './utils/nativeBridge';
 const AdminPortal = React.lazy(() => import('./components/views/AdminDashboard'));
 const ResidentDashboard = React.lazy(() => import('./components/views/ResidentDashboard'));
 const SyndicPortal = React.lazy(() => import('./components/portals/SyndicPortal'));
 const PrestatairePortal = React.lazy(() => import('./components/portals/PrestatairePortal'));
 const HelpCenter = React.lazy(() => import('./components/views/HelpCenter'));
 const PwaInstallPrompt = React.lazy(() => import('./components/common/PwaInstallPrompt'));
+
+const NativeShellBridge: React.FC = () => {
+  const navigate = useNavigate();
+  useEffect(() => initNativeShell((path) => navigate(path)), [navigate]);
+  return null;
+};
 
 const SyndicDataProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
@@ -494,6 +501,7 @@ const App: React.FC = () => {
             />
           </Routes></Suspense>
         </RouteErrorBoundary>
+        <NativeShellBridge />
         <Suspense fallback={null}>
           <PwaInstallPrompt />
         </Suspense>

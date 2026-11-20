@@ -4,6 +4,8 @@ import type {
   GenerateChargesResult,
 } from '../shared/api/records';
 import { STORAGE_KEYS } from '../shared/api/records';
+import { apiUrl } from '../utils/apiBase';
+import { isNativeApp, saveOrShareBlob } from '../utils/nativeBridge';
 import type {
   AddBuildingCommand,
   CreateQuittanceCommand,
@@ -212,7 +214,7 @@ async function billingJsonRequest<T>(
   url: string,
   init: RequestInit,
 ): Promise<T> {
-  const response = await fetch(url, init);
+  const response = await fetch(apiUrl(url), init);
   let parsed: Record<string, unknown> = {};
   try {
     const json: unknown = await response.json();
@@ -588,15 +590,30 @@ export const uploadSubscriptionProof = async (
   };
 };
 
-export const openAuthenticatedUpload = async (url: string): Promise<void> => {
+export const openAuthenticatedUpload = async (
+  url: string,
+  fileNameHint?: string,
+): Promise<void> => {
   const headers = getAuthenticatedRequestHeaders();
   delete headers['Content-Type'];
   delete headers['Accept'];
-  const response = await fetch(url, { method: 'GET', headers });
+  const response = await fetch(apiUrl(url), { method: 'GET', headers });
   if (!response.ok) {
     throw new Error('Impossible d’ouvrir le justificatif.');
   }
   const blob = await response.blob();
+  if (isNativeApp()) {
+    const ext = blob.type.includes('pdf')
+      ? 'pdf'
+      : blob.type.includes('png')
+        ? 'png'
+        : blob.type.includes('jpeg') || blob.type.includes('jpg')
+          ? 'jpg'
+          : 'bin';
+    const fileName = fileNameHint || `justificatif_${Date.now()}.${ext}`;
+    await saveOrShareBlob(blob, fileName, fileName);
+    return;
+  }
   const objectUrl = URL.createObjectURL(blob);
   window.open(objectUrl, '_blank', 'noopener,noreferrer');
   window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);

@@ -12,6 +12,7 @@ import { useAuth, getHomeRouteForRole } from '../../contexts/AuthContext';
 import { auth } from '../../firebase/config';
 import { BuildingsIcon } from '../icons/IconComponents';
 import { PLAN_CATALOG } from '../../utils/subscriptionPolicy';
+import { apiUrl } from '../../utils/apiBase';
 
 interface LoginScreenProps {
   syndics?: Syndic[];
@@ -600,7 +601,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
         onSubmit={async () => {
           const target = forgotEmail.trim();
           if (!/^\S+@\S+\.\S+$/.test(target)) throw new Error(tr('Indiquez l’adresse email associée à votre compte.', 'أدخل البريد الإلكتروني المرتبط بحسابك.'));
-          const response = await fetch('/api/auth/recovery/request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: target }) });
+          const response = await fetch(apiUrl('/api/auth/recovery/request'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: target }) });
           const data = await response.json();
           if (!response.ok) throw new Error(data.error || tr('Envoi impossible.', 'تعذر الإرسال.'));
           setForgotSent(true);

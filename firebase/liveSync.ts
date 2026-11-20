@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { getAuthenticatedRequestHeaders } from '../utils/security';
+import { apiUrl } from '../utils/apiBase';
 import {
   getKnownServerRevision,
   SyncHttpError,
@@ -159,7 +160,7 @@ export function startLiveSync(
     };
     let sawHealthyFrame = false;
     try {
-      const response = await fetch('/api/events', {
+      const response = await fetch(apiUrl('/api/events'), {
         headers: getAuthenticatedRequestHeaders(),
         cache: 'no-store',
         signal: active.signal,

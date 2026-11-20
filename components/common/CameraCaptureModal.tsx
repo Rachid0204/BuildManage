@@ -3,6 +3,7 @@ import { Camera, RefreshCw, Check, X, Upload, AlertCircle } from 'lucide-react';
 import Modal from './Modal';
 import Button from './Button';
 import { useI18n } from '../../hooks/useI18n';
+import { captureNativePhoto, isNativeApp } from '../../utils/nativeBridge';
 
 interface CameraCaptureModalProps {
   isOpen: boolean;
@@ -81,6 +82,26 @@ const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
       stopStream();
       setCameraError(null);
       setIsStarting(true);
+
+      if (isNativeApp()) {
+        try {
+          const nativeDataUrl = await captureNativePhoto();
+          if (nativeDataUrl) {
+            setCapturedImage(nativeDataUrl);
+            setIsStarting(false);
+            return;
+          }
+        } catch {
+          setCameraError(
+            tr(
+              "Capture annulée ou accès caméra refusé. Vous pouvez réessayer ou sélectionner une image depuis votre appareil.",
+              'تم إلغاء الالتقاط أو رفض إذن الكاميرا. يمكنك المحاولة مجدداً أو اختيار صورة من جهازك.'
+            )
+          );
+          setIsStarting(false);
+          return;
+        }
+      }
 
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         setCameraError(

@@ -14,6 +14,7 @@ import {
 import { getPrestatairesForBuilding, addPrestataireReview } from '../../firebase/services';
 import Loading from '../common/Loading';
 import { useI18n } from '../../hooks/useI18n';
+import { isNativeApp, openExternalUrl } from '../../utils/nativeBridge';
 
 interface ServiceProvidersDirectoryProps {
   building: Building;
@@ -131,8 +132,13 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
         `مرحباً ${targetPrestataire.contactPerson || targetPrestataire.name}،\nأنا ${residentName} ساكن في ${building.name} (${apartmentNumber}).\nأحتاج إلى تدخل تقني : ${problemDescription || 'طلب إصلاح'}.\nدرجة الاستعجال : ${urgencyLevel === 'urgent' ? 'مستعجل جداً' : 'عادي'}.\nشكراً للتواصل معي!`
       )
     );
-    const opened = window.open(`https://wa.me/${cleanPhone}?text=${text}`, '_blank');
-    if (!opened) throw new Error(tr('Autorisez les fenêtres contextuelles pour ouvrir WhatsApp.', 'اسمح بالنوافذ المنبثقة لفتح واتساب.'));
+    const waUrl = `https://wa.me/${cleanPhone}?text=${text}`;
+    if (isNativeApp()) {
+      void openExternalUrl(waUrl);
+    } else {
+      const opened = window.open(waUrl, '_blank');
+      if (!opened) throw new Error(tr('Autorisez les fenêtres contextuelles pour ouvrir WhatsApp.', 'اسمح بالنوافذ المنبثقة لفتح واتساب.'));
+    }
     showToast(tr('WhatsApp est ouvert. Vérifiez le message puis envoyez-le dans WhatsApp.', 'تم فتح واتساب. راجع الرسالة ثم أرسلها داخل واتساب.'), 'info');
     setIsRequestModalOpen(false);
   };

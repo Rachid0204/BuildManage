@@ -6,6 +6,7 @@ import Card from '../common/Card';
 import Button from '../common/Button';
 import Modal from '../common/Modal';
 import LanguageToggle from '../common/LanguageToggle';
+import { saveOrShareBlob } from '../../utils/nativeBridge';
 import AdminGatewaysTab from './admin/AdminGatewaysTab';
 import AdminCommercialTab from './admin/AdminCommercialTab';
 import AdminAuditWebhooksTab from './admin/AdminAuditWebhooksTab';
@@ -989,14 +990,8 @@ const AdminDashboard: React.FC = () => {
     });
     const csv = `\uFEFF${[headers.map(escapeCsvCell).join(';'), ...rows].join('\r\n')}`;
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `syndik-saas-paiements-${new Date().toISOString().slice(0, 10)}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    const fileName = `syndik-saas-paiements-${new Date().toISOString().slice(0, 10)}.csv`;
+    void saveOrShareBlob(blob, fileName, fileName);
   };
 
   const renderStatusBadge = (syndic: Syndic) => {

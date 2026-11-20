@@ -30,6 +30,7 @@ import {
 import type { SubscriptionPricingPreview } from '../../firebase/services';
 import { generateSubscriptionInvoicePDF } from '../../services/pdfOnDemand';
 import { PLANS, PLAN_CATALOG } from '../../utils/subscriptionPolicy';
+import { isIosNativeApp } from '../../utils/nativeBridge';
 import {
   getCashChannelLabel,
   getMethodBadgeMeta,
@@ -969,6 +970,113 @@ const SubscriptionRenewalModal: React.FC<{
 
   const noMethodsConfigured =
     !loadingConfig && billingConfig && enabledTabs.length === 0;
+
+  if (isIosNativeApp()) {
+    const planEntry = PLAN_CATALOG[syndic.subscriptionPlan];
+    return (
+      <Modal
+        isOpen={isOpen}
+        onClose={onClose}
+        maxWidthClass="max-w-2xl"
+        title={tr(
+          'Mon Abonnement Cabinet Syndic',
+          'اشتراك مكتب السنديك',
+        )}
+        footer={
+          <Button variant="secondary" onClick={onClose}>
+            {tr('Fermer', 'إغلاق')}
+          </Button>
+        }
+      >
+        <div className="space-y-5">
+          <div className="p-4 rounded-xl bg-teal-50 border border-teal-200 space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-sm font-bold text-teal-950">{syndic.name}</span>
+              <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-teal-700 text-white">
+                {planEntry
+                  ? language === 'ar'
+                    ? planEntry.nameAr
+                    : planEntry.nameFr
+                  : syndic.subscriptionPlan}
+              </span>
+            </div>
+            <p className="text-xs text-teal-900">
+              {tr('Statut :', 'الحالة :')}{' '}
+              <strong className="uppercase">{syndic.subscriptionStatus}</strong>
+              {syndic.subscriptionExpiry
+                ? ` · ${tr('Échéance', 'تاريخ الانتهاء')} : ${new Date(
+                    syndic.subscriptionExpiry,
+                  ).toLocaleDateString(language === 'ar' ? 'ar-MA' : 'fr-MA')}`
+                : ''}
+            </p>
+            <p className="text-xs text-slate-700 pt-1 leading-relaxed">
+              {tr(
+                'La gestion commerciale et le renouvellement de votre contrat cabinet B2B s’effectuent depuis votre espace administrateur web. Vous pouvez consulter et partager vos factures officielles PDF ci-dessous.',
+                'تتم إدارة وتجديد اشتراك المكتب المهني عبر البوابة الإلكترونية على الويب. يمكنكم الاطلاع على فواتيركم الرسمية PDF ومشاركتها أدناه.',
+              )}
+            </p>
+          </div>
+
+          {cabinetPayments.length > 0 ? (
+            <div className="space-y-2">
+              <h5 className="text-xs font-bold uppercase tracking-wider text-slate-600">
+                {tr(
+                  `Mes Factures & Reçus Officiels (${cabinetPayments.length})`,
+                  `فواتيري ووصولاتي الرسمية (${cabinetPayments.length})`,
+                )}
+              </h5>
+              <div className="space-y-1.5 max-h-64 overflow-y-auto text-xs">
+                {cabinetPayments.map((p) => {
+                  const badge = getMethodBadgeMeta(p.method, tr);
+                  return (
+                    <div
+                      key={p.id}
+                      className="flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-lg border border-slate-200 bg-white"
+                    >
+                      <div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="font-mono font-bold text-teal-900">
+                            {p.invoiceNumber || p.receiptNumber || p.reference}
+                          </span>
+                          <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${badge.badgeClass}`}>
+                            {badge.label}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-slate-500 mt-0.5">
+                          {new Date(p.createdAt).toLocaleDateString(
+                            language === 'ar' ? 'ar-MA' : 'fr-MA',
+                          )}{' '}
+                          ·{' '}
+                          <span className="font-mono font-bold text-slate-800">
+                            {Number(p.amount || 0).toLocaleString('fr-MA')} MAD
+                          </span>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={pdfDownloadingId === p.id}
+                        onClick={() => void handleDownloadInvoice(p)}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 min-h-[36px] rounded-lg border border-teal-300 bg-teal-50 text-teal-900 hover:bg-teal-100 font-bold text-[11px] disabled:opacity-50"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        {pdfDownloadingId === p.id
+                          ? tr('Génération...', 'جاري التحميل...')
+                          : tr('Facture PDF', 'فاتورة PDF')}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs text-slate-500 text-center py-4">
+              {tr('Aucune facture enregistrée pour le moment.', 'لا توجد فواتير مسجلة حالياً.')}
+            </p>
+          )}
+        </div>
+      </Modal>
+    );
+  }
 
   return (
     <Modal

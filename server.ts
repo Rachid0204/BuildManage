@@ -52,6 +52,7 @@ import {
 } from './server/operationStatus';
 import { hashPassword, verifyPassword } from './server/passwords';
 import { validateProductionEnvironment } from './server/productionConfig';
+import { createApiCorsMiddleware } from './server/corsPolicy';
 import { registerLiveUpdates } from './server/realtime';
 import {
   createAdmissionStore,
@@ -978,6 +979,7 @@ async function startServer() {
   );
 
   app.use(express.json({ limit: "15mb" }));
+  app.use("/api", createApiCorsMiddleware());
 
   process.env.SYNDIK_SERVER_SECRET ||= LEGACY_SERVER_SECRET;
   if (process.env.SYNDIK_SERVER_SECRET.length < 32) {
