@@ -26,6 +26,7 @@ export const generateMiseEnDemeurePDF = deferred('generateMiseEnDemeurePDF');
 export const generateConvocationAgPDF = deferred('generateConvocationAgPDF');
 export const generatePvAgPDF = deferred('generatePvAgPDF');
 export const generateQuittancePDF = deferred('generateQuittancePDF');
+export const generateSubscriptionInvoicePDF = deferred('generateSubscriptionInvoicePDF');
 export const generateTransactionVoucherPDF = deferred('generateTransactionVoucherPDF');
 export async function generateArchiveDocumentPDFBlobUrl(...args: Parameters<Renderer['generateArchiveDocumentPDFBlobUrl']>): Promise<string | null> {
   try { return (await import('./pdfService')).generateArchiveDocumentPDFBlobUrl(...args); }

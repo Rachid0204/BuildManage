@@ -1,10 +1,21 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import Modal from '../common/Modal';
 import LanguageToggle from '../common/LanguageToggle';
+import AdminGatewaysTab from './admin/AdminGatewaysTab';
+import AdminCommercialTab from './admin/AdminCommercialTab';
+import AdminAuditWebhooksTab from './admin/AdminAuditWebhooksTab';
+import {
+  escapeCsvCell,
+  getCasablancaMonthKey,
+  getCashChannelLabel,
+  getDaysRemaining,
+  getMethodBadgeMeta,
+  parseExpiryMs,
+} from './admin/adminBillingHelpers';
 import { useAuth, getHomeRouteForRole } from '../../contexts/AuthContext';
 import { useI18n } from '../../hooks/useI18n';
 import {
@@ -18,25 +29,22 @@ import {
   recordSubscriptionPayment,
   remoteMutation,
   reviewSubscriptionBankTransfer,
-  saveAdminBillingConfig,
   saveSyndic,
+  sendCabinetRenewalReminder,
   syncAllSharedStateFromServer,
-  testPayPalBillingConnection,
   voidSubscriptionPayment,
 } from '../../firebase/services';
+import { generateSubscriptionInvoicePDF } from '../../services/pdfOnDemand';
 import { generateSecureRandomDigits } from '../../utils/security';
 import {
   PLANS,
   PLAN_CATALOG,
   countActiveBuildings,
   getEffectiveSubscriptionStatus,
+  getGraceDaysRemaining,
+  isInGracePeriod,
 } from '../../utils/subscriptionPolicy';
 import type {
-  AdminBillingConfigUpdateInput,
-  AdminPlatformBillingConfig,
-  PayPalCheckoutMode,
-  PayPalCurrency,
-  PayPalEnv,
   SubscriptionBankTransferRequest,
   SubscriptionPayment,
   SubscriptionPaymentMethod,
@@ -52,77 +60,10 @@ import {
   TrashIcon,
 } from '../icons/IconComponents';
 
-type AdminTab = 'cabinets' | 'reports' | 'billing';
+type AdminTab = 'cabinets' | 'reports' | 'billing' | 'commercial' | 'audit';
 type StatusFilter = 'all' | SubscriptionStatus | 'archived';
 type PlanFilter = 'all' | SubscriptionPlan;
-
-function escapeCsvCell(value: string | number | undefined | null): string {
-  const raw = String(value ?? '');
-  const sanitized = /^[=+\-@\t\r]/.test(raw.trimStart()) ? `'${raw}` : raw;
-  return `"${sanitized.replace(/"/g, '""')}"`;
-}
-
-function getCasablancaMonthKey(date: Date = new Date()): string {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Africa/Casablanca',
-    year: 'numeric',
-    month: '2-digit',
-  })
-    .format(date)
-    .slice(0, 7);
-}
-
-function parseExpiryMs(raw?: string): number {
-  const trimmed = (raw || '').trim();
-  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
-    ? `${trimmed}T23:59:59.999Z`
-    : trimmed;
-  return Date.parse(normalized);
-}
-
-function getDaysRemaining(raw?: string): number | null {
-  const ms = parseExpiryMs(raw);
-  if (!Number.isFinite(ms)) return null;
-  return Math.ceil((ms - Date.now()) / 86_400_000);
-}
-
-function normalizeRibDigits(raw: string): string {
-  return raw.replace(/\s+/g, '');
-}
-
-function formatRibMoroccan(raw: string): string {
-  const digits = normalizeRibDigits(raw);
-  if (!/^\d{24}$/.test(digits)) return raw.trim();
-  return digits.replace(/^(\d{3})(\d{3})(\d{16})(\d{2})$/, '$1 $2 $3 $4');
-}
-
-function getMethodBadgeMeta(
-  method: SubscriptionPaymentMethod | undefined,
-  tr: (fr: string, ar: string) => string,
-) {
-  switch (method) {
-    case 'card':
-      return {
-        label: tr('Carte (PayPal)', 'بطاقة بنكية (PayPal)'),
-        badgeClass: 'bg-indigo-100 text-indigo-800',
-      };
-    case 'paypal':
-      return {
-        label: 'PayPal',
-        badgeClass: 'bg-sky-100 text-sky-800',
-      };
-    case 'virement':
-      return {
-        label: tr('Virement Maroc', 'تحويل بنكي'),
-        badgeClass: 'bg-emerald-100 text-emerald-800',
-      };
-    default:
-      return {
-        label: tr('Manuel', 'يدوي'),
-        badgeClass: 'bg-slate-100 text-slate-700',
-      };
-  }
-}
+type QueueFilter = 'all' | 'virement' | 'cash';
 
 const AdminDashboard: React.FC = () => {
   const { userProfile, logout } = useAuth();
@@ -135,9 +76,11 @@ const AdminDashboard: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [planFilter, setPlanFilter] = useState<PlanFilter>('all');
   const [paymentSearch, setPaymentSearch] = useState('');
+  const [paymentMethodFilter, setPaymentMethodFilter] = useState<string>('all');
   const [includeVoidedPayments, setIncludeVoidedPayments] = useState(false);
+  const [queueFilter, setQueueFilter] = useState<QueueFilter>('all');
 
-  // Manage Cabinet Modal State (Profile + Subscription + Payments + Archive)
+  // Manage Cabinet Modal State (Profile + Subscription + Counter Payment + Archive)
   const [selectedSyndic, setSelectedSyndic] = useState<Syndic | null>(null);
   const [editName, setEditName] = useState('');
   const [editEmail, setEditEmail] = useState('');
@@ -150,8 +93,15 @@ const AdminDashboard: React.FC = () => {
   const [editPlan, setEditPlan] = useState<SubscriptionPlan>('professional');
   const [editStatus, setEditStatus] = useState<SubscriptionStatus>('active');
   const [editExpiry, setEditExpiry] = useState('');
+  const [subscriptionMethod, setSubscriptionMethod] =
+    useState<SubscriptionPaymentMethod>('cash');
   const [subscriptionReference, setSubscriptionReference] = useState('');
   const [subscriptionMonths, setSubscriptionMonths] = useState(1);
+  const [subscriptionPromoCode, setSubscriptionPromoCode] = useState('');
+  const [subscriptionAgencyLocation, setSubscriptionAgencyLocation] = useState('');
+  const [subscriptionNotes, setSubscriptionNotes] = useState('');
+  const [lastRecordedPayment, setLastRecordedPayment] =
+    useState<SubscriptionPayment | null>(null);
   const [subscriptionMessage, setSubscriptionMessage] = useState('');
   const [subscriptionError, setSubscriptionError] = useState('');
   const [archiveConfirmId, setArchiveConfirmId] = useState<string | null>(null);
@@ -161,7 +111,7 @@ const AdminDashboard: React.FC = () => {
   const [voidReason, setVoidReason] = useState('');
   const [voidError, setVoidError] = useState('');
 
-  // Bank Transfer Requests Review State
+  // Bank Transfer & Cash Requests Review State
   const [busyRequestId, setBusyRequestId] = useState<string | null>(null);
   const [rejectTarget, setRejectTarget] =
     useState<SubscriptionBankTransferRequest | null>(null);
@@ -171,42 +121,12 @@ const AdminDashboard: React.FC = () => {
   const [requestActionError, setRequestActionError] = useState('');
   const [showReviewedRequests, setShowReviewedRequests] = useState(false);
 
-  // Platform Billing Config Form State (PayPal + Virement Maroc)
-  const [billingDirty, setBillingDirty] = useState(false);
-  const [ppEnabled, setPpEnabled] = useState(false);
-  const [ppEnv, setPpEnv] = useState<PayPalEnv>('sandbox');
-  const [ppCheckoutMode, setPpCheckoutMode] =
-    useState<PayPalCheckoutMode>('expanded');
-  const [ppClientId, setPpClientId] = useState('');
-  const [ppClientSecret, setPpClientSecret] = useState('');
-  const [ppClearSecret, setPpClearSecret] = useState(false);
-  const [ppWebhookId, setPpWebhookId] = useState('');
-  const [ppClearWebhook, setPpClearWebhook] = useState(false);
-  const [ppCurrency, setPpCurrency] = useState<PayPalCurrency>('EUR');
-  const [ppMadPerUnit, setPpMadPerUnit] = useState('10');
-  const [ppStarterPrice, setPpStarterPrice] = useState('');
-  const [ppProPrice, setPpProPrice] = useState('');
-  const [ppEnterprisePrice, setPpEnterprisePrice] = useState('');
-
-  const [bankEnabled, setBankEnabled] = useState(false);
-  const [bankName, setBankName] = useState('');
-  const [bankHolder, setBankHolder] = useState('');
-  const [bankRib, setBankRib] = useState('');
-  const [bankIban, setBankIban] = useState('');
-  const [bankSwift, setBankSwift] = useState('');
-  const [bankIce, setBankIce] = useState('');
-  const [bankInstructionsFr, setBankInstructionsFr] = useState('');
-  const [bankInstructionsAr, setBankInstructionsAr] = useState('');
-  const [billingSaving, setBillingSaving] = useState(false);
-  const [billingTesting, setBillingTesting] = useState(false);
-  const [billingMessage, setBillingMessage] = useState('');
-  const [billingError, setBillingError] = useState('');
-  const [paypalTestResult, setPaypalTestResult] = useState<{
+  // Dunning Reminder State
+  const [busyReminderId, setBusyReminderId] = useState<string | null>(null);
+  const [reminderFeedback, setReminderFeedback] = useState<{
     ok: boolean;
-    message: string;
+    text: string;
   } | null>(null);
-  const [confirmResetEnv, setConfirmResetEnv] = useState(false);
-  const [copiedWebhookUrl, setCopiedWebhookUrl] = useState(false);
 
   // Create New Syndic Cabinet Modal State
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -274,50 +194,7 @@ const AdminDashboard: React.FC = () => {
     staleTime: 10_000,
   });
 
-  const applyBillingConfigToForm = (cfg: AdminPlatformBillingConfig) => {
-    setPpEnabled(cfg.paypal.enabled);
-    setPpEnv(cfg.paypal.env);
-    setPpCheckoutMode(cfg.paypal.checkoutMode);
-    setPpClientId(cfg.paypal.clientId || '');
-    setPpClientSecret('');
-    setPpClearSecret(false);
-    setPpWebhookId('');
-    setPpClearWebhook(false);
-    setPpCurrency(cfg.paypal.currency);
-    setPpMadPerUnit(String(cfg.paypal.madPerUnit || 10));
-    setPpStarterPrice(
-      cfg.paypal.planPrices?.starter !== undefined
-        ? String(cfg.paypal.planPrices.starter)
-        : '',
-    );
-    setPpProPrice(
-      cfg.paypal.planPrices?.professional !== undefined
-        ? String(cfg.paypal.planPrices.professional)
-        : '',
-    );
-    setPpEnterprisePrice(
-      cfg.paypal.planPrices?.enterprise !== undefined
-        ? String(cfg.paypal.planPrices.enterprise)
-        : '',
-    );
-
-    setBankEnabled(cfg.bankTransfer.enabled);
-    setBankName(cfg.bankTransfer.bankName || '');
-    setBankHolder(cfg.bankTransfer.accountHolder || '');
-    setBankRib(cfg.bankTransfer.rib || '');
-    setBankIban(cfg.bankTransfer.iban || '');
-    setBankSwift(cfg.bankTransfer.swift || '');
-    setBankIce(cfg.bankTransfer.ice || '');
-    setBankInstructionsFr(cfg.bankTransfer.instructionsFr || '');
-    setBankInstructionsAr(cfg.bankTransfer.instructionsAr || '');
-    setBillingDirty(false);
-  };
-
-  useEffect(() => {
-    if (adminBillingConfig && !billingDirty) {
-      applyBillingConfigToForm(adminBillingConfig);
-    }
-  }, [adminBillingConfig, billingDirty]);
+  const graceDays = adminBillingConfig?.commercialPolicy?.gracePeriodDays ?? 0;
 
   const isFetching =
     isFetchingSyndics ||
@@ -508,21 +385,21 @@ const AdminDashboard: React.FC = () => {
       archived: archivedSyndics.length,
     };
     for (const s of activeSyndics) {
-      counts[getEffectiveSubscriptionStatus(s)] += 1;
+      counts[getEffectiveSubscriptionStatus(s, Date.now(), graceDays)] += 1;
     }
     return counts;
-  }, [activeSyndics, archivedSyndics.length]);
+  }, [activeSyndics, archivedSyndics.length, graceDays]);
 
   const totalMrr = useMemo(
     () =>
       activeSyndics.reduce(
         (acc, s) =>
-          getEffectiveSubscriptionStatus(s) === 'active'
+          getEffectiveSubscriptionStatus(s, Date.now(), graceDays) === 'active'
             ? acc + (PLANS[s.subscriptionPlan]?.price || PLANS.professional.price)
             : acc,
         0,
       ),
-    [activeSyndics],
+    [activeSyndics, graceDays],
   );
 
   const activePayments = useMemo(
@@ -549,17 +426,17 @@ const AdminDashboard: React.FC = () => {
     () =>
       activeSyndics
         .filter((s) => {
-          const eff = getEffectiveSubscriptionStatus(s);
+          const eff = getEffectiveSubscriptionStatus(s, Date.now(), graceDays);
           if (eff !== 'active' && eff !== 'trialing') return false;
           const days = getDaysRemaining(s.subscriptionExpiry);
-          return days !== null && days >= 0 && days <= 15;
+          return days !== null && days >= -graceDays && days <= 15;
         })
         .sort(
           (a, b) =>
             (getDaysRemaining(a.subscriptionExpiry) ?? 999) -
             (getDaysRemaining(b.subscriptionExpiry) ?? 999),
         ),
-    [activeSyndics],
+    [activeSyndics, graceDays],
   );
 
   const planSummary = useMemo(() => {
@@ -575,7 +452,7 @@ const AdminDashboard: React.FC = () => {
       const entry = summary[s.subscriptionPlan];
       if (!entry) continue;
       entry.cabinets += 1;
-      if (getEffectiveSubscriptionStatus(s) === 'active') {
+      if (getEffectiveSubscriptionStatus(s, Date.now(), graceDays) === 'active') {
         entry.activeSubscribers += 1;
       }
     }
@@ -584,13 +461,68 @@ const AdminDashboard: React.FC = () => {
       if (entry) entry.collected += Number(p.amount || 0);
     }
     return summary;
-  }, [activeSyndics, activePayments]);
+  }, [activeSyndics, activePayments, graceDays]);
+
+  const revenueByGateway = useMemo(() => {
+    const groups: Record<string, { label: string; count: number; total: number; color: string }> = {
+      cmi: { label: 'CMI Maroc (3DS)', count: 0, total: 0, color: 'bg-teal-600' },
+      paypal: { label: 'PayPal & Cartes Intl', count: 0, total: 0, color: 'bg-sky-600' },
+      virement: { label: tr('Virement Bancaire', 'تحويل بنكي'), count: 0, total: 0, color: 'bg-emerald-600' },
+      cash: { label: tr('Espèces & Agences', 'نقداً ووكالات'), count: 0, total: 0, color: 'bg-amber-500' },
+      check: { label: tr('Chèque', 'شيك'), count: 0, total: 0, color: 'bg-purple-600' },
+      manual: { label: tr('Manuel', 'يدوي'), count: 0, total: 0, color: 'bg-slate-500' },
+    };
+    for (const p of activePayments) {
+      const m = p.method || 'manual';
+      const bucket =
+        m === 'cmi'
+          ? 'cmi'
+          : m === 'paypal' || m === 'card'
+            ? 'paypal'
+            : m === 'virement'
+              ? 'virement'
+              : m === 'cash' || m === 'wafacash' || m === 'cashplus' || m === 'baridcash'
+                ? 'cash'
+                : m === 'check'
+                  ? 'check'
+                  : 'manual';
+      groups[bucket].count += 1;
+      groups[bucket].total += Number(p.amount || 0);
+    }
+    return Object.entries(groups).map(([key, val]) => ({ key, ...val }));
+  }, [activePayments, tr]);
+
+  const monthlyRevenueTrend = useMemo(() => {
+    const months: Array<{ key: string; label: string; total: number }> = [];
+    const now = new Date();
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+      const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+      const label = d.toLocaleDateString(language === 'ar' ? 'ar-MA' : 'fr-MA', {
+        month: 'short',
+        year: '2-digit',
+        timeZone: 'UTC',
+      });
+      months.push({ key, label, total: 0 });
+    }
+    const map = new Map(months.map((m) => [m.key, m]));
+    for (const p of activePayments) {
+      const mk = String(p.createdAt || '').slice(0, 7);
+      const bucket = map.get(mk);
+      if (bucket) bucket.total += Number(p.amount || 0);
+    }
+    const maxTotal = Math.max(1, ...months.map((m) => m.total));
+    return months.map((m) => ({
+      ...m,
+      pct: Math.round((m.total / maxTotal) * 100),
+    }));
+  }, [activePayments, language]);
 
   const filteredSyndics = useMemo(() => {
     const query = cabinetSearch.trim().toLowerCase();
     return syndics.filter((s) => {
       const isArchived = Boolean(s.archivedAt);
-      const effectiveStatus = getEffectiveSubscriptionStatus(s);
+      const effectiveStatus = getEffectiveSubscriptionStatus(s, Date.now(), graceDays);
       if (statusFilter === 'archived') {
         if (!isArchived) return false;
       } else if (statusFilter === 'all') {
@@ -606,16 +538,29 @@ const AdminDashboard: React.FC = () => {
         .filter(Boolean)
         .some((v) => String(v).toLowerCase().includes(query));
     });
-  }, [syndics, cabinetSearch, statusFilter, planFilter]);
+  }, [syndics, cabinetSearch, statusFilter, planFilter, graceDays]);
 
   const filteredPayments = useMemo(() => {
     const query = paymentSearch.trim().toLowerCase();
     return subscriptionPayments.filter((p) => {
       if (!includeVoidedPayments && p.voidedAt) return false;
+      if (paymentMethodFilter !== 'all') {
+        const m = p.method || 'manual';
+        if (paymentMethodFilter === 'cash_all') {
+          if (!['cash', 'wafacash', 'cashplus', 'baridcash', 'check'].includes(m)) {
+            return false;
+          }
+        } else if (m !== paymentMethodFilter) {
+          return false;
+        }
+      }
       if (!query) return true;
       const cab = syndicMap.get(p.syndicId);
       return [
         p.reference,
+        p.invoiceNumber,
+        p.receiptNumber,
+        p.promoCode,
         p.syndicName,
         p.syndicEmail,
         cab?.name,
@@ -625,7 +570,13 @@ const AdminDashboard: React.FC = () => {
         .filter(Boolean)
         .some((v) => String(v).toLowerCase().includes(query));
     });
-  }, [subscriptionPayments, includeVoidedPayments, paymentSearch, syndicMap]);
+  }, [
+    subscriptionPayments,
+    includeVoidedPayments,
+    paymentMethodFilter,
+    paymentSearch,
+    syndicMap,
+  ]);
 
   const selectedSyndicPayments = useMemo(
     () =>
@@ -640,10 +591,39 @@ const AdminDashboard: React.FC = () => {
     [transferRequests],
   );
 
+  const filteredPendingRequests = useMemo(
+    () =>
+      pendingTransferRequests.filter((r) => {
+        const type = r.requestType || 'virement';
+        if (queueFilter === 'virement') return type === 'virement';
+        if (queueFilter === 'cash') return type === 'cash' || type === 'check';
+        return true;
+      }),
+    [pendingTransferRequests, queueFilter],
+  );
+
   const reviewedTransferRequests = useMemo(
     () => transferRequests.filter((r) => r.status !== 'pending'),
     [transferRequests],
   );
+
+  const counterEstimatedAmount = useMemo(() => {
+    const base = PLANS[editPlan].price * subscriptionMonths;
+    const disc = adminBillingConfig?.commercialPolicy?.multiMonthDiscounts;
+    const pct =
+      subscriptionMonths >= 12
+        ? disc?.m12 ?? 0
+        : subscriptionMonths >= 6
+          ? disc?.m6 ?? 0
+          : subscriptionMonths >= 3
+            ? disc?.m3 ?? 0
+            : 0;
+    return {
+      base,
+      pct,
+      afterMulti: Number(((base * (100 - pct)) / 100).toFixed(2)),
+    };
+  }, [editPlan, subscriptionMonths, adminBillingConfig]);
 
   const handleOpenManage = (syndic: Syndic) => {
     setSelectedSyndic(syndic);
@@ -660,8 +640,13 @@ const AdminDashboard: React.FC = () => {
     setEditExpiry(
       (syndic.subscriptionExpiry || new Date().toISOString()).split('T')[0],
     );
+    setSubscriptionMethod('cash');
     setSubscriptionReference('');
     setSubscriptionMonths(1);
+    setSubscriptionPromoCode('');
+    setSubscriptionAgencyLocation('');
+    setSubscriptionNotes('');
+    setLastRecordedPayment(null);
     setSubscriptionMessage('');
     setSubscriptionError('');
     setArchiveConfirmId(null);
@@ -709,10 +694,23 @@ const AdminDashboard: React.FC = () => {
     });
   };
 
+  const handleGenerateCounterRef = () => {
+    const prefix =
+      subscriptionMethod === 'check'
+        ? 'CHQ'
+        : subscriptionMethod === 'virement'
+          ? 'VIR'
+          : 'ESP';
+    setSubscriptionReference(
+      `${prefix}-${new Date().getFullYear()}-${generateSecureRandomDigits(6)}`,
+    );
+  };
+
   const handleRecordSubscriptionPayment = async () => {
     if (!selectedSyndic) return;
     setSubscriptionError('');
     setSubscriptionMessage('');
+    setLastRecordedPayment(null);
     if (selectedSyndic.archivedAt) {
       const msg = tr(
         "Restaurez ce cabinet avant d'enregistrer un paiement.",
@@ -721,7 +719,14 @@ const AdminDashboard: React.FC = () => {
       setSubscriptionError(msg);
       throw new Error(msg);
     }
-    if (!subscriptionReference.trim()) {
+    const isCashLike = [
+      'cash',
+      'wafacash',
+      'cashplus',
+      'baridcash',
+      'check',
+    ].includes(subscriptionMethod);
+    if (!isCashLike && !subscriptionReference.trim()) {
       const msg = tr(
         'La référence bancaire est obligatoire.',
         'المرجع البنكي مطلوب.',
@@ -746,8 +751,19 @@ const AdminDashboard: React.FC = () => {
         syndicId: selectedSyndic.id,
         plan: editPlan,
         months: subscriptionMonths,
-        reference: subscriptionReference.trim(),
-        amount: PLANS[editPlan].price * subscriptionMonths,
+        method: subscriptionMethod,
+        ...(subscriptionReference.trim()
+          ? { reference: subscriptionReference.trim() }
+          : {}),
+        ...(subscriptionPromoCode.trim()
+          ? { promoCode: subscriptionPromoCode.trim().toUpperCase() }
+          : {}),
+        ...(subscriptionAgencyLocation.trim()
+          ? { agencyLocation: subscriptionAgencyLocation.trim() }
+          : {}),
+        ...(subscriptionNotes.trim()
+          ? { notes: subscriptionNotes.trim() }
+          : {}),
       });
       const nextExpiry =
         result.subscriptionExpiry || selectedSyndic.subscriptionExpiry;
@@ -768,11 +784,15 @@ const AdminDashboard: React.FC = () => {
             }
           : null,
       );
+      setLastRecordedPayment(result);
       setSubscriptionReference('');
+      setSubscriptionPromoCode('');
+      setSubscriptionAgencyLocation('');
+      setSubscriptionNotes('');
       setSubscriptionMessage(
         tr(
-          'Abonnement prolongé et paiement enregistré.',
-          'تم تمديد الاشتراك وتسجيل الدفع.',
+          `Abonnement prolongé et paiement enregistré (${result.invoiceNumber || result.reference}).`,
+          `تم تمديد الاشتراك وتسجيل الدفع (${result.invoiceNumber || result.reference}).`,
         ),
       );
       await Promise.all([
@@ -786,6 +806,34 @@ const AdminDashboard: React.FC = () => {
           : tr("L'enregistrement du paiement a échoué.", 'فشل تسجيل الدفع.');
       setSubscriptionError(msg);
       throw err;
+    }
+  };
+
+  const handleDownloadInvoice = async (payment: SubscriptionPayment) => {
+    const cab = syndicMap.get(payment.syndicId) || selectedSyndic;
+    await generateSubscriptionInvoicePDF(
+      payment,
+      cab,
+      adminBillingConfig?.issuerProfile,
+    );
+  };
+
+  const handleSendReminder = async (syndic: Syndic) => {
+    setBusyReminderId(syndic.id);
+    setReminderFeedback(null);
+    try {
+      const res = await sendCabinetRenewalReminder(syndic.id);
+      setReminderFeedback({ ok: true, text: `${syndic.name} — ${res.message}` });
+    } catch (err: unknown) {
+      setReminderFeedback({
+        ok: false,
+        text:
+          err instanceof Error
+            ? err.message
+            : tr('Impossible d’envoyer le rappel.', 'تعذر إرسال التذكير.'),
+      });
+    } finally {
+      setBusyReminderId(null);
     }
   };
 
@@ -812,14 +860,14 @@ const AdminDashboard: React.FC = () => {
     setRequestActionError('');
     setRequestActionMessage('');
     try {
-      await reviewSubscriptionBankTransfer({
+      const res = await reviewSubscriptionBankTransfer({
         requestId: req.id,
         action: 'approve',
       });
       setRequestActionMessage(
         tr(
-          `Virement ${req.transferReference} validé — abonnement de ${req.syndicName} activé (+${req.months} mois).`,
-          `تم تأكيد التحويل ${req.transferReference} وتفعيل اشتراك ${req.syndicName}.`,
+          `Paiement ${req.transferReference} validé (${res.payment?.invoiceNumber || ''}) — abonnement de ${req.syndicName} activé (+${req.months} mois).`,
+          `تم تأكيد الدفع ${req.transferReference} وتفعيل اشتراك ${req.syndicName}.`,
         ),
       );
       await Promise.all([
@@ -832,8 +880,8 @@ const AdminDashboard: React.FC = () => {
         err instanceof Error
           ? err.message
           : tr(
-              'Impossible de valider ce virement.',
-              'تعذر تأكيد هذا التحويل.',
+              'Impossible de valider cette demande.',
+              'تعذر تأكيد هذا الطلب.',
             ),
       );
     } finally {
@@ -884,198 +932,21 @@ const AdminDashboard: React.FC = () => {
     }
   };
 
-  const handleSaveBillingConfig = async () => {
-    setBillingError('');
-    setBillingMessage('');
-    const parsedMadRate = Number(ppMadPerUnit);
-    if (!Number.isFinite(parsedMadRate) || parsedMadRate < 0.01) {
-      setBillingError(
-        tr(
-          'Indiquez un taux de conversion MAD valide (> 0).',
-          'أدخل سعر تحويل صالحاً من الدرهم (> 0).',
-        ),
-      );
-      return;
-    }
-    const planPrices: Partial<Record<SubscriptionPlan, number>> = {};
-    const priceInputs: Array<[SubscriptionPlan, string]> = [
-      ['starter', ppStarterPrice],
-      ['professional', ppProPrice],
-      ['enterprise', ppEnterprisePrice],
-    ];
-    for (const [planKey, rawVal] of priceInputs) {
-      if (rawVal.trim()) {
-        const parsed = Number(rawVal);
-        if (!Number.isFinite(parsed) || parsed <= 0) {
-          setBillingError(
-            tr(
-              `Tarif PayPal invalide pour le forfait ${planKey}.`,
-              `سعر PayPal غير صالح للباقة ${planKey}.`,
-            ),
-          );
-          return;
-        }
-        planPrices[planKey] = Number(parsed.toFixed(2));
-      }
-    }
-    const cleanRib = normalizeRibDigits(bankRib);
-    if (cleanRib && !/^\d{24}$/.test(cleanRib)) {
-      setBillingError(
-        tr(
-          'Le RIB marocain doit comporter exactement 24 chiffres.',
-          'يجب أن يتكون رقم RIB المغربي من 24 رقماً بالضبط.',
-        ),
-      );
-      return;
-    }
-
-    setBillingSaving(true);
-    try {
-      const payload: AdminBillingConfigUpdateInput = {
-        paypal: {
-          enabled: ppEnabled,
-          env: ppEnv,
-          checkoutMode: ppCheckoutMode,
-          clientId: ppClientId.trim(),
-          ...(ppClientSecret.trim()
-            ? { clientSecret: ppClientSecret.trim() }
-            : ppClearSecret
-              ? { clearClientSecret: true }
-              : {}),
-          ...(ppWebhookId.trim()
-            ? { webhookId: ppWebhookId.trim() }
-            : ppClearWebhook
-              ? { clearWebhookId: true }
-              : {}),
-          currency: ppCurrency,
-          madPerUnit: parsedMadRate,
-          planPrices,
-        },
-        bankTransfer: {
-          enabled: bankEnabled,
-          bankName: bankName.trim(),
-          accountHolder: bankHolder.trim(),
-          rib: cleanRib ? formatRibMoroccan(cleanRib) : '',
-          iban: bankIban.trim().toUpperCase(),
-          swift: bankSwift.trim().toUpperCase(),
-          ice: bankIce.trim(),
-          instructionsFr: bankInstructionsFr.trim(),
-          instructionsAr: bankInstructionsAr.trim(),
-        },
-      };
-      const updated = await saveAdminBillingConfig(payload);
-      queryClient.setQueryData(['adminBillingConfig'], updated);
-      applyBillingConfigToForm(updated);
-      setBillingMessage(
-        tr(
-          'Configuration des paiements enregistrée et chiffrée sur le serveur.',
-          'تم حفظ إعدادات الدفع وتشفيرها على الخادم.',
-        ),
-      );
-      await queryClient.invalidateQueries({
-        queryKey: ['subscriptionBillingConfig'],
-      });
-    } catch (err: unknown) {
-      setBillingError(
-        err instanceof Error
-          ? err.message
-          : tr(
-              'Erreur lors de l’enregistrement de la configuration.',
-              'حدث خطأ أثناء حفظ الإعدادات.',
-            ),
-      );
-    } finally {
-      setBillingSaving(false);
-    }
-  };
-
-  const handleTestPayPalConnection = async () => {
-    setBillingTesting(true);
-    setPaypalTestResult(null);
-    setBillingError('');
-    try {
-      const result = await testPayPalBillingConnection({
-        env: ppEnv,
-        ...(ppClientId.trim() ? { clientId: ppClientId.trim() } : {}),
-        ...(ppClientSecret.trim()
-          ? { clientSecret: ppClientSecret.trim() }
-          : {}),
-      });
-      setPaypalTestResult({ ok: true, message: result.message });
-    } catch (err: unknown) {
-      setPaypalTestResult({
-        ok: false,
-        message:
-          err instanceof Error
-            ? err.message
-            : tr(
-                'Échec du test de connexion PayPal.',
-                'فشل اختبار الاتصال مع PayPal.',
-              ),
-      });
-    } finally {
-      setBillingTesting(false);
-    }
-  };
-
-  const handleResetBillingToEnv = async () => {
-    setBillingSaving(true);
-    setBillingError('');
-    setBillingMessage('');
-    setConfirmResetEnv(false);
-    try {
-      const updated = await saveAdminBillingConfig({
-        resetToEnv: true,
-        paypal: {
-          enabled: false,
-          env: 'sandbox',
-          checkoutMode: 'expanded',
-          clientId: '',
-          currency: 'EUR',
-          madPerUnit: 10,
-        },
-        bankTransfer: {
-          enabled: false,
-          bankName: '',
-          accountHolder: '',
-          rib: '',
-        },
-      });
-      queryClient.setQueryData(['adminBillingConfig'], updated);
-      applyBillingConfigToForm(updated);
-      setPaypalTestResult(null);
-      setBillingMessage(
-        tr(
-          'Surcharge Admin supprimée : la configuration utilise désormais les variables d’environnement.',
-          'تمت إزالة تخصيص المدير: تعتمد الإعدادات الآن على متغيرات البيئة.',
-        ),
-      );
-      await queryClient.invalidateQueries({
-        queryKey: ['subscriptionBillingConfig'],
-      });
-    } catch (err: unknown) {
-      setBillingError(
-        err instanceof Error
-          ? err.message
-          : tr(
-              'Impossible de réinitialiser la configuration.',
-              'تعذر إعادة تعيين الإعدادات.',
-            ),
-      );
-    } finally {
-      setBillingSaving(false);
-    }
-  };
-
   const handleExportPaymentsCsv = () => {
     const headers = [
       'Date',
+      'N° Facture',
+      'N° Recu',
       'Cabinet',
       'Email',
       'Forfait',
       'Duree (mois)',
       'Mode',
-      'Montant (MAD)',
+      'Sous-total (MAD)',
+      'Remise (MAD)',
+      'Code Promo',
+      'TVA (%)',
+      'Montant TTC (MAD)',
       'Montant facture',
       'Devise',
       'Reference',
@@ -1088,11 +959,17 @@ const AdminDashboard: React.FC = () => {
       const methodLabel = getMethodBadgeMeta(p.method, tr).label;
       return [
         p.createdAt ? new Date(p.createdAt).toLocaleDateString('fr-MA') : '',
+        p.invoiceNumber || '',
+        p.receiptNumber || '',
         p.syndicName || cab?.name || p.syndicId,
         p.syndicEmail || cab?.email || '',
         p.plan,
         p.months,
         methodLabel,
+        p.subtotalMad ?? p.amount,
+        p.discountMad ?? 0,
+        p.promoCode || '',
+        p.vatRate ?? 0,
         p.amount,
         p.chargedAmount ?? p.amount,
         p.currency || 'MAD',
@@ -1126,7 +1003,19 @@ const AdminDashboard: React.FC = () => {
         </span>
       );
     }
-    const effectiveStatus = getEffectiveSubscriptionStatus(syndic);
+    if (isInGracePeriod(syndic, graceDays)) {
+      const left = getGraceDaysRemaining(syndic, graceDays);
+      return (
+        <span className="px-2.5 py-0.5 inline-flex text-xs font-bold rounded-full bg-amber-100 text-amber-900">
+          {tr(`Grâce (${left}j)`, `مهلة (${left}ي)`)}
+        </span>
+      );
+    }
+    const effectiveStatus = getEffectiveSubscriptionStatus(
+      syndic,
+      Date.now(),
+      graceDays,
+    );
     const badgeClass =
       effectiveStatus === 'active'
         ? 'bg-emerald-100 text-emerald-800'
@@ -1284,12 +1173,10 @@ const AdminDashboard: React.FC = () => {
                 {t('adminPortal.estimatedMrr')}
               </p>
               <p className="text-2xl font-bold font-mono text-slate-900">
-                {totalMrr} MAD
+                {totalMrr.toLocaleString('fr-MA')} MAD
               </p>
-              <p className="text-[11px] text-slate-500">
-                {statusBreakdown.expired > 0
-                  ? `${statusBreakdown.expired} ${tr('expiré(s)', 'منتهي')}`
-                  : tr('Abonnements actifs', 'اشتراكات نشطة')}
+              <p className="text-[11px] text-slate-500 font-mono">
+                ARR {(totalMrr * 12).toLocaleString('fr-MA')} MAD
               </p>
             </div>
           </Card>
@@ -1317,8 +1204,8 @@ const AdminDashboard: React.FC = () => {
           <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-xl bg-amber-50 border border-amber-300 text-amber-950 text-xs">
             <div className="font-semibold">
               {tr(
-                `${pendingTransferRequests.length} virement(s) bancaire(s) Maroc en attente de validation`,
-                `${pendingTransferRequests.length} طلب(ات) تحويل بنكي في انتظار التحقق`,
+                `${pendingTransferRequests.length} demande(s) de paiement (Virement / Espèces / Chèque) en attente de validation`,
+                `${pendingTransferRequests.length} طلب(ات) دفع (تحويل / نقد / شيك) في انتظار التحقق`,
               )}
             </div>
             <button
@@ -1383,8 +1270,39 @@ const AdminDashboard: React.FC = () => {
             }`}
           >
             <span>
-              {tr('Configuration Paiements', 'إعدادات الدفع والمنصة')}
+              {tr('Passerelles & Paiements', 'بوابات الدفع')}
             </span>
+            {(adminBillingConfig?.readinessWarnings?.length || 0) > 0 && (
+              <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-900">
+                {adminBillingConfig?.readinessWarnings?.length}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'commercial'}
+            onClick={() => setActiveTab('commercial')}
+            className={`px-4 py-2.5 text-xs sm:text-sm font-bold rounded-t-xl border-b-2 transition-colors ${
+              activeTab === 'commercial'
+                ? 'border-teal-700 text-teal-800 bg-white'
+                : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            {tr('Facturation & Offres', 'الفوترة والعروض')}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'audit'}
+            onClick={() => setActiveTab('audit')}
+            className={`px-4 py-2.5 text-xs sm:text-sm font-bold rounded-t-xl border-b-2 transition-colors ${
+              activeTab === 'audit'
+                ? 'border-teal-700 text-teal-800 bg-white'
+                : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            {tr('Audit & Webhooks', 'التدقيق و Webhooks')}
           </button>
         </div>
 
@@ -1499,7 +1417,11 @@ const AdminDashboard: React.FC = () => {
                 <tbody className="bg-white divide-y divide-slate-100">
                   {filteredSyndics.map((s) => {
                     const days = getDaysRemaining(s.subscriptionExpiry);
-                    const effective = getEffectiveSubscriptionStatus(s);
+                    const effective = getEffectiveSubscriptionStatus(
+                      s,
+                      Date.now(),
+                      graceDays,
+                    );
                     const planEntry = PLAN_CATALOG[s.subscriptionPlan];
                     return (
                       <tr
@@ -1677,39 +1599,61 @@ const AdminDashboard: React.FC = () => {
 
         {activeTab === 'reports' && (
           <div className="space-y-6">
-            {/* Moroccan Bank Transfer Validation Queue */}
+            {/* Unified Offline Validation Queue (Bank Transfer + Cash / Agencies / Check) */}
             <Card className="p-5 border border-slate-200 space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
                 <div>
                   <h2 className="text-base font-bold text-slate-900">
                     {tr(
-                      'Demandes de virement bancaire Maroc',
-                      'طلبات التحويل البنكي المغربي',
+                      'File de validation — Virements, Espèces & Agences Cash',
+                      'قائمة التحقق — التحويلات البنكية والدفع النقدي والوكالات',
                     )}{' '}
-                    ({pendingTransferRequests.length}{' '}
+                    ({filteredPendingRequests.length}{' '}
                     {tr('en attente', 'في الانتظار')})
                   </h2>
                   <p className="text-xs text-slate-500">
                     {tr(
-                      'Vérifiez le reçu bancaire ou le relevé avant de valider l’activation de l’abonnement.',
-                      'تحقق من وصل التحويل البنكي أو كشف الحساب قبل تأكيد تفعيل الاشتراك.',
+                      'Vérifiez le reçu (virement RIB, Wafacash, Cash Plus, Barid Cash, guichet ou chèque) avant d’activer l’abonnement.',
+                      'تحقق من الوصل قبل تأكيد تفعيل الاشتراك وإصدار الفاتورة.',
                     )}
                   </p>
                 </div>
-                {reviewedTransferRequests.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setShowReviewedRequests((prev) => !prev)}
-                    className="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-bold text-slate-700"
-                  >
-                    {showReviewedRequests
-                      ? tr('Masquer l’historique traité', 'إخفاء الطلبات المعالجة')
-                      : tr(
-                          `Voir l’historique traité (${reviewedTransferRequests.length})`,
-                          `عرض السجل المعالج (${reviewedTransferRequests.length})`,
-                        )}
-                  </button>
-                )}
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  {(
+                    [
+                      ['all', tr('Tous', 'الكل')],
+                      ['virement', tr('Virements', 'التحويلات')],
+                      ['cash', tr('Espèces & Chèque', 'نقداً وشيك')],
+                    ] as const
+                  ).map(([key, label]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setQueueFilter(key)}
+                      className={`px-3 py-1.5 rounded-lg border font-bold ${
+                        queueFilter === key
+                          ? 'bg-teal-700 text-white border-teal-700'
+                          : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                  {reviewedTransferRequests.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setShowReviewedRequests((prev) => !prev)}
+                      className="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 font-bold text-slate-700"
+                    >
+                      {showReviewedRequests
+                        ? tr('Masquer traités', 'إخفاء المعالجة')
+                        : tr(
+                            `Historique (${reviewedTransferRequests.length})`,
+                            `السجل (${reviewedTransferRequests.length})`,
+                          )}
+                    </button>
+                  )}
+                </div>
               </div>
 
               {requestActionError && (
@@ -1729,22 +1673,28 @@ const AdminDashboard: React.FC = () => {
                 </div>
               )}
 
-              {pendingTransferRequests.length === 0 ? (
+              {filteredPendingRequests.length === 0 ? (
                 <p className="text-xs text-slate-500 py-2">
                   {tr(
-                    'Aucune demande de virement en attente de validation.',
-                    'لا يوجد أي طلب تحويل بنكي في انتظار التحقق حالياً.',
+                    'Aucune demande en attente de validation pour ce filtre.',
+                    'لا يوجد أي طلب في انتظار التحقق حالياً.',
                   )}
                 </p>
               ) : (
                 <div className="space-y-3">
-                  {pendingTransferRequests.map((req) => {
+                  {filteredPendingRequests.map((req) => {
                     const isBusy = busyRequestId === req.id;
                     const planEntry = PLAN_CATALOG[req.plan];
+                    const isCashLike =
+                      req.requestType === 'cash' || req.requestType === 'check';
                     return (
                       <div
                         key={req.id}
-                        className="p-4 rounded-xl border border-amber-200 bg-amber-50/60 flex flex-col lg:flex-row lg:items-center justify-between gap-4 text-xs"
+                        className={`p-4 rounded-xl border flex flex-col lg:flex-row lg:items-center justify-between gap-4 text-xs ${
+                          isCashLike
+                            ? 'border-orange-200 bg-orange-50/60'
+                            : 'border-amber-200 bg-amber-50/60'
+                        }`}
                       >
                         <div className="space-y-1.5">
                           <div className="flex flex-wrap items-center gap-2">
@@ -1756,9 +1706,22 @@ const AdminDashboard: React.FC = () => {
                                 ({req.syndicEmail})
                               </span>
                             )}
-                            <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 font-bold">
-                              {tr('En attente', 'قيد المراجعة')}
+                            <span
+                              className={`px-2 py-0.5 rounded-full font-bold ${
+                                isCashLike
+                                  ? 'bg-orange-100 text-orange-900'
+                                  : 'bg-emerald-100 text-emerald-900'
+                              }`}
+                            >
+                              {isCashLike
+                                ? getCashChannelLabel(req.cashChannel, tr)
+                                : tr('Virement Bancaire', 'تحويل بنكي')}
                             </span>
+                            {req.promoCode && (
+                              <span className="px-2 py-0.5 rounded-full bg-teal-100 text-teal-900 font-mono font-bold">
+                                {req.promoCode}
+                              </span>
+                            )}
                           </div>
                           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-slate-700">
                             <span>
@@ -1775,15 +1738,20 @@ const AdminDashboard: React.FC = () => {
                               MAD
                             </span>
                             <span>
-                              <strong>{tr('Banque :', 'البنك :')}</strong>{' '}
+                              <strong>
+                                {isCashLike
+                                  ? tr('Canal / Agence :', 'القناة / الوكالة :')
+                                  : tr('Banque :', 'البنك :')}
+                              </strong>{' '}
                               {req.bankName}
+                              {req.agencyLocation ? ` (${req.agencyLocation})` : ''}
                             </span>
                             <span className="font-mono">
                               <strong>{tr('Réf. :', 'المرجع :')}</strong>{' '}
                               {req.transferReference}
                             </span>
                             <span>
-                              <strong>{tr('Date virement :', 'تاريخ التحويل :')}</strong>{' '}
+                              <strong>{tr('Date :', 'التاريخ :')}</strong>{' '}
                               {req.transferDate}
                             </span>
                           </div>
@@ -1892,7 +1860,76 @@ const AdminDashboard: React.FC = () => {
               )}
             </Card>
 
-            {/* Reports Summary Breakdown */}
+            {/* Gateway Revenue Breakdown & 6-Month Collection Trend */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <Card className="p-5 border border-slate-200 space-y-3 text-xs">
+                <h3 className="text-sm font-bold text-slate-900">
+                  {tr(
+                    'Encaissements par passerelle de paiement',
+                    'التحصيلات حسب بوابة الدفع',
+                  )}
+                </h3>
+                <div className="space-y-2.5">
+                  {revenueByGateway.map((gw) => {
+                    const pct =
+                      totalCollected > 0
+                        ? Math.round((gw.total / totalCollected) * 100)
+                        : 0;
+                    return (
+                      <div key={gw.key} className="space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="font-semibold text-slate-800">
+                            {gw.label}{' '}
+                            <span className="text-slate-400">({gw.count})</span>
+                          </span>
+                          <span className="font-mono font-bold text-slate-900">
+                            {gw.total.toLocaleString('fr-MA')} MAD ({pct}%)
+                          </span>
+                        </div>
+                        <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full ${gw.color}`}
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </Card>
+
+              <Card className="p-5 border border-slate-200 space-y-3 text-xs">
+                <h3 className="text-sm font-bold text-slate-900">
+                  {tr(
+                    'Évolution des encaissements (6 derniers mois)',
+                    'تطور التحصيلات (آخر 6 أشهر)',
+                  )}
+                </h3>
+                <div className="grid grid-cols-6 gap-2 items-end h-40 pt-4">
+                  {monthlyRevenueTrend.map((m) => (
+                    <div
+                      key={m.key}
+                      className="flex flex-col items-center justify-end h-full gap-1.5"
+                    >
+                      <span className="font-mono text-[10px] font-bold text-slate-700">
+                        {m.total > 0 ? m.total.toLocaleString('fr-MA') : '0'}
+                      </span>
+                      <div className="w-full bg-slate-100 rounded-t-md h-24 flex items-end overflow-hidden">
+                        <div
+                          className="w-full bg-teal-600 rounded-t-md transition-all"
+                          style={{ height: `${Math.max(m.total > 0 ? 8 : 2, m.pct)}%` }}
+                        />
+                      </div>
+                      <span className="text-[10px] font-semibold text-slate-500 capitalize">
+                        {m.label}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            </div>
+
+            {/* Reports Summary Breakdown + Dunning Reminders */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
               <Card className="p-5 border border-slate-200 space-y-3">
                 <h3 className="text-sm font-bold text-slate-900">
@@ -1974,9 +2011,21 @@ const AdminDashboard: React.FC = () => {
 
               <Card className="p-5 border border-slate-200 space-y-3">
                 <h3 className="text-sm font-bold text-slate-900">
-                  {tr('Échéances < 15 jours', 'تنتهي خلال 15 يوماً')} (
-                  {expiringSoonSyndics.length})
+                  {tr('Relances & Échéances < 15 jours', 'تذكير بالتجديد < 15 يوماً')}{' '}
+                  ({expiringSoonSyndics.length})
                 </h3>
+                {reminderFeedback && (
+                  <div
+                    role="status"
+                    className={`p-2 rounded-lg text-[11px] font-semibold ${
+                      reminderFeedback.ok
+                        ? 'bg-emerald-50 border border-emerald-200 text-emerald-900'
+                        : 'bg-rose-50 border border-rose-200 text-rose-800'
+                    }`}
+                  >
+                    {reminderFeedback.text}
+                  </div>
+                )}
                 {expiringSoonSyndics.length === 0 ? (
                   <p className="text-xs text-slate-500 py-4">
                     {tr(
@@ -1985,14 +2034,14 @@ const AdminDashboard: React.FC = () => {
                     )}
                   </p>
                 ) : (
-                  <div className="space-y-2 max-h-44 overflow-y-auto text-xs">
+                  <div className="space-y-2 max-h-48 overflow-y-auto text-xs">
                     {expiringSoonSyndics.map((s) => (
                       <div
                         key={s.id}
-                        className="flex items-center justify-between p-2 rounded-lg bg-amber-50 border border-amber-200"
+                        className="flex items-center justify-between gap-2 p-2 rounded-lg bg-amber-50 border border-amber-200"
                       >
-                        <div>
-                          <div className="font-bold text-slate-900">
+                        <div className="min-w-0">
+                          <div className="font-bold text-slate-900 truncate">
                             {s.name}
                           </div>
                           <div className="text-[11px] text-amber-800 font-mono">
@@ -2003,13 +2052,25 @@ const AdminDashboard: React.FC = () => {
                             )
                           </div>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => handleOpenManage(s)}
-                          className="px-2.5 py-1 rounded bg-slate-900 text-white font-bold text-[11px]"
-                        >
-                          {tr('Prolonger', 'تمديد')}
-                        </button>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            disabled={busyReminderId === s.id}
+                            onClick={() => void handleSendReminder(s)}
+                            className="px-2 py-1 rounded border border-amber-400 bg-white hover:bg-amber-100 text-amber-950 font-bold text-[11px] disabled:opacity-50"
+                          >
+                            {busyReminderId === s.id
+                              ? '...'
+                              : tr('Rappel', 'تذكير')}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleOpenManage(s)}
+                            className="px-2.5 py-1 rounded bg-slate-900 text-white font-bold text-[11px]"
+                          >
+                            {tr('Encaisser', 'تحصيل')}
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -2023,28 +2084,41 @@ const AdminDashboard: React.FC = () => {
                 <div>
                   <h2 className="text-base font-bold text-slate-900">
                     {tr(
-                      'Journal des paiements d’abonnement encaissés',
-                      'سجل مدفوعات الاشتراكات المحصلة',
+                      'Journal des paiements & factures SaaS',
+                      'سجل مدفوعات وفواتير الاشتراكات',
                     )}{' '}
                     ({filteredPayments.length})
                   </h2>
                   <p className="text-xs text-slate-500">
                     {tr(
-                      'Historique complet des encaissements plateforme (PayPal, Carte, Virement Maroc et Manuel)',
-                      'السجل الكامل لتحصيلات اشتراكات المنصة (PayPal، بطاقة بنكية، تحويل بنكي، يدوي)',
+                      'CMI Maroc, PayPal, Carte, Virement RIB, Espèces / Agences Cash & Chèque — Factures PDF officielles.',
+                      'CMI المغرب، PayPal، تحويل بنكي، نقداً ووكالات وشيك مع فواتير PDF رسمية.',
                     )}
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <select
+                    value={paymentMethodFilter}
+                    onChange={(e) => setPaymentMethodFilter(e.target.value)}
+                    className="px-2.5 py-2 rounded-lg border border-slate-300 bg-white font-semibold"
+                  >
+                    <option value="all">{tr('Tous modes', 'كل الطرق')}</option>
+                    <option value="cmi">CMI Maroc (3DS)</option>
+                    <option value="paypal">PayPal</option>
+                    <option value="card">{tr('Carte (PayPal)', 'بطاقة (PayPal)')}</option>
+                    <option value="virement">{tr('Virement RIB', 'تحويل بنكي')}</option>
+                    <option value="cash_all">{tr('Espèces / Agences / Chèque', 'نقداً / وكالات / شيك')}</option>
+                    <option value="manual">{tr('Manuel', 'يدوي')}</option>
+                  </select>
                   <input
                     type="search"
                     value={paymentSearch}
                     onChange={(e) => setPaymentSearch(e.target.value)}
                     placeholder={tr(
-                      'Rechercher cabinet ou référence...',
-                      'بحث بالمكتب أو المرجع...',
+                      'Rechercher cabinet, FAC, réf...',
+                      'بحث بالمكتب أو الفاتورة...',
                     )}
-                    className="px-3 py-2 rounded-lg border border-slate-300 bg-white w-56"
+                    className="px-3 py-2 rounded-lg border border-slate-300 bg-white w-52"
                   />
                   <label className="inline-flex items-center gap-1.5 px-2.5 py-2 rounded-lg border border-slate-200 bg-slate-50 cursor-pointer">
                     <input
@@ -2071,7 +2145,7 @@ const AdminDashboard: React.FC = () => {
                   <thead className="bg-slate-50">
                     <tr>
                       <th className="px-4 py-3 text-start font-bold text-slate-500 uppercase text-xs">
-                        {tr('Date', 'التاريخ')}
+                        {tr('Date / N°', 'التاريخ / الرقم')}
                       </th>
                       <th className="px-4 py-3 text-start font-bold text-slate-500 uppercase text-xs">
                         {tr('Cabinet', 'المكتب')}
@@ -2110,11 +2184,23 @@ const AdminDashboard: React.FC = () => {
                           }
                         >
                           <td className="px-4 py-3 whitespace-nowrap font-mono text-xs text-slate-600">
-                            {p.createdAt
-                              ? new Date(p.createdAt).toLocaleDateString(
-                                  language === 'ar' ? 'ar-MA' : 'fr-MA',
-                                )
-                              : '—'}
+                            <div>
+                              {p.createdAt
+                                ? new Date(p.createdAt).toLocaleDateString(
+                                    language === 'ar' ? 'ar-MA' : 'fr-MA',
+                                  )
+                                : '—'}
+                            </div>
+                            {p.invoiceNumber && (
+                              <div className="text-[11px] font-bold text-teal-800">
+                                {p.invoiceNumber}
+                              </div>
+                            )}
+                            {p.receiptNumber && (
+                              <div className="text-[10px] text-amber-800">
+                                {p.receiptNumber}
+                              </div>
+                            )}
                           </td>
                           <td className="px-4 py-3 whitespace-nowrap">
                             <div className="font-bold text-slate-900">
@@ -2133,6 +2219,11 @@ const AdminDashboard: React.FC = () => {
                             <span className="ms-1.5 text-xs text-slate-500">
                               · {p.months} {tr('mois', 'أشهر')}
                             </span>
+                            {p.promoCode && (
+                              <div className="text-[10px] font-mono text-teal-700 font-bold">
+                                Promo: {p.promoCode}
+                              </div>
+                            )}
                           </td>
                           <td className="px-4 py-3 whitespace-nowrap">
                             <span
@@ -2159,6 +2250,11 @@ const AdminDashboard: React.FC = () => {
                             <div>
                               {Number(p.amount || 0).toLocaleString('fr-MA')} MAD
                             </div>
+                            {p.discountMad && p.discountMad > 0 ? (
+                              <div className="text-[10px] font-normal text-emerald-700">
+                                -{p.discountMad.toLocaleString('fr-MA')} MAD
+                              </div>
+                            ) : null}
                             {p.currency &&
                               p.currency !== 'MAD' &&
                               p.chargedAmount !== undefined && (
@@ -2186,7 +2282,14 @@ const AdminDashboard: React.FC = () => {
                             )}
                           </td>
                           <td className="px-4 py-3 whitespace-nowrap text-end">
-                            <div className="inline-flex items-center gap-2">
+                            <div className="inline-flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => void handleDownloadInvoice(p)}
+                                className="px-2.5 py-1 rounded border border-teal-300 bg-teal-50/60 text-teal-900 hover:bg-teal-100 font-semibold text-xs"
+                              >
+                                {tr('Facture PDF', 'فاتورة PDF')}
+                              </button>
                               {cab && (
                                 <button
                                   type="button"
@@ -2231,665 +2334,14 @@ const AdminDashboard: React.FC = () => {
         )}
 
         {activeTab === 'billing' && (
-          <div className="space-y-6">
-            <Card className="p-5 border border-slate-200 space-y-5">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-4">
-                <div>
-                  <h2 className="text-base font-bold text-slate-900">
-                    {tr(
-                      'Configuration des passerelles de paiement (PayPal & Virement Maroc)',
-                      'إعدادات بوابات الدفع (PayPal والتحويل البنكي المغربي)',
-                    )}
-                  </h2>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    {tr(
-                      'Priorité : les paramètres enregistrés ici sont chiffrés sur le serveur (AES-256) et remplacent les variables d’environnement (.env / Cloud Run).',
-                      'الأولوية: الإعدادات المحفوظة هنا تُشفّر على الخادم (AES-256) وتحل محل متغيرات البيئة.',
-                    )}
-                  </p>
-                </div>
-                {adminBillingConfig?.updatedAt && (
-                  <div className="text-[11px] text-slate-500 font-mono text-end">
-                    {tr('Dernière modif. :', 'آخر تعديل :')}{' '}
-                    {new Date(adminBillingConfig.updatedAt).toLocaleString(
-                      language === 'ar' ? 'ar-MA' : 'fr-MA',
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Section 1: PayPal Expanded Checkout */}
-              <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 sm:p-5 space-y-4 text-xs">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <h3 className="text-sm font-bold text-slate-900">
-                      {tr(
-                        '1. PayPal Standard & Expanded Checkout (Cartes 3D Secure)',
-                        '1. PayPal Standard و Expanded Checkout (البطاقات البنكية 3DS)',
-                      )}
-                    </h3>
-                    <p className="text-slate-500 mt-0.5">
-                      {tr(
-                        'Acceptez les paiements par compte PayPal ou carte bancaire internationale (Visa/Mastercard) avec conversion MAD automatique.',
-                        'اقبل الدفع عبر حساب PayPal أو البطاقات الدولية مع التحويل التلقائي من الدرهم.',
-                      )}
-                    </p>
-                  </div>
-                  <label className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-slate-300 bg-white font-bold text-slate-800 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={ppEnabled}
-                      onChange={(e) => {
-                        setPpEnabled(e.target.checked);
-                        setBillingDirty(true);
-                      }}
-                    />
-                    <span>
-                      {ppEnabled
-                        ? tr('PayPal activé', 'PayPal مفعل')
-                        : tr('PayPal désactivé', 'PayPal معطل')}
-                    </span>
-                  </label>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-                  <label className="block">
-                    <span className="font-bold text-slate-700">
-                      {tr('Environnement', 'البيئة')}
-                    </span>
-                    <select
-                      value={ppEnv}
-                      onChange={(e) => {
-                        setPpEnv(e.target.value as PayPalEnv);
-                        setBillingDirty(true);
-                      }}
-                      className="mt-1 w-full p-2 rounded-lg border border-slate-300 bg-white font-semibold"
-                    >
-                      <option value="sandbox">
-                        {tr('Sandbox (Test développeur)', 'Sandbox (تجريبي)')}
-                      </option>
-                      <option value="live">
-                        {tr('Live (Production réelle)', 'Live (الإنتاج الفعلي)')}
-                      </option>
-                    </select>
-                  </label>
-
-                  <label className="block">
-                    <span className="font-bold text-slate-700">
-                      {tr('Mode Checkout', 'وضع الدفع')}
-                    </span>
-                    <select
-                      value={ppCheckoutMode}
-                      onChange={(e) => {
-                        setPpCheckoutMode(e.target.value as PayPalCheckoutMode);
-                        setBillingDirty(true);
-                      }}
-                      className="mt-1 w-full p-2 rounded-lg border border-slate-300 bg-white font-semibold"
-                    >
-                      <option value="expanded">
-                        {tr(
-                          'Expanded Checkout (Boutons + Carte 3DS)',
-                          'Expanded Checkout (PayPal + حقول البطاقة)',
-                        )}
-                      </option>
-                      <option value="standard">
-                        {tr(
-                          'Standard (Boutons PayPal uniquement)',
-                          'Standard (أزرار PayPal فقط)',
-                        )}
-                      </option>
-                    </select>
-                  </label>
-
-                  <label className="block">
-                    <span className="font-bold text-slate-700">
-                      {tr('Devise PayPal', 'عملة PayPal')}
-                    </span>
-                    <select
-                      value={ppCurrency}
-                      onChange={(e) => {
-                        setPpCurrency(e.target.value as PayPalCurrency);
-                        setBillingDirty(true);
-                      }}
-                      className="mt-1 w-full p-2 rounded-lg border border-slate-300 bg-white font-semibold font-mono"
-                    >
-                      <option value="EUR">EUR (€)</option>
-                      <option value="USD">USD ($)</option>
-                    </select>
-                  </label>
-
-                  <label className="block">
-                    <span className="font-bold text-slate-700">
-                      {tr(
-                        `Taux : 1 ${ppCurrency} = X MAD`,
-                        `سعر الصرف : 1 ${ppCurrency} = X درهم`,
-                      )}
-                    </span>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0.01"
-                      value={ppMadPerUnit}
-                      onChange={(e) => {
-                        setPpMadPerUnit(e.target.value);
-                        setBillingDirty(true);
-                      }}
-                      className="mt-1 w-full p-2 rounded-lg border border-slate-300 bg-white font-mono"
-                    />
-                  </label>
-                </div>
-
-                <div className="p-2.5 rounded-lg bg-sky-50 border border-sky-200 text-sky-900">
-                  {tr(
-                    'Note Expanded Checkout : PayPal active automatiquement les champs carte bancaire 3D Secure si votre compte PayPal Business est éligible à « Advanced Credit and Debit Card Payments ». Sinon, l’interface bascule sans erreur vers les boutons PayPal + paiement carte standard.',
-                    'ملاحظة: يظهر نموذج البطاقة المدمج تلقائياً إذا كان حساب PayPal Business مؤهلاً لخدمة Expanded Checkout، وإلا تنتقل الواجهة تلقائياً إلى أزرار PayPal القياسية.',
-                  )}
-                </div>
-
-                {/* Optional fixed monthly prices per plan */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  {(
-                    [
-                      ['starter', ppStarterPrice, setPpStarterPrice],
-                      ['professional', ppProPrice, setPpProPrice],
-                      ['enterprise', ppEnterprisePrice, setPpEnterprisePrice],
-                    ] as const
-                  ).map(([planKey, rawVal, setter]) => {
-                    const mad = PLANS[planKey].price;
-                    const rate = Number(ppMadPerUnit) > 0 ? Number(ppMadPerUnit) : 10;
-                    const autoVal = Math.max(1, mad / rate).toFixed(2);
-                    const entry = PLAN_CATALOG[planKey];
-                    return (
-                      <label key={planKey} className="block">
-                        <span className="font-bold text-slate-700">
-                          {language === 'ar' ? entry.nameAr : entry.nameFr} (
-                          {mad} MAD →{' '}
-                          {rawVal.trim() ? rawVal.trim() : autoVal}{' '}
-                          {ppCurrency}/mois)
-                        </span>
-                        <input
-                          type="number"
-                          step="0.01"
-                          min="1"
-                          placeholder={tr(
-                            `Auto (${autoVal} ${ppCurrency})`,
-                            `تلقائي (${autoVal} ${ppCurrency})`,
-                          )}
-                          value={rawVal}
-                          onChange={(e) => {
-                            setter(e.target.value);
-                            setBillingDirty(true);
-                          }}
-                          className="mt-1 w-full p-2 rounded-lg border border-slate-300 bg-white font-mono"
-                        />
-                      </label>
-                    );
-                  })}
-                </div>
-
-                {/* PayPal Credentials & Webhook */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <label className="block">
-                    <span className="font-bold text-slate-700">
-                      PayPal Client ID
-                    </span>
-                    <input
-                      type="text"
-                      value={ppClientId}
-                      onChange={(e) => {
-                        setPpClientId(e.target.value);
-                        setBillingDirty(true);
-                      }}
-                      placeholder="A..."
-                      className="mt-1 w-full p-2 rounded-lg border border-slate-300 bg-white font-mono"
-                    />
-                  </label>
-
-                  <div>
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-bold text-slate-700">
-                        PayPal Client Secret
-                      </span>
-                      <span className="text-[11px] font-mono text-slate-500">
-                        {ppClearSecret
-                          ? tr('Sera effacé', 'سيتم الحذف')
-                          : adminBillingConfig?.paypal.clientSecretSource ===
-                              'admin'
-                            ? tr('Chiffré (Admin)', 'مشفر (المدير)')
-                            : adminBillingConfig?.paypal.clientSecretSource ===
-                                'env'
-                              ? tr('Variable ENV', 'متغير البيئة')
-                              : tr('Non défini', 'غير محدد')}
-                      </span>
-                    </div>
-                    <div className="mt-1 flex gap-1.5">
-                      <input
-                        type="password"
-                        autoComplete="new-password"
-                        value={ppClientSecret}
-                        onChange={(e) => {
-                          setPpClientSecret(e.target.value);
-                          if (e.target.value.trim()) setPpClearSecret(false);
-                          setBillingDirty(true);
-                        }}
-                        placeholder={
-                          adminBillingConfig?.paypal.hasClientSecret &&
-                          !ppClearSecret
-                            ? tr(
-                                '•••••••• (laisser vide pour conserver)',
-                                '•••••••• (اتركه فارغاً للإبقاء)',
-                              )
-                            : tr('Saisir le Client Secret', 'أدخل المفتاح السري')
-                        }
-                        className="w-full p-2 rounded-lg border border-slate-300 bg-white font-mono"
-                      />
-                      {(adminBillingConfig?.paypal.hasClientSecret ||
-                        ppClearSecret) && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setPpClearSecret((prev) => !prev);
-                            setPpClientSecret('');
-                            setBillingDirty(true);
-                          }}
-                          className="px-2.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 font-semibold shrink-0"
-                        >
-                          {ppClearSecret
-                            ? tr('Annuler', 'تراجع')
-                            : tr('Effacer', 'حذف')}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-bold text-slate-700">
-                        {tr(
-                          'Webhook ID PayPal (recommandé en production)',
-                          'معرف Webhook PayPal (موصى به للإنتاج)',
-                        )}
-                      </span>
-                      <span className="text-[11px] font-mono text-slate-500">
-                        {ppClearWebhook
-                          ? tr('Sera effacé', 'سيتم الحذف')
-                          : adminBillingConfig?.paypal.webhookIdSource === 'admin'
-                            ? tr('Chiffré (Admin)', 'مشفر (المدير)')
-                            : adminBillingConfig?.paypal.webhookIdSource === 'env'
-                              ? tr('Variable ENV', 'متغير البيئة')
-                              : tr('Non défini', 'غير محدد')}
-                      </span>
-                    </div>
-                    <div className="mt-1 flex gap-1.5">
-                      <input
-                        type="text"
-                        value={ppWebhookId}
-                        onChange={(e) => {
-                          setPpWebhookId(e.target.value);
-                          if (e.target.value.trim()) setPpClearWebhook(false);
-                          setBillingDirty(true);
-                        }}
-                        placeholder={
-                          adminBillingConfig?.paypal.hasWebhookId &&
-                          !ppClearWebhook
-                            ? tr(
-                                'Configuré (laisser vide pour conserver)',
-                                'مضبوط (اتركه فارغاً للإبقاء)',
-                              )
-                            : 'WH-...'
-                        }
-                        className="w-full p-2 rounded-lg border border-slate-300 bg-white font-mono"
-                      />
-                      {(adminBillingConfig?.paypal.hasWebhookId ||
-                        ppClearWebhook) && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setPpClearWebhook((prev) => !prev);
-                            setPpWebhookId('');
-                            setBillingDirty(true);
-                          }}
-                          className="px-2.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 font-semibold shrink-0"
-                        >
-                          {ppClearWebhook
-                            ? tr('Annuler', 'تراجع')
-                            : tr('Effacer', 'حذف')}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  <div>
-                    <span className="font-bold text-slate-700 block">
-                      {tr(
-                        'URL Webhook à déclarer dans PayPal',
-                        'رابط Webhook للتسجيل في PayPal',
-                      )}
-                    </span>
-                    <div className="mt-1 flex gap-1.5">
-                      <input
-                        type="text"
-                        readOnly
-                        value={`${window.location.origin}/api/webhooks/paypal`}
-                        className="w-full p-2 rounded-lg border border-slate-200 bg-slate-100 font-mono text-slate-700"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          void navigator.clipboard?.writeText(
-                            `${window.location.origin}/api/webhooks/paypal`,
-                          );
-                          setCopiedWebhookUrl(true);
-                          window.setTimeout(() => setCopiedWebhookUrl(false), 2000);
-                        }}
-                        className="px-3 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 font-bold text-slate-800 shrink-0"
-                      >
-                        {copiedWebhookUrl
-                          ? tr('Copié ✓', 'تم النسخ ✓')
-                          : tr('Copier', 'نسخ')}
-                      </button>
-                    </div>
-                    <p className="text-[11px] text-slate-500 mt-1">
-                      {tr(
-                        'Événements à abonner : PAYMENT.CAPTURE.COMPLETED, PAYMENT.CAPTURE.REFUNDED, PAYMENT.CAPTURE.REVERSED',
-                        'الأحداث المطلوب تفعيلها: PAYMENT.CAPTURE.COMPLETED, PAYMENT.CAPTURE.REFUNDED, PAYMENT.CAPTURE.REVERSED',
-                      )}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-                  <button
-                    type="button"
-                    disabled={billingTesting}
-                    onClick={() => void handleTestPayPalConnection()}
-                    className="px-3.5 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-800 font-bold disabled:opacity-50"
-                  >
-                    {billingTesting
-                      ? tr('Test OAuth en cours...', 'جاري الاختبار...')
-                      : tr('Tester la connexion PayPal', 'اختبار اتصال PayPal')}
-                  </button>
-                  {paypalTestResult && (
-                    <span
-                      className={`px-3 py-1.5 rounded-lg font-semibold ${
-                        paypalTestResult.ok
-                          ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
-                          : 'bg-rose-50 border border-rose-200 text-rose-800'
-                      }`}
-                    >
-                      {paypalTestResult.message}
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              {/* Section 2: Moroccan Bank Transfer */}
-              <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 sm:p-5 space-y-4 text-xs">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <h3 className="text-sm font-bold text-slate-900">
-                      {tr(
-                        '2. Virement Bancaire Maroc (RIB 24 chiffres)',
-                        '2. التحويل البنكي المغربي (RIB من 24 رقماً)',
-                      )}
-                    </h3>
-                    <p className="text-slate-500 mt-0.5">
-                      {tr(
-                        'Coordonnées bancaires affichées aux syndics dans la fenêtre de renouvellement · Source :',
-                        'البيانات البنكية المعروضة للسنديك عند تجديد الاشتراك · المصدر :',
-                      )}{' '}
-                      <span className="font-mono font-semibold">
-                        {adminBillingConfig?.bankTransfer.source || 'default'}
-                      </span>
-                    </p>
-                  </div>
-                  <label className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-slate-300 bg-white font-bold text-slate-800 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={bankEnabled}
-                      onChange={(e) => {
-                        setBankEnabled(e.target.checked);
-                        setBillingDirty(true);
-                      }}
-                    />
-                    <span>
-                      {bankEnabled
-                        ? tr('Virement activé', 'التحويل البنكي مفعل')
-                        : tr('Virement désactivé', 'التحويل البنكي معطل')}
-                    </span>
-                  </label>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <label className="block">
-                    <span className="font-bold text-slate-700">
-                      {tr('Nom de la banque *', 'اسم البنك *')}
-                    </span>
-                    <input
-                      type="text"
-                      value={bankName}
-                      onChange={(e) => {
-                        setBankName(e.target.value);
-                        setBillingDirty(true);
-                      }}
-                      placeholder="Ex: Attijariwafa Bank / CIH Bank"
-                      className="mt-1 w-full p-2 rounded-lg border border-slate-300 bg-white"
-                    />
-                  </label>
-
-                  <label className="block">
-                    <span className="font-bold text-slate-700">
-                      {tr(
-                        'Titulaire du compte (Bénéficiaire) *',
-                        'صاحب الحساب (المستفيد) *',
-                      )}
-                    </span>
-                    <input
-                      type="text"
-                      value={bankHolder}
-                      onChange={(e) => {
-                        setBankHolder(e.target.value);
-                        setBillingDirty(true);
-                      }}
-                      placeholder="Ex: IMMOGEST SARL"
-                      className="mt-1 w-full p-2 rounded-lg border border-slate-300 bg-white"
-                    />
-                  </label>
-
-                  <div className="md:col-span-2">
-                    <div className="flex items-center justify-between">
-                      <label className="font-bold text-slate-700">
-                        {tr(
-                          'RIB Marocain (24 chiffres exacts) *',
-                          'رقم الحساب البنكي RIB (24 رقماً) *',
-                        )}
-                      </label>
-                      <span
-                        className={`font-mono text-[11px] font-bold ${
-                          /^\d{24}$/.test(normalizeRibDigits(bankRib))
-                            ? 'text-emerald-700'
-                            : 'text-slate-500'
-                        }`}
-                      >
-                        {normalizeRibDigits(bankRib).replace(/\D/g, '').length}{' '}
-                        / 24 {tr('chiffres', 'رقم')}
-                      </span>
-                    </div>
-                    <input
-                      type="text"
-                      value={bankRib}
-                      onChange={(e) => {
-                        setBankRib(e.target.value);
-                        setBillingDirty(true);
-                      }}
-                      onBlur={() => {
-                        const clean = normalizeRibDigits(bankRib);
-                        if (/^\d{24}$/.test(clean)) {
-                          setBankRib(formatRibMoroccan(clean));
-                        }
-                      }}
-                      placeholder="007 780 0001234567890123 45"
-                      className="mt-1 w-full p-2 rounded-lg border border-slate-300 bg-white font-mono"
-                    />
-                  </div>
-
-                  <label className="block">
-                    <span className="font-bold text-slate-700">
-                      {tr('IBAN (optionnel)', 'IBAN (اختياري)')}
-                    </span>
-                    <input
-                      type="text"
-                      value={bankIban}
-                      onChange={(e) => {
-                        setBankIban(e.target.value);
-                        setBillingDirty(true);
-                      }}
-                      placeholder="MA64..."
-                      className="mt-1 w-full p-2 rounded-lg border border-slate-300 bg-white font-mono"
-                    />
-                  </label>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <label className="block">
-                      <span className="font-bold text-slate-700">
-                        {tr('SWIFT / BIC', 'SWIFT / BIC')}
-                      </span>
-                      <input
-                        type="text"
-                        value={bankSwift}
-                        onChange={(e) => {
-                          setBankSwift(e.target.value);
-                          setBillingDirty(true);
-                        }}
-                        placeholder="BCMAMAMC"
-                        className="mt-1 w-full p-2 rounded-lg border border-slate-300 bg-white font-mono"
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="font-bold text-slate-700">ICE</span>
-                      <input
-                        type="text"
-                        value={bankIce}
-                        onChange={(e) => {
-                          setBankIce(e.target.value);
-                          setBillingDirty(true);
-                        }}
-                        placeholder="001234567000089"
-                        className="mt-1 w-full p-2 rounded-lg border border-slate-300 bg-white font-mono"
-                      />
-                    </label>
-                  </div>
-
-                  <label className="block">
-                    <span className="font-bold text-slate-700">
-                      {tr(
-                        'Instructions affichées au syndic (FR)',
-                        'تعليمات الدفع المعروضة للسنديك (فرنسي)',
-                      )}
-                    </span>
-                    <textarea
-                      rows={3}
-                      value={bankInstructionsFr}
-                      onChange={(e) => {
-                        setBankInstructionsFr(e.target.value);
-                        setBillingDirty(true);
-                      }}
-                      className="mt-1 w-full p-2 rounded-lg border border-slate-300 bg-white"
-                    />
-                  </label>
-
-                  <label className="block">
-                    <span className="font-bold text-slate-700">
-                      {tr(
-                        'Instructions affichées au syndic (AR)',
-                        'تعليمات الدفع المعروضة للسنديك (عربي)',
-                      )}
-                    </span>
-                    <textarea
-                      rows={3}
-                      dir="rtl"
-                      value={bankInstructionsAr}
-                      onChange={(e) => {
-                        setBankInstructionsAr(e.target.value);
-                        setBillingDirty(true);
-                      }}
-                      className="mt-1 w-full p-2 rounded-lg border border-slate-300 bg-white"
-                    />
-                  </label>
-                </div>
-              </div>
-
-              {billingError && (
-                <div
-                  role="alert"
-                  className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold"
-                >
-                  {billingError}
-                </div>
-              )}
-              {billingMessage && (
-                <div
-                  role="status"
-                  className="p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-semibold"
-                >
-                  {billingMessage}
-                </div>
-              )}
-
-              <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-200 text-xs">
-                <div>
-                  {confirmResetEnv ? (
-                    <div className="inline-flex items-center gap-2">
-                      <span className="text-amber-800 font-semibold">
-                        {tr(
-                          'Supprimer la surcharge Admin et revenir aux variables .env ?',
-                          'حذف إعدادات المدير والعودة إلى متغيرات البيئة؟',
-                        )}
-                      </span>
-                      <button
-                        type="button"
-                        disabled={billingSaving}
-                        onClick={() => void handleResetBillingToEnv()}
-                        className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold"
-                      >
-                        {tr('Confirmer', 'تأكيد')}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setConfirmResetEnv(false)}
-                        className="px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-700"
-                      >
-                        {tr('Annuler', 'إلغاء')}
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setConfirmResetEnv(true)}
-                      className="px-3 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 font-bold"
-                    >
-                      {tr(
-                        'Réinitialiser aux variables d’environnement',
-                        'إعادة التعيين لمتغيرات البيئة',
-                      )}
-                    </button>
-                  )}
-                </div>
-
-                <Button
-                  type="button"
-                  disabled={billingSaving}
-                  onClick={() => void handleSaveBillingConfig()}
-                  className="bg-teal-700 hover:bg-teal-800 text-white font-bold"
-                >
-                  {billingSaving
-                    ? tr('Enregistrement...', 'جاري الحفظ...')
-                    : tr('Enregistrer la configuration', 'حفظ الإعدادات')}
-                </Button>
-              </div>
-            </Card>
-          </div>
+          <AdminGatewaysTab adminBillingConfig={adminBillingConfig} />
         )}
+
+        {activeTab === 'commercial' && (
+          <AdminCommercialTab adminBillingConfig={adminBillingConfig} />
+        )}
+
+        {activeTab === 'audit' && <AdminAuditWebhooksTab />}
       </main>
 
       {/* Create New Syndic Cabinet Modal */}
@@ -3358,12 +2810,12 @@ const AdminDashboard: React.FC = () => {
               </div>
             </fieldset>
 
-            {/* Record Subscription Payment & Extend */}
+            {/* Record Subscription Payment & Extend (Counter Cash / Agency / Check / Bank) */}
             <fieldset className="border border-teal-200 bg-teal-50/40 rounded-xl p-3.5 space-y-2.5">
               <legend className="px-1.5 font-bold text-teal-900">
                 {tr(
-                  'Encaisser l’abonnement plateforme & prolonger',
-                  'تسجيل دفع اشتراك المنصة وتمديده',
+                  'Encaisser l’abonnement (Espèces / Agence / Chèque / Virement) & prolonger',
+                  'تسجيل دفع اشتراك المنصة (نقداً / وكالة / شيك / تحويل) وتمديده',
                 )}
               </legend>
               <div className="flex flex-wrap items-center gap-1.5">
@@ -3385,6 +2837,28 @@ const AdminDashboard: React.FC = () => {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <label className="block">
                   <span className="font-bold text-slate-700">
+                    {tr('Mode d’encaissement', 'طريقة التحصيل')}
+                  </span>
+                  <select
+                    value={subscriptionMethod}
+                    onChange={(e) =>
+                      setSubscriptionMethod(
+                        e.target.value as SubscriptionPaymentMethod,
+                      )
+                    }
+                    className="mt-1 border border-slate-300 rounded-lg p-2 w-full bg-white font-semibold"
+                  >
+                    <option value="cash">{tr('Espèces (Guichet / Bureau)', 'نقداً (الشباك)')}</option>
+                    <option value="wafacash">Wafacash</option>
+                    <option value="cashplus">Cash Plus</option>
+                    <option value="baridcash">Barid Cash</option>
+                    <option value="check">{tr('Chèque bancaire', 'شيك بنكي')}</option>
+                    <option value="virement">{tr('Virement bancaire RIB', 'تحويل بنكي')}</option>
+                    <option value="manual">{tr('Manuel', 'يدوي')}</option>
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="font-bold text-slate-700">
                     {tr('Nombre de mois', 'عدد الأشهر')}
                   </span>
                   <input
@@ -3401,31 +2875,90 @@ const AdminDashboard: React.FC = () => {
                   />
                 </label>
                 <label className="block">
-                  <span className="font-bold text-slate-700">
-                    {tr('Référence bancaire unique', 'مرجع بنكي فريد')}
-                  </span>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-bold text-slate-700">
+                      {tr('Référence / N° reçu', 'المرجع / رقم الوصل')}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleGenerateCounterRef}
+                      className="text-[11px] font-bold text-teal-700 hover:underline"
+                    >
+                      {tr('Auto-générer', 'توليد تلقائي')}
+                    </button>
+                  </div>
                   <input
                     className="mt-1 border border-slate-300 rounded-lg p-2 w-full bg-white font-mono"
-                    placeholder="Ex: VIR-2026-001"
+                    placeholder={
+                      ['cash', 'wafacash', 'cashplus', 'baridcash', 'check'].includes(
+                        subscriptionMethod,
+                      )
+                        ? tr('Auto (ESP-...) si laissé vide', 'تلقائي إذا ترك فارغاً')
+                        : 'Ex: VIR-2026-001'
+                    }
                     value={subscriptionReference}
                     onChange={(e) => setSubscriptionReference(e.target.value)}
                   />
                 </label>
+                <label className="block">
+                  <span className="font-bold text-slate-700">
+                    {tr('Code promo (optionnel)', 'رمز ترويجي (اختياري)')}
+                  </span>
+                  <input
+                    className="mt-1 border border-slate-300 rounded-lg p-2 w-full bg-white font-mono uppercase"
+                    placeholder="Ex: MAROC10"
+                    value={subscriptionPromoCode}
+                    onChange={(e) =>
+                      setSubscriptionPromoCode(e.target.value.toUpperCase())
+                    }
+                  />
+                </label>
+                <label className="block">
+                  <span className="font-bold text-slate-700">
+                    {tr('Agence / Guichet (optionnel)', 'الوكالة / المكتب (اختياري)')}
+                  </span>
+                  <input
+                    className="mt-1 border border-slate-300 rounded-lg p-2 w-full bg-white"
+                    placeholder="Ex: Guichet Casablanca / Agence Maarif"
+                    value={subscriptionAgencyLocation}
+                    onChange={(e) =>
+                      setSubscriptionAgencyLocation(e.target.value)
+                    }
+                  />
+                </label>
+                <label className="block">
+                  <span className="font-bold text-slate-700">
+                    {tr('Observation / Caissier (optionnel)', 'ملاحظات (اختياري)')}
+                  </span>
+                  <input
+                    className="mt-1 border border-slate-300 rounded-lg p-2 w-full bg-white"
+                    placeholder={tr('Ex: Reçu signé en agence', 'مثال: وصل موقع')}
+                    value={subscriptionNotes}
+                    onChange={(e) => setSubscriptionNotes(e.target.value)}
+                  />
+                </label>
               </div>
               <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-                <p className="font-mono font-bold text-sm text-teal-900">
-                  {tr('Montant à encaisser :', 'المبلغ المطلوب:')}{' '}
-                  {(PLANS[editPlan].price * subscriptionMonths).toLocaleString(
-                    'fr-MA',
-                  )}{' '}
-                  MAD
-                </p>
+                <div className="font-mono font-bold text-sm text-teal-900">
+                  {tr('Montant estimé :', 'المبلغ المقدر:')}{' '}
+                  {counterEstimatedAmount.afterMulti.toLocaleString('fr-MA')} MAD
+                  {counterEstimatedAmount.pct > 0 && (
+                    <span className="ms-1.5 text-[11px] font-sans text-emerald-700">
+                      (-{counterEstimatedAmount.pct}% multi-mois)
+                    </span>
+                  )}
+                  {subscriptionPromoCode.trim() && (
+                    <span className="ms-1.5 text-[11px] font-sans text-teal-700">
+                      + promo {subscriptionPromoCode.trim()}
+                    </span>
+                  )}
+                </div>
                 <Button
                   disabled={Boolean(selectedSyndic.archivedAt)}
                   onClick={handleRecordSubscriptionPayment}
                   className="bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs"
                 >
-                  {tr('Enregistrer le paiement', 'تسجيل الدفع')}
+                  {tr('Encaisser & Prolonger', 'تحصيل وتمديد')}
                 </Button>
               </div>
               {subscriptionError && (
@@ -3437,12 +2970,21 @@ const AdminDashboard: React.FC = () => {
                 </p>
               )}
               {subscriptionMessage && (
-                <p
+                <div
                   role="status"
-                  className="text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg p-2 font-semibold"
+                  className="flex flex-wrap items-center justify-between gap-2 text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg p-2 font-semibold"
                 >
-                  {subscriptionMessage}
-                </p>
+                  <span>{subscriptionMessage}</span>
+                  {lastRecordedPayment && (
+                    <button
+                      type="button"
+                      onClick={() => void handleDownloadInvoice(lastRecordedPayment)}
+                      className="px-2.5 py-1 rounded bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-[11px]"
+                    >
+                      {tr('Télécharger Reçu / Facture PDF', 'تحميل الوصل / الفاتورة PDF')}
+                    </button>
+                  )}
+                </div>
               )}
             </fieldset>
 
@@ -3462,7 +3004,7 @@ const AdminDashboard: React.FC = () => {
                   )}
                 </p>
               ) : (
-                <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                <div className="space-y-1.5 max-h-44 overflow-y-auto">
                   {selectedSyndicPayments.map((p) => {
                     const methodBadge = getMethodBadgeMeta(p.method, tr);
                     return (
@@ -3492,6 +3034,11 @@ const AdminDashboard: React.FC = () => {
                             {methodBadge.label}
                           </span>{' '}
                           · <span className="font-mono">{p.reference}</span>
+                          {p.invoiceNumber && (
+                            <span className="ms-1.5 font-mono text-teal-800 font-bold">
+                              ({p.invoiceNumber})
+                            </span>
+                          )}
                           <div className="text-slate-400">
                             {new Date(p.createdAt).toLocaleDateString('fr-MA')}
                             {p.voidedAt && p.voidReason
@@ -3500,6 +3047,13 @@ const AdminDashboard: React.FC = () => {
                           </div>
                         </div>
                         <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => void handleDownloadInvoice(p)}
+                            className="px-2 py-1 rounded border border-teal-300 bg-teal-50/60 text-teal-900 hover:bg-teal-100 font-semibold"
+                          >
+                            {tr('PDF', 'PDF')}
+                          </button>
                           {p.proofUrl && (
                             <button
                               type="button"
