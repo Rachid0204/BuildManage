@@ -121,7 +121,7 @@ const Modal: React.FC<ModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 bg-slate-900/50 backdrop-blur-[1px] z-50 flex justify-center items-center p-4 transition-opacity"
+      className="fixed inset-0 bg-slate-900/50 backdrop-blur-[1px] z-50 flex justify-center items-end sm:items-center p-0 sm:p-4 transition-opacity"
       aria-labelledby={titleId}
       role="dialog"
       aria-modal="true"
@@ -129,20 +129,20 @@ const Modal: React.FC<ModalProps> = ({
     >
       <div
         ref={modalRef}
-        className={`bg-white rounded-lg border border-slate-200 shadow-xl w-full ${maxWidthClass} max-h-[90vh] flex flex-col overflow-hidden focus:outline-none`}
+        className={`bg-white rounded-t-2xl sm:rounded-xl border border-slate-200 shadow-xl w-full ${maxWidthClass} max-h-[92dvh] flex flex-col overflow-hidden focus:outline-none`}
         onClick={(e) => e.stopPropagation()}
         tabIndex={-1}
       >
         {/* Header */}
-        <div className="flex justify-between items-center px-6 py-4 border-b border-slate-200 bg-slate-50/60">
-          <h3 id={titleId} className="text-base font-bold text-slate-900 tracking-tight">
+        <div className="flex justify-between items-center gap-3 px-4 sm:px-6 py-3.5 sm:py-4 border-b border-slate-200 bg-slate-50/60 shrink-0">
+          <h3 id={titleId} className="text-base font-bold text-slate-900 tracking-tight leading-snug">
             {title}
           </h3>
           <button
             type="button"
             onClick={() => onCloseRef.current()}
             disabled={isBusy}
-            className="text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 p-1 rounded transition-colors focus:outline-none focus:ring-2 focus:ring-teal-500"
+            className="text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-teal-500 shrink-0"
             aria-label={tr('Fermer la boîte de dialogue', 'إغلاق النافذة')}
           >
             <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -158,12 +158,12 @@ const Modal: React.FC<ModalProps> = ({
 
         {onSubmit ? (
           <Form onSubmit={onSubmit} onBusyChange={setFormBusy} className="flex flex-col min-h-0">
-            <div className="p-6 space-y-4 overflow-y-auto text-sm text-slate-700">{children}</div>
-            {footer && <div className="flex justify-end items-center px-6 py-3.5 bg-slate-50 border-t border-slate-200 gap-2">{footer}</div>}
+            <div className="p-4 sm:p-6 space-y-4 overflow-y-auto text-sm text-slate-700">{children}</div>
+            {footer && <div className="flex flex-wrap justify-end items-center px-4 sm:px-6 py-3.5 pb-safe bg-slate-50 border-t border-slate-200 gap-2 shrink-0">{footer}</div>}
           </Form>
         ) : <>
-          <div className="p-6 space-y-4 overflow-y-auto text-sm text-slate-700">{children}</div>
-          {footer && <div className="flex justify-end items-center px-6 py-3.5 bg-slate-50 border-t border-slate-200 gap-2">{footer}</div>}
+          <div className="p-4 sm:p-6 space-y-4 overflow-y-auto text-sm text-slate-700">{children}</div>
+          {footer && <div className="flex flex-wrap justify-end items-center px-4 sm:px-6 py-3.5 pb-safe bg-slate-50 border-t border-slate-200 gap-2 shrink-0">{footer}</div>}
         </>}
       </div>
     </div>

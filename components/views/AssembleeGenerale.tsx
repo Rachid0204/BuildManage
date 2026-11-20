@@ -461,12 +461,12 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
       {/* Top Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-2 border-b border-slate-200">
         <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
-              <AGIcon />
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
+              <span className="shrink-0 flex items-center"><AGIcon /></span>
               <span>{tr('Gouvernance & Assemblées Générales (Loi 18-00)', 'الحكامة والجمعيات العامة (القانون 18-00)')}</span>
             </h1>
-            <span className="text-xs bg-teal-50 text-teal-800 font-semibold px-2.5 py-0.5 rounded-full border border-teal-200">
+            <span className="text-xs bg-teal-50 text-teal-800 font-semibold px-2.5 py-0.5 rounded-full border border-teal-200 whitespace-nowrap">
               {tr('Scrutin pondéré par tantièmes', 'تصويت مرجح بالحصة الشائعة')}
             </span>
           </div>
@@ -478,12 +478,12 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
           {agList.length > 1 && (
             <select
               value={activeAG?.id || ''}
               onChange={(e) => setActiveSessionId(e.target.value)}
-              className="text-xs border border-slate-300 rounded-lg px-2.5 py-1.5 bg-white font-medium"
+              className="text-xs border border-slate-300 rounded-lg px-2.5 py-2 min-h-[36px] bg-white font-medium max-w-full"
             >
               {agList.map((ag) => (
                 <option key={ag.id} value={ag.id}>
@@ -493,7 +493,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
             </select>
           )}
 
-          <Button onClick={() => setIsCreateModalOpen(true)} className="flex items-center gap-1.5 text-xs sm:text-sm">
+          <Button onClick={() => setIsCreateModalOpen(true)} className="flex items-center gap-1.5 text-xs sm:text-sm min-h-[36px]">
             <PlusIcon />
             <span>{tr('Planifier une AG', 'برمجة جمع عام')}</span>
           </Button>
@@ -502,8 +502,8 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
 
       {/* Quorum & Digital Voting Banner */}
       {activeAG && (
-        <Card className="bg-gradient-to-r from-teal-900 via-teal-800 to-slate-900 text-white p-6 border-none shadow-md">
-          <div className="flex flex-col md:flex-row md:items-start justify-between gap-5">
+        <Card className="bg-gradient-to-r from-teal-900 via-teal-800 to-slate-900 text-white p-4 sm:p-6 border-none shadow-md">
+          <div className="flex flex-col xl:flex-row xl:items-start justify-between gap-5">
             <div className="space-y-2">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-[11px] font-bold uppercase tracking-wider bg-teal-700/80 text-teal-100 px-2.5 py-0.5 rounded-full border border-teal-500/30">

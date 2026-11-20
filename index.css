@@ -31,12 +31,24 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
   background-color: #f8fafc;
   color: #0f172a;
 }
 
 html[dir="rtl"] body {
   font-family: 'Cairo', 'Inter', sans-serif;
+}
+
+/* Preserve connected Arabic cursive glyphs by neutralizing Tailwind tracking-* utilities in RTL
+   and ensuring Arabic characters inside .font-mono fall back to Cairo instead of system monospace */
+html[dir="rtl"],
+html[dir="rtl"] * {
+  letter-spacing: 0 !important;
+}
+
+html[dir="rtl"] .font-mono {
+  font-family: 'JetBrains Mono', 'Cairo', sans-serif;
 }
 
 /* Tabular numeric precision for accounting & tantièmes */
@@ -85,7 +97,11 @@ textarea:focus-visible {
   scrollbar-width: none;
 }
 
-/* Safe area padding for mobile bottom bars */
+/* Safe area padding for mobile notched viewports, bottom bars & Capacitor WebViews */
+.pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
 .pb-safe {
-  padding-bottom: env(safe-area-inset-bottom, 0.5rem);
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), 0.5rem);
 }

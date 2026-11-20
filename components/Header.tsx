@@ -103,8 +103,8 @@ const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
-      <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0 ms-2">
-        <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1 sm:gap-2.5 shrink-0 ms-1.5 sm:ms-2">
+        <div className="hidden sm:flex items-center gap-2">
           <span className="hidden md:inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-semibold bg-teal-50 text-teal-800 border border-teal-200">
             {t('header.syndicSpace')}
           </span>
@@ -123,7 +123,7 @@ const Header: React.FC<HeaderProps> = ({
             onClick={onOpenHelp}
             aria-label={tr('Guide pas à pas', 'دليل الاستخدام')}
             title={tr('Ouvrir le guide de cet écran', 'فتح دليل هذه الشاشة')}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-teal-200 bg-teal-50/70 hover:bg-teal-100 text-teal-900 text-xs font-bold min-h-[36px] transition-colors"
+            className="inline-flex items-center justify-center gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg border border-teal-200 bg-teal-50/70 hover:bg-teal-100 text-teal-900 text-xs font-bold min-w-[36px] min-h-[36px] transition-colors"
           >
             <HelpCircle className="w-4 h-4 text-teal-700 shrink-0" />
             <span className="hidden sm:inline">{tr('Guide', 'الدليل')}</span>
@@ -132,13 +132,13 @@ const Header: React.FC<HeaderProps> = ({
 
         <NotificationBell />
 
-        <LanguageToggle variant="light" />
+        <LanguageToggle variant="light" compactMobile />
 
         <button
           type="button"
           onClick={onLogout}
           aria-label={t('header.logout')}
-          className="flex items-center justify-center p-2 text-slate-500 hover:text-rose-600 focus:outline-none min-w-[40px] min-h-[40px] rounded-lg hover:bg-slate-100 transition-colors"
+          className="flex items-center justify-center p-2 text-slate-500 hover:text-rose-600 focus:outline-none min-w-[36px] min-h-[36px] sm:min-w-[40px] sm:min-h-[40px] rounded-lg hover:bg-slate-100 transition-colors"
         >
           <LogoutIcon />
           <span className="ms-2 text-xs sm:text-sm hidden md:block font-semibold">
