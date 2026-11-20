@@ -27,6 +27,7 @@ const ResidentDashboard = React.lazy(() => import('./components/views/ResidentDa
 const SyndicPortal = React.lazy(() => import('./components/portals/SyndicPortal'));
 const PrestatairePortal = React.lazy(() => import('./components/portals/PrestatairePortal'));
 const HelpCenter = React.lazy(() => import('./components/views/HelpCenter'));
+const PwaInstallPrompt = React.lazy(() => import('./components/common/PwaInstallPrompt'));
 
 const SyndicDataProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
@@ -493,6 +494,9 @@ const App: React.FC = () => {
             />
           </Routes></Suspense>
         </RouteErrorBoundary>
+        <Suspense fallback={null}>
+          <PwaInstallPrompt />
+        </Suspense>
       </BuildingProvider>
     </Router>
   );

@@ -53,7 +53,9 @@
     "test:live-sync": "node --import ./tests/helpers/networkGuard.mjs --import tsx --test tests/liveSync.test.ts",
     "test:user-guides": "node --import tsx --test tests/userGuidesIntegrity.test.ts",
     "docs:screenshots": "node --import tsx scripts/captureUserGuides.ts",
-    "docs:guides": "node --import tsx scripts/exportGuidesMarkdown.ts"
+    "docs:guides": "node --import tsx scripts/exportGuidesMarkdown.ts",
+    "pwa:icons": "node --import tsx scripts/generatePwaIcons.ts",
+    "test:ui:responsive": "playwright test tests/ui/responsiveDevices.spec.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.28.4",

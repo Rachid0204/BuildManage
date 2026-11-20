@@ -40,3 +40,16 @@ root.render(
     </QueryClientProvider>
   </React.StrictMode>
 );
+
+if (
+  typeof window !== 'undefined' &&
+  'serviceWorker' in navigator &&
+  !navigator.webdriver &&
+  (import.meta as ImportMeta & { env?: { PROD?: boolean } }).env?.PROD
+) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {
+      // Service worker registration is progressive enhancement; ignore errors cleanly
+    });
+  });
+}
