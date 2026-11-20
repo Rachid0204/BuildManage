@@ -114,24 +114,67 @@ export const PLAN_CATALOG: Record<SubscriptionPlan, PlanCatalogEntry> = {
   },
 };
 
+function parseCabinetExpiryMs(rawExpiry?: string): number {
+  const trimmed = (rawExpiry || '').trim();
+  const normalizedExpiry = /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
+    ? `${trimmed}T23:59:59.999Z`
+    : trimmed;
+  return Date.parse(normalizedExpiry);
+}
+
+export function isInGracePeriod(
+  cabinet: {
+    subscriptionStatus?: string;
+    subscriptionExpiry?: string;
+  },
+  gracePeriodDays: number = 0,
+  nowMs: number = Date.now(),
+): boolean {
+  const safeGrace = Math.max(0, Math.min(30, Math.trunc(gracePeriodDays || 0)));
+  if (safeGrace <= 0) return false;
+  if (
+    cabinet.subscriptionStatus === 'cancelled' ||
+    cabinet.subscriptionStatus === 'expired'
+  ) {
+    return false;
+  }
+  const expiryMs = parseCabinetExpiryMs(cabinet.subscriptionExpiry);
+  if (!Number.isFinite(expiryMs)) return false;
+  return expiryMs <= nowMs && nowMs < expiryMs + safeGrace * 86_400_000;
+}
+
+export function getGraceDaysRemaining(
+  cabinet: {
+    subscriptionStatus?: string;
+    subscriptionExpiry?: string;
+  },
+  gracePeriodDays: number = 0,
+  nowMs: number = Date.now(),
+): number {
+  if (!isInGracePeriod(cabinet, gracePeriodDays, nowMs)) return 0;
+  const expiryMs = parseCabinetExpiryMs(cabinet.subscriptionExpiry);
+  const graceEndMs =
+    expiryMs + Math.max(0, Math.min(30, Math.trunc(gracePeriodDays || 0))) * 86_400_000;
+  return Math.max(0, Math.ceil((graceEndMs - nowMs) / 86_400_000));
+}
+
 export function getEffectiveSubscriptionStatus(
   cabinet: {
     subscriptionStatus?: string;
     subscriptionExpiry?: string;
   },
   nowMs: number = Date.now(),
+  gracePeriodDays: number = 0,
 ): SubscriptionStatus {
   if (cabinet.subscriptionStatus === 'cancelled') return 'cancelled';
-  const rawExpiry = (cabinet.subscriptionExpiry || '').trim();
-  const normalizedExpiry = /^\d{4}-\d{2}-\d{2}$/.test(rawExpiry)
-    ? `${rawExpiry}T23:59:59.999Z`
-    : rawExpiry;
-  const expiryMs = Date.parse(normalizedExpiry);
-  if (
-    cabinet.subscriptionStatus === 'expired' ||
-    !Number.isFinite(expiryMs) ||
-    expiryMs <= nowMs
-  ) {
+  const expiryMs = parseCabinetExpiryMs(cabinet.subscriptionExpiry);
+  if (cabinet.subscriptionStatus === 'expired' || !Number.isFinite(expiryMs)) {
+    return 'expired';
+  }
+  if (expiryMs <= nowMs) {
+    if (isInGracePeriod(cabinet, gracePeriodDays, nowMs)) {
+      return cabinet.subscriptionStatus === 'trialing' ? 'trialing' : 'active';
+    }
     return 'expired';
   }
   if (cabinet.subscriptionStatus === 'trialing') return 'trialing';
@@ -139,12 +182,20 @@ export function getEffectiveSubscriptionStatus(
   return 'expired';
 }
 
-export function subscriptionCanWrite(cabinet: {
-  subscriptionStatus?: string;
-  subscriptionExpiry?: string;
-}) {
-  const effective = getEffectiveSubscriptionStatus(cabinet);
+export function subscriptionCanWrite(
+  cabinet: {
+    subscriptionStatus?: string;
+    subscriptionExpiry?: string;
+  },
+  gracePeriodDays: number = 0,
+) {
+  const effective = getEffectiveSubscriptionStatus(
+    cabinet,
+    Date.now(),
+    gracePeriodDays,
+  );
   return effective === 'active' || effective === 'trialing';
 }
+
 
 

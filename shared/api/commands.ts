@@ -3,12 +3,14 @@ import type {
   Apartment,
   AssembleeGenerale,
   Building,
+  CashChannel,
   Charge,
   ChatMessage,
   Document,
   Invoice,
   MaintenanceRequest,
   MarketplaceItem,
+  OfflineRequestType,
   PaymentPostingOptions,
   PaymentProof,
   Prestataire,
@@ -16,6 +18,7 @@ import type {
   Quittance,
   Resident,
   SubscriptionPayment,
+  SubscriptionPaymentMethod,
   SubscriptionBankTransferRequest,
   SubscriptionPlan,
   SubscriptionStatus,
@@ -355,22 +358,14 @@ export interface CoordinatedMethods {
     syndicId: string;
     plan: SubscriptionPlan;
     months: number;
-    reference: string;
-    amount: number;
-  }) => Promise<{
-    id: string;
-    syndicId: string;
-    syndicName?: string;
-    syndicEmail?: string;
-    plan: SubscriptionPlan;
-    months: number;
-    reference: string;
-    amount: number;
-    recordedBy?: string;
-    createdAt?: string;
-    subscriptionExpiry?: string;
-    subscriptionStatus?: SubscriptionStatus;
-  }>;
+    reference?: string;
+    amount?: number;
+    method?: SubscriptionPaymentMethod;
+    cashChannel?: CashChannel;
+    agencyLocation?: string;
+    promoCode?: string;
+    notes?: string;
+  }) => Promise<SubscriptionPayment>;
   voidSubscriptionPayment: (
     paymentId: string,
     reason: string,
@@ -380,8 +375,12 @@ export interface CoordinatedMethods {
     plan: SubscriptionPlan;
     months: number;
     transferReference: string;
-    bankName: string;
+    bankName?: string;
     transferDate: string;
+    requestType?: OfflineRequestType;
+    cashChannel?: CashChannel;
+    agencyLocation?: string;
+    promoCode?: string;
     proofUrl?: string;
     notes?: string;
   }) => Promise<SubscriptionBankTransferRequest>;

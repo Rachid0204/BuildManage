@@ -85,8 +85,11 @@ export function createBuildingService(context: DomainContext) {
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, []);
     const syndic = syndics.find((s) => s.id === syndicId);
     if (!syndic) throw new OperationError('Syndic introuvable ou non autorisé', 404);
+    const graceDays =
+      resolvePlatformBillingConfig(context.state).publicConfig.commercialPolicy
+        ?.gracePeriodDays ?? 0;
     // Audit Item 21: Delegate subscription expiry check to canonical subscriptionCanWrite with admin bypass
-    if (context.actor.role !== 'admin' && !subscriptionCanWrite(syndic)) {
+    if (context.actor.role !== 'admin' && !subscriptionCanWrite(syndic, graceDays)) {
       throw new OperationError(
         'Abonnement expiré. Veuillez renouveler votre abonnement pour ajouter un nouvel immeuble.',
         402,
@@ -511,16 +514,53 @@ export function createBuildingService(context: DomainContext) {
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type {
+  CashChannel,
+  OfflineRequestType,
   SubscriptionPayment,
   SubscriptionPaymentMethod,
   SubscriptionPlan,
+  SubscriptionPromoCode,
 } from '../../types';
 import { PLANS } from '../../shared/domain/subscription';
 import { subscriptionCanWrite } from '../../utils/subscriptionPolicy';
-import { resolvePlatformBillingConfig } from '../paypalBilling';
+import {
+  computeSubscriptionPricing,
+  nextSubscriptionDocumentNumber,
+  recordGatewayEvent,
+  resolveAndValidatePromoCode,
+  resolvePlatformBillingConfig,
+} from '../paypalBilling';
 import type { State } from '../repository';
 import type { CommandDependencies } from './dependencies';
 import { OperationError, type Actor } from './errors';
+
+const CASH_PAYMENT_METHODS: readonly SubscriptionPaymentMethod[] = [
+  'cash',
+  'wafacash',
+  'cashplus',
+  'baridcash',
+  'check',
+];
+
+const CASH_CHANNEL_LABELS: Record<CashChannel, string> = {
+  office: 'Guichet / Bureau',
+  wafacash: 'Wafacash',
+  cashplus: 'Cash Plus',
+  baridcash: 'Barid Cash',
+  check: 'Chèque',
+};
+
+function cashChannelToPaymentMethod(
+  requestType: OfflineRequestType,
+  channel?: CashChannel,
+): SubscriptionPaymentMethod {
+  if (requestType === 'virement') return 'virement';
+  if (requestType === 'check' || channel === 'check') return 'check';
+  if (channel === 'wafacash') return 'wafacash';
+  if (channel === 'cashplus') return 'cashplus';
+  if (channel === 'baridcash') return 'baridcash';
+  return 'cash';
+}
 
 export interface ActivatePlatformSubscriptionInput {
   syndicId: string;
@@ -531,6 +571,10 @@ export interface ActivatePlatformSubscriptionInput {
   method?: SubscriptionPaymentMethod;
   currency?: 'MAD' | 'EUR' | 'USD';
   chargedAmount?: number;
+  promoCode?: string;
+  cashChannel?: CashChannel;
+  agencyLocation?: string;
+  notes?: string;
   externalOrderId?: string;
   externalCaptureId?: string;
   proofUrl?: string;
@@ -576,6 +620,18 @@ export function voidPlatformSubscriptionPayment(
   payment.voidedAt = new Date().toISOString();
   payment.voidReason = reason;
   payment.voidedBy = actor.uid;
+
+  if (payment.promoCode) {
+    const promos: SubscriptionPromoCode[] = state.__subscriptionPromos || [];
+    const promo = promos.find(
+      (p) =>
+        String(p.code || '').trim().toUpperCase() ===
+        String(payment.promoCode || '').trim().toUpperCase(),
+    );
+    if (promo && Number(promo.usedCount) > 0) {
+      promo.usedCount = Math.max(0, Number(promo.usedCount) - 1);
+    }
+  }
 
   const cabinets = state.syndik_prod_syndics_v1 || [];
   const cabinet = cabinets.find((c: Syndic) => c.id === payment.syndicId);
@@ -725,10 +781,19 @@ export function activatePlatformSubscription(
   );
   const months = z.number().int().min(1).max(12).parse(input.months);
   const reference = z.string().min(1).max(200).parse(input.reference).trim();
+
+  const billing = resolvePlatformBillingConfig(state).publicConfig;
+  const promo = input.promoCode
+    ? resolveAndValidatePromoCode(state, input.promoCode, plan, months)
+    : undefined;
+  const pricing = computeSubscriptionPricing(billing, plan, months, promo);
   const amountCents = Math.round(Number(input.amountMad) * 100);
+  const baseCents = Math.round(pricing.baseAmountMad * 100);
+  const matchesPricing =
+    amountCents === pricing.amountMadCents ||
+    (!promo && amountCents === baseCents);
   check(
-    Number.isFinite(input.amountMad) &&
-      amountCents === PLANS[plan].price * months * 100,
+    Number.isFinite(input.amountMad) && matchesPricing,
     'Montant incompatible avec le forfait.',
     400,
   );
@@ -752,6 +817,32 @@ export function activatePlatformSubscription(
     subscriptionExpiry: expiry.toISOString(),
   });
 
+  if (promo) {
+    promo.usedCount = (Number(promo.usedCount) || 0) + 1;
+  }
+
+  const finalAmountMad = amountCents / 100;
+  const effectiveDiscountMad = Number(
+    Math.max(0, pricing.baseAmountMad - finalAmountMad).toFixed(2),
+  );
+  const vatRate = billing.issuerProfile?.vatRate === 20 ? 20 : 0;
+  const totalHtMad =
+    vatRate > 0
+      ? Number((finalAmountMad / (1 + vatRate / 100)).toFixed(2))
+      : finalAmountMad;
+  const vatAmountMad = Number((finalAmountMad - totalHtMad).toFixed(2));
+  const method = input.method || 'manual';
+  const invoiceNumber = nextSubscriptionDocumentNumber(
+    state,
+    billing.issuerProfile?.invoicePrefix || 'FAC',
+  );
+  const receiptNumber = CASH_PAYMENT_METHODS.includes(method)
+    ? nextSubscriptionDocumentNumber(
+        state,
+        billing.issuerProfile?.receiptPrefix || 'REC',
+      )
+    : undefined;
+
   const payment: SubscriptionPayment = {
     id: randomUUID(),
     syndicId: s.id,
@@ -760,12 +851,26 @@ export function activatePlatformSubscription(
     plan,
     months,
     reference,
-    amount: amountCents / 100,
-    ...(input.method ? { method: input.method } : {}),
-    ...(input.currency ? { currency: input.currency } : {}),
+    amount: finalAmountMad,
+    method,
+    ...(input.currency ? { currency: input.currency } : { currency: 'MAD' }),
     ...(input.chargedAmount !== undefined
       ? { chargedAmount: Number(input.chargedAmount.toFixed(2)) }
+      : { chargedAmount: finalAmountMad }),
+    invoiceNumber,
+    ...(receiptNumber ? { receiptNumber } : {}),
+    subtotalMad: pricing.baseAmountMad,
+    ...(effectiveDiscountMad > 0 ? { discountMad: effectiveDiscountMad } : {}),
+    ...(promo ? { promoCode: promo.code } : {}),
+    ...(pricing.multiMonthDiscountPct > 0 && effectiveDiscountMad > 0
+      ? { multiMonthDiscountPct: pricing.multiMonthDiscountPct }
       : {}),
+    vatRate,
+    totalHtMad,
+    vatAmountMad,
+    ...(input.cashChannel ? { cashChannel: input.cashChannel } : {}),
+    ...(input.agencyLocation ? { agencyLocation: input.agencyLocation } : {}),
+    ...(input.notes ? { notes: input.notes } : {}),
     ...(input.externalOrderId ? { externalOrderId: input.externalOrderId } : {}),
     ...(input.externalCaptureId
       ? { externalCaptureId: input.externalCaptureId }
@@ -790,7 +895,10 @@ export function activatePlatformSubscription(
     detail: {
       paymentId: payment.id,
       syndicId: s.id,
-      method: input.method || 'manual',
+      method,
+      invoiceNumber,
+      ...(receiptNumber ? { receiptNumber } : {}),
+      ...(promo ? { promoCode: promo.code } : {}),
       ...(input.externalOrderId ? { externalOrderId: input.externalOrderId } : {}),
       ...(input.requestId ? { requestId: input.requestId } : {}),
     },
@@ -882,17 +990,94 @@ async function createCabinet(actor: Actor, input: any) {
 function subscriptionPayment(actor: Actor, input: any) {
   check(actor.role === "admin", "Administration uniquement.");
   const data = object(input);
-  return activatePlatformSubscription(transactionState, actor, {
+  const plan = z
+    .enum(["starter", "professional", "enterprise"])
+    .parse(data.plan);
+  const months = z.number().int().min(1).max(12).parse(data.months);
+  const method = z
+    .enum([
+      "manual",
+      "virement",
+      "cash",
+      "wafacash",
+      "cashplus",
+      "baridcash",
+      "check",
+    ])
+    .default("manual")
+    .parse(data.method ?? "manual");
+  const cashChannel = data.cashChannel
+    ? z
+        .enum(["office", "wafacash", "cashplus", "baridcash", "check"])
+        .parse(data.cashChannel)
+    : method === "cash"
+      ? ("office" as const)
+      : method === "wafacash" ||
+          method === "cashplus" ||
+          method === "baridcash" ||
+          method === "check"
+        ? method
+        : undefined;
+  const promoCode =
+    typeof data.promoCode === "string" && data.promoCode.trim()
+      ? data.promoCode.trim().toUpperCase()
+      : undefined;
+  const billing = resolvePlatformBillingConfig(transactionState).publicConfig;
+  const promo = promoCode
+    ? resolveAndValidatePromoCode(transactionState, promoCode, plan, months)
+    : undefined;
+  const pricing = computeSubscriptionPricing(billing, plan, months, promo);
+  const amountMad =
+    data.amount !== undefined && data.amount !== null && data.amount !== ""
+      ? cents(data.amount) / 100
+      : pricing.amountMad;
+
+  const rawRef = typeof data.reference === "string" ? data.reference.trim() : "";
+  let reference = rawRef;
+  if (!reference) {
+    if (CASH_PAYMENT_METHODS.includes(method)) {
+      const prefix = method === "check" ? "CHQ" : "ESP";
+      reference = `${prefix}-${new Date().getUTCFullYear()}-${randomUUID().slice(0, 8).toUpperCase()}`;
+    } else {
+      throw new OperationError("La référence de paiement est obligatoire.", 400);
+    }
+  }
+  const agencyLocation =
+    typeof data.agencyLocation === "string" && data.agencyLocation.trim()
+      ? data.agencyLocation.trim().slice(0, 120)
+      : undefined;
+  const notes =
+    typeof data.notes === "string" && data.notes.trim()
+      ? data.notes.trim().slice(0, 500)
+      : undefined;
+
+  const payment = activatePlatformSubscription(transactionState, actor, {
     syndicId: str(data.syndicId),
-    plan: z.enum(["starter", "professional", "enterprise"]).parse(data.plan),
-    months: z.number().int().min(1).max(12).parse(data.months),
-    reference: str(data.reference, 200),
-    amountMad: cents(data.amount) / 100,
-    method: "manual",
+    plan,
+    months,
+    reference: str(reference, 200),
+    amountMad,
+    method,
     currency: "MAD",
-    chargedAmount: cents(data.amount) / 100,
+    chargedAmount: amountMad,
+    ...(promoCode ? { promoCode } : {}),
+    ...(cashChannel ? { cashChannel } : {}),
+    ...(agencyLocation ? { agencyLocation } : {}),
+    ...(notes ? { notes } : {}),
     auditOperation: "recordSubscriptionPayment",
   });
+  if (CASH_PAYMENT_METHODS.includes(method)) {
+    recordGatewayEvent(transactionState, {
+      gateway: "cash",
+      eventType: `COUNTER_${method.toUpperCase()}_RECORDED`,
+      status: "ok",
+      httpStatus: 200,
+      syndicId: payment.syndicId,
+      reference: payment.reference,
+      message: `Encaissement guichet (${method}) de ${payment.amount} MAD (${payment.receiptNumber || payment.invoiceNumber}).`,
+    });
+  }
+  return payment;
 }
 
 function submitSubscriptionBankTransfer(actor: Actor, input: any) {
@@ -901,7 +1086,7 @@ function submitSubscriptionBankTransfer(actor: Actor, input: any) {
   const s = cabinetFor(actor, str(data.syndicId));
   check(
     !s.archivedAt,
-    "Cabinet archivé : impossible de soumettre un virement.",
+    "Cabinet archivé : impossible de soumettre une demande de paiement.",
     409,
   );
   check(
@@ -910,12 +1095,39 @@ function submitSubscriptionBankTransfer(actor: Actor, input: any) {
     403,
   );
 
+  const requestType: OfflineRequestType = z
+    .enum(["virement", "cash", "check"])
+    .default("virement")
+    .parse(data.requestType ?? "virement");
+  const isCashLike = requestType === "cash" || requestType === "check";
+  const cashChannel: CashChannel | undefined = isCashLike
+    ? z
+        .enum(["office", "wafacash", "cashplus", "baridcash", "check"])
+        .parse(
+          requestType === "check" ? "check" : (data.cashChannel ?? "office"),
+        )
+    : undefined;
+
   const billing = resolvePlatformBillingConfig(transactionState).publicConfig;
-  check(
-    billing.bankTransfer.enabled,
-    "Le paiement par virement bancaire n'est pas activé.",
-    400,
-  );
+  if (isCashLike) {
+    check(
+      billing.cashPayment?.enabled,
+      "Le paiement en espèces / agence cash n'est pas activé.",
+      400,
+    );
+    check(
+      cashChannel &&
+        billing.cashPayment.acceptedChannels.includes(cashChannel),
+      "Ce canal espèces / agence n'est pas activé.",
+      400,
+    );
+  } else {
+    check(
+      billing.bankTransfer.enabled,
+      "Le paiement par virement bancaire n'est pas activé.",
+      400,
+    );
+  }
 
   const plan = z
     .enum(["starter", "professional", "enterprise"])
@@ -928,19 +1140,47 @@ function submitSubscriptionBankTransfer(actor: Actor, input: any) {
     409,
   );
   const months = z.number().int().min(1).max(12).parse(data.months);
+  const promoCode =
+    typeof data.promoCode === "string" && data.promoCode.trim()
+      ? data.promoCode.trim().toUpperCase()
+      : undefined;
+  const promo = promoCode
+    ? resolveAndValidatePromoCode(transactionState, promoCode, plan, months)
+    : undefined;
+  const pricing = computeSubscriptionPricing(billing, plan, months, promo);
+
+  if (
+    isCashLike &&
+    cashChannel !== "check" &&
+    billing.cashPayment &&
+    billing.cashPayment.maxCashAmountMad > 0 &&
+    pricing.amountMad > billing.cashPayment.maxCashAmountMad
+  ) {
+    throw new OperationError(
+      `Le montant (${pricing.amountMad} MAD) dépasse le plafond espèces autorisé (${billing.cashPayment.maxCashAmountMad} MAD). Utilisez le virement bancaire ou CMI.`,
+      400,
+    );
+  }
+
   const transferReference = str(data.transferReference, 120).trim();
   check(
     transferReference.length >= 3,
-    "Référence de virement invalide (min. 3 caractères).",
+    isCashLike
+      ? "Référence / code de reçu invalide (min. 3 caractères)."
+      : "Référence de virement invalide (min. 3 caractères).",
     400,
   );
-  const bankName = str(data.bankName, 120).trim();
-  check(bankName.length >= 2, "Indiquez la banque émettrice.", 400);
+  const rawBankName =
+    typeof data.bankName === "string" ? data.bankName.trim() : "";
+  const bankName = isCashLike
+    ? rawBankName || (cashChannel ? CASH_CHANNEL_LABELS[cashChannel] : "Espèces")
+    : str(rawBankName, 120).trim();
+  check(bankName.length >= 2, "Indiquez la banque ou l'agence émettrice.", 400);
 
   const transferDate = str(data.transferDate, 32).trim();
   check(
     /^\d{4}-\d{2}-\d{2}$/.test(transferDate),
-    "Date de virement invalide (AAAA-MM-JJ).",
+    "Date de paiement invalide (AAAA-MM-JJ).",
     400,
   );
   const [yr, mo, dy] = transferDate.split("-").map(Number);
@@ -950,7 +1190,7 @@ function submitSubscriptionBankTransfer(actor: Actor, input: any) {
       utc.getUTCMonth() === mo - 1 &&
       utc.getUTCDate() === dy &&
       utc.getTime() <= Date.now() + 2 * 86_400_000,
-    "Date de virement invalide.",
+    "Date de paiement invalide.",
     400,
   );
 
@@ -973,6 +1213,17 @@ function submitSubscriptionBankTransfer(actor: Actor, input: any) {
     proofUrl = rawProof;
   }
 
+  if (isCashLike && billing.cashPayment?.requireProofUpload && !proofUrl) {
+    throw new OperationError(
+      "Importez le reçu de versement (photo ou PDF) avant de soumettre la demande.",
+      400,
+    );
+  }
+
+  const agencyLocation =
+    typeof data.agencyLocation === "string" && data.agencyLocation.trim()
+      ? data.agencyLocation.trim().slice(0, 120)
+      : undefined;
   const notes =
     typeof data.notes === "string" && data.notes.trim()
       ? data.notes.trim().slice(0, 500)
@@ -991,11 +1242,10 @@ function submitSubscriptionBankTransfer(actor: Actor, input: any) {
           r.status !== "rejected" &&
           String(r.transferReference || "").toLowerCase() === refKey,
       ),
-    "Cette référence de virement est déjà enregistrée ou en attente de validation.",
+    "Cette référence de paiement est déjà enregistrée ou en attente de validation.",
     409,
   );
 
-  const amount = PLANS[plan].price * months;
   const reqRecord = {
     id: randomUUID(),
     syndicId: s.id,
@@ -1003,7 +1253,15 @@ function submitSubscriptionBankTransfer(actor: Actor, input: any) {
     ...(s.email ? { syndicEmail: s.email } : {}),
     plan,
     months,
-    amount,
+    amount: pricing.amountMad,
+    subtotalMad: pricing.baseAmountMad,
+    ...(pricing.totalDiscountMad > 0
+      ? { discountMad: pricing.totalDiscountMad }
+      : {}),
+    ...(promo ? { promoCode: promo.code } : {}),
+    requestType,
+    ...(cashChannel ? { cashChannel } : {}),
+    ...(agencyLocation ? { agencyLocation } : {}),
     transferReference,
     bankName,
     transferDate,
@@ -1014,6 +1272,17 @@ function submitSubscriptionBankTransfer(actor: Actor, input: any) {
     createdAt: new Date().toISOString(),
   };
   requests.push(reqRecord);
+  recordGatewayEvent(transactionState, {
+    gateway: isCashLike ? "cash" : "bank_transfer",
+    eventType: isCashLike
+      ? `CASH_REQUEST_SUBMITTED_${String(cashChannel || "office").toUpperCase()}`
+      : "BANK_TRANSFER_REQUEST_SUBMITTED",
+    status: "ok",
+    httpStatus: 200,
+    syndicId: s.id,
+    reference: transferReference,
+    message: `Demande ${isCashLike ? "espèces/agence" : "virement"} soumise (${pricing.amountMad} MAD · ${plan} × ${months}m).`,
+  });
   appendAudit(
     transactionState,
     actor,
@@ -1022,9 +1291,12 @@ function submitSubscriptionBankTransfer(actor: Actor, input: any) {
     {
       requestId: reqRecord.id,
       syndicId: s.id,
+      requestType,
+      ...(cashChannel ? { cashChannel } : {}),
       plan,
       months,
-      amount,
+      amount: pricing.amountMad,
+      ...(promo ? { promoCode: promo.code } : {}),
     },
   );
   return reqRecord;
@@ -1037,12 +1309,14 @@ function reviewSubscriptionBankTransfer(actor: Actor, input: any) {
   const action = z.enum(["approve", "reject"]).parse(data.action);
   const requests = transactionState.syndik_prod_subscription_requests_v1 || [];
   const reqRecord = requests.find((r: any) => r.id === requestId);
-  check(reqRecord, "Demande de virement introuvable.", 404);
+  check(reqRecord, "Demande de paiement introuvable.", 404);
   check(
     reqRecord.status === "pending",
     "Cette demande a déjà été traitée.",
     409,
   );
+  const reqType: OfflineRequestType = reqRecord.requestType || "virement";
+  const isCashLike = reqType === "cash" || reqType === "check";
 
   if (action === "reject") {
     const reason = str(data.rejectionReason, 1000).trim();
@@ -1055,6 +1329,15 @@ function reviewSubscriptionBankTransfer(actor: Actor, input: any) {
     reqRecord.rejectionReason = reason;
     reqRecord.reviewedAt = new Date().toISOString();
     reqRecord.reviewedBy = actor.uid;
+    recordGatewayEvent(transactionState, {
+      gateway: isCashLike ? "cash" : "bank_transfer",
+      eventType: isCashLike ? "CASH_REQUEST_REJECTED" : "BANK_TRANSFER_REJECTED",
+      status: "rejected",
+      httpStatus: 200,
+      syndicId: reqRecord.syndicId,
+      reference: reqRecord.transferReference,
+      message: `Demande rejetée : ${reason}`,
+    });
     appendAudit(
       transactionState,
       actor,
@@ -1063,6 +1346,7 @@ function reviewSubscriptionBankTransfer(actor: Actor, input: any) {
       {
         requestId: reqRecord.id,
         syndicId: reqRecord.syndicId,
+        requestType: reqType,
         action: "reject",
         reason,
       },
@@ -1070,15 +1354,22 @@ function reviewSubscriptionBankTransfer(actor: Actor, input: any) {
     return { request: reqRecord };
   }
 
+  const paymentMethod = cashChannelToPaymentMethod(reqType, reqRecord.cashChannel);
   const payment = activatePlatformSubscription(transactionState, actor, {
     syndicId: reqRecord.syndicId,
     plan: reqRecord.plan,
     months: reqRecord.months,
     reference: reqRecord.transferReference,
     amountMad: reqRecord.amount,
-    method: "virement",
+    method: paymentMethod,
     currency: "MAD",
     chargedAmount: reqRecord.amount,
+    ...(reqRecord.promoCode ? { promoCode: reqRecord.promoCode } : {}),
+    ...(reqRecord.cashChannel ? { cashChannel: reqRecord.cashChannel } : {}),
+    ...(reqRecord.agencyLocation
+      ? { agencyLocation: reqRecord.agencyLocation }
+      : {}),
+    ...(reqRecord.notes ? { notes: reqRecord.notes } : {}),
     ...(reqRecord.proofUrl ? { proofUrl: reqRecord.proofUrl } : {}),
     requestId: reqRecord.id,
     auditOperation: "reviewSubscriptionBankTransfer",
@@ -1087,6 +1378,15 @@ function reviewSubscriptionBankTransfer(actor: Actor, input: any) {
   reqRecord.paymentId = payment.id;
   reqRecord.reviewedAt = new Date().toISOString();
   reqRecord.reviewedBy = actor.uid;
+  recordGatewayEvent(transactionState, {
+    gateway: isCashLike ? "cash" : "bank_transfer",
+    eventType: isCashLike ? "CASH_REQUEST_APPROVED" : "BANK_TRANSFER_APPROVED",
+    status: "ok",
+    httpStatus: 200,
+    syndicId: reqRecord.syndicId,
+    reference: reqRecord.transferReference,
+    message: `Demande validée (${paymentMethod}) — ${payment.invoiceNumber || payment.id}.`,
+  });
   return { request: reqRecord, payment };
 }
 function archiveCabinet(actor: Actor, syndicId: any) {
@@ -1139,8 +1439,11 @@ function restoreArchived(actor: Actor,args:any[]) { const operation='restoreArch
         "Cabinet archivé : restaurez d'abord le cabinet.",
         409,
       );
+      const graceDays =
+        resolvePlatformBillingConfig(transactionState).publicConfig
+          .commercialPolicy?.gracePeriodDays ?? 0;
       check(
-        actor.role === "admin" || subscriptionCanWrite(s),
+        actor.role === "admin" || subscriptionCanWrite(s, graceDays),
         "Abonnement expiré : renouvelez votre abonnement pour restaurer un immeuble.",
         402,
       );
