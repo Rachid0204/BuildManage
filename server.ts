@@ -3980,6 +3980,7 @@ async function startServer() {
     const distPath = path.join(process.cwd(), "dist");
     const assetsPath = path.join(distPath, "assets") + path.sep;
     const guidesPath = path.join(distPath, "guides", "screenshots") + path.sep;
+    const iconsPath = path.join(distPath, "icons") + path.sep;
     // The HTML shell must be revalidated so a new release is picked up at once, and
     // it should not be framed by other origins. Vite content-hashes everything under
     // /assets, so those files never change in place and can be cached indefinitely.
@@ -3997,7 +3998,14 @@ async function startServer() {
             res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
           else if (filePath.startsWith(guidesPath))
             res.setHeader("Cache-Control", "public, max-age=86400");
-          else if (filePath.endsWith(".html")) shellHeaders(res);
+          else if (filePath.startsWith(iconsPath))
+            res.setHeader("Cache-Control", "public, max-age=604800");
+          else if (filePath.endsWith(".webmanifest")) {
+            res.setHeader("Content-Type", "application/manifest+json; charset=utf-8");
+            res.setHeader("Cache-Control", "public, max-age=3600");
+          } else if (path.basename(filePath) === "sw.js") {
+            res.setHeader("Cache-Control", "no-cache");
+          } else if (filePath.endsWith(".html")) shellHeaders(res);
         },
       }),
     );
@@ -4012,7 +4020,8 @@ async function startServer() {
       // 200 turns it into an opaque "Unexpected token <" script error.
       if (
         req.path.startsWith("/assets/") ||
-        req.path.startsWith("/guides/screenshots/")
+        req.path.startsWith("/guides/screenshots/") ||
+        req.path.startsWith("/icons/")
       )
         return res.status(404).type("text/plain").send("Not found");
       shellHeaders(res);

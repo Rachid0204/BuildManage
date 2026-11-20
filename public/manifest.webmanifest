@@ -1,0 +1,57 @@
+{
+  "name": "Syndik — Gestion de Copropriété Maroc (Loi 18-00)",
+  "short_name": "Syndik",
+  "description": "Plateforme SaaS marocaine de gestion de copropriété conforme à la Loi 18-00 et 106-12 : comptabilité tantièmes, quittances PDF, AG en ligne et portails résidents & prestataires.",
+  "lang": "fr",
+  "dir": "auto",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#0f766e",
+  "background_color": "#f8fafc",
+  "categories": ["business", "finance", "productivity"],
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icons/syndik-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Tableau de bord",
+      "short_name": "Accueil",
+      "url": "/"
+    },
+    {
+      "name": "Comptabilité & Quittances",
+      "short_name": "Finances",
+      "url": "/financials"
+    },
+    {
+      "name": "Centre d'Aide & Guides",
+      "short_name": "Guide",
+      "url": "/guide"
+    }
+  ]
+}

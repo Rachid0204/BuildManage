@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Syndik">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f766e" />
+      <stop offset="100%" stop-color="#042f2e" />
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#2dd4bf" />
+      <stop offset="100%" stop-color="#34d399" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)" />
+  <rect x="24" y="24" width="464" height="464" rx="92" fill="none" stroke="#2dd4bf" stroke-opacity="0.22" stroke-width="6" />
+  <!-- Stylized Moroccan residential complex silhouette -->
+  <g fill="#ffffff">
+    <!-- Main central tower -->
+    <rect x="164" y="128" width="184" height="260" rx="18" />
+    <!-- Left wing -->
+    <rect x="96" y="204" width="60" height="184" rx="12" fill-opacity="0.88" />
+    <!-- Right wing -->
+    <rect x="356" y="204" width="60" height="184" rx="12" fill-opacity="0.88" />
+  </g>
+  <!-- Teal accent roofline & Moroccan arch entrance -->
+  <rect x="150" y="106" width="212" height="16" rx="8" fill="url(#accent)" />
+  <g fill="#0f766e">
+    <!-- Central tower windows (3x3 grid) -->
+    <rect x="192" y="160" width="32" height="32" rx="6" />
+    <rect x="240" y="160" width="32" height="32" rx="6" />
+    <rect x="288" y="160" width="32" height="32" rx="6" />
+    <rect x="192" y="212" width="32" height="32" rx="6" />
+    <rect x="240" y="212" width="32" height="32" rx="6" />
+    <rect x="288" y="212" width="32" height="32" rx="6" />
+    <rect x="192" y="264" width="32" height="32" rx="6" />
+    <rect x="288" y="264" width="32" height="32" rx="6" />
+    <!-- Pointed Moroccan arch doorway -->
+    <path d="M226 388 V324 C226 300 256 286 256 286 C256 286 286 300 286 324 V388 Z" />
+    <!-- Wing windows -->
+    <rect x="114" y="232" width="24" height="28" rx="5" />
+    <rect x="114" y="280" width="24" height="28" rx="5" />
+    <rect x="114" y="328" width="24" height="28" rx="5" />
+    <rect x="374" y="232" width="24" height="28" rx="5" />
+    <rect x="374" y="280" width="24" height="28" rx="5" />
+    <rect x="374" y="328" width="24" height="28" rx="5" />
+  </g>
+  <!-- Ground line accent -->
+  <rect x="84" y="388" width="344" height="14" rx="7" fill="url(#accent)" />
+</svg>
