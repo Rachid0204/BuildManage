@@ -1898,4 +1898,135 @@ for(const width of [390, 1280]) test(`A4: PDF export loads on demand and downloa
   expect(scripts.some(p=>/\/pdf-/.test(p))).toBe(true);
 });
 
+test('Admin 5-tab payment gateways, Syndic CMI/Cash/Promo checkout, CMI return banner, and SaaS Facture PDF', async ({ page }) => {
+  test.setTimeout(90_000);
+  const pageErrors: string[] = [];
+  page.on('pageerror', (err) => pageErrors.push(err.message));
+
+  const adminToken = await apiSession(3);
+  const configRes = await fetch(`${base}/api/admin/billing-config`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({
+      paypal: {
+        enabled: false,
+        env: 'sandbox',
+        checkoutMode: 'standard',
+        clientId: '',
+        currency: 'EUR',
+        madPerUnit: 10,
+      },
+      cmi: {
+        enabled: true,
+        env: 'test',
+        clientId: '600001234',
+        storeKey: 'SyntheticCmiStoreKey123456!',
+        currencyCode: '504',
+        lang: 'fr',
+      },
+      bankTransfer: {
+        enabled: true,
+        bankName: 'Attijariwafa Bank',
+        accountHolder: 'ImmoGest Maroc SARL',
+        rib: '007780000123456789012345',
+      },
+      cashPayment: {
+        enabled: true,
+        acceptedChannels: ['wafacash', 'cashplus', 'office', 'check'],
+        beneficiaryName: 'ImmoGest Maroc SARL',
+        officeAddress: 'Casablanca Maarif',
+        officeHours: 'Lun-Ven 09h-17h',
+        contactPhone: '0522000000',
+        maxCashAmountMad: 5000,
+        requireProofUpload: false,
+      },
+      issuerProfile: {
+        companyName: 'ImmoGest Maroc SARL',
+        legalForm: 'SARL',
+        ice: '001234567890123',
+        vatRate: 20,
+        invoicePrefix: 'FAC',
+        receiptPrefix: 'REC',
+      },
+      commercialPolicy: {
+        gracePeriodDays: 7,
+        multiMonthDiscounts: { m3: 5, m6: 10, m12: 20 },
+      },
+    }),
+  });
+  expect(configRes.status, await configRes.clone().text()).toBe(200);
+
+  const promoRes = await apiCall(adminToken, '/api/admin/promos', {
+    code: 'PROMO20',
+    discountType: 'percent',
+    discountValue: 20,
+    description: 'Remise lancement E2E',
+  });
+  expect(promoRes.status, JSON.stringify(promoRes.data)).toBe(200);
+
+  // 1. Admin navigates all 5 tabs cleanly
+  await login(page, 3);
+  await expect(page.getByRole('tab', { name: /Cabinets/i })).toBeVisible();
+  await page.getByRole('tab', { name: /Paiements & Rapports SaaS/i }).click();
+  await expect(page.getByText(/Encaissements par passerelle de paiement/i)).toBeVisible();
+  await page.getByRole('tab', { name: /Passerelles & Paiements/i }).click();
+  await expect(page.getByText(/CMI Maroc/i).first()).toBeVisible();
+  await expect(page.getByText(/Wafacash/i).first()).toBeVisible();
+  await page.getByRole('tab', { name: /Facturation & Offres/i }).click();
+  await expect(page.getByRole('cell', { name: /PROMO20/ })).toBeVisible();
+  await page.getByRole('tab', { name: /Audit & Webhooks/i }).click();
+  await expect(page.getByText(/Moniteur Webhooks & Callbacks Passerelles/i)).toBeVisible();
+
+  // 2. Syndic lands from CMI browser return (?cmi_return=ok&oid=CMI-E2E-001)
+  await login(page, 0);
+  await page.goto(`${base}/?cmi_return=ok&oid=CMI-E2E-001`);
+  await expect(page.getByRole('status').filter({ hasText: /CMI-E2E-001/ })).toBeVisible();
+  await expect.poll(() => new URL(page.url()).search).toBe('');
+
+  // 3. Syndic opens renewal modal, applies PROMO20, submits Wafacash declaration
+  await page.getByRole('button', { name: /Mes factures PDF|Renouveler \/ Payer/i }).first().click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('button', { name: /Carte Marocaine \(CMI/i })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: /Virement RIB Maroc/i })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: /Espèces \/ Agences \/ Chèque/i })).toBeVisible();
+
+  // Verify multi-month discount badge and live promo code preview
+  await expect(dialog.getByText('-10%', { exact: true })).toBeVisible();
+  await dialog.getByLabel('Code promo').fill('PROMO20');
+  await dialog.getByRole('button', { name: 'Appliquer', exact: true }).click();
+  await expect(dialog.getByText(/✓ PROMO20/)).toBeVisible();
+
+  // Submit a Wafacash declaration
+  await dialog.getByRole('button', { name: /Espèces \/ Agences \/ Chèque/i }).click();
+  await dialog.getByPlaceholder('WFC-2026-...').fill('WFC-E2E-9988');
+  await dialog.getByRole('button', { name: /Soumettre la déclaration/i }).click();
+  await expect(dialog.getByText('WFC-E2E-9988', { exact: true })).toBeVisible();
+
+  // Admin approves the Wafacash request so a real FAC-... payment is created
+  const requests = (await disk()).syndik_prod_subscription_requests_v1 || [];
+  const cashReq = requests.find((r: any) => r.transferReference === 'WFC-E2E-9988');
+  expect(cashReq).toBeTruthy();
+  const approved = await apiCommand(adminToken, 'reviewSubscriptionBankTransfer', [{
+    requestId: cashReq.id,
+    action: 'approve',
+  }]);
+  expect(approved.status, JSON.stringify(approved.data)).toBe(200);
+
+  // Syndic closes & re-opens modal and downloads real PDF invoice on demand
+  await dialog.getByRole('button', { name: 'Fermer', exact: true }).click();
+  await page.reload();
+  await page.getByRole('button', { name: /Renouveler \/ Payer/i }).first().click();
+  const reloadedDialog = page.getByRole('dialog');
+  const pdfBtn = reloadedDialog.getByRole('button', { name: 'Facture PDF', exact: true }).first();
+  await expect(pdfBtn).toBeVisible();
+  const download = page.waitForEvent('download');
+  await pdfBtn.click();
+  const file = await download;
+  expect(file.suggestedFilename()).toMatch(/\.pdf$/);
+  const path = await file.path();
+  expect(readFileSync(path!).subarray(0, 5).toString()).toBe('%PDF-');
+  expect(pageErrors).toEqual([]);
+});
+
+
 

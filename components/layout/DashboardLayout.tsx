@@ -1,15 +1,22 @@
 import SetupChecklist from '../views/SetupChecklist';
 import {
   getEffectiveSubscriptionStatus,
+  getGraceDaysRemaining,
+  isInGracePeriod,
   subscriptionCanWrite,
 } from '../../utils/subscriptionPolicy';
 import React, { Suspense, useEffect, useState } from 'react';
 import { Outlet, Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import Sidebar from '../Sidebar';
 import Header from '../Header';
 import { useAuth, getHomeRouteForRole } from '../../contexts/AuthContext';
 import { useBuilding } from '../../contexts/BuildingContext';
 import { useI18n } from '../../hooks/useI18n';
+import {
+  getSubscriptionBillingConfig,
+  syncAllSharedStateFromServer,
+} from '../../firebase/services';
 import Loading from '../common/Loading';
 import {
     DashboardIcon,
@@ -35,8 +42,22 @@ const DashboardLayout: React.FC = () => {
     const { language, t, tr } = useI18n();
     const location = useLocation();
     const navigate = useNavigate();
+    const queryClient = useQueryClient();
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
     const [isRenewalOpen, setIsRenewalOpen] = useState(false);
+    const [cmiReturnBanner, setCmiReturnBanner] = useState<{
+        status: 'ok' | 'fail';
+        oid: string;
+    } | null>(null);
+
+    const { data: billingConfig } = useQuery({
+        queryKey: ['subscriptionBillingConfig'],
+        queryFn: getSubscriptionBillingConfig,
+        enabled: userProfile?.role === 'syndic',
+        staleTime: 60_000,
+    });
+
+    const graceDays = billingConfig?.commercialPolicy?.gracePeriodDays ?? 0;
 
     useEffect(() => {
         const handleOpen = () => setIsRenewalOpen(true);
@@ -44,6 +65,32 @@ const DashboardLayout: React.FC = () => {
         return () =>
             window.removeEventListener('syndik-open-renewal', handleOpen);
     }, []);
+
+    useEffect(() => {
+        const params = new URLSearchParams(location.search);
+        const cmiReturn = params.get('cmi_return');
+        if (cmiReturn !== 'ok' && cmiReturn !== 'fail') return;
+
+        const oid = (params.get('oid') || '')
+            .replace(/[^A-Za-z0-9_-]/g, '')
+            .slice(0, 64);
+        setCmiReturnBanner({ status: cmiReturn, oid });
+
+        params.delete('cmi_return');
+        params.delete('oid');
+        const cleanedQuery = params.toString();
+        const nextUrl = `${location.pathname}${cleanedQuery ? `?${cleanedQuery}` : ''}${location.hash || ''}`;
+        window.history.replaceState({}, '', nextUrl);
+
+        void syncAllSharedStateFromServer(true)
+            .catch(() => {})
+            .finally(() => {
+                void queryClient.invalidateQueries({ queryKey: ['syndics'] });
+                void queryClient.invalidateQueries({
+                    queryKey: ['subscriptionPayments'],
+                });
+            });
+    }, [location.pathname, location.search, location.hash, queryClient]);
 
     const handleLogout = async () => {
         await logout();
@@ -69,7 +116,14 @@ const DashboardLayout: React.FC = () => {
         setIsMobileMenuOpen(false);
     };
 
-    const effectiveStatus = getEffectiveSubscriptionStatus(syndic);
+    const effectiveStatus = getEffectiveSubscriptionStatus(
+        syndic,
+        Date.now(),
+        graceDays,
+    );
+    const inGrace = isInGracePeriod(syndic, graceDays);
+    const graceDaysLeft = inGrace ? getGraceDaysRemaining(syndic, graceDays) : 0;
+    const canWrite = subscriptionCanWrite(syndic, graceDays);
     const canRenew = effectiveStatus !== 'cancelled';
 
     return (
@@ -95,37 +149,95 @@ const DashboardLayout: React.FC = () => {
                         onOpenMobileMenu={() => setIsMobileMenuOpen(true)}
                     />
                     <main className="flex-1 overflow-x-hidden overflow-y-auto bg-slate-100 p-3 sm:p-6 pb-24 lg:pb-6">
+                        {cmiReturnBanner && (
+                            <div
+                                role={cmiReturnBanner.status === 'ok' ? 'status' : 'alert'}
+                                className={`text-sm p-3.5 rounded-lg mb-3 flex flex-wrap items-center justify-between gap-2 border font-semibold ${
+                                    cmiReturnBanner.status === 'ok'
+                                        ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                                        : 'bg-rose-50 border-rose-200 text-rose-900'
+                                }`}
+                            >
+                                <span>
+                                    {cmiReturnBanner.status === 'ok'
+                                        ? tr(
+                                              `Paiement CMI reçu${cmiReturnBanner.oid ? ` (réf. ${cmiReturnBanner.oid})` : ''}. Votre abonnement et votre facture PDF officielle sont disponibles.`,
+                                              `تم استلام الدفع عبر CMI${cmiReturnBanner.oid ? ` (مرجع ${cmiReturnBanner.oid})` : ''}. تم تحديث اشتراككم وفاتورتكم الرسمية جاهزة.`,
+                                          )
+                                        : tr(
+                                              `Le paiement CMI n'a pas été finalisé${cmiReturnBanner.oid ? ` (réf. ${cmiReturnBanner.oid})` : ''}. Vous pouvez réessayer ou choisir un autre mode de règlement.`,
+                                              `لم تكتمل عملية الدفع عبر CMI${cmiReturnBanner.oid ? ` (مرجع ${cmiReturnBanner.oid})` : ''}. يمكنكم إعادة المحاولة أو اختيار وسيلة دفع أخرى.`,
+                                          )}
+                                </span>
+                                <div className="flex items-center gap-2">
+                                    {canRenew && (
+                                        <button
+                                            type="button"
+                                            onClick={() => setIsRenewalOpen(true)}
+                                            className={`px-3 py-1 rounded-md text-xs font-bold ${
+                                                cmiReturnBanner.status === 'ok'
+                                                    ? 'bg-emerald-700 text-white hover:bg-emerald-800'
+                                                    : 'bg-rose-700 text-white hover:bg-rose-800'
+                                            }`}
+                                        >
+                                            {cmiReturnBanner.status === 'ok'
+                                                ? tr('Mes factures PDF', 'فواتيري PDF')
+                                                : tr('Réessayer', 'إعادة المحاولة')}
+                                        </button>
+                                    )}
+                                    <button
+                                        type="button"
+                                        onClick={() => setCmiReturnBanner(null)}
+                                        aria-label={tr('Fermer', 'إغلاق')}
+                                        className="px-2 py-1 rounded text-xs font-bold hover:bg-black/5"
+                                    >
+                                        ✕
+                                    </button>
+                                </div>
+                            </div>
+                        )}
                         {syndic && (
                             <div
                                 role="status"
                                 className={`text-sm p-3 rounded-lg mb-3 flex flex-wrap items-center justify-between gap-2 border ${
-                                    subscriptionCanWrite(syndic)
-                                        ? 'bg-slate-100 border-slate-200 text-slate-700'
-                                        : 'bg-rose-50 border-rose-200 text-rose-900 font-semibold'
+                                    inGrace
+                                        ? 'bg-amber-50 border-amber-300 text-amber-950 font-semibold'
+                                        : canWrite
+                                            ? 'bg-slate-100 border-slate-200 text-slate-700'
+                                            : 'bg-rose-50 border-rose-200 text-rose-900 font-semibold'
                                 }`}
                             >
                                 <span>
-                                    {subscriptionCanWrite(syndic)
+                                    {inGrace
                                         ? tr(
-                                              `Abonnement : ${syndic.subscriptionStatus} · Échéance ${new Date(syndic.subscriptionExpiry).toLocaleDateString('fr-MA')}`,
-                                              `الاشتراك: ${syndic.subscriptionStatus} · الانتهاء ${new Date(syndic.subscriptionExpiry).toLocaleDateString('ar-MA')}`,
+                                              `Période de grâce active : votre abonnement est échu mais vos accès restent ouverts pendant encore ${graceDaysLeft} jour(s). Renouvelez rapidement pour éviter le mode lecture seule.`,
+                                              `فترة السماح نشطة: انتهى الاشتراك ولكن صلاحيات الكتابة لا تزال متاحة لمدة ${graceDaysLeft} يوم(أيام) إضافية. يرجى التجديد لتفادي التقييد.`,
                                           )
-                                        : tr(
-                                              'Abonnement expiré : consultation et export disponibles.',
-                                              'انتهى الاشتراك: الاطلاع والتصدير متاحان.',
-                                          )}
+                                        : canWrite
+                                            ? tr(
+                                                  `Abonnement : ${syndic.subscriptionStatus} · Échéance ${new Date(syndic.subscriptionExpiry).toLocaleDateString('fr-MA')}`,
+                                                  `الاشتراك: ${syndic.subscriptionStatus} · الانتهاء ${new Date(syndic.subscriptionExpiry).toLocaleDateString('ar-MA')}`,
+                                              )
+                                            : tr(
+                                                  'Abonnement expiré : consultation et export disponibles.',
+                                                  'انتهى الاشتراك: الاطلاع والتصدير متاحان.',
+                                              )}
                                 </span>
                                 {canRenew && (
                                     <button
                                         type="button"
                                         onClick={() => setIsRenewalOpen(true)}
                                         className={`px-3 py-1 rounded-md text-xs font-bold transition-colors ${
-                                            subscriptionCanWrite(syndic)
-                                                ? 'bg-white border border-slate-300 text-slate-800 hover:bg-slate-50'
-                                                : 'bg-rose-700 text-white hover:bg-rose-800'
+                                            inGrace
+                                                ? 'bg-amber-700 text-white hover:bg-amber-800'
+                                                : canWrite
+                                                    ? 'bg-white border border-slate-300 text-slate-800 hover:bg-slate-50'
+                                                    : 'bg-rose-700 text-white hover:bg-rose-800'
                                         }`}
                                     >
-                                        {tr('Renouveler / Payer →', 'تجديد / دفع ←')}
+                                        {inGrace
+                                            ? tr('Renouveler maintenant →', 'تجديد الآن ←')
+                                            : tr('Renouveler / Payer →', 'تجديد / دفع ←')}
                                     </button>
                                 )}
                             </div>
