@@ -55,6 +55,7 @@
     "docs:screenshots": "node --import tsx scripts/captureUserGuides.ts",
     "docs:guides": "node --import tsx scripts/exportGuidesMarkdown.ts",
     "pwa:icons": "node --import tsx scripts/generatePwaIcons.ts",
+    "test:mobile": "node --import ./tests/helpers/networkGuard.mjs --import tsx --test tests/mobilePushAndCors.test.ts",
     "test:ui:responsive": "playwright test tests/ui/responsiveDevices.spec.ts"
   },
   "dependencies": {

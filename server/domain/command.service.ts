@@ -12,6 +12,7 @@ TransactionSchema,
 import { allAttachmentValues, privateAttachments } from '../attachments';
 import { fileIsReferenced } from '../lifecycle';
 import { mailIsConfigured,queueMail } from "../mailer";
+import { queuePushNotification } from "../pushNotifications";
 import { resolvePlatformBillingConfig } from "../paypalBilling";
 import { type State } from "../repository";
 import { firebaseLinkedResidentIds,LINKED_RESIDENT_EMAIL_CODE,LINKED_RESIDENT_EMAIL_MESSAGE } from '../residentIdentity';
@@ -377,6 +378,7 @@ function pushUserNotification(
   type: string,
   link?: string,
 ) {
+  const resolvedLink = link || defaultNotificationLink(type);
   const account = (transactionState.syndik_prod_registered_users_v1 || []).find(
     (u: any) => !u.disabled && u.uid === uid,
   );
@@ -387,6 +389,13 @@ function pushUserNotification(
       title,
       `${message}\n\n${process.env.PUBLIC_APP_URL || "http://localhost:3000"}`,
     );
+  queuePushNotification(transactionState, {
+    uid,
+    title,
+    body: message,
+    type,
+    link: resolvedLink,
+  });
   (transactionState.syndik_prod_notifications_v1 ??= []).push({
     id: randomUUID(),
     userId: uid,
@@ -394,7 +403,7 @@ function pushUserNotification(
     title,
     message,
     type,
-    link: link || defaultNotificationLink(type),
+    link: resolvedLink,
     read: false,
     createdAt: new Date().toISOString(),
   });
