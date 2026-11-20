@@ -346,15 +346,28 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
 
                   {/* Rating Badge */}
                   <div className="flex flex-col items-end shrink-0">
-                    <div className="flex items-center gap-1 bg-amber-50 border border-amber-200 px-2 py-1 rounded-lg">
-                      <StarIcon filled />
-                      <span className="font-bold text-xs text-amber-900">
-                        {p.rating ? p.rating.toFixed(1) : '4.8'}
-                      </span>
-                    </div>
-                    <span className="text-[10px] text-slate-400 mt-0.5">
-                      ({p.reviewsCount || (p.reviews ? p.reviews.length : 12)} {tr('avis', 'تقييم')})
-                    </span>
+                    {(p.reviewsCount || p.reviews?.length || 0) > 0 && p.rating ? (
+                      <>
+                        <div className="flex items-center gap-1 bg-amber-50 border border-amber-200 px-2 py-1 rounded-lg">
+                          <StarIcon filled />
+                          <span className="font-bold text-xs text-amber-900">
+                            {p.rating.toFixed(1)}
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-slate-400 mt-0.5">
+                          ({p.reviewsCount ?? p.reviews?.length ?? 0} {tr('avis', 'تقييم')})
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="text-[11px] font-semibold px-2 py-1 rounded-lg bg-slate-100 text-slate-600 border border-slate-200">
+                          {tr('Nouveau', 'جديد')}
+                        </span>
+                        <span className="text-[10px] text-slate-400 mt-0.5">
+                          (0 {tr('avis', 'تقييم')})
+                        </span>
+                      </>
+                    )}
                   </div>
                 </div>
 
@@ -406,7 +419,8 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
                     <div className="bg-slate-50 p-2 rounded text-[11px] text-slate-700 border border-slate-100 space-y-0.5">
                       <div className="flex items-center justify-between text-[10px] font-semibold text-slate-900">
                         <span>
-                          {p.reviews[0].residentName} ({p.reviews[0].apartmentNumber})
+                          {p.reviews[0].residentName || p.reviews[0].authorName}
+                          {p.reviews[0].apartmentNumber ? ` (${p.reviews[0].apartmentNumber})` : ''}
                         </span>
                         <span className="text-amber-600">{'★'.repeat(p.reviews[0].rating)}</span>
                       </div>
@@ -439,15 +453,21 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
                 </div>
 
                 <div className="flex items-center justify-between text-xs pt-1">
-                  <button
-                    onClick={() => handleOpenReview(p)}
-                    className="text-[11px] text-slate-600 hover:text-teal-700 font-semibold flex items-center gap-1"
-                  >
-                    <span>⭐</span>
-                    <span>{tr('Laisser un avis', 'إضافة تقييم')}</span>
-                  </button>
+                  {isResidentPortal ? (
+                    <button
+                      type="button"
+                      onClick={() => handleOpenReview(p)}
+                      className="text-[11px] text-slate-600 hover:text-teal-700 font-semibold flex items-center gap-1"
+                    >
+                      <span>⭐</span>
+                      <span>{tr('Laisser un avis', 'إضافة تقييم')}</span>
+                    </button>
+                  ) : (
+                    <span />
+                  )}
 
                   <button
+                    type="button"
                     onClick={() => handleOpenRequest(p)}
                     className="text-[11px] text-teal-700 hover:text-teal-900 font-bold underline"
                   >

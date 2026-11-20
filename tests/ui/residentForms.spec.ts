@@ -1626,8 +1626,14 @@ test('database read failures offer recovery instead of claiming the account has 
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Données temporairement indisponibles' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Compte en attente de rattachement' })).toHaveCount(0);
+  const retryButton = page.getByRole('button', { name: 'Réessayer le chargement' });
+  await expect(retryButton).toBeVisible();
   await page.unroute('**/api/shared-state*');
-  await page.getByRole('button', { name: 'Réessayer le chargement' }).click();
+  // LiveDataSync may auto-recover right after /api/shared-state is restored, detaching the retry button.
+  await Promise.race([
+    retryButton.click({ timeout: 10_000 }).catch(() => {}),
+    page.getByRole('button', { name: 'Déconnexion' }).first().waitFor({ state: 'visible' }),
+  ]);
   await expect(page.getByRole('button', { name: 'Déconnexion' }).first()).toBeVisible();
 });
 

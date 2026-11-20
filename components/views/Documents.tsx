@@ -25,7 +25,27 @@ const Documents: React.FC<{
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadVisibility, setUploadVisibility] = useState<NonNullable<Document['visibility']>>('all');
   const [previewDoc, setPreviewDoc] = useState<Document | null>(null);
+
+  const visibilityLabel = (vis?: Document['visibility']) => {
+    if (vis === 'syndic_only') {
+      return {
+        text: tr('Syndic uniquement', 'السنديك فقط'),
+        cls: 'bg-rose-50 text-rose-700 border-rose-200',
+      };
+    }
+    if (vis === 'owners_only') {
+      return {
+        text: tr('Copropriétaires', 'الملاك فقط'),
+        cls: 'bg-amber-50 text-amber-800 border-amber-200',
+      };
+    }
+    return {
+      text: tr('Tous les résidents', 'جميع السكان'),
+      cls: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    };
+  };
 
   const sortedDocuments = [...documents].sort(
     (a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime()
@@ -93,7 +113,8 @@ const Documents: React.FC<{
   };
 
   const uploadMutation = useMutation({
-    mutationFn: (file: File) => uploadDocument(building.id, file),
+    mutationFn: ({ file, visibility }: { file: File; visibility: NonNullable<Document['visibility']> }) =>
+      uploadDocument(building.id, file, { visibility }),
     onMutate: () => setIsUploading(true),
     onSuccess: (createdDoc) => {
       queryClient.invalidateQueries({ queryKey: ['syndics'] });
@@ -146,7 +167,7 @@ const Documents: React.FC<{
         e.target.value = '';
         return;
       }
-      uploadMutation.mutate(file);
+      uploadMutation.mutate({ file, visibility: uploadVisibility });
     }
   };
 
@@ -184,7 +205,23 @@ const Documents: React.FC<{
           </p>
         </div>
 
-        <div className="relative">
+        <div className="relative flex flex-wrap items-center gap-2">
+          <label htmlFor="doc-visibility-select" className="sr-only">
+            {tr('Visibilité du document', 'إتاحة الوثيقة')}
+          </label>
+          <select
+            id="doc-visibility-select"
+            value={uploadVisibility}
+            onChange={(e) =>
+              setUploadVisibility(e.target.value as NonNullable<Document['visibility']>)
+            }
+            disabled={isUploading}
+            className="px-3 py-2 text-xs font-semibold bg-white border border-slate-300 rounded-lg text-slate-700 focus:outline-hidden focus:ring-2 focus:ring-teal-500"
+          >
+            <option value="all">{tr('Visible : Tous les résidents', 'مرئي: جميع السكان')}</option>
+            <option value="owners_only">{tr('Visible : Copropriétaires uniquement', 'مرئي: الملاك فقط')}</option>
+            <option value="syndic_only">{tr('Visible : Syndic uniquement', 'مرئي: السنديك فقط')}</option>
+          </select>
           <input
             type="file"
             ref={fileInputRef}
@@ -212,6 +249,9 @@ const Documents: React.FC<{
                   {t('documents.table.name')}
                 </th>
                 <th className="px-6 py-3 text-start text-xs font-bold text-slate-500 uppercase tracking-wider">
+                  {tr('Visibilité', 'الإتاحة')}
+                </th>
+                <th className="px-6 py-3 text-start text-xs font-bold text-slate-500 uppercase tracking-wider">
                   {t('documents.table.size')}
                 </th>
                 <th className="px-6 py-3 text-start text-xs font-bold text-slate-500 uppercase tracking-wider">
@@ -223,7 +263,9 @@ const Documents: React.FC<{
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-slate-100">
-              {sortedDocuments.map((docItem) => (
+              {sortedDocuments.map((docItem) => {
+                const visBadge = visibilityLabel(docItem.visibility);
+                return (
                 <tr key={docItem.id} className="hover:bg-slate-50 transition-colors">
                   <td className="px-6 py-4 whitespace-nowrap font-semibold text-teal-800">
                     <button
@@ -234,6 +276,11 @@ const Documents: React.FC<{
                       <FileText className="w-4 h-4 text-teal-600 shrink-0" />
                       <span>{docItem.name}</span>
                     </button>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border ${visBadge.cls}`}>
+                      {visBadge.text}
+                    </span>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap font-mono text-xs text-slate-500">
                     {docItem.size}
@@ -272,7 +319,8 @@ const Documents: React.FC<{
                     </div>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>

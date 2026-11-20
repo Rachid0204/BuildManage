@@ -1,6 +1,6 @@
 import { notifyOperation } from '../../utils/formFeedback';
 import ResidentPaymentModal from './ResidentPaymentModal';
-import React, { Suspense, useState, useMemo, useRef } from 'react';
+import React, { Suspense, useState, useMemo, useRef, useEffect } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Camera, Image as ImageIcon } from 'lucide-react';
@@ -32,6 +32,7 @@ import {
   generateQuittanceForCharge,
   getPaymentProofsForResident,
   getAssembleesGeneralesForBuilding,
+  getPrestatairesForBuilding,
   getSyndics,
 } from '../../firebase/services';
 import type {
@@ -81,7 +82,22 @@ const ResidentDashboard: React.FC = () => {
   const [selectedResidentQuittanceForPreview, setSelectedResidentQuittanceForPreview] =
     useState<Quittance | null>(null);
   const [isDownloadingChargeQuit, setIsDownloadingChargeQuit] = useState<string | null>(null);
-  const [previewDocName, setPreviewDocName] = useState<string | null>(null);
+  const [previewDocId, setPreviewDocId] = useState<string | null>(null);
+  const [selectedResidentBuildingId, setSelectedResidentBuildingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const handleNav = (e: Event) => {
+      const tab = (e as CustomEvent<{ tab?: string }>).detail?.tab;
+      if (tab === 'maintenance') setActiveTab('maintenance');
+      else if (tab === 'ag' || tab === 'voting') setActiveTab('voting');
+      else if (tab === 'chat') setActiveTab('chat');
+      else if (tab === 'marketplace') setActiveTab('marketplace');
+      else if (tab === 'providers') setActiveTab('providers');
+      else setActiveTab('overview');
+    };
+    window.addEventListener('syndik-resident-navigate', handleNav);
+    return () => window.removeEventListener('syndik-resident-navigate', handleNav);
+  }, []);
 
   // Password Change State
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
@@ -94,6 +110,7 @@ const ResidentDashboard: React.FC = () => {
   // Maintenance Form State
   const [maintTitle, setMaintTitle] = useState('');
   const [maintLocation, setMaintLocation] = useState('');
+  const [maintApartmentId, setMaintApartmentId] = useState<string>('common');
   const [maintCategory, setMaintCategory] = useState<MaintenanceRequest['category']>('plumbing');
   const [maintDesc, setMaintDesc] = useState('');
   const [maintPriority, setMaintPriority] = useState<MaintenanceRequest['priority']>('medium');
@@ -110,43 +127,60 @@ const ResidentDashboard: React.FC = () => {
     queryFn: getSyndics,
   });
 
-  // Dynamically resolve exact Syndic, Building, Resident, and Apartment across all buildings
-  const { activeSyndic, activeBuilding, currentResident, currentApartment, myApartments } = useMemo(() => {
-    let foundSyndic: Syndic | undefined;
-    let foundBuilding: Building | undefined;
-    let foundResident: Resident | undefined;
+  // Dynamically resolve all active resident memberships and prefer selected/profile non-archived building
+  const {
+    residentMemberships,
+    activeSyndic,
+    activeBuilding,
+    currentResident,
+    currentApartment,
+    myApartments,
+  } = useMemo(() => {
+    const memberships: Array<{ syndic: Syndic; building: Building; resident: Resident }> = [];
 
     const targetUid = userProfile?.uid;
     const targetResidentId = userProfile?.residentId || targetUid?.replace(/^(user-res-|res-)/, '');
     const targetEmail = userProfile?.email?.trim().toLowerCase();
     const targetCin = userProfile?.cin?.trim().toLowerCase();
 
-    // 1. Search across all syndics and buildings for the exact logged-in resident
+    // 1. Collect all active non-archived building memberships for the logged-in resident
     for (const s of syndics) {
-      for (const b of s.buildings) {
-        const match = b.residents.find(
+      if (s.archivedAt) continue;
+      for (const b of s.buildings || []) {
+        if (b.archivedAt) continue;
+        const match = (b.residents || []).find(
           (r) =>
-            (targetResidentId && r.id === targetResidentId) ||
-            (targetUid && r.id === targetUid) ||
-            (targetEmail && r.email?.trim().toLowerCase() === targetEmail) ||
-            (targetCin && r.cin && r.cin.trim().toLowerCase() === targetCin)
+            !r.archivedAt &&
+            ((targetResidentId && r.id === targetResidentId) ||
+              (targetUid && r.id === targetUid) ||
+              (targetEmail && r.email?.trim().toLowerCase() === targetEmail) ||
+              (targetCin && r.cin && r.cin.trim().toLowerCase() === targetCin))
         );
         if (match) {
-          foundSyndic = s;
-          foundBuilding = b;
-          foundResident = match;
-          break;
+          memberships.push({ syndic: s, building: b, resident: match });
         }
       }
-      if (foundResident) break;
     }
 
-    // 2. If not matched by resident record, resolve strictly by userProfile.syndicId & userProfile.buildingId (no cross-tenant fallback)
+    const preferred =
+      (selectedResidentBuildingId &&
+        memberships.find((m) => m.building.id === selectedResidentBuildingId)) ||
+      (userProfile?.buildingId &&
+        memberships.find((m) => m.building.id === userProfile.buildingId)) ||
+      memberships[0];
+
+    let foundSyndic: Syndic | undefined = preferred?.syndic;
+    let foundBuilding: Building | undefined = preferred?.building;
+    const foundResident: Resident | undefined = preferred?.resident;
+
+    // 2. Fallback strictly by userProfile.syndicId & active userProfile.buildingId (no cross-tenant fallback)
     if (!foundSyndic && userProfile?.syndicId) {
-      foundSyndic = syndics.find((s) => s.id === userProfile.syndicId);
+      foundSyndic = syndics.find((s) => !s.archivedAt && s.id === userProfile.syndicId);
     }
     if (!foundBuilding && foundSyndic && userProfile?.buildingId) {
-      foundBuilding = foundSyndic.buildings.find((b) => b.id === userProfile.buildingId);
+      foundBuilding = foundSyndic.buildings.find(
+        (b) => !b.archivedAt && b.id === userProfile.buildingId
+      );
     }
     const foundApts = (foundBuilding?.apartments || []).filter((a) => {
       if (a.archivedAt) return false;
@@ -162,13 +196,14 @@ const ResidentDashboard: React.FC = () => {
     const foundApt = foundApts[0];
 
     return {
+      residentMemberships: memberships,
       activeSyndic: foundSyndic,
       activeBuilding: foundBuilding,
       currentResident: foundResident,
       currentApartment: foundApt,
       myApartments: foundApts,
     };
-  }, [syndics, userProfile]);
+  }, [syndics, userProfile, selectedResidentBuildingId]);
 
   const isOwnerResident = currentResident ? currentResident.isOwner : userProfile?.isOwner ?? false;
 
@@ -199,6 +234,27 @@ const ResidentDashboard: React.FC = () => {
     queryFn: () => (currentResident ? getMaintenanceRequestsForResident(currentResident.id) : []),
     enabled: !!currentResident,
   });
+
+  // Fetch Building Prestataires to resolve human-readable provider names (never raw UUIDs)
+  const { data: buildingPrestataires = [] } = useQuery({
+    queryKey: ['prestataires', activeBuilding?.id],
+    queryFn: () => (activeBuilding ? getPrestatairesForBuilding(activeBuilding.id) : []),
+    enabled: !!activeBuilding,
+  });
+
+  const resolveProviderName = (assignedId?: string) => {
+    if (!assignedId) return '';
+    const match = buildingPrestataires.find((p) => p.id === assignedId);
+    if (match) {
+      return match.archivedAt || match.active === false
+        ? `${match.name} (${tr('archivé', 'مؤرشف')})`
+        : match.name;
+    }
+    if (/^prest-/i.test(assignedId)) {
+      return tr('Prestataire assigné', 'مقدم خدمة معين');
+    }
+    return assignedId;
+  };
 
   const ownedApartments = useMemo(
     () =>
@@ -250,8 +306,26 @@ const ResidentDashboard: React.FC = () => {
       : 0;
 
   const reportMutation = useMutation({
-    mutationFn: (data: any) =>
-      addMaintenanceRequest({
+    mutationFn: (data: any) => {
+      const selectedApt =
+        data.apartmentId && data.apartmentId !== 'common'
+          ? myApartments.find((a) => a.id === data.apartmentId)
+          : undefined;
+      const resolvedApartmentId =
+        data.apartmentId === 'common'
+          ? 'common'
+          : selectedApt
+          ? selectedApt.id
+          : currentApartment?.id || 'common';
+      const resolvedApartmentNumber =
+        resolvedApartmentId === 'common'
+          ? 'Parties Communes'
+          : selectedApt
+          ? `Lot ${selectedApt.number}`
+          : currentApartment?.number
+          ? `Lot ${currentApartment.number}`
+          : undefined;
+      return addMaintenanceRequest({
         ...data,
         buildingId: activeBuilding?.id || userProfile?.buildingId || '',
         residentId: currentResident?.id || userProfile?.uid || '',
@@ -259,19 +333,20 @@ const ResidentDashboard: React.FC = () => {
           currentResident?.name ||
           userProfile?.displayName ||
           tr('Copropriétaire', 'مالك مشترك'),
-        apartmentNumber: currentApartment?.number
-          ? `${tr('Lot', 'شقة')} ${currentApartment.number}`
-          : undefined,
+        apartmentId: resolvedApartmentId,
+        apartmentNumber: resolvedApartmentNumber,
         photos: data.photos && data.photos.length > 0 ? data.photos : undefined,
         photoUrl: data.photos && data.photos.length > 0 ? data.photos[0] : undefined,
         status: 'pending',
-      }),
+      });
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['maintenance', currentResident?.id] });
       queryClient.invalidateQueries({ queryKey: ['maintenance', activeBuilding?.id] });
       setIsReportModalOpen(false);
       setMaintTitle('');
       setMaintLocation('');
+      setMaintApartmentId(myApartments.length === 1 ? myApartments[0].id : 'common');
       setMaintDesc('');
       setMaintPhotos([]);
     },
@@ -403,13 +478,28 @@ const ResidentDashboard: React.FC = () => {
               >
                 {isOwnerResident ? t('residentPortal.ownerBadge') : t('residentPortal.tenantBadge')}
               </span>
-              {activeBuilding && (
-                <span className="text-xs text-slate-300 font-medium hidden md:inline">
-                  • {activeBuilding.name}
-                  {currentApartment
-                    ? ` (${t('residentPortal.lotLabel', { number: currentApartment.number })})`
-                    : ''}
-                </span>
+              {residentMemberships.length > 1 ? (
+                <select
+                  aria-label={tr('Changer de résidence', 'تغيير الإقامة')}
+                  value={activeBuilding?.id || ''}
+                  onChange={(e) => setSelectedResidentBuildingId(e.target.value)}
+                  className="text-xs bg-slate-800 text-slate-100 border border-slate-700 rounded-lg px-2 py-1 font-medium focus:outline-none focus:ring-2 focus:ring-teal-500"
+                >
+                  {residentMemberships.map((m) => (
+                    <option key={m.building.id} value={m.building.id}>
+                      {m.building.name}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                activeBuilding && (
+                  <span className="text-xs text-slate-300 font-medium hidden md:inline">
+                    • {activeBuilding.name}
+                    {currentApartment
+                      ? ` (${t('residentPortal.lotLabel', { number: currentApartment.number })})`
+                      : ''}
+                  </span>
+                )
               )}
             </div>
 
@@ -1097,6 +1187,8 @@ const ResidentDashboard: React.FC = () => {
                               className={`text-xs px-2.5 py-0.5 rounded-full font-bold shrink-0 ${
                                 req.status === 'completed'
                                   ? 'bg-emerald-100 text-emerald-800'
+                                  : req.completionPending
+                                  ? 'bg-indigo-100 text-indigo-800'
                                   : req.status === 'in_progress'
                                   ? 'bg-blue-100 text-blue-800'
                                   : 'bg-amber-100 text-amber-800'
@@ -1104,6 +1196,8 @@ const ResidentDashboard: React.FC = () => {
                             >
                               {req.status === 'completed'
                                 ? tr('✓ Résolu', '✓ منجز')
+                                : req.completionPending
+                                ? tr('🔔 À valider', '🔔 للتأكيد')
                                 : req.status === 'in_progress'
                                 ? tr('🔧 En cours', '🔧 قيد الإنجاز')
                                 : tr('⏳ Reçu', '⏳ تم الاستلام')}
@@ -1114,8 +1208,8 @@ const ResidentDashboard: React.FC = () => {
                           <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200/80 space-y-1.5">
                             <div className="flex items-center justify-between text-[11px]">
                               <span className="text-slate-600 font-medium">
-                                {req.assignedTo
-                                  ? `${tr('Prestataire :', 'مقدم الخدمة :')} ${req.assignedTo}`
+                                {req.prestataireId || req.assignedTo
+                                  ? `${tr('Prestataire :', 'مقدم الخدمة :')} ${resolveProviderName(req.prestataireId || req.assignedTo)}`
                                   : tr(
                                       "En attente d'assignation prestataire",
                                       'في انتظار تعيين تقني مختص'
@@ -1255,7 +1349,14 @@ const ResidentDashboard: React.FC = () => {
                   <div className="space-y-3 mt-3">
                     {(activeBuilding?.announcements || []).map((ann) => (
                       <div key={ann.id} className="border-b border-slate-100 pb-3 last:border-b-0">
-                        <p className="font-semibold text-slate-900 text-xs">{ann.title}</p>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="font-semibold text-slate-900 text-xs">{ann.title}</p>
+                          {ann.priority === 'urgent' && (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-200">
+                              {tr('Urgent', 'عاجل')}
+                            </span>
+                          )}
+                        </div>
                         <p className="text-[11px] text-slate-400 font-mono">
                           {new Date(ann.date).toLocaleDateString(dateLocale)}
                         </p>
@@ -1264,6 +1365,14 @@ const ResidentDashboard: React.FC = () => {
                         </p>
                       </div>
                     ))}
+                    {(!activeBuilding?.announcements || activeBuilding.announcements.length === 0) && (
+                      <p className="text-xs text-slate-500 py-3 text-center">
+                        {tr(
+                          'Aucune annonce publiée pour cette résidence.',
+                          'لا توجد أي إعلانات منشورة لهذه الإقامة.'
+                        )}
+                      </p>
+                    )}
                   </div>
                 </Card>
 
@@ -1293,7 +1402,7 @@ const ResidentDashboard: React.FC = () => {
                         </div>
                         <button
                           type="button"
-                          onClick={() => setPreviewDocName(docItem.name)}
+                          onClick={() => setPreviewDocId(docItem.id)}
                           className="px-2.5 py-1 rounded bg-slate-100 hover:bg-teal-50 hover:text-teal-800 text-slate-700 font-semibold text-xs shrink-0 transition-colors"
                         >
                           {tr('Consulter', 'اطلاع')}
@@ -1314,16 +1423,26 @@ const ResidentDashboard: React.FC = () => {
       </main>
 
       {/* Modal: Official Document Preview for Resident */}
-      {previewDocName && (() => {
-        const previewDoc = (activeBuilding?.documents || []).find((d) => d.name === previewDocName);
+      {previewDocId && (() => {
+        const previewDoc = (activeBuilding?.documents || []).find((d) => d.id === previewDocId);
+        if (!previewDoc) return null;
+        const lowerName = (previewDoc.name || '').toLowerCase();
+        const isImg =
+          /\.(png|jpe?g|webp)$/i.test(lowerName) ||
+          Boolean(previewDoc.mimeType?.startsWith('image/')) ||
+          Boolean(previewDoc.url?.startsWith('data:image/'));
+        const hasInlineUrl = Boolean(
+          previewDoc.url && /^(\/api\/uploads\/|data:|blob:|https?:)/.test(previewDoc.url)
+        );
         return (
           <Modal
-            isOpen={!!previewDocName}
-            onClose={() => setPreviewDocName(null)}
-            title={`${tr('Consultation Document Officiel', 'معاينة وثيقة رسمية')} — ${previewDocName}`}
+            isOpen={!!previewDocId}
+            onClose={() => setPreviewDocId(null)}
+            maxWidthClass="max-w-3xl"
+            title={`${tr('Consultation Document Officiel', 'معاينة وثيقة رسمية')} — ${previewDoc.name}`}
             footer={
               <div className="flex flex-wrap items-center justify-end gap-2">
-                {previewDoc?.url && (
+                {previewDoc.url && (
                   <a
                     href={previewDoc.url}
                     target="_blank"
@@ -1334,7 +1453,7 @@ const ResidentDashboard: React.FC = () => {
                     {tr('Ouvrir / Télécharger le document', 'فتح / تحميل الوثيقة')}
                   </a>
                 )}
-                <Button variant="secondary" onClick={() => setPreviewDocName(null)}>
+                <Button variant="secondary" onClick={() => setPreviewDocId(null)}>
                   {tr('Fermer', 'إغلاق')}
                 </Button>
               </div>
@@ -1343,7 +1462,7 @@ const ResidentDashboard: React.FC = () => {
             <div className="p-5 bg-slate-50 rounded-xl border border-slate-200 space-y-3 text-xs text-slate-700">
               <div className="flex items-center justify-between border-b border-slate-200 pb-3">
                 <div>
-                  <div className="font-bold text-slate-900 text-sm">{previewDocName}</div>
+                  <div className="font-bold text-slate-900 text-sm">{previewDoc.name}</div>
                   <div className="text-[11px] text-slate-500">
                     {activeBuilding?.name} ·{' '}
                     {tr(
@@ -1356,6 +1475,23 @@ const ResidentDashboard: React.FC = () => {
                   {tr('Loi n° 18-00', 'قانون رقم 18-00')}
                 </span>
               </div>
+              {hasInlineUrl && (
+                <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
+                  {isImg ? (
+                    <img
+                      src={previewDoc.url}
+                      alt={previewDoc.name}
+                      className="max-h-[420px] w-full object-contain bg-slate-100"
+                    />
+                  ) : (
+                    <iframe
+                      src={previewDoc.url}
+                      title={previewDoc.name}
+                      className="w-full h-[420px] border-0"
+                    />
+                  )}
+                </div>
+              )}
               <p className="leading-relaxed">
                 {tr(
                   `Ce document fait partie intégrante du registre légal de la copropriété ${activeBuilding?.name} (${activeBuilding?.address}, ${activeBuilding?.city}). Il est mis à la disposition de l'ensemble des copropriétaires conformément aux dispositions de la Loi n° 18-00 telle que modifiée et complétée par la Loi n° 106-12.`,
@@ -1403,7 +1539,21 @@ const ResidentDashboard: React.FC = () => {
         onSubmit={async () => {
           if (!maintTitle.trim() || !maintDesc.trim()) throw new Error(tr('Le titre et la description sont obligatoires.', 'العنوان والوصف مطلوبان.'));
           if (!activeBuilding || !currentResident) throw new Error(tr('Votre logement ne peut pas être identifié. Actualisez la page ou contactez votre syndic.', 'تعذر تحديد شقتك. حدّث الصفحة أو تواصل مع السنديك.'));
-          await reportMutation.mutateAsync({ title: maintTitle.trim(), description: maintDesc.trim(), category: maintCategory, priority: maintPriority, location: maintLocation.trim() || currentApartment?.number || tr('Parties communes', 'الأجزاء المشتركة'), photos: maintPhotos });
+          const chosenApt =
+            maintApartmentId !== 'common'
+              ? myApartments.find((a) => a.id === maintApartmentId)
+              : undefined;
+          await reportMutation.mutateAsync({
+            title: maintTitle.trim(),
+            description: maintDesc.trim(),
+            category: maintCategory,
+            priority: maintPriority,
+            apartmentId: maintApartmentId,
+            location:
+              maintLocation.trim() ||
+              (chosenApt ? `Lot ${chosenApt.number}` : tr('Parties communes', 'الأجزاء المشتركة')),
+            photos: maintPhotos,
+          });
         }}
         title={tr('Signaler un incident ou une réparation', 'التبليغ عن عطب أو طلب إصلاح')}
         footer={
@@ -1469,8 +1619,29 @@ const ResidentDashboard: React.FC = () => {
                 <option value="low">{tr('Normale', 'عادية')}</option>
                 <option value="medium">{tr('Moyenne', 'متوسطة')}</option>
                 <option value="high">{tr('Urgente', 'مستعجلة')}</option>
+                <option value="emergency">{tr('Urgence Critique', 'طوارئ قصوى')}</option>
               </select>
             </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              {tr('Lot concerné / Parties communes', 'الشقة المعنية / الأجزاء المشتركة')}
+            </label>
+            <select
+              value={maintApartmentId}
+              onChange={(e) => setMaintApartmentId(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-300 rounded text-sm bg-white"
+            >
+              <option value="common">
+                {tr('Parties Communes (Hall, Escalier, Parking, Ascenseur...)', 'الأجزاء المشتركة (البهو، الدرج، المرآب، المصعد...)')}
+              </option>
+              {myApartments.map((apt) => (
+                <option key={apt.id} value={apt.id}>
+                  {tr(`Lot ${apt.number}`, `شقة ${apt.number}`)}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div>

@@ -1719,6 +1719,279 @@ test('PR 3 Property & Residents Lifecycle: registry sync, tantiemes/RIB/ICE vali
   );
 });
 
+test('PR 4 Maintenance, Prestataires, Le Souk, Chat, Documents & Notifications hardening', async () => {
+  const { claimFileForDeletion } = await import('../server/lifecycle');
+  const state: any = {
+    syndik_prod_syndics_v1: [
+      {
+        id: 's-pr4',
+        name: 'Cabinet Atlas',
+        email: 'syndic@pr4.invalid',
+        createdBy: 'u-syndic-pr4',
+        subscriptionPlan: 'professional',
+        subscriptionStatus: 'active',
+        subscriptionExpiry: '2099-01-01',
+        buildings: [
+          {
+            id: 'b-pr4',
+            syndicId: 's-pr4',
+            name: 'Residence Atlas',
+            address: '10 Avenue Mohammed V',
+            city: 'Casablanca',
+            monthlySyndicFees: 300,
+            totalTantiemes: 1000,
+            reserveFundRate: 5,
+            apartments: [
+              { id: 'apt-1', buildingId: 'b-pr4', number: 'A1', floor: 1, area: 80, tantiemes: 400, monthlyFees: 300, ownerId: 'res-1', tenantId: null },
+              { id: 'apt-2', buildingId: 'b-pr4', number: 'A2', floor: 2, area: 80, tantiemes: 400, monthlyFees: 300, ownerId: 'res-1', tenantId: null },
+              { id: 'apt-3', buildingId: 'b-pr4', number: 'A3', floor: 3, area: 60, tantiemes: 200, monthlyFees: 200, ownerId: 'res-2', tenantId: null },
+            ],
+            residents: [
+              { id: 'res-1', syndicId: 's-pr4', buildingId: 'b-pr4', name: 'Amina Benali', email: 'amina@pr4.invalid', phone: '0611111111', isOwner: true, apartmentId: 'apt-1', hasAccount: true },
+              { id: 'res-2', syndicId: 's-pr4', buildingId: 'b-pr4', name: 'Karim Tazi', email: 'karim@pr4.invalid', phone: '0622222222', isOwner: true, apartmentId: 'apt-3', hasAccount: true },
+            ],
+            announcements: [],
+            documents: [],
+            financials: { balance: 0, reserveFundBalance: 0, transactions: [], openingBalancesRecordedAt: '2026-01-01T00:00:00.000Z' },
+          },
+        ],
+      },
+    ],
+    syndik_prod_registered_users_v1: [
+      { uid: 'u-syndic-pr4', email: 'syndic@pr4.invalid', profile: { uid: 'u-syndic-pr4', displayName: 'Cabinet Atlas', role: 'syndic', syndicId: 's-pr4', buildingId: 'b-pr4', emailVerified: true } },
+      { uid: 'u-res-1', email: 'amina@pr4.invalid', profile: { uid: 'u-res-1', displayName: 'Amina Benali', role: 'resident', residentId: 'res-1', syndicId: 's-pr4', buildingId: 'b-pr4', apartmentId: 'apt-1', emailVerified: true } },
+      { uid: 'u-res-2', email: 'karim@pr4.invalid', profile: { uid: 'u-res-2', displayName: 'Karim Tazi', role: 'resident', residentId: 'res-2', syndicId: 's-pr4', buildingId: 'b-pr4', apartmentId: 'apt-3', emailVerified: true } },
+      { uid: 'u-prov-1', email: 'plombier@pr4.invalid', profile: { uid: 'u-prov-1', displayName: 'Plomberie Express', role: 'provider', prestataireId: 'prov-1', syndicId: 's-pr4', buildingId: 'b-pr4', emailVerified: true } },
+    ],
+    syndik_prod_prestataires_v1: [
+      { id: 'prov-1', syndicId: 's-pr4', buildingId: 'b-pr4', name: 'Plomberie Express', contactPerson: 'Omar', category: 'plumbing', phone: '0633333333', email: 'plombier@pr4.invalid', active: true, hasAccount: true, rating: 0, reviews: [] },
+    ],
+    syndik_prod_prestataire_accounts_v1: [
+      { prestataireId: 'prov-1', email: 'plombier@pr4.invalid', syndicId: 's-pr4', buildingId: 'b-pr4' },
+    ],
+    syndik_prod_maintenance_v1: [],
+    syndik_prod_marketplace_v1: [],
+    syndik_prod_chat_v1: [],
+    syndik_prod_notifications_v1: [
+      { id: 'notif-broadcast-1', userId: 'all', buildingId: 'b-pr4', title: 'Coupure eau', message: 'Demain 9h', type: 'announcement', read: false, createdAt: '2026-06-01T10:00:00.000Z' },
+    ],
+    __files: {
+      'file-doc-pr4': { fileId: 'file-doc-pr4', key: 'private/b-pr4/file-doc-pr4', buildingId: 'b-pr4', name: 'pv-ag.pdf', mimeType: 'application/pdf', sizeBytes: 1024, uploadedBy: 'u-syndic-pr4', createdAt: new Date().toISOString() },
+    },
+  };
+
+  const syndicActor = { uid: 'u-syndic-pr4', role: 'syndic' as const, email: 'syndic@pr4.invalid', syndicId: 's-pr4', buildingId: 'b-pr4' };
+  const res1Actor = { uid: 'u-res-1', role: 'resident' as const, email: 'amina@pr4.invalid', residentId: 'res-1', syndicId: 's-pr4', buildingId: 'b-pr4' };
+  const res2Actor = { uid: 'u-res-2', role: 'resident' as const, email: 'karim@pr4.invalid', residentId: 'res-2', syndicId: 's-pr4', buildingId: 'b-pr4' };
+  const provActor = { uid: 'u-prov-1', role: 'provider' as const, email: 'plombier@pr4.invalid', prestataireId: 'prov-1', syndicId: 's-pr4', buildingId: 'b-pr4' };
+  const cmd = createCommandService(state);
+
+  // 1. Multi-lot & Parties Communes maintenance location preservation + syndic notification
+  const reqLot2 = await cmd.runOperation(res1Actor, 'addMaintenanceRequest', [{
+    buildingId: 'b-pr4', title: 'Fuite cuisine', description: 'Fuite sous évier Lot A2', category: 'plumbing', priority: 'emergency', apartmentId: 'apt-2',
+  }], 'op-pr4-maint-lot2');
+  assert.equal(reqLot2.apartmentId, 'apt-2');
+  assert.equal(reqLot2.apartmentNumber, 'Lot A2', 'Explicit second lot preserved');
+
+  const reqCommon = await cmd.runOperation(res1Actor, 'addMaintenanceRequest', [{
+    buildingId: 'b-pr4', title: 'Ampoule hall', description: 'Éclairage hall HS', category: 'common_area', priority: 'medium', apartmentId: 'common',
+  }], 'op-pr4-maint-common');
+  assert.equal(reqCommon.apartmentId, 'common');
+  assert.equal(reqCommon.apartmentNumber, 'Parties Communes', 'Parties Communes preserved without overwriting with first lot');
+
+  await assert.rejects(
+    cmd.runOperation(res1Actor, 'addMaintenanceRequest', [{
+      buildingId: 'b-pr4', title: 'Autre lot', description: 'Tentative sur apt-3', category: 'other', apartmentId: 'apt-3',
+    }], 'op-pr4-maint-foreign-lot'),
+    /propres lots/i,
+  );
+  assert.ok(
+    state.syndik_prod_notifications_v1.some((n: any) => n.userId === 'u-syndic-pr4' && n.type === 'maintenance' && n.link === '/maintenance'),
+    'Resident maintenance submission notifies cabinet syndic with /maintenance link',
+  );
+
+  // 2. Maintenance lifecycle: human-readable updatedBy, clearing fields, forward-only provider transitions, completed lock & reopen guard
+  await cmd.runOperation(syndicActor, 'updateMaintenanceRequest', [
+    reqLot2.id,
+    { status: 'in_progress', prestataireId: 'prov-1', assignedTo: 'prov-1', cost: 450, invoiceRef: 'FAC-10', syndicNotes: 'Intervention planifiée' },
+    { note: 'Affectation plombier' },
+  ], 'op-pr4-maint-assign');
+  const afterAssign = state.syndik_prod_maintenance_v1.find((r: any) => r.id === reqLot2.id);
+  assert.equal(afterAssign.updates.at(-1).updatedBy, 'Cabinet Atlas', 'updatedBy resolves human-readable display name instead of raw UID');
+
+  // Clear cost, invoiceRef, syndicNotes with null/""
+  await cmd.runOperation(syndicActor, 'updateMaintenanceRequest', [
+    reqLot2.id,
+    { cost: null, invoiceRef: '', syndicNotes: '' },
+    { note: 'Champs réinitialisés' },
+  ], 'op-pr4-maint-clear');
+  const afterClear = state.syndik_prod_maintenance_v1.find((r: any) => r.id === reqLot2.id);
+  assert.equal(afterClear.cost, undefined, 'cost cleared to undefined');
+  assert.equal(afterClear.invoiceRef, undefined, 'invoiceRef cleared to undefined');
+  assert.equal(afterClear.syndicNotes, undefined, 'syndicNotes cleared to undefined');
+
+  // Provider cannot transition backwards in_progress -> pending
+  await assert.rejects(
+    cmd.runOperation(provActor, 'updateMaintenanceRequest', [reqLot2.id, { status: 'pending' }, { note: 'Rollback' }], 'op-pr4-prov-back'),
+    /Transition de statut non autorisée/i,
+  );
+  // Cannot reopen a non-completed ticket
+  await assert.rejects(
+    cmd.runOperation(res1Actor, 'reopenMaintenance', [reqLot2.id, 'Pas encore clos'], 'op-pr4-reopen-early'),
+    /clôturée/i,
+  );
+  // Provider marks completed -> completionPending, resident confirms -> completed
+  await cmd.runOperation(provActor, 'updateMaintenanceRequest', [reqLot2.id, { status: 'completed' }, { note: 'Réparé' }], 'op-pr4-prov-done');
+  await cmd.runOperation(res1Actor, 'confirmMaintenanceCompletion', [reqLot2.id, 'OK confirmé'], 'op-pr4-res-confirm');
+  // Provider & resident blocked from mutating completed ticket
+  await assert.rejects(
+    cmd.runOperation(provActor, 'updateMaintenanceRequest', [reqLot2.id, { status: 'in_progress' }, { note: 'Mutate closed' }], 'op-pr4-prov-closed'),
+    /clôturée/i,
+  );
+  await assert.rejects(
+    cmd.runOperation(res1Actor, 'updateMaintenanceRequest', [reqLot2.id, { description: 'Overwrite closed' }], 'op-pr4-res-closed'),
+    /clôturée/i,
+  );
+  // Reopen succeeds once completed
+  await cmd.runOperation(res1Actor, 'reopenMaintenance', [reqLot2.id, 'Fuite revenue'], 'op-pr4-reopen-ok');
+  assert.equal(state.syndik_prod_maintenance_v1.find((r: any) => r.id === reqLot2.id).status, 'pending');
+
+  // 3. Prestataires: generated ID when omitted, active:false disables login, single integer review + apartmentNumber, deletePrestataire unassigns open tickets
+  const newPrest = await cmd.runOperation(syndicActor, 'savePrestataire', [{
+    buildingId: 'b-pr4', name: 'Élec Pro', contactPerson: 'Said', category: 'electrical', phone: '0644444444', email: 'elec@pr4.invalid', active: true,
+  }, false], 'op-pr4-prest-genid');
+  assert.match(newPrest.id, /^prest-/, 'savePrestataire generates canonical prest-<uuid> ID when omitted');
+
+  // Review validation: fractional rejected, integer accepted with apartmentNumber, duplicate rejected
+  await assert.rejects(
+    cmd.runOperation(res1Actor, 'addPrestataireReview', ['prov-1', { rating: 4.5, comment: 'Bien' }], 'op-pr4-rev-frac'),
+    /entier de 1 à 5/i,
+  );
+  const reviewed = await cmd.runOperation(res1Actor, 'addPrestataireReview', ['prov-1', { rating: 5, comment: 'Excellent travail' }], 'op-pr4-rev-ok');
+  assert.equal(reviewed.reviews[0].apartmentNumber, 'Lot A1');
+  assert.equal(reviewed.reviews[0].authorName, 'Amina Benali', 'Review authorName uses display name, not email');
+  await assert.rejects(
+    cmd.runOperation(res1Actor, 'addPrestataireReview', ['prov-1', { rating: 1, comment: 'Doublon' }], 'op-pr4-rev-dup'),
+    /déjà publié un avis/i,
+  );
+
+  // Deactivating prestataire disables accounts & blocks reviews
+  await cmd.runOperation(syndicActor, 'savePrestataire', [{
+    id: 'prov-1', buildingId: 'b-pr4', name: 'Plomberie Express', contactPerson: 'Omar', category: 'plumbing', phone: '0633333333', email: 'plombier@pr4.invalid', active: false,
+  }, false], 'op-pr4-prest-deactivate');
+  assert.equal(state.syndik_prod_registered_users_v1.find((u: any) => u.uid === 'u-prov-1').disabled, true, 'Deactivated provider account disabled');
+  assert.ok((state.__sessionVersions?.['u-prov-1'] || 0) >= 1, 'Deactivated provider session revoked');
+  await assert.rejects(
+    cmd.runOperation(res2Actor, 'addPrestataireReview', ['prov-1', { rating: 4, comment: 'Inactif' }], 'op-pr4-rev-inactive'),
+    /archivé ou inactif/i,
+  );
+
+  // deletePrestataire unassigns open tickets
+  await cmd.runOperation(syndicActor, 'deletePrestataire', ['prov-1'], 'op-pr4-prest-del');
+  const unassignedTicket = state.syndik_prod_maintenance_v1.find((r: any) => r.id === reqLot2.id);
+  assert.equal(unassignedTicket.prestataireId, '', 'Open ticket unassigned on deletePrestataire');
+  assert.equal(unassignedTicket.assignedTo, '', 'Open ticket assignedTo cleared on deletePrestataire');
+
+  // 4. Le Souk & Community Chat: normalization, free price=0, syndic DM, sold lock, channel allowlist, moderation & orphan cleanup
+  await assert.rejects(
+    cmd.runOperation(syndicActor, 'addMarketplaceItem', [{
+      buildingId: 'b-pr4', title: 'Bad img', description: 'XSS attempt', price: 10, imageUrl: 'javascript:alert(1)',
+    }], 'op-pr4-souk-badimg'),
+    /HTTPS|\/api\/uploads/i,
+  );
+  const syndicListing = await cmd.runOperation(syndicActor, 'addMarketplaceItem', [{
+    buildingId: 'b-pr4', title: 'Étagère Bureau', description: 'Don du bureau syndic', category: 'furniture', type: 'free', price: 999, condition: 'like_new',
+  }], 'op-pr4-souk-syndic');
+  assert.equal(syndicListing.category, 'mobilier');
+  assert.equal(syndicListing.condition, 'tres_bon_etat');
+  assert.equal(syndicListing.price, 0, 'Free listing forces price to 0');
+  assert.equal(syndicListing.apartmentNumber, 'Bureau Syndic');
+
+  // Resident sends Souk DM to syndic listing; syndic replies and likes
+  const inquiry = await cmd.runOperation(res1Actor, 'sendChatMessage', [{
+    buildingId: 'b-pr4', channelId: `market-${syndicListing.id}`, recipientId: syndicListing.residentId, marketplaceItemId: syndicListing.id, content: 'Toujours dispo ?', badge: 'Question Souk',
+  }], 'op-pr4-chat-dm1');
+  assert.equal(inquiry.senderName, 'Amina Benali');
+  assert.equal(inquiry.senderApartment, 'Lot A1');
+  assert.equal(inquiry.badge, 'Question Souk');
+  assert.equal(inquiry.marketplaceItemPrice, 0);
+
+  const reply = await cmd.runOperation(syndicActor, 'sendChatMessage', [{
+    buildingId: 'b-pr4', channelId: `market-${syndicListing.id}`, recipientId: 'res-1', marketplaceItemId: syndicListing.id, content: 'Oui disponible',
+  }], 'op-pr4-chat-dm2');
+  assert.equal(reply.senderName, 'Cabinet Atlas', 'Syndic chat senderName uses cabinet name, not raw email');
+  assert.equal(reply.channelId, inquiry.channelId, 'Syndic and resident share canonical thread channelId');
+  await cmd.runOperation(syndicActor, 'toggleChatMessageLike', [inquiry.id, syndicActor.uid], 'op-pr4-chat-like');
+
+  // Arbitrary public channelId & self-DM rejected
+  await assert.rejects(
+    cmd.runOperation(res1Actor, 'sendChatMessage', [{
+      buildingId: 'b-pr4', channelId: 'arbitrary-injected', content: 'Hello',
+    }], 'op-pr4-chat-badchan'),
+    /Canal de discussion invalide/i,
+  );
+  await assert.rejects(
+    cmd.runOperation(res1Actor, 'sendChatMessage', [{
+      buildingId: 'b-pr4', channelId: 'private', recipientId: 'res-1', content: 'Self DM',
+    }], 'op-pr4-chat-self'),
+    /vous-même/i,
+  );
+
+  // Sold listing blocks new inquiries; deleteMarketplaceItem purges orphaned chat threads
+  await cmd.runOperation(syndicActor, 'updateMarketplaceItemStatus', [syndicListing.id, 'sold'], 'op-pr4-souk-sold');
+  await assert.rejects(
+    cmd.runOperation(res2Actor, 'sendChatMessage', [{
+      buildingId: 'b-pr4', channelId: `market-${syndicListing.id}`, recipientId: syndicListing.residentId, marketplaceItemId: syndicListing.id, content: 'Trop tard',
+    }], 'op-pr4-chat-sold'),
+    /déjà vendue/i,
+  );
+  await cmd.runOperation(syndicActor, 'deleteMarketplaceItem', [syndicListing.id], 'op-pr4-souk-del');
+  assert.equal(
+    state.syndik_prod_chat_v1.filter((m: any) => m.marketplaceItemId === syndicListing.id).length,
+    0,
+    'Deleting Souk listing purges orphaned chat messages',
+  );
+
+  // deleteChatMessage moderation: non-author blocked, syndic allowed
+  const pubMsg = await cmd.runOperation(res1Actor, 'sendChatMessage', [{
+    buildingId: 'b-pr4', channelId: 'general', content: 'Bonjour voisins',
+  }], 'op-pr4-chat-pub');
+  await assert.rejects(
+    cmd.runOperation(res2Actor, 'deleteChatMessage', [pubMsg.id], 'op-pr4-chat-del-deny'),
+    /auteur ou au syndic/i,
+  );
+  await cmd.runOperation(syndicActor, 'deleteChatMessage', [pubMsg.id], 'op-pr4-chat-del-ok');
+  assert.equal(state.syndik_prod_chat_v1.some((m: any) => m.id === pubMsg.id), false);
+
+  // Archiving resident closes their active Souk listings
+  const res2Listing = await cmd.runOperation(res2Actor, 'addMarketplaceItem', [{
+    buildingId: 'b-pr4', title: 'Vélo enfant', description: 'Très bon état', category: 'enfants', type: 'sale', price: 300, condition: 'good',
+  }], 'op-pr4-souk-res2');
+  await cmd.runOperation(syndicActor, 'deleteResident', ['res-2'], 'op-pr4-del-res2');
+  assert.equal(state.syndik_prod_marketplace_v1.find((i: any) => i.id === res2Listing.id).status, 'sold', 'Archiving resident closes active Souk listings');
+
+  // 5. Documents visibility + immediate deletedAt fence for lifecycle GC
+  const doc = await cmd.runOperation(syndicActor, 'attachDocument', ['b-pr4', {
+    fileId: 'file-doc-pr4', visibility: 'owners_only', category: 'pv_ag',
+  }], 'op-pr4-doc-attach');
+  assert.equal(doc.visibility, 'owners_only');
+  assert.equal(doc.category, 'pv_ag');
+  await cmd.runOperation(syndicActor, 'deleteDocument', [doc], 'op-pr4-doc-del');
+  assert.ok(state.__files['file-doc-pr4'].deletedAt, 'Deleted unreferenced document upload marked deletedAt immediately');
+  const claim = claimFileForDeletion(state, { id: 'file-doc-pr4', key: 'private/b-pr4/file-doc-pr4', createdAt: state.__files['file-doc-pr4'].createdAt }, Date.now());
+  assert.ok(claim, 'claimFileForDeletion claims explicitly deleted file immediately without waiting 7 days');
+
+  // 6. Broadcast notifications per-user readBy + batch markAllNotificationsAsRead
+  await cmd.runOperation(res1Actor, 'markNotificationAsRead', ['notif-broadcast-1'], 'op-pr4-notif-read1');
+  const bcast = state.syndik_prod_notifications_v1.find((n: any) => n.id === 'notif-broadcast-1');
+  assert.equal(bcast.read, false, 'Broadcast shared read flag stays false');
+  assert.deepEqual(bcast.readBy, ['u-res-1'], 'Broadcast readBy records per-user read');
+  const batchRes = await cmd.runOperation(syndicActor, 'markAllNotificationsAsRead', [], 'op-pr4-notif-batch');
+  assert.ok(batchRes.updated >= 1, 'markAllNotificationsAsRead marks unread notifications in one batch');
+  assert.ok(bcast.readBy.includes('u-syndic-pr4'), 'markAllNotificationsAsRead appends caller to broadcast readBy');
+});
+
+
 
 
 

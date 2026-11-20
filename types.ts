@@ -282,6 +282,7 @@ export interface MaintenanceRequest {
   syndicId?: string;
   residentId: string;
   residentName?: string;
+  apartmentId?: string;
   apartmentNumber?: string;
   title?: string;
   description: string;
@@ -295,6 +296,7 @@ export interface MaintenanceRequest {
     | 'other';
   location?: string;
   status: 'pending' | 'in_progress' | 'completed';
+  completionPending?: boolean;
   priority?: 'low' | 'medium' | 'high' | 'emergency';
   createdAt: string;
   completedAt?: string;
@@ -322,11 +324,13 @@ export interface Announcement {
 export interface Notification {
   id: string;
   userId: string;
+  buildingId?: string;
   title: string;
   message: string;
   type?: 'invoice' | 'maintenance' | 'announcement' | 'general';
   createdAt: string;
   read: boolean;
+  readBy?: string[];
   link?: string;
 }
 
@@ -339,6 +343,7 @@ export interface Document {
   mimeType?: string;
   storagePath?: string;
   category?: 'reglement_copropriete' | 'pv_ag' | 'contrat' | 'budget' | 'assurance' | 'autre';
+  visibility?: 'all' | 'owners_only' | 'syndic_only';
 }
 
 export type BuildingDocument = Document;

@@ -42,7 +42,8 @@ const PrestatairePortal: React.FC = () => {
       userProfile.prestataireCategory || userProfile.providerCategory;
     return rawRequests.filter(
       (r) =>
-        (effectivePrestId && r.prestataireId === effectivePrestId) ||
+        (effectivePrestId &&
+          (r.prestataireId === effectivePrestId || r.assignedTo === effectivePrestId)) ||
         (userProfile.displayName && r.assignedTo === userProfile.displayName) ||
         (!r.prestataireId &&
           !r.assignedTo &&
@@ -191,6 +192,8 @@ const PrestatairePortal: React.FC = () => {
                       className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${
                         req.status === 'completed'
                           ? 'bg-emerald-100 text-emerald-800'
+                          : req.completionPending
+                          ? 'bg-indigo-100 text-indigo-800 border border-indigo-200'
                           : req.status === 'in_progress'
                           ? 'bg-amber-100 text-amber-800'
                           : 'bg-rose-100 text-rose-800'
@@ -198,6 +201,8 @@ const PrestatairePortal: React.FC = () => {
                     >
                       {req.status === 'completed'
                         ? t('providerPortal.statusCompleted')
+                        : req.completionPending
+                        ? tr('En attente de validation', 'في انتظار التأكيد')
                         : req.status === 'in_progress'
                         ? t('providerPortal.statusInProgress')
                         : t('providerPortal.statusPending')}

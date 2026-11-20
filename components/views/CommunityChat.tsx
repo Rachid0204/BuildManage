@@ -6,8 +6,14 @@ import { useAuth } from '../../contexts/AuthContext';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import { ChatIcon } from '../icons/IconComponents';
-import { getChatMessages, sendChatMessage, toggleChatMessageLike } from '../../firebase/services';
+import {
+  getChatMessages,
+  sendChatMessage,
+  toggleChatMessageLike,
+  deleteChatMessage,
+} from '../../firebase/services';
 import Loading from '../common/Loading';
+import { useToast } from '../common/Toast';
 import { useI18n } from '../../hooks/useI18n';
 
 interface CommunityChatProps {
@@ -146,6 +152,21 @@ export const CommunityChat: React.FC<CommunityChatProps> = ({
     mutationFn: (messageId: string) => toggleChatMessageLike(messageId, effectiveSenderId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['chatMessages', building.id, activeChannelId] });
+    },
+  });
+
+  const { showToast } = useToast();
+  const deleteMutation = useMutation({
+    mutationFn: (messageId: string) => deleteChatMessage(messageId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['chatMessages', building.id, activeChannelId] });
+      showToast(tr('Message supprimé.', 'تم حذف الرسالة.'), 'info');
+    },
+    onError: (err: any) => {
+      showToast(
+        err?.message || tr('Impossible de supprimer ce message.', 'تعذر حذف هذه الرسالة.'),
+        'error'
+      );
     },
   });
 
@@ -469,13 +490,14 @@ export const CommunityChat: React.FC<CommunityChatProps> = ({
                         <p>{msg.content}</p>
                       </div>
 
-                      {/* Like Action */}
+                      {/* Like & Moderation Actions */}
                       <div
                         className={`flex items-center gap-2 pt-0.5 text-[11px] text-slate-400 ${
                           isMe ? 'justify-end' : 'justify-start'
                         }`}
                       >
                         <button
+                          type="button"
                           onClick={() => likeMutation.mutate(msg.id)}
                           className={`flex items-center gap-1 px-2 py-0.5 rounded-full transition-colors ${
                             hasLiked
@@ -487,6 +509,18 @@ export const CommunityChat: React.FC<CommunityChatProps> = ({
                           <span>{hasLiked ? '❤️' : '🤍'}</span>
                           <span>{msg.likes?.length || 0}</span>
                         </button>
+                        {(isMe || isSyndicUser) && (
+                          <button
+                            type="button"
+                            disabled={deleteMutation.isPending}
+                            onClick={() => deleteMutation.mutate(msg.id)}
+                            className="px-2 py-0.5 rounded-full hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors disabled:opacity-50"
+                            title={tr('Supprimer ce message', 'حذف هذه الرسالة')}
+                            aria-label={tr('Supprimer ce message', 'حذف هذه الرسالة')}
+                          >
+                            {tr('Supprimer', 'حذف')}
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>

@@ -248,7 +248,18 @@ export interface CoordinatedMethods {
   ) => Promise<AssembleeGenerale>;
   attachDocument: (
     buildingId: string,
-    document: { fileId: string } | { name: string; dataUrl: string },
+    document:
+      | {
+          fileId: string;
+          visibility?: Document['visibility'];
+          category?: Document['category'];
+        }
+      | {
+          name: string;
+          dataUrl: string;
+          visibility?: Document['visibility'];
+          category?: Document['category'];
+        },
   ) => Promise<Document>;
   assignApartmentOwner: (input: {
     buildingId: string;
@@ -382,6 +393,8 @@ export interface CoordinatedMethods {
     request: SubscriptionBankTransferRequest;
     payment?: SubscriptionPayment;
   }>;
+  markAllNotificationsAsRead: () => Promise<{ updated: number }>;
+  deleteChatMessage: (messageId: string) => Promise<boolean>;
 }
 // The server supplies createdAt; the transport must not manufacture a new retry identity.
 export type CommandMethods = Omit<BackendMethods, 'addMaintenanceRequest'> &

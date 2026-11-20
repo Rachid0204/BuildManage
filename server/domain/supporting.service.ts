@@ -18,6 +18,7 @@ import {
   hashPasswordSync,
 } from '../../utils/security';
 import { ResidentSchema, SyndicSchema } from '../../utils/validation';
+import { normalizeMaintenanceRequestApartment as normalizeMaintenanceRequestApartmentShared } from '../../utils/maintenanceDisplay';
 import { hashPassword } from '../passwords';
 import type { DomainContext } from './context';
 import { assertContext } from './context';
@@ -415,8 +416,11 @@ const deleteResident = async (residentId: string) => {
 
 const savePrestataire = async (prestataire: Prestataire, generateCredentials?: boolean): Promise<Prestataire> => {
 
+    const resolvedId = typeof prestataire.id === 'string' && prestataire.id.trim()
+        ? prestataire.id.trim()
+        : `prest-${crypto.randomUUID()}`;
     const list = getLocalItem<Prestataire[]>(STORAGE_KEYS.PRESTATAIRES, []);
-    const index = list.findIndex((p) => p.id === prestataire.id);
+    const index = list.findIndex((p) => p.id === resolvedId);
     const prev = index >= 0 ? list[index] : undefined;
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, []);
     let resolvedSyndicId = prestataire.syndicId || prev?.syndicId;
@@ -427,6 +431,7 @@ const savePrestataire = async (prestataire: Prestataire, generateCredentials?: b
     let finalPrestataire: Prestataire = {
         ...prev,
         ...prestataire,
+        id: resolvedId,
         syndicId: resolvedSyndicId,
     };
     let ephemeralPassword: string | undefined;
@@ -732,15 +737,24 @@ const addMaintenanceRequest = async (request: Omit<MaintenanceRequest, 'id'>) =>
         id: crypto.randomUUID(),
         ...request,
     });
+    const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, []);
+    const bld = syndics.flatMap((s) => s.buildings || []).find((b) => b.id === normalizedDraft.buildingId);
+    const isResidentReporter = Boolean(
+        bld?.residents?.some((r) => r.id === normalizedDraft.residentId || `res-${r.id}` === normalizedDraft.residentId)
+    );
     const initialUpdate: MaintenanceStepUpdate = {
         id: `upd-${crypto.randomUUID()}`,
         status: normalizedDraft.status || 'pending',
-        title: 'Signalement créé et transmis au Syndic',
+        title: isResidentReporter
+            ? 'Signalement créé et transmis au Syndic'
+            : 'Intervention créée par le Syndic',
         note: normalizedDraft.description,
         updatedBy: normalizedDraft.residentName
             ? `${normalizedDraft.residentName}${normalizedDraft.apartmentNumber ? ` (${normalizedDraft.apartmentNumber})` : ''}`
-            : 'Copropriétaire',
-        updatedByRole: 'resident',
+            : isResidentReporter
+                ? 'Copropriétaire'
+                : 'Bureau Syndic',
+        updatedByRole: isResidentReporter ? 'resident' : 'syndic',
         timestamp: normalizedDraft.createdAt || new Date().toISOString(),
         photos: normalizedDraft.photos ||
             (normalizedDraft.photoUrl ? [normalizedDraft.photoUrl] : undefined),
@@ -759,64 +773,14 @@ const addMaintenanceRequest = async (request: Omit<MaintenanceRequest, 'id'>) =>
 
 function normalizeMaintenanceRequestApartment(req: MaintenanceRequest): MaintenanceRequest {
     const syndics = getLocalItem<Syndic[]>(STORAGE_KEYS.SYNDICS, []);
-    let targetBld: Building | undefined;
-    for (const s of syndics) {
-        const found = s.buildings.find((b) => b.id === req.buildingId);
-        if (found) {
-            targetBld = found;
-            break;
-        }
-    }
-    if (!targetBld)
-        return req;
-    const apartments = targetBld.apartments || [];
-    const residents = targetBld.residents || [];
-    const resObj = residents.find((r) => r.id === req.residentId ||
-        `res-${r.id}` === req.residentId ||
-        (req.residentName && r.name.trim().toLowerCase() === req.residentName.trim().toLowerCase()));
-    const resolveAptNum = (aptId?: string): string | undefined => {
-        if (!aptId)
-            return undefined;
-        const direct = apartments.find((a) => a.id === aptId);
-        if (direct?.number && !direct.number.startsWith('apt-')) {
-            return direct.number.replace(/^(Lot|شقة)\s+/i, '').trim();
-        }
-        const idxMatch = aptId.match(/apt-\d+-(\d+)/);
-        if (idxMatch) {
-            const idx = parseInt(idxMatch[1], 10);
-            const byIdx = apartments[idx];
-            if (byIdx?.number && !byIdx.number.startsWith('apt-')) {
-                return byIdx.number.replace(/^(Lot|شقة)\s+/i, '').trim();
-            }
-            return String(idx + 1);
-        }
-        return undefined;
-    };
-    let resolvedNumber = req.apartmentNumber;
-    const linkedApt = (resObj?.apartmentId && apartments.find((a) => a.id === resObj.apartmentId)) ||
-        apartments.find((a) => a.ownerId === req.residentId ||
-            a.tenantId === req.residentId ||
-            (resObj && (a.ownerId === resObj.id || a.tenantId === resObj.id)));
-    if (linkedApt?.number && !linkedApt.number.startsWith('apt-')) {
-        resolvedNumber = `Lot ${linkedApt.number.replace(/^(Lot|شقة)\s+/i, '').trim()}`;
-    }
-    else if (req.apartmentNumber && /apt-[\w-]+/.test(req.apartmentNumber)) {
-        const idMatch = req.apartmentNumber.match(/apt-[\w-]+/);
-        const num = resolveAptNum(idMatch?.[0]) || resolveAptNum(resObj?.apartmentId);
-        if (num)
-            resolvedNumber = `Lot ${num}`;
-    }
-    else if (!req.apartmentNumber && resObj?.apartmentId) {
-        const num = resolveAptNum(resObj.apartmentId);
-        if (num)
-            resolvedNumber = `Lot ${num}`;
-    }
-    return {
-        ...req,
-        residentName: req.residentName || resObj?.name,
-        apartmentNumber: resolvedNumber,
-    };
+    return normalizeMaintenanceRequestApartmentShared(req, syndics);
 }
+
+const formatMaintenanceStatusFr = (status?: string) => {
+    if (status === 'completed') return 'Clôturée';
+    if (status === 'in_progress') return 'En cours';
+    return 'En attente';
+};
 
 const updateMaintenanceRequest = async (id: string, updates: Partial<MaintenanceRequest>, stepInfo?: {
     title?: string;
@@ -835,42 +799,63 @@ const updateMaintenanceRequest = async (id: string, updates: Partial<Maintenance
                 ...(existing.photos || (existing.photoUrl ? [existing.photoUrl] : [])),
                 ...stepInfo.stepPhotos,
             ]
-            : updates.photos || existing.photos;
+            : updates.photos !== undefined
+                ? updates.photos
+                : existing.photos;
+        const sanitizedUpdates: Record<string, any> = { ...updates };
+        if ('cost' in sanitizedUpdates && (sanitizedUpdates.cost === null || sanitizedUpdates.cost === '')) {
+            sanitizedUpdates.cost = undefined;
+        }
+        if ('invoiceRef' in sanitizedUpdates && (sanitizedUpdates.invoiceRef === null || String(sanitizedUpdates.invoiceRef).trim() === '')) {
+            sanitizedUpdates.invoiceRef = undefined;
+        }
+        if ('syndicNotes' in sanitizedUpdates && (sanitizedUpdates.syndicNotes === null || String(sanitizedUpdates.syndicNotes).trim() === '')) {
+            sanitizedUpdates.syndicNotes = undefined;
+        }
+        if ('estimatedCompletionDate' in sanitizedUpdates && (sanitizedUpdates.estimatedCompletionDate === null || String(sanitizedUpdates.estimatedCompletionDate).trim() === '')) {
+            sanitizedUpdates.estimatedCompletionDate = undefined;
+        }
         const existingUpdates = existing.updates || [];
         const nextUpdates = [...existingUpdates];
+        const nextStatus = sanitizedUpdates.status || existing.status;
         if (stepInfo &&
             (stepInfo.note ||
                 stepInfo.title ||
-                updates.status !== existing.status ||
+                (sanitizedUpdates.status && sanitizedUpdates.status !== existing.status) ||
                 stepInfo.stepPhotos?.length)) {
-            const statusLabel = (updates.status || existing.status) === 'completed'
+            const statusLabel = nextStatus === 'completed'
                 ? 'Intervention clôturée et vérifiée'
-                : (updates.status || existing.status) === 'in_progress'
+                : nextStatus === 'in_progress'
                     ? 'Intervention en cours / Mise à jour de suivi'
                     : 'Mise à jour du dossier';
             const newStep: MaintenanceStepUpdate = {
                 id: `upd-${crypto.randomUUID()}`,
-                status: updates.status || existing.status,
+                status: nextStatus,
                 title: stepInfo.title || statusLabel,
                 note: stepInfo.note ||
-                    updates.syndicNotes ||
-                    `Statut mis à jour vers : ${updates.status || existing.status}`,
-                updatedBy: stepInfo.updatedBy || 'SyndicPro Gestion (Bureau Syndic)',
+                    sanitizedUpdates.syndicNotes ||
+                    `Statut mis à jour : ${formatMaintenanceStatusFr(nextStatus)}`,
+                updatedBy: stepInfo.updatedBy || 'Bureau Syndic',
                 updatedByRole: stepInfo.updatedByRole || 'syndic',
                 timestamp: new Date().toISOString(),
                 photos: stepInfo.stepPhotos?.length ? stepInfo.stepPhotos : undefined,
-                assignedTo: updates.assignedTo || existing.assignedTo,
-                cost: updates.cost !== undefined ? updates.cost : existing.cost,
+                assignedTo: sanitizedUpdates.assignedTo !== undefined ? sanitizedUpdates.assignedTo : existing.assignedTo,
+                cost: 'cost' in sanitizedUpdates ? sanitizedUpdates.cost : existing.cost,
             };
             nextUpdates.push(newStep);
         }
-        list[idx] = {
+        const merged: MaintenanceRequest = {
             ...existing,
-            ...updates,
+            ...sanitizedUpdates,
             photos: mergedPhotos,
-            photoUrl: mergedPhotos && mergedPhotos.length > 0 ? mergedPhotos[0] : existing.photoUrl,
+            photoUrl: mergedPhotos && mergedPhotos.length > 0 ? mergedPhotos[0] : (updates.photos ? undefined : existing.photoUrl),
             updates: nextUpdates,
         };
+        if (merged.cost === undefined) delete merged.cost;
+        if (merged.invoiceRef === undefined) delete merged.invoiceRef;
+        if (merged.syndicNotes === undefined) delete merged.syndicNotes;
+        if (merged.estimatedCompletionDate === undefined) delete merged.estimatedCompletionDate;
+        list[idx] = merged;
         setLocalItem(STORAGE_KEYS.MAINTENANCE, list);
         return list[idx];
     }
@@ -927,6 +912,8 @@ const markNotificationAsRead = async (notificationId: string) => {
     return true;
 };
 
+const MAX_CHAT_MESSAGES_PER_BUILDING = 1000;
+
 const sendChatMessage = async (message: Omit<ChatMessage, 'id' | 'createdAt'>): Promise<ChatMessage> => {
 
     const newMsg: ChatMessage = {
@@ -936,7 +923,14 @@ const sendChatMessage = async (message: Omit<ChatMessage, 'id' | 'createdAt'>): 
     };
     const list = getLocalItem<ChatMessage[]>(STORAGE_KEYS.CHAT, []);
     list.push(newMsg);
-    setLocalItem(STORAGE_KEYS.CHAT, list);
+    const sameBuilding = list.filter((m) => m.buildingId === newMsg.buildingId);
+    let nextList = list;
+    if (sameBuilding.length > MAX_CHAT_MESSAGES_PER_BUILDING) {
+        const dropCount = sameBuilding.length - MAX_CHAT_MESSAGES_PER_BUILDING;
+        const dropIds = new Set(sameBuilding.slice(0, dropCount).map((m) => m.id));
+        nextList = list.filter((m) => !dropIds.has(m.id));
+    }
+    setLocalItem(STORAGE_KEYS.CHAT, nextList);
     return newMsg;
 };
 
@@ -988,6 +982,13 @@ const deleteMarketplaceItem = async (itemId: string): Promise<boolean> => {
     const list = getLocalItem<MarketplaceItem[]>(STORAGE_KEYS.MARKETPLACE, []);
     const filtered = list.filter((i) => i.id !== itemId);
     setLocalItem(STORAGE_KEYS.MARKETPLACE, filtered, itemId);
+    const chatList = getLocalItem<ChatMessage[]>(STORAGE_KEYS.CHAT, []);
+    const remainingChat = chatList.filter(
+        (m) => m.marketplaceItemId !== itemId && !String(m.channelId || '').startsWith(`market-${itemId}:`),
+    );
+    if (remainingChat.length !== chatList.length) {
+        setLocalItem(STORAGE_KEYS.CHAT, remainingChat);
+    }
     return true;
 };
 return {saveSyndic, addResident, saveResidentCredentialAccount, updateResident, regenerateResidentCredentials, recordResidentCredentialShare, deleteResident, savePrestataire, generateTempPassword, savePrestataireCredentialAccount, regeneratePrestataireCredentials, recordPrestataireCredentialShare, deletePrestataire, addPrestataireReview, addMaintenanceRequest, normalizeMaintenanceRequestApartment, updateMaintenanceRequest, addAnnouncement, deleteDocument, markNotificationAsRead, sendChatMessage, toggleChatMessageLike, addMarketplaceItem, updateMarketplaceItemStatus, deleteMarketplaceItem};

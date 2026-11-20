@@ -64,6 +64,7 @@ const PrestataireCredentialsModal: React.FC<{
 }) => {
   const { tr, language } = useI18n();
   const [copied, setCopied] = useState(false);
+  const [confirmRegenerate, setConfirmRegenerate] = useState(false);
 
   if (!prestataire) return null;
 
@@ -81,6 +82,7 @@ const PrestataireCredentialsModal: React.FC<{
   );
 
   const handleCopy = () => {
+    if (!password) return;
     if (navigator.clipboard) {
       navigator.clipboard.writeText(shareText);
       setCopied(true);
@@ -90,6 +92,7 @@ const PrestataireCredentialsModal: React.FC<{
   };
 
   const handleDownloadPDF = async () => {
+    if (!password) return;
     if (!await exportPrestataireCredentialsPDF(prestataire, building)) return;
     onShareRecorded?.(prestataire.id, 'pdf');
   };
@@ -97,30 +100,65 @@ const PrestataireCredentialsModal: React.FC<{
   return (
     <Modal
       isOpen={!!prestataire}
-      onClose={onClose}
+      onClose={() => {
+        setConfirmRegenerate(false);
+        onClose();
+      }}
       title={tr("Fiche Officielle d'Accès Prestataire Agréé", 'بطاقة الولوج الرسمية لمقدم الخدمة المعتمد')}
       footer={
         <div className="flex flex-wrap items-center justify-between w-full gap-2">
-          <button
-            type="button"
-            onClick={() => onRegenerate(prestataire.id)}
-            className="text-xs font-semibold text-slate-600 hover:text-teal-700 underline"
-          >
-            {tr('🔄 Régénérer un mot de passe temporaire', '🔄 إعادة توليد كلمة مرور مؤقتة')}
-          </button>
+          {confirmRegenerate ? (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="font-semibold text-amber-800">
+                {tr('Révoquer le mot de passe actuel ?', 'إلغاء كلمة المرور الحالية؟')}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmRegenerate(false);
+                  onRegenerate(prestataire.id);
+                }}
+                className="px-2 py-1 rounded bg-rose-600 hover:bg-rose-700 text-white font-bold"
+              >
+                {tr('Confirmer', 'تأكيد')}
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmRegenerate(false)}
+                className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold"
+              >
+                {tr('Annuler', 'إلغاء')}
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setConfirmRegenerate(true)}
+              className="text-xs font-semibold text-slate-600 hover:text-teal-700 underline"
+            >
+              {tr('🔄 Régénérer un mot de passe temporaire', '🔄 إعادة توليد كلمة مرور مؤقتة')}
+            </button>
+          )}
           <div className="flex flex-wrap items-center gap-2 ms-auto">
-            <Button variant="secondary" onClick={onClose}>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setConfirmRegenerate(false);
+                onClose();
+              }}
+            >
               {tr('Fermer', 'إغلاق')}
             </Button>
             <Button
               variant="secondary"
               onClick={handleDownloadPDF}
-              className="flex items-center gap-1.5 border-teal-200 text-teal-800 hover:bg-teal-50"
+              disabled={!password}
+              className="flex items-center gap-1.5 border-teal-200 text-teal-800 hover:bg-teal-50 disabled:opacity-50"
             >
               <DocumentsIcon />
               <span>{tr("Fiche d'Accès PDF", 'تحميل بطاقة PDF')}</span>
             </Button>
-            <Button onClick={handleCopy}>
+            <Button onClick={handleCopy} disabled={!password}>
               {copied
                 ? tr('✓ Identifiants copiés !', '✓ تم نسخ البيانات!')
                 : tr('Copier les identifiants', 'نسخ بيانات الولوج')}
@@ -146,10 +184,15 @@ const PrestataireCredentialsModal: React.FC<{
               </span>
             </div>
             <p className="mt-1 text-emerald-800">
-              {tr(
-                `Remettez cette fiche PDF officielle ou copiez ces identifiants à ${prestataire.name} pour lui donner accès à ses ordres de mission (/provider).`,
-                `سلموا بطاقة PDF الرسمية أو انسخوا هذه البيانات لـ ${prestataire.name} لتمكينه من متابعة أوامر التدخل (/provider).`
-              )}
+              {password
+                ? tr(
+                    `Remettez cette fiche PDF officielle ou copiez ces identifiants à ${prestataire.name} pour lui donner accès à ses ordres de mission (/provider).`,
+                    `سلموا بطاقة PDF الرسمية أو انسخوا هذه البيانات لـ ${prestataire.name} لتمكينه من متابعة أوامر التدخل (/provider).`
+                  )
+                : tr(
+                    `Le compte de ${prestataire.name} est déjà actif. Le mot de passe n'est plus affiché par sécurité. Utilisez « Régénérer » uniquement si le prestataire a perdu son accès.`,
+                    `حساب ${prestataire.name} مفعل بالفعل. لا يتم عرض كلمة المرور لأسباب أمنية. استخدم « إعادة توليد » فقط إذا فقد مقدم الخدمة صلاحية الدخول.`
+                  )}
             </p>
           </div>
         </div>
@@ -180,7 +223,7 @@ const PrestataireCredentialsModal: React.FC<{
               {tr('Mot de passe temporaire :', 'كلمة المرور المؤقتة :')}
             </span>
             <span className="px-2.5 py-1 rounded bg-slate-800 text-emerald-300 font-bold text-sm tracking-wider select-all border border-slate-700 tabular-nums">
-              {password}
+              {password || '••••••••••••'}
             </span>
           </div>
         </div>
@@ -199,8 +242,9 @@ const PrestataireCredentialsModal: React.FC<{
           </div>
           <button
             type="button"
+            disabled={!password}
             onClick={handleDownloadPDF}
-            className="shrink-0 px-3 py-1.5 rounded-lg bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold text-xs transition-colors"
+            className="shrink-0 px-3 py-1.5 rounded-lg bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold text-xs transition-colors disabled:opacity-50"
           >
             {tr('📄 Télécharger PDF', '📄 تحميل PDF')}
           </button>
@@ -261,6 +305,7 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingPrestataire, setEditingPrestataire] = useState<Prestataire | null>(null);
   const [credentialPrestataireId, setCredentialPrestataireId] = useState<string | null>(null);
+  const [ephemeralPasswords, setEphemeralPasswords] = useState<Record<string, string>>({});
 
   const [name, setName] = useState('');
   const [category, setCategory] = useState<Prestataire['category']>('plumbing');
@@ -281,10 +326,14 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
     queryFn: () => getPrestatairesForBuilding(building.id),
   });
 
-  const activeCredentialPrestataire =
-    prestataires.find((p) => p.id === credentialPrestataireId) || null;
-
-
+  const activeCredentialPrestataire = React.useMemo(() => {
+    const found = prestataires.find((p) => p.id === credentialPrestataireId) || null;
+    if (!found) return null;
+    const cachedPassword = ephemeralPasswords[found.id];
+    return cachedPassword && !found.generatedPassword
+      ? { ...found, generatedPassword: cachedPassword }
+      : found;
+  }, [prestataires, credentialPrestataireId, ephemeralPasswords]);
 
   const saveMutation = useMutation({
     mutationFn: ({
@@ -298,15 +347,13 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
       queryClient.invalidateQueries({ queryKey: ['prestataires', building.id] });
       setIsModalOpen(false);
       resetForm();
-      if (
-        saved &&
-        saved.hasAccount &&
-        (saved.generatedPassword || saved.invitationToken || saved.invitationCode)
-      ) {
-
-        if (variables.shouldGenerate) {
-          setCredentialPrestataireId(saved.id);
-        }
+      const freshPass =
+        saved?.generatedPassword || saved?.invitationToken || saved?.invitationCode;
+      if (saved && freshPass) {
+        setEphemeralPasswords((prev) => ({ ...prev, [saved.id]: freshPass }));
+      }
+      if (saved && saved.hasAccount && freshPass && variables.shouldGenerate) {
+        setCredentialPrestataireId(saved.id);
       }
     },
   });
@@ -316,6 +363,11 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
     onSuccess: (updated) => {
       queryClient.invalidateQueries({ queryKey: ['prestataires', building.id] });
       if (updated) {
+        const freshPass =
+          updated.generatedPassword || updated.invitationToken || updated.invitationCode;
+        if (freshPass) {
+          setEphemeralPasswords((prev) => ({ ...prev, [updated.id]: freshPass }));
+        }
         setCredentialPrestataireId(updated.id);
       }
     },
@@ -385,20 +437,20 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
   };
 
   const handleManageCredentials = (p: Prestataire) => {
-    if (p.hasAccount && (p.generatedPassword || p.invitationToken || p.invitationCode)) {
+    if (p.hasAccount) {
       setCredentialPrestataireId(p.id);
-    } else {
-      if (!p.email || !p.email.includes('@')) {
-        handleOpenEdit(p);
-        setGenerateCredentials(true);
-        notifyOperation({ operation: 'credentials', error: tr(
-            "Veuillez renseigner une adresse email professionnelle pour générer les identifiants d'accès de ce prestataire.",
-            'يرجى إدخال بريد إلكتروني مهني لتوليد بيانات الولوج الخاصة بمقدم الخدمة هذا.'
-          ) });
-        return;
-      }
-      regenerateMutation.mutateAsync(p.id).catch(() => {});
+      return;
     }
+    if (!p.email || !p.email.includes('@')) {
+      handleOpenEdit(p);
+      setGenerateCredentials(true);
+      notifyOperation({ operation: 'credentials', error: tr(
+          "Veuillez renseigner une adresse email professionnelle pour générer les identifiants d'accès de ce prestataire.",
+          'يرجى إدخال بريد إلكتروني مهني لتوليد بيانات الولوج الخاصة بمقدم الخدمة هذا.'
+        ) });
+      return;
+    }
+    regenerateMutation.mutateAsync(p.id).catch(() => {});
   };
 
   const handleSave = async () => {
@@ -423,13 +475,13 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
       email: email.trim().toLowerCase(),
       ice: ice.trim(),
       rc: rc.trim(),
-      active: true,
+      active: editingPrestataire ? editingPrestataire.active !== false : true,
       notes: notes.trim(),
       hourlyRate: hourlyRate.trim(),
       isEmergency247,
       isVerifiedBySyndic,
-      rating: editingPrestataire?.rating || 4.8,
-      reviewsCount: editingPrestataire?.reviewsCount || (editingPrestataire?.reviews?.length || 1),
+      rating: editingPrestataire?.rating ?? 0,
+      reviewsCount: editingPrestataire?.reviewsCount ?? (editingPrestataire?.reviews?.length ?? 0),
       reviews: editingPrestataire?.reviews || [],
       hasAccount: editingPrestataire?.hasAccount,
       generatedPassword: editingPrestataire?.generatedPassword,

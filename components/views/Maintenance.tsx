@@ -264,8 +264,8 @@ const Maintenance: React.FC<MaintenanceProps> = ({
 
   // Filters
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'in_progress' | 'completed'>('all');
-  const [priorityFilter, setPriorityFilter] = useState<'all' | 'high' | 'medium' | 'low'>('all');
-  const [residentScope, setResidentScope] = useState<'all_building' | 'mine'>('all_building');
+  const [priorityFilter, setPriorityFilter] = useState<'all' | 'emergency' | 'high' | 'medium' | 'low'>('all');
+  const [residentScope] = useState<'all_building' | 'mine'>('all_building');
   const [searchQuery, setSearchQuery] = useState('');
 
   // Expanded timeline view on cards
@@ -291,6 +291,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [newLocation, setNewLocation] = useState('');
+  const [newApartmentId, setNewApartmentId] = useState<string>('common');
   const [newCategory, setNewCategory] = useState<MaintenanceRequest['category']>('elevator');
   const [newPriority, setNewPriority] = useState<MaintenanceRequest['priority']>('medium');
   const [newDescription, setNewDescription] = useState('');
@@ -299,6 +300,15 @@ const Maintenance: React.FC<MaintenanceProps> = ({
 
   // Banner Feedback
   const [bannerMessage, setBannerMessage] = useState<string | null>(null);
+
+  const myResidentApartments = useMemo(() => {
+    if (!isResidentPortal || !currentResidentId) return [];
+    return (building.apartments || []).filter(
+      (a) =>
+        !a.archivedAt &&
+        (a.ownerId === currentResidentId || a.tenantId === currentResidentId)
+    );
+  }, [building.apartments, isResidentPortal, currentResidentId]);
 
   const { data: requests = [], isLoading } = useQuery({
     queryKey: ['maintenance', building.id],
@@ -312,7 +322,19 @@ const Maintenance: React.FC<MaintenanceProps> = ({
     enabled: !!building.id,
   });
 
-  const providerName = (id?: string) => prestataires.find(p => p.id === id)?.name || id || '';
+  const providerName = (id?: string) => {
+    if (!id) return '';
+    const found = prestataires.find((p) => p.id === id);
+    if (found) {
+      return found.archivedAt || found.active === false
+        ? `${found.name} (${tr('archivé', 'مؤرشف')})`
+        : found.name;
+    }
+    if (/^prest-/i.test(id)) {
+      return tr('Prestataire archivé', 'مقدم خدمة مؤرشف');
+    }
+    return id;
+  };
 
   const residentMap = useMemo(
     () => new Map((building.residents || []).map((r) => [r.id, r])),
@@ -492,7 +514,16 @@ const Maintenance: React.FC<MaintenanceProps> = ({
     e.preventDefault();
     if (!selectedRequest) return;
 
-    const updates: Partial<MaintenanceRequest> = isResidentPortal ? {} : {status:editStatus,assignedTo:editAssignedTo,prestataireId:editAssignedTo,cost:editCost?parseFloat(editCost):undefined,invoiceRef:editInvoiceRef || undefined,syndicNotes:stepNote.trim() || undefined};
+    const updates: Partial<MaintenanceRequest> = isResidentPortal
+      ? {}
+      : {
+          status: editStatus,
+          assignedTo: editAssignedTo,
+          prestataireId: editAssignedTo,
+          cost: editCost.trim() !== '' ? parseFloat(editCost) : (null as any),
+          invoiceRef: editInvoiceRef.trim(),
+          syndicNotes: stepNote.trim(),
+        };
 
     return updateMutation.mutateAsync({
       id: selectedRequest.id,
@@ -522,11 +553,33 @@ const Maintenance: React.FC<MaintenanceProps> = ({
     if (!newTitle.trim() || !newDescription.trim()) throw new Error(tr('Le titre et la description sont obligatoires.', 'العنوان والوصف مطلوبان.'));
 
     const catLabel = isAr ? CATEGORY_META[newCategory].labelAr : CATEGORY_META[newCategory].labelFr;
+    const selectedApt =
+      newApartmentId && newApartmentId !== 'common'
+        ? (building.apartments || []).find((a) => !a.archivedAt && a.id === newApartmentId)
+        : undefined;
+    const resolvedApartmentId =
+      newApartmentId === 'common'
+        ? 'common'
+        : selectedApt
+        ? selectedApt.id
+        : isResidentPortal && myResidentApartments.length === 1
+        ? myResidentApartments[0].id
+        : 'common';
+    const resolvedApartmentNumber =
+      resolvedApartmentId === 'common'
+        ? 'Parties Communes'
+        : selectedApt
+        ? `Lot ${selectedApt.number}`
+        : isResidentPortal && myResidentApartments.length === 1
+        ? `Lot ${myResidentApartments[0].number}`
+        : currentApartmentNumber || 'Parties Communes';
+
     return createMutation.mutateAsync({
       buildingId: building.id,
       residentId: isResidentPortal ? currentResidentId : building.residents[0]?.id || 'res-1',
-      residentName: isResidentPortal ? currentResidentName : tr('SyndicPro Gestion (Inspection)', 'مكتب السنديك (معاينة)'),
-      apartmentNumber: isResidentPortal ? currentApartmentNumber : tr('Parties Communes', 'الأجزاء المشتركة'),
+      residentName: isResidentPortal ? currentResidentName : tr('Bureau Syndic', 'مكتب السنديك'),
+      apartmentId: resolvedApartmentId,
+      apartmentNumber: resolvedApartmentNumber,
       title: newTitle.trim() || `${catLabel} — ${newLocation || tr('Immeuble', 'العمارة')}`,
       location: newLocation.trim() || tr('Parties communes de la résidence', 'الأجزاء المشتركة للإقامة'),
       category: newCategory,
@@ -666,33 +719,6 @@ const Maintenance: React.FC<MaintenanceProps> = ({
       {/* Filter & Search Bar */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs">
         <div className="flex items-center gap-1.5 flex-wrap">
-          {isResidentPortal && (
-            <div className="flex items-center bg-slate-100 p-1 rounded-lg me-2">
-              <button
-                type="button"
-                onClick={() => setResidentScope('all_building')}
-                className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all ${
-                  residentScope === 'all_building'
-                    ? 'bg-white text-slate-900 shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                🏢 {tr("Tout l'immeuble", 'كل العمارة')} ({requests.length})
-              </button>
-              <button
-                type="button"
-                onClick={() => setResidentScope('mine')}
-                className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all ${
-                  residentScope === 'mine'
-                    ? 'bg-white text-teal-800 shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                👤 {tr('Mes signalements', 'بلاغاتي')} ({requests.filter((r) => r.residentId === currentResidentId).length})
-              </button>
-            </div>
-          )}
-
           {[
             { id: 'all', label: tr('Tous les statuts', 'جميع الحالات') },
             { id: 'pending', label: tr('⏳ Reçus / En attente', '⏳ مستلمة / في الانتظار') },
@@ -721,6 +747,7 @@ const Maintenance: React.FC<MaintenanceProps> = ({
             className="text-xs px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-700 font-medium"
           >
             <option value="all">{tr('Toutes urgences', 'جميع الأولويات')}</option>
+            <option value="emergency">{tr('🚨 Urgence Critique', '🚨 طوارئ قصوى')}</option>
             <option value="high">{tr('🔴 Urgence Haute', '🔴 مستعجل جداً')}</option>
             <option value="medium">{tr('🟠 Urgence Moyenne', '🟠 متوسط الأهمية')}</option>
             <option value="low">{tr('🟢 Normale', '🟢 عادي')}</option>
@@ -771,14 +798,18 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                     </span>
                     <span
                       className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full uppercase ${
-                        req.priority === 'high'
+                        req.priority === 'emergency'
+                          ? 'bg-rose-600 text-white border border-rose-700'
+                          : req.priority === 'high'
                           ? 'bg-rose-100 text-rose-800 border border-rose-200'
                           : req.priority === 'medium'
                           ? 'bg-amber-100 text-amber-800 border border-amber-200'
                           : 'bg-emerald-50 text-emerald-800 border border-emerald-200'
                       }`}
                     >
-                      {req.priority === 'high'
+                      {req.priority === 'emergency'
+                        ? tr('🚨 Urgence Critique', '🚨 طوارئ قصوى')
+                        : req.priority === 'high'
                         ? tr('🔴 Urgente', '🔴 مستعجل')
                         : req.priority === 'medium'
                         ? tr('🟠 Moyenne', '🟠 متوسط')
@@ -788,6 +819,8 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                       className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${
                         req.status === 'completed'
                           ? 'bg-emerald-600 text-white'
+                          : req.completionPending
+                          ? 'bg-indigo-600 text-white'
                           : req.status === 'in_progress'
                           ? 'bg-blue-600 text-white'
                           : 'bg-amber-500 text-white'
@@ -795,6 +828,8 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                     >
                       {req.status === 'completed'
                         ? tr('✓ Résolu & Vérifié', '✓ تم الحل والتحقق')
+                        : req.completionPending
+                        ? tr('🔔 À valider (intervention terminée)', '🔔 في انتظار التأكيد')
                         : req.status === 'in_progress'
                         ? tr("🔧 En cours d'intervention", '🔧 قيد التدخل')
                         : tr('⏳ Reçu / En attente', '⏳ قيد الانتظار')}
@@ -1308,9 +1343,36 @@ const Maintenance: React.FC<MaintenanceProps> = ({
                   <option value="low">🟢 {tr('Normale', 'عادي')}</option>
                   <option value="medium">🟠 {tr('Moyenne', 'متوسط')}</option>
                   <option value="high">🔴 {tr('Urgente (Sécurité / Fuite / Ascenseur bloqué)', 'مستعجل (أمن / تسرب / مصعد متوقف)')}</option>
+                  <option value="emergency">🚨 {tr('Urgence Critique (Intervention immédiate)', 'طوارئ قصوى (تدخل فوري)')}</option>
                 </select>
               </div>
             </div>
+
+            {((isResidentPortal && myResidentApartments.length > 0) ||
+              (!isResidentPortal && (building.apartments || []).some((a) => !a.archivedAt))) && (
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  {tr('Lot concerné / Parties communes :', 'الشقة المعنية / الأجزاء المشتركة:')}
+                </label>
+                <select
+                  value={newApartmentId}
+                  onChange={(e) => setNewApartmentId(e.target.value)}
+                  className="w-full p-2.5 rounded-lg border border-slate-300 bg-white"
+                >
+                  <option value="common">
+                    🏢 {tr('Parties Communes (Hall, Escalier, Parking, Ascenseur...)', 'الأجزاء المشتركة (البهو، الدرج، المرآب، المصعد...)')}
+                  </option>
+                  {(isResidentPortal
+                    ? myResidentApartments
+                    : (building.apartments || []).filter((a) => !a.archivedAt)
+                  ).map((apt) => (
+                    <option key={apt.id} value={apt.id}>
+                      🚪 {tr(`Lot ${apt.number}`, `شقة ${apt.number}`)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             <div>
               <label className="block font-bold text-slate-700 mb-1">
