@@ -36,6 +36,7 @@ const LandingPage: React.FC<LandingPageProps> = ({
     'monthly',
   );
   const [openFaqIndex, setOpenFaqIndex] = useState<number>(0);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   const handlePlanChoose = (plan: SubscriptionPlan) => {
     if (onSelectPlan) {
@@ -263,17 +264,17 @@ const LandingPage: React.FC<LandingPageProps> = ({
     >
       {/* Top Navigation */}
       <header className="bg-white/95 backdrop-blur-md border-b border-slate-200 sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16 items-center gap-4">
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
+          <div className="flex justify-between h-16 items-center gap-2 sm:gap-4">
             <a
               href="#top"
-              className="flex items-center gap-2.5 focus:outline-none"
+              className="flex items-center gap-2 sm:gap-2.5 focus:outline-none shrink-0"
             >
-              <div className="w-9 h-9 bg-teal-700 rounded-lg flex items-center justify-center text-white shadow-xs">
+              <div className="w-8 h-8 sm:w-9 sm:h-9 bg-teal-700 rounded-lg flex items-center justify-center text-white shadow-xs shrink-0">
                 <BuildingsIcon />
               </div>
               <div className="flex items-baseline gap-2">
-                <span className="font-extrabold text-xl text-slate-900 tracking-tight">
+                <span className="font-extrabold text-lg sm:text-xl text-slate-900 tracking-tight">
                   Syndik
                 </span>
                 <span className="hidden sm:inline-block text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-teal-50 text-teal-800 border border-teal-200">
@@ -322,24 +323,94 @@ const LandingPage: React.FC<LandingPageProps> = ({
               </Link>
             </nav>
 
-            <div className="flex items-center gap-2.5 sm:gap-3">
-              <LanguageToggle variant="light" />
+            <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
+              <LanguageToggle variant="light" compactMobile />
               <button
                 type="button"
                 onClick={onLoginClick}
-                className="text-xs sm:text-sm font-bold text-slate-700 hover:text-teal-700 px-2.5 py-2 transition-colors"
+                className="hidden sm:inline-flex items-center text-xs sm:text-sm font-bold text-slate-700 hover:text-teal-700 px-2.5 py-2 min-h-[36px] transition-colors whitespace-nowrap"
               >
                 {tr('Se connecter', 'تسجيل الدخول')}
               </button>
               <Button
                 onClick={() => scrollToSection('pricing-plans')}
-                className="text-xs sm:text-sm font-bold px-3.5 sm:px-4 py-2"
+                className="text-xs sm:text-sm font-bold px-2.5 sm:px-4 py-2 min-h-[36px] whitespace-nowrap"
+              >
+                <span className="sm:hidden">{tr('Essai 30 j', 'تجربة مجانية')}</span>
+                <span className="hidden sm:inline">{tr('Essai gratuit 30 j', 'تجربة 30 يوماً')}</span>
+              </Button>
+              <button
+                type="button"
+                onClick={() => setIsMobileMenuOpen((prev) => !prev)}
+                aria-expanded={isMobileMenuOpen}
+                aria-label={tr('Menu de navigation', 'قائمة التنقل')}
+                className="lg:hidden inline-flex items-center justify-center min-w-[36px] min-h-[36px] rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-100 transition-colors"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  {isMobileMenuOpen ? (
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  ) : (
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                  )}
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Collapsible Mobile Navigation Drawer (< lg) */}
+        {isMobileMenuOpen && (
+          <div className="lg:hidden border-t border-slate-200 bg-white px-4 py-3 space-y-1 shadow-md">
+            {(
+              [
+                { id: 'features', fr: 'Fonctionnalités', ar: 'الميزات' },
+                { id: 'portals', fr: '3 Portails (Syndic, Résident, Prestataire)', ar: 'البوابات الثلاث (سنديك، ساكن، مقدم خدمة)' },
+                { id: 'pricing-plans', fr: 'Tarifs & Plans', ar: 'الأسعار والباقات' },
+                { id: 'faq', fr: 'FAQ', ar: 'أسئلة شائعة' },
+              ] as const
+            ).map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => {
+                  setIsMobileMenuOpen(false);
+                  scrollToSection(item.id);
+                }}
+                className="w-full text-start px-3 py-2.5 rounded-lg text-sm font-semibold text-slate-700 hover:bg-teal-50 hover:text-teal-800 transition-colors"
+              >
+                {tr(item.fr, item.ar)}
+              </button>
+            ))}
+            <Link
+              to="/guide"
+              onClick={() => setIsMobileMenuOpen(false)}
+              className="block w-full text-start px-3 py-2.5 rounded-lg text-sm font-semibold text-teal-800 hover:bg-teal-50 transition-colors"
+            >
+              {tr('Centre d’Aide & Guides', 'مركز المساعدة والأدلة')}
+            </Link>
+            <div className="pt-2 mt-2 border-t border-slate-100 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsMobileMenuOpen(false);
+                  onLoginClick();
+                }}
+                className="flex-1 py-2.5 px-3 rounded-lg border border-slate-300 text-sm font-bold text-slate-800 hover:bg-slate-50"
+              >
+                {tr('Se connecter', 'تسجيل الدخول')}
+              </button>
+              <Button
+                onClick={() => {
+                  setIsMobileMenuOpen(false);
+                  scrollToSection('pricing-plans');
+                }}
+                className="flex-1 py-2.5 text-sm font-bold justify-center"
               >
                 {tr('Essai gratuit 30 j', 'تجربة 30 يوماً')}
               </Button>
             </div>
           </div>
-        </div>
+        )}
       </header>
 
       {/* Hero Section */}

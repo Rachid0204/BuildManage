@@ -154,8 +154,8 @@ const HelpCenter: React.FC<HelpCenterProps> = ({
       {/* Public Top Navbar */}
       {mode === 'public' && (
         <header className="print:hidden sticky top-0 z-30 bg-slate-950 text-white border-b border-slate-800">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3 min-w-0">
+          <div className="max-w-7xl mx-auto px-3 sm:px-6 h-16 flex items-center justify-between gap-2 sm:gap-3">
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
               <button
                 type="button"
                 onClick={() =>
@@ -165,7 +165,12 @@ const HelpCenter: React.FC<HelpCenterProps> = ({
                       : '/welcome',
                   )
                 }
-                className="inline-flex items-center gap-2 text-xs font-bold text-slate-300 hover:text-white"
+                aria-label={
+                  currentUser
+                    ? tr('Retour à mon portail', 'العودة إلى بوابتك')
+                    : tr('Accueil Syndik', 'الرئيسية')
+                }
+                className="inline-flex items-center justify-center gap-2 min-w-[36px] min-h-[36px] rounded-lg text-xs font-bold text-slate-300 hover:text-white hover:bg-slate-800 px-1.5 sm:px-2 transition-colors shrink-0"
               >
                 <ArrowLeft className="w-4 h-4 rtl:rotate-180" />
                 <span className="hidden sm:inline">
@@ -174,34 +179,38 @@ const HelpCenter: React.FC<HelpCenterProps> = ({
                     : tr('Accueil Syndik', 'الرئيسية')}
                 </span>
               </button>
-              <span className="text-slate-700">|</span>
+              <span className="text-slate-700 hidden sm:inline">|</span>
               <div className="flex items-center gap-2 min-w-0">
                 <div className="w-7 h-7 rounded-lg bg-teal-600 flex items-center justify-center font-bold text-white text-sm shrink-0">
                   S
                 </div>
-                <span className="font-extrabold text-sm sm:text-base truncate">
+                <span className="font-extrabold text-sm sm:text-base truncate sm:hidden">
+                  {tr('Aide Syndik', 'دليل Syndik')}
+                </span>
+                <span className="hidden sm:inline font-extrabold text-base truncate">
                   {tr('Centre d’Aide & Guides Syndik', 'مركز المساعدة وأدلة Syndik')}
                 </span>
               </div>
             </div>
 
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
               <button
                 type="button"
                 onClick={() => window.print()}
-                className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700"
+                className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700"
               >
                 <Printer className="w-3.5 h-3.5" />
                 {tr('Imprimer / PDF', 'طباعة / PDF')}
               </button>
-              <LanguageToggle variant="dark" />
+              <LanguageToggle variant="dark" compactMobile />
               {!currentUser && (
                 <button
                   type="button"
                   onClick={() => navigate('/login')}
-                  className="px-3.5 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold"
+                  className="px-2.5 sm:px-3.5 py-1.5 min-h-[36px] rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold whitespace-nowrap"
                 >
-                  {tr('Se connecter', 'تسجيل الدخول')}
+                  <span className="sm:hidden">{tr('Connexion', 'دخول')}</span>
+                  <span className="hidden sm:inline">{tr('Se connecter', 'تسجيل الدخول')}</span>
                 </button>
               )}
             </div>

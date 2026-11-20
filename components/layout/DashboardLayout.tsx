@@ -141,7 +141,7 @@ const DashboardLayout: React.FC = () => {
 
     return (
         <div
-            className="flex h-screen bg-slate-100 flex-col overflow-hidden"
+            className="flex h-[100dvh] bg-slate-100 flex-col overflow-hidden"
             dir={language === 'ar' ? 'rtl' : 'ltr'}
         >
             <div className="flex-1 flex overflow-hidden relative">
@@ -244,7 +244,7 @@ const DashboardLayout: React.FC = () => {
                                     <button
                                         type="button"
                                         onClick={() => setIsRenewalOpen(true)}
-                                        className={`px-3 py-1 rounded-md text-xs font-bold transition-colors ${
+                                        className={`px-3 py-1.5 min-h-[36px] rounded-md text-xs font-bold transition-colors ${
                                             inGrace
                                                 ? 'bg-amber-700 text-white hover:bg-amber-800'
                                                 : canWrite

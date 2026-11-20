@@ -3,7 +3,7 @@ import ResidentPaymentModal from './ResidentPaymentModal';
 import React, { Suspense, useState, useMemo, useRef, useEffect } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Camera, HelpCircle, Image as ImageIcon } from 'lucide-react';
+import { Camera, HelpCircle, Image as ImageIcon, LogOut } from 'lucide-react';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import Modal from '../common/Modal';
@@ -468,12 +468,12 @@ const ResidentDashboard: React.FC = () => {
     <div className="min-h-screen bg-slate-100" dir={language === 'ar' ? 'rtl' : 'ltr'}>
       {/* Top Navbar */}
       <nav className="bg-slate-900 text-white shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex flex-wrap justify-between min-h-16 py-2 items-center gap-3">
-            <div className="flex items-center gap-2.5 flex-wrap">
-              <span className="text-xl font-bold tracking-tight text-white">Syndik</span>
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
+          <div className="flex justify-between h-16 items-center gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-lg sm:text-xl font-bold tracking-tight text-white whitespace-nowrap">Syndik</span>
               <span
-                className={`text-xs px-2.5 py-0.5 rounded-full font-bold ${
+                className={`hidden sm:inline-flex text-xs px-2.5 py-0.5 rounded-full font-bold whitespace-nowrap ${
                   isOwnerResident
                     ? 'bg-emerald-600/30 text-emerald-200 border border-emerald-500/40'
                     : 'bg-sky-600/30 text-sky-200 border border-sky-500/40'
@@ -486,7 +486,7 @@ const ResidentDashboard: React.FC = () => {
                   aria-label={tr('Changer de résidence', 'تغيير الإقامة')}
                   value={activeBuilding?.id || ''}
                   onChange={(e) => setSelectedResidentBuildingId(e.target.value)}
-                  className="text-xs bg-slate-800 text-slate-100 border border-slate-700 rounded-lg px-2 py-1 font-medium focus:outline-none focus:ring-2 focus:ring-teal-500"
+                  className="text-xs bg-slate-800 text-slate-100 border border-slate-700 rounded-lg px-2 py-1.5 min-h-[36px] font-medium focus:outline-none focus:ring-2 focus:ring-teal-500 max-w-[140px] sm:max-w-none truncate"
                 >
                   {residentMemberships.map((m) => (
                     <option key={m.building.id} value={m.building.id}>
@@ -496,7 +496,7 @@ const ResidentDashboard: React.FC = () => {
                 </select>
               ) : (
                 activeBuilding && (
-                  <span className="text-xs text-slate-300 font-medium hidden md:inline">
+                  <span className="text-xs text-slate-300 font-medium hidden md:inline truncate">
                     • {activeBuilding.name}
                     {currentApartment
                       ? ` (${t('residentPortal.lotLabel', { number: currentApartment.number })})`
@@ -506,8 +506,8 @@ const ResidentDashboard: React.FC = () => {
               )}
             </div>
 
-            <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
-              <span className="text-xs sm:text-sm text-slate-300 hidden sm:inline">
+            <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+              <span className="text-xs sm:text-sm text-slate-300 hidden md:inline">
                 <strong>{currentResident?.name || userProfile?.displayName}</strong>
               </span>
 
@@ -517,32 +517,36 @@ const ResidentDashboard: React.FC = () => {
                   setPasswordMsg(null);
                   setIsPasswordModalOpen(true);
                 }}
-                className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 px-2.5 py-1.5 rounded-lg border border-slate-700 font-medium"
+                aria-label={t('residentPortal.passwordBtn')}
+                className="inline-flex items-center justify-center gap-1 text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 px-2 sm:px-2.5 py-1.5 min-w-[36px] min-h-[36px] rounded-lg border border-slate-700 font-medium"
                 title={t('residentPortal.passwordBtn')}
               >
-                🔑 {t('residentPortal.passwordBtn')}
+                <span aria-hidden="true">🔑</span>
+                <span className="hidden sm:inline">{t('residentPortal.passwordBtn')}</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => setIsHelpOpen(true)}
                 aria-label={tr('Guide Résident', 'دليل الساكن')}
-                className="inline-flex items-center gap-1 text-xs bg-slate-800 hover:bg-slate-700 text-teal-200 px-2.5 py-1.5 rounded-lg border border-slate-700 font-bold"
+                className="inline-flex items-center justify-center gap-1 text-xs bg-slate-800 hover:bg-slate-700 text-teal-200 px-2 sm:px-2.5 py-1.5 min-w-[36px] min-h-[36px] rounded-lg border border-slate-700 font-bold"
               >
-                <HelpCircle className="w-3.5 h-3.5" />
+                <HelpCircle className="w-4 h-4 shrink-0" />
                 <span className="hidden sm:inline">{tr('Aide', 'مساعدة')}</span>
               </button>
 
               <NotificationBell />
 
-              <LanguageToggle variant="dark" />
+              <LanguageToggle variant="dark" compactMobile />
 
               <button
                 type="button"
                 onClick={handleLogout}
-                className="text-xs text-rose-400 hover:text-rose-200 transition-colors font-semibold px-2 py-1"
+                aria-label={t('header.logout')}
+                className="inline-flex items-center justify-center gap-1.5 text-xs text-rose-400 hover:text-rose-200 hover:bg-slate-800 transition-colors font-semibold px-2 min-w-[36px] min-h-[36px] rounded-lg"
               >
-                {t('header.logout')}
+                <LogOut className="w-4 h-4 shrink-0 sm:hidden" />
+                <span className="hidden sm:inline">{t('header.logout')}</span>
               </button>
             </div>
           </div>
@@ -781,8 +785,9 @@ const ResidentDashboard: React.FC = () => {
                   </div>
 
                   <Button
+                    variant="light"
                     onClick={() => setActiveTab('voting')}
-                    className="text-xs bg-white text-teal-900 hover:bg-teal-50 font-bold shrink-0 shadow-xs"
+                    className="text-xs font-bold shrink-0 shadow-xs min-h-[38px]"
                   >
                     {tr('Accéder au Scrutin Numérique →', 'الولوج إلى التصويت الرقمي ←')}
                   </Button>
@@ -2040,7 +2045,7 @@ const ResidentDashboard: React.FC = () => {
         aria-label={tr('Navigation mobile copropriétaire', 'تنقل الجوال للمالك المشترك')}
         className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-white border-t border-slate-200 shadow-lg pb-safe"
       >
-        <div className="grid grid-cols-6 h-16">
+        <div className={`grid ${isOwnerResident ? 'grid-cols-6' : 'grid-cols-5'} h-16`}>
           <button
             type="button"
             onClick={() => setActiveTab('overview')}
@@ -2049,22 +2054,24 @@ const ResidentDashboard: React.FC = () => {
             }`}
           >
             <span className="text-base leading-none">🏠</span>
-            <span className="truncate max-w-[54px]">{t('residentPortal.mobileHome')}</span>
+            <span className="truncate max-w-[56px]">{t('residentPortal.mobileHome')}</span>
           </button>
 
-          <button
-            type="button"
-            onClick={() => setActiveTab('voting')}
-            className={`relative flex flex-col items-center justify-center gap-0.5 text-[10px] font-bold transition-colors ${
-              activeTab === 'voting' ? 'text-teal-700' : 'text-slate-500 hover:text-slate-900'
-            }`}
-          >
-            <span className="text-base leading-none">🗳️</span>
-            <span className="truncate max-w-[54px]">{t('residentPortal.mobileAg')}</span>
-            {unvotedResolutionsCount > 0 && (
-              <span className="absolute top-1.5 end-2.5 w-2 h-2 rounded-full bg-emerald-500"></span>
-            )}
-          </button>
+          {isOwnerResident && (
+            <button
+              type="button"
+              onClick={() => setActiveTab('voting')}
+              className={`relative flex flex-col items-center justify-center gap-0.5 text-[10px] font-bold transition-colors ${
+                activeTab === 'voting' ? 'text-teal-700' : 'text-slate-500 hover:text-slate-900'
+              }`}
+            >
+              <span className="text-base leading-none">🗳️</span>
+              <span className="truncate max-w-[56px]">{t('residentPortal.mobileAg')}</span>
+              {unvotedResolutionsCount > 0 && (
+                <span className="absolute top-1.5 end-2.5 w-2 h-2 rounded-full bg-emerald-500"></span>
+              )}
+            </button>
+          )}
 
           <button
             type="button"
@@ -2074,7 +2081,7 @@ const ResidentDashboard: React.FC = () => {
             }`}
           >
             <span className="text-base leading-none">🔧</span>
-            <span className="truncate max-w-[54px]">{t('residentPortal.mobileMaintenance')}</span>
+            <span className="truncate max-w-[56px]">{t('residentPortal.mobileMaintenance')}</span>
           </button>
 
           <button
@@ -2085,7 +2092,7 @@ const ResidentDashboard: React.FC = () => {
             }`}
           >
             <span className="text-base leading-none">💬</span>
-            <span className="truncate max-w-[54px]">{t('residentPortal.mobileChat')}</span>
+            <span className="truncate max-w-[56px]">{t('residentPortal.mobileChat')}</span>
           </button>
 
           <button
@@ -2096,7 +2103,7 @@ const ResidentDashboard: React.FC = () => {
             }`}
           >
             <span className="text-base leading-none">🛍️</span>
-            <span className="truncate max-w-[54px]">{t('residentPortal.mobileMarketplace')}</span>
+            <span className="truncate max-w-[56px]">{t('residentPortal.mobileMarketplace')}</span>
           </button>
 
           <button
@@ -2107,7 +2114,7 @@ const ResidentDashboard: React.FC = () => {
             }`}
           >
             <span className="text-base leading-none">🛠️</span>
-            <span className="truncate max-w-[54px]">{t('sidebar.prestataires')}</span>
+            <span className="truncate max-w-[56px]">{tr('Services', 'الخدمات')}</span>
           </button>
         </div>
       </nav>

@@ -1391,7 +1391,88 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
               </div>
             </div>
 
-            <div className="overflow-x-auto">
+            {/* Mobile Cards (< md) */}
+            <div className="md:hidden divide-y divide-slate-200 bg-white">
+              {filteredTransactions.map((trx) => {
+                const isIncome = isIncomeTransaction(trx);
+                const displayAmount = signedTransactionAmount(trx);
+                return (
+                  <div
+                    key={`trx-card-${trx.id}`}
+                    className="p-3.5 space-y-2 active:bg-slate-50"
+                    onClick={() => setSelectedTrxForView(trx)}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="font-semibold text-sm text-slate-900 line-clamp-2">
+                          {trx.description}
+                        </p>
+                        <p className="text-[11px] font-mono text-slate-500 mt-0.5">
+                          {new Date(trx.date).toLocaleDateString(isAr ? 'ar-MA' : 'fr-MA')}
+                          {trx.lotNumber ? ` · ${tr('Lot', 'شقة')} ${trx.lotNumber}` : ''}
+                        </p>
+                      </div>
+                      <span
+                        className={`font-mono font-bold text-sm whitespace-nowrap tabular-nums shrink-0 ${
+                          isIncome ? 'text-emerald-600' : 'text-slate-900'
+                        }`}
+                      >
+                        {isIncome ? '+' : ''}
+                        {currencyFormatter.format(displayAmount)}
+                      </span>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                      {trx.fundType === 'reserve' ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                          {tr('Fonds Réserve', 'صندوق الاحتياط')}
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-semibold bg-teal-50 text-teal-700 border border-teal-200">
+                          {tr('Compte Courant', 'الحساب الجاري')}
+                        </span>
+                      )}
+                      <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-medium">
+                        {trx.category ? CATEGORY_LABELS[trx.category] || trx.category : tr('Charges', 'تكاليف')}
+                      </span>
+                      {trx.thirdPartyName && (
+                        <span className="text-slate-600 truncate max-w-[160px]">
+                          {trx.thirdPartyName}
+                        </span>
+                      )}
+                    </div>
+
+                    <div
+                      className="flex items-center justify-end gap-2 pt-1"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => generateTransactionVoucherPDF(trx, building, syndic)}
+                        className="inline-flex items-center gap-1 min-h-[36px] px-2.5 py-1 text-xs font-semibold text-teal-800 bg-teal-50 hover:bg-teal-100 rounded-lg border border-teal-200"
+                      >
+                        <DocumentsIcon />
+                        <span>PDF</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedTrxForView(trx)}
+                        className="min-h-[36px] px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 rounded-lg border border-slate-200"
+                      >
+                        {tr('Détails', 'التفاصيل')}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+              {filteredTransactions.length === 0 && (
+                <div className="px-4 py-10 text-center text-slate-500">
+                  <p className="font-semibold text-sm">{tr('Aucune écriture comptable trouvée', 'لم يتم العثور على أي قيد محاسبي')}</p>
+                </div>
+              )}
+            </div>
+
+            <div className="hidden md:block overflow-x-auto">
               <table className="min-w-full divide-y divide-slate-200 text-xs">
                 <thead className="bg-slate-100/75 text-slate-600 text-start font-semibold uppercase tracking-wider text-[11px]">
                   <tr>
@@ -1596,7 +1677,145 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
           </div>
 
           {chargesSubTab === 'charges' ? (
-          <div className="overflow-x-auto">
+          <>
+          {/* Mobile Cards (< md) */}
+          <div className="md:hidden divide-y divide-slate-200 bg-white">
+            {charges.map((charge) => {
+              const apt = building.apartments.find((a) => a.id === charge.apartmentId);
+              const res = building.residents.find((r) => r.id === charge.residentId);
+              const paidCents = Math.round((charge.paidAmount || 0) * 100);
+              const amountCents = Math.round((charge.amount || 0) * 100);
+              const remainingCents = Math.max(0, amountCents - paidCents);
+              const isPartial = charge.status !== 'paid' && paidCents > 0 && remainingCents > 0;
+              const effectivelyOverdue = isChargeEffectivelyOverdue(charge);
+              const activeChargeQuittances = quittances.filter(
+                (q) => q.chargeId === charge.id && !q.voidedAt
+              );
+              return (
+                <div key={`charge-card-${charge.id}`} className="p-3.5 space-y-2.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="font-mono font-bold text-sm text-teal-800">
+                          {apt?.number || 'Lot'}
+                        </span>
+                        <span className="font-semibold text-sm text-slate-900 truncate">
+                          {res?.name || tr('Inconnu', 'غير معروف')}
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-slate-500 mt-0.5">
+                        {charge.period || '—'} · {tr('Éch.', 'استحقاق')}{' '}
+                        <span className="font-mono">
+                          {new Date(charge.dueDate).toLocaleDateString(isAr ? 'ar-MA' : 'fr-MA')}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="text-end shrink-0">
+                      <div className="font-mono font-bold text-sm text-slate-900">
+                        {currencyFormatter.format(charge.amount)}
+                      </div>
+                      <span
+                        className={`inline-block mt-0.5 text-[10px] px-2 py-0.5 rounded-full font-semibold ${
+                          charge.status === 'paid'
+                            ? 'bg-emerald-50 text-emerald-700'
+                            : isPartial
+                            ? effectivelyOverdue
+                              ? 'bg-rose-50 text-rose-700'
+                              : 'bg-sky-50 text-sky-700'
+                            : effectivelyOverdue
+                            ? 'bg-rose-50 text-rose-700'
+                            : 'bg-amber-50 text-amber-700'
+                        }`}
+                      >
+                        {charge.status === 'paid'
+                          ? tr('Payé', 'مؤدى')
+                          : isPartial
+                          ? effectivelyOverdue
+                            ? tr('Partiel (en retard)', 'جزئي (متأخر)')
+                            : tr('Partiellement payée', 'مؤدى جزئياً')
+                          : effectivelyOverdue
+                          ? tr('En retard', 'متأخر')
+                          : tr('En attente', 'في الانتظار')}
+                      </span>
+                    </div>
+                  </div>
+                  {isPartial && (
+                    <div className="text-[11px] font-mono text-sky-700 bg-sky-50/70 rounded px-2.5 py-1">
+                      {tr('Réglé:', 'المؤدى:')} {currencyFormatter.format(paidCents / 100)} ·{' '}
+                      {tr('Reste:', 'الباقي:')} {currencyFormatter.format(remainingCents / 100)}
+                    </div>
+                  )}
+                  <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                    {charge.status === 'paid' ? (
+                      <button
+                        type="button"
+                        onClick={() => handleDirectQuittance(charge)}
+                        disabled={directGeneratingChargeId === charge.id}
+                        className="min-h-[36px] px-3 py-1.5 text-xs bg-teal-50 hover:bg-teal-100 text-teal-800 font-semibold rounded-lg border border-teal-200 flex items-center gap-1"
+                      >
+                        <QuittanceIcon />
+                        <span>
+                          {directGeneratingChargeId === charge.id
+                            ? tr('Génération...', 'جاري الإصدار...')
+                            : tr('Quittance PDF', 'وصل PDF')}
+                        </span>
+                      </button>
+                    ) : (
+                      <>
+                        {activeChargeQuittances.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              generateQuittancePDF(activeChargeQuittances[0], building, syndic, apt, res)
+                            }
+                            className="min-h-[36px] px-2.5 py-1.5 text-xs bg-teal-50 hover:bg-teal-100 text-teal-800 font-semibold rounded-lg border border-teal-200 flex items-center gap-1"
+                          >
+                            <QuittanceIcon />
+                            <span>{tr('Quittance PDF', 'وصل PDF')}</span>
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => openQuittanceModalForCharge(charge)}
+                          className="min-h-[36px] px-3 py-1.5 text-xs bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-semibold rounded-lg border border-emerald-200"
+                        >
+                          {tr('+ Quittance', '+ إصدار وصل')}
+                        </button>
+                      </>
+                    )}
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (!res) return;
+                        try {
+                          const buildingInvoices = await getInvoicesForBuilding(building.id);
+                          const invoice =
+                            buildingInvoices.find(
+                              (i) =>
+                                i.status !== 'cancelled' &&
+                                (i.id === charge.invoiceId || i.chargeIds.includes(charge.id))
+                            ) || (await createInvoiceForResident(charge.residentId, building.id, building.syndicId));
+                          queryClient.invalidateQueries({ queryKey: ['invoices', building.id] });
+                          generateInvoicePDF(invoice, building, res, syndic);
+                        } catch (e: any) {
+                          showToast(e.message, 'error');
+                        }
+                      }}
+                      className="min-h-[36px] px-2.5 py-1.5 text-xs text-slate-700 hover:bg-slate-100 rounded-lg border border-slate-200 font-semibold"
+                    >
+                      {tr('Avis PDF', 'إشعار PDF')}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+            {charges.length === 0 && (
+              <div className="px-4 py-10 text-center text-xs text-slate-500">
+                {tr('Aucun appel de charges enregistré.', 'لا توجد مساهمات مسجلة حالياً.')}
+              </div>
+            )}
+          </div>
+          <div className="hidden md:block overflow-x-auto">
             <table className="min-w-full divide-y divide-slate-200 text-xs sm:text-sm">
               <thead className="bg-slate-50 text-slate-500 text-start font-medium">
                 <tr>
@@ -1743,8 +1962,122 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
               </tbody>
             </table>
           </div>
+          </>
           ) : (
-          <div className="overflow-x-auto">
+          <>
+          {/* Mobile Cards (< md) */}
+          <div className="md:hidden divide-y divide-slate-200 bg-white">
+            {invoices.map((inv) => {
+              const res = building.residents.find((r) => r.id === inv.residentId);
+              const remaining = Math.max(
+                0,
+                Math.round(((inv.totalAmount || 0) - (inv.paidAmount || 0)) * 100)
+              ) / 100;
+              const isVoided = inv.status === 'cancelled' || Boolean(inv.voidedAt);
+              const isPartialInv = !isVoided && inv.status !== 'paid' && (inv.paidAmount || 0) > 0 && remaining > 0;
+              const canPay = !isVoided && inv.status !== 'paid' && remaining > 0;
+              const canVoid = !isVoided && (inv.paidAmount || 0) === 0;
+              return (
+                <div
+                  key={`inv-card-${inv.id}`}
+                  className={`p-3.5 space-y-2.5 ${isVoided ? 'opacity-60 bg-slate-50/70' : ''}`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="font-mono font-bold text-sm text-teal-800">{inv.invoiceNumber}</div>
+                      <div className="font-semibold text-sm text-slate-900 truncate">
+                        {res?.name || inv.issuedTo?.name || tr('Copropriétaire', 'مالك مشترك')}
+                      </div>
+                      <div className="text-[11px] font-mono text-slate-500 mt-0.5">
+                        {inv.chargeIds.length} {tr('charge(s)', 'مساهمة(ات)')} · {tr('Éch.:', 'الاستحقاق:')}{' '}
+                        {new Date(inv.dueDate).toLocaleDateString(isAr ? 'ar-MA' : 'fr-MA')}
+                      </div>
+                    </div>
+                    <div className="text-end shrink-0">
+                      <div className={`font-mono font-bold text-sm ${isVoided ? 'line-through text-slate-400' : 'text-slate-900'}`}>
+                        {currencyFormatter.format(inv.totalAmount)}
+                      </div>
+                      <span
+                        className={`inline-block mt-0.5 text-[10px] px-2 py-0.5 rounded-full font-semibold ${
+                          inv.status === 'paid'
+                            ? 'bg-emerald-50 text-emerald-700'
+                            : isVoided
+                            ? 'bg-slate-200 text-slate-600'
+                            : inv.status === 'overdue'
+                            ? 'bg-rose-50 text-rose-700'
+                            : isPartialInv
+                            ? 'bg-sky-50 text-sky-700'
+                            : 'bg-amber-50 text-amber-700'
+                        }`}
+                      >
+                        {inv.status === 'paid'
+                          ? tr('Soldée', 'مؤداة')
+                          : isVoided
+                          ? tr('Annulée', 'ملغاة')
+                          : inv.status === 'overdue'
+                          ? tr('En retard', 'متأخرة')
+                          : isPartialInv
+                          ? tr('Partielle', 'جزئية')
+                          : tr('Émise', 'صادرة')}
+                      </span>
+                    </div>
+                  </div>
+                  {!isVoided && remaining > 0 && remaining < inv.totalAmount && (
+                    <div className="text-[11px] font-mono text-sky-700 bg-sky-50/70 rounded px-2.5 py-1">
+                      {tr('Reste:', 'الباقي:')} {currencyFormatter.format(remaining)}
+                    </div>
+                  )}
+                  <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                    {res && (
+                      <button
+                        type="button"
+                        onClick={() => generateInvoicePDF(inv, building, res, syndic)}
+                        className="min-h-[36px] px-3 py-1.5 text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-lg"
+                      >
+                        PDF
+                      </button>
+                    )}
+                    {canPay && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPayInvoiceTarget(inv);
+                          setPayInvoiceAmount(String(remaining));
+                          setPayInvoiceMethod('virement');
+                          setPayInvoiceReference(`VIR-${inv.invoiceNumber}`);
+                          setPayInvoiceDate(new Date().toISOString().split('T')[0]);
+                        }}
+                        className="min-h-[36px] px-3 py-1.5 text-xs bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-semibold rounded-lg border border-emerald-200"
+                      >
+                        {tr('Encaisser', 'تحصيل')}
+                      </button>
+                    )}
+                    {canVoid && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setVoidInvoiceTarget(inv);
+                          setVoidInvoiceReason('');
+                        }}
+                        className="min-h-[36px] px-3 py-1.5 text-xs text-rose-600 hover:bg-rose-50 font-semibold rounded-lg border border-rose-200"
+                      >
+                        {tr('Annuler', 'إلغاء')}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+            {invoices.length === 0 && (
+              <div className="px-4 py-10 text-center text-xs text-slate-500">
+                {tr(
+                  'Aucune facture / avis groupé émis. Cliquez sur « Avis » sur une charge pour générer une facture consolidée.',
+                  'لم تصدر أي فاتورة أو إشعار مجمع بعد. اضغط على «إشعار» بجانب أي مساهمة لإصدار فاتورة مجمعة.'
+                )}
+              </div>
+            )}
+          </div>
+          <div className="hidden md:block overflow-x-auto">
             <table className="min-w-full divide-y divide-slate-200 text-xs sm:text-sm">
               <thead className="bg-slate-50 text-slate-500 text-start font-medium">
                 <tr>
@@ -1878,6 +2211,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
               </tbody>
             </table>
           </div>
+          </>
           )}
         </Card>
       )}
@@ -2308,7 +2642,99 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
           </Card>
 
           <Card className="overflow-hidden border border-slate-200">
-            <div className="overflow-x-auto">
+            {/* Mobile Cards (< md) */}
+            <div className="md:hidden divide-y divide-slate-200 bg-white">
+              {filteredQuittances.map((quit) => {
+                const apt = building.apartments.find((a) => a.id === quit.apartmentId);
+                const res = building.residents.find((r) => r.id === quit.residentId);
+                return (
+                  <div
+                    key={`quit-card-${quit.id}`}
+                    className={`p-3.5 space-y-2.5 ${quit.voidedAt ? 'opacity-70 bg-rose-50/30' : ''}`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <span
+                          className={`font-mono font-bold px-2 py-0.5 rounded text-xs inline-block ${
+                            quit.voidedAt
+                              ? 'text-rose-700 bg-rose-50 line-through'
+                              : 'text-teal-800 bg-teal-50'
+                          }`}
+                        >
+                          {quit.quittanceNumber}
+                        </span>
+                        <div className="font-bold text-sm text-slate-900 truncate mt-1">
+                          {quit.residentName}
+                        </div>
+                        <div className="text-[11px] text-slate-500">
+                          {tr('Lot', 'شقة')} {quit.apartmentNumber} · {quit.periodCovered}
+                        </div>
+                      </div>
+                      <div className="text-end shrink-0">
+                        <div
+                          className={`font-mono font-bold text-sm ${
+                            quit.voidedAt ? 'text-rose-700 line-through' : 'text-teal-900'
+                          }`}
+                        >
+                          {currencyFormatter.format(quit.amount)}
+                        </div>
+                        <span
+                          className={`inline-block mt-0.5 text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                            quit.voidedAt
+                              ? 'text-rose-700 bg-rose-50'
+                              : 'text-emerald-700 bg-emerald-50'
+                          }`}
+                        >
+                          {quit.voidedAt ? tr('Annulée', 'ملغى') : tr('Libératoire', 'مُبرئ للذمة')}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="text-[11px] text-slate-500 flex flex-wrap gap-x-3 gap-y-0.5 font-mono">
+                      <span>{PAYMENT_METHOD_LABELS[quit.paymentMethod] || quit.paymentMethod}</span>
+                      <span>
+                        {new Date(quit.postingDate || quit.paymentDate).toLocaleDateString(
+                          isAr ? 'ar-MA' : 'fr-MA'
+                        )}
+                      </span>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedQuittanceForPreview(quit)}
+                        className="min-h-[36px] px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-100 rounded-lg border border-slate-200 font-semibold"
+                      >
+                        {tr('Aperçu', 'معاينة')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => generateQuittancePDF(quit, building, syndic, apt, res)}
+                        className="min-h-[36px] px-3 py-1.5 text-xs bg-teal-700 hover:bg-teal-800 text-white font-semibold rounded-lg shadow-xs flex items-center gap-1"
+                      >
+                        <QuittanceIcon />
+                        <span>{tr('Télécharger PDF', 'تحميل PDF')}</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+              {filteredQuittances.length === 0 && (
+                <div className="px-4 py-10 text-center text-slate-500">
+                  <p className="font-semibold text-sm text-slate-700">
+                    {tr('Aucune quittance trouvée', 'لم يتم العثور على أي وصل')}
+                  </p>
+                  <Button
+                    onClick={() => openQuittanceModalNew()}
+                    className="mt-3 text-xs bg-teal-700 hover:bg-teal-800"
+                  >
+                    {tr('+ Émettre une Quittance', '+ إصدار وصل إبراء')}
+                  </Button>
+                </div>
+              )}
+            </div>
+
+            <div className="hidden md:block overflow-x-auto">
               <table className="min-w-full divide-y divide-slate-200 text-xs sm:text-sm">
                 <thead className="bg-slate-50 text-slate-600 text-start font-semibold">
                   <tr>

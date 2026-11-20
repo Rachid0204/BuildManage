@@ -1,7 +1,7 @@
 import React, { Suspense, useMemo, useState } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { HelpCircle } from 'lucide-react';
+import { HelpCircle, LogOut } from 'lucide-react';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import Modal from '../common/Modal';
@@ -1061,36 +1061,38 @@ const AdminDashboard: React.FC = () => {
       dir={language === 'ar' ? 'rtl' : 'ltr'}
     >
       <nav className="bg-slate-900 text-white shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16 items-center">
-            <div className="flex items-center gap-2.5">
-              <span className="text-xl font-bold text-white tracking-tight">
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
+          <div className="flex justify-between h-16 items-center gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-lg sm:text-xl font-bold text-white tracking-tight whitespace-nowrap">
                 Syndik Admin
               </span>
-              <span className="px-2.5 py-0.5 bg-rose-600 text-xs font-bold rounded-full text-white">
+              <span className="hidden sm:inline-flex px-2.5 py-0.5 bg-rose-600 text-xs font-bold rounded-full text-white whitespace-nowrap">
                 {t('adminPortal.badge')}
               </span>
             </div>
-            <div className="flex items-center gap-3">
-              <span className="text-xs sm:text-sm text-slate-300 font-mono hidden sm:inline">
+            <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
+              <span className="text-xs sm:text-sm text-slate-300 font-mono hidden md:inline">
                 {userProfile?.email}
               </span>
               <button
                 type="button"
                 onClick={() => setIsHelpOpen(true)}
                 aria-label={tr('Guide Admin', 'دليل الإدارة')}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-teal-200 border border-slate-700 text-xs font-bold"
+                className="inline-flex items-center justify-center gap-1.5 px-2 sm:px-2.5 py-1.5 min-w-[36px] min-h-[36px] rounded-lg bg-slate-800 hover:bg-slate-700 text-teal-200 border border-slate-700 text-xs font-bold"
               >
-                <HelpCircle className="w-3.5 h-3.5" />
+                <HelpCircle className="w-4 h-4 shrink-0" />
                 <span className="hidden sm:inline">{tr('Guide', 'الدليل')}</span>
               </button>
-              <LanguageToggle variant="dark" />
+              <LanguageToggle variant="dark" compactMobile />
               <button
                 type="button"
                 onClick={handleLogout}
-                className="text-xs font-bold text-rose-400 hover:text-rose-200 transition-colors"
+                aria-label={t('header.logout')}
+                className="inline-flex items-center justify-center gap-1.5 text-xs font-bold text-rose-400 hover:text-rose-200 hover:bg-slate-800 px-2 min-w-[36px] min-h-[36px] rounded-lg transition-colors whitespace-nowrap"
               >
-                {t('header.logout')}
+                <LogOut className="w-4 h-4 shrink-0 sm:hidden" />
+                <span className="hidden sm:inline">{t('header.logout')}</span>
               </button>
             </div>
           </div>
@@ -1400,7 +1402,145 @@ const AdminDashboard: React.FC = () => {
               </div>
             </div>
 
-            <div className="overflow-x-auto">
+            {/* Mobile Cards (< md) */}
+            <div className="md:hidden divide-y divide-slate-200 bg-white">
+              {filteredSyndics.map((s) => {
+                const days = getDaysRemaining(s.subscriptionExpiry);
+                const effective = getEffectiveSubscriptionStatus(
+                  s,
+                  Date.now(),
+                  graceDays,
+                );
+                const planEntry = PLAN_CATALOG[s.subscriptionPlan];
+                return (
+                  <div
+                    key={`card-${s.id}`}
+                    className={`p-4 space-y-3 ${s.archivedAt ? 'opacity-75 bg-slate-50/70' : ''}`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="font-bold text-sm text-slate-900 truncate">
+                          {s.name}
+                        </div>
+                        <div className="text-xs text-slate-500">
+                          {s.city || tr('Casablanca', 'الدار البيضاء')} ·{' '}
+                          {countActiveBuildings(s.buildings)}{' '}
+                          {tr('immeuble(s)', 'عمارة(ات)')}
+                        </div>
+                      </div>
+                      {renderStatusBadge(s)}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-xs bg-slate-50 rounded-lg p-2.5 border border-slate-100">
+                      <div className="min-w-0">
+                        <span className="text-[10px] font-semibold uppercase text-slate-400 block">
+                          {tr('Forfait', 'الباقة')}
+                        </span>
+                        <span className="font-bold text-slate-800 truncate block">
+                          {planEntry
+                            ? language === 'ar'
+                              ? planEntry.nameAr
+                              : planEntry.nameFr
+                            : t(`subscription.plans.${s.subscriptionPlan}`)}{' '}
+                          ({PLANS[s.subscriptionPlan]?.price} DH)
+                        </span>
+                      </div>
+                      <div className="min-w-0">
+                        <span className="text-[10px] font-semibold uppercase text-slate-400 block">
+                          {tr('Échéance', 'تاريخ الانتهاء')}
+                        </span>
+                        <span className="font-mono font-semibold text-slate-700 block">
+                          {s.subscriptionExpiry
+                            ? new Date(
+                                parseExpiryMs(s.subscriptionExpiry),
+                              ).toLocaleDateString(
+                                language === 'ar' ? 'ar-MA' : 'fr-MA',
+                              )
+                            : '—'}
+                        </span>
+                        {!s.archivedAt &&
+                          days !== null &&
+                          effective !== 'cancelled' && (
+                            <span
+                              className={`text-[10px] font-mono ${
+                                days <= 0
+                                  ? 'text-rose-600 font-bold'
+                                  : days <= 15
+                                    ? 'text-amber-600 font-semibold'
+                                    : 'text-slate-400'
+                              }`}
+                            >
+                              {days > 0
+                                ? tr(`Reste ${days} j`, `متبقي ${days} يوم`)
+                                : tr(`Échu (${days} j)`, `منتهي (${days} يوم)`)}
+                            </span>
+                          )}
+                      </div>
+                    </div>
+
+                    <div className="text-xs text-slate-600 flex flex-wrap gap-x-3 gap-y-1">
+                      <span className="truncate">{s.email || '—'}</span>
+                      {s.phone && (
+                        <span className="font-mono text-slate-500">
+                          {s.phone}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenManage(s)}
+                        className="flex-1 min-h-[36px] px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs transition-colors"
+                      >
+                        {t('adminPortal.manageBtn')}
+                      </button>
+                      {s.archivedAt ? (
+                        <button
+                          type="button"
+                          disabled={restoreMutation.isPending}
+                          onClick={() => void restoreMutation.mutateAsync(s.id)}
+                          className="min-h-[36px] px-3 py-1.5 rounded-lg border border-emerald-300 text-emerald-700 hover:bg-emerald-50 font-bold text-xs"
+                        >
+                          {tr('Restaurer', 'استعادة')}
+                        </button>
+                      ) : archiveConfirmId === s.id ? (
+                        <span className="inline-flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            disabled={archiveMutation.isPending}
+                            onClick={() =>
+                              void archiveMutation.mutateAsync(s.id)
+                            }
+                            className="min-h-[36px] px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs"
+                          >
+                            {tr('Confirmer', 'تأكيد')}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setArchiveConfirmId(null)}
+                            className="min-h-[36px] px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-600 text-xs"
+                          >
+                            ✕
+                          </button>
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          title={tr('Archiver ce cabinet', 'أرشفة هذا المكتب')}
+                          onClick={() => setArchiveConfirmId(s.id)}
+                          className="min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:text-rose-600 hover:border-rose-200"
+                        >
+                          <TrashIcon />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="hidden md:block overflow-x-auto">
               <table className="min-w-full divide-y divide-slate-200 text-xs sm:text-sm">
                 <thead className="bg-slate-50">
                   <tr>
@@ -2153,7 +2293,111 @@ const AdminDashboard: React.FC = () => {
                 </div>
               </div>
 
-              <div className="overflow-x-auto">
+              {/* Mobile Cards (< md) */}
+              <div className="md:hidden divide-y divide-slate-200 bg-white">
+                {filteredPayments.map((p) => {
+                  const cab = syndicMap.get(p.syndicId);
+                  const cabName = p.syndicName || cab?.name || p.syndicId;
+                  const methodBadge = getMethodBadgeMeta(p.method, tr);
+                  return (
+                    <div
+                      key={`pay-card-${p.id}`}
+                      className={`p-4 space-y-2.5 ${p.voidedAt ? 'bg-slate-50/70 opacity-75' : ''}`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="font-bold text-sm text-slate-900 truncate">
+                            {cabName}
+                          </div>
+                          <div className="text-[11px] font-mono text-slate-500">
+                            {p.createdAt
+                              ? new Date(p.createdAt).toLocaleDateString(
+                                  language === 'ar' ? 'ar-MA' : 'fr-MA',
+                                )
+                              : '—'}
+                            {p.invoiceNumber ? ` · ${p.invoiceNumber}` : ''}
+                          </div>
+                        </div>
+                        <div className="text-end shrink-0">
+                          <div className="font-mono font-bold text-sm text-slate-900">
+                            {Number(p.amount || 0).toLocaleString('fr-MA')} MAD
+                          </div>
+                          {p.voidedAt ? (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800">
+                              {tr('Annulé', 'ملغى')}
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                              {tr('Encaissé', 'محصل')}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${methodBadge.badgeClass}`}
+                        >
+                          {methodBadge.label}
+                        </span>
+                        <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 capitalize font-semibold text-[11px]">
+                          {p.plan} · {p.months} {tr('mois', 'أشهر')}
+                        </span>
+                        {p.reference && (
+                          <span className="font-mono text-[11px] text-slate-500 truncate max-w-[180px]">
+                            {p.reference}
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => void handleDownloadInvoice(p)}
+                          className="min-h-[36px] px-3 py-1.5 rounded-lg border border-teal-300 bg-teal-50/60 text-teal-900 hover:bg-teal-100 font-bold text-xs"
+                        >
+                          {tr('Facture PDF', 'فاتورة PDF')}
+                        </button>
+                        {p.proofUrl && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handlePreviewProof(p.proofUrl as string)
+                            }
+                            className="min-h-[36px] px-3 py-1.5 rounded-lg border border-slate-300 text-teal-700 hover:bg-slate-50 font-semibold text-xs"
+                          >
+                            {tr('Justificatif', 'الوصل')}
+                          </button>
+                        )}
+                        {cab && (
+                          <button
+                            type="button"
+                            onClick={() => handleOpenManage(cab)}
+                            className="min-h-[36px] px-3 py-1.5 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-100 font-semibold text-xs"
+                          >
+                            {tr('Cabinet', 'المكتب')}
+                          </button>
+                        )}
+                        {!p.voidedAt && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setVoidTarget(p);
+                              setVoidReason('');
+                              setVoidError('');
+                            }}
+                            className="min-h-[36px] px-3 py-1.5 rounded-lg border border-rose-200 text-rose-700 hover:bg-rose-50 font-semibold text-xs"
+                          >
+                            {tr('Annuler', 'إلغاء')}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="hidden md:block overflow-x-auto">
                 <table className="min-w-full divide-y divide-slate-200 text-xs sm:text-sm">
                   <thead className="bg-slate-50">
                     <tr>

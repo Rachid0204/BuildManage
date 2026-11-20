@@ -132,40 +132,40 @@ const PrestatairePortal: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-50" dir={language === 'ar' ? 'rtl' : 'ltr'}>
-      <header className="bg-slate-900 text-white px-6 py-4 flex flex-wrap justify-between items-center gap-4">
-        <div>
+      <header className="bg-slate-900 text-white px-4 sm:px-6 py-4 flex flex-wrap justify-between items-center gap-3 sm:gap-4">
+        <div className="min-w-0">
           <span className="text-[11px] uppercase tracking-wider font-bold px-2.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-400/30">
             {t('providerPortal.badge')}
           </span>
-          <h1 className="text-xl font-bold mt-1">
+          <h1 className="text-lg sm:text-xl font-bold mt-1 truncate">
             {userProfile?.displayName || tr('Artisan Partenaire', 'حرفي شريك')}
           </h1>
-          <p className="text-xs text-slate-400">
+          <p className="text-xs text-slate-400 truncate">
             {t('providerPortal.subtitle')} •{' '}
             {selectedBuilding?.name || userProfile?.buildingName || tr('Copropriété assignée', 'الإقامة المعينة')}
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="text-xs text-slate-300 font-mono hidden sm:inline">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+          <span className="text-xs text-slate-300 font-mono hidden md:inline">
             {userProfile?.email}
           </span>
           <button
             type="button"
             onClick={() => setIsHelpOpen(true)}
             aria-label={tr('Guide Prestataire', 'دليل مقدم الخدمة')}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-teal-200 border border-slate-700 text-xs font-bold"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 min-h-[36px] rounded-lg bg-slate-800 hover:bg-slate-700 text-teal-200 border border-slate-700 text-xs font-bold"
           >
-            <HelpCircle className="w-3.5 h-3.5" />
+            <HelpCircle className="w-4 h-4 shrink-0" />
             <span>{tr('Aide', 'مساعدة')}</span>
           </button>
-          <LanguageToggle variant="dark" />
-          <Button variant="secondary" onClick={handleLogout}>
+          <LanguageToggle variant="dark" compactMobile />
+          <Button variant="secondary" onClick={handleLogout} className="min-h-[36px] text-xs sm:text-sm">
             {t('header.logout')}
           </Button>
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto p-6 space-y-6">
+      <main className="max-w-6xl mx-auto p-4 sm:p-6 space-y-6">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <Card>
             <p className="text-xs font-semibold uppercase text-slate-400">{t('providerPortal.activeOrders')}</p>
