@@ -28,6 +28,7 @@ import { Wrench } from 'lucide-react';
 const SubscriptionRenewalModal = React.lazy(
   () => import('../views/SubscriptionRenewalModal'),
 );
+const HelpDrawer = React.lazy(() => import('../help/HelpDrawer'));
 
 // Map routes to View types for Sidebar highlighting
 const getActiveView = (pathname: string): any => {
@@ -45,6 +46,10 @@ const DashboardLayout: React.FC = () => {
     const queryClient = useQueryClient();
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
     const [isRenewalOpen, setIsRenewalOpen] = useState(false);
+    const [isHelpOpen, setIsHelpOpen] = useState(false);
+    const [helpArticleId, setHelpArticleId] = useState<string | undefined>(
+        undefined,
+    );
     const [cmiReturnBanner, setCmiReturnBanner] = useState<{
         status: 'ok' | 'fail';
         oid: string;
@@ -61,9 +66,17 @@ const DashboardLayout: React.FC = () => {
 
     useEffect(() => {
         const handleOpen = () => setIsRenewalOpen(true);
+        const handleOpenHelp = (event: Event) => {
+            const custom = event as CustomEvent<{ articleId?: string }>;
+            setHelpArticleId(custom.detail?.articleId);
+            setIsHelpOpen(true);
+        };
         window.addEventListener('syndik-open-renewal', handleOpen);
-        return () =>
+        window.addEventListener('syndik-open-help', handleOpenHelp);
+        return () => {
             window.removeEventListener('syndik-open-renewal', handleOpen);
+            window.removeEventListener('syndik-open-help', handleOpenHelp);
+        };
     }, []);
 
     useEffect(() => {
@@ -147,6 +160,10 @@ const DashboardLayout: React.FC = () => {
                         selectedBuilding={selectedBuilding} 
                         onLogout={handleLogout}
                         onOpenMobileMenu={() => setIsMobileMenuOpen(true)}
+                        onOpenHelp={() => {
+                            setHelpArticleId(undefined);
+                            setIsHelpOpen(true);
+                        }}
                     />
                     <main className="flex-1 overflow-x-hidden overflow-y-auto bg-slate-100 p-3 sm:p-6 pb-24 lg:pb-6">
                         {cmiReturnBanner && (
@@ -250,6 +267,24 @@ const DashboardLayout: React.FC = () => {
                                     isOpen={isRenewalOpen}
                                     onClose={() => setIsRenewalOpen(false)}
                                     syndic={syndic}
+                                />
+                            </Suspense>
+                        )}
+                        {isHelpOpen && (
+                            <Suspense fallback={null}>
+                                <HelpDrawer
+                                    isOpen={isHelpOpen}
+                                    onClose={() => setIsHelpOpen(false)}
+                                    role="syndic"
+                                    contextKey={activeView}
+                                    initialArticleId={helpArticleId}
+                                    onOpenFullCenter={(articleId) =>
+                                        navigate(
+                                            articleId
+                                                ? `/help?article=${encodeURIComponent(articleId)}`
+                                                : '/help',
+                                        )
+                                    }
                                 />
                             </Suspense>
                         )}

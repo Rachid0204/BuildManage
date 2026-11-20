@@ -1,5 +1,6 @@
 import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { HelpCircle } from 'lucide-react';
 import type { Syndic, Building } from '../types';
 import { LogoutIcon } from './icons/IconComponents';
 import { useI18n } from '../hooks/useI18n';
@@ -11,6 +12,7 @@ interface HeaderProps {
   selectedBuilding: Building | null;
   onLogout: () => void;
   onOpenMobileMenu?: () => void;
+  onOpenHelp?: () => void;
 }
 
 const getInitials = (name?: string): string => {
@@ -29,6 +31,7 @@ const Header: React.FC<HeaderProps> = ({
   selectedBuilding,
   onLogout,
   onOpenMobileMenu,
+  onOpenHelp,
 }) => {
   const { t, tr } = useI18n();
   const location = useLocation();
@@ -50,6 +53,7 @@ const Header: React.FC<HeaderProps> = ({
     announcements: { fr: 'Annonces Officielles', ar: 'الإعلانات الرسمية' },
     documents: { fr: 'Archives & Documents', ar: 'الأرشيف والوثائق' },
     settings: { fr: 'Paramètres du Cabinet', ar: 'إعدادات المكتب' },
+    help: { fr: 'Guide & Centre d’Aide', ar: 'دليل الاستخدام والمساعدة' },
   };
 
   const segment = location.pathname.replace(/^\//, '').split('/')[0] || 'dashboard';
@@ -112,6 +116,19 @@ const Header: React.FC<HeaderProps> = ({
             {syndicInitials}
           </div>
         </div>
+
+        {onOpenHelp && (
+          <button
+            type="button"
+            onClick={onOpenHelp}
+            aria-label={tr('Guide pas à pas', 'دليل الاستخدام')}
+            title={tr('Ouvrir le guide de cet écran', 'فتح دليل هذه الشاشة')}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-teal-200 bg-teal-50/70 hover:bg-teal-100 text-teal-900 text-xs font-bold min-h-[36px] transition-colors"
+          >
+            <HelpCircle className="w-4 h-4 text-teal-700 shrink-0" />
+            <span className="hidden sm:inline">{tr('Guide', 'الدليل')}</span>
+          </button>
+        )}
 
         <NotificationBell />
 

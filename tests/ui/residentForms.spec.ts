@@ -2028,5 +2028,68 @@ test('Admin 5-tab payment gateways, Syndic CMI/Cash/Promo checkout, CMI return b
   expect(pageErrors).toEqual([]);
 });
 
+test('Help Center (/guide & /help) and contextual ? Guide drawers work across all 4 portals with loaded screenshots', async ({ page }) => {
+  test.setTimeout(90_000);
+  const pageErrors: string[] = [];
+  page.on('pageerror', (err) => pageErrors.push(err.message));
+
+  // 1. Public /guide loads without login, switches role, searches FR/AR, loads real screenshot & opens zoom lightbox
+  await page.goto(`${base}/welcome`);
+  await page.evaluate(() => localStorage.setItem('syndik_lang', 'fr'));
+  await page.goto(`${base}/guide`);
+  await expect(page.getByRole('heading', { name: /Guide Complet d’Utilisation/i })).toBeVisible();
+  await page.getByRole('tab', { name: /Super-Admin SaaS/i }).click();
+  await expect(page.getByRole('heading', { name: /Gérer les Cabinets Syndics/i })).toBeVisible();
+
+  const img = page.locator('article img').first();
+  await expect(img).toBeVisible();
+  await expect.poll(async () => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(200);
+
+  // Click screenshot to open lightbox zoom and close with Escape
+  await img.click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+
+  // Bilingual search (FR + AR)
+  const search = page.getByLabel('Rechercher dans les guides');
+  await search.fill('CMI');
+  await expect(page.getByText(/Configurer CMI Maroc 3DS/i).first()).toBeVisible();
+  await search.fill('توصيل');
+  await expect(page.getByText(/Consulter mes Charges/i).first()).toBeVisible();
+
+  // 2. Syndic contextual ? Guide drawer on /financials -> opens Financials guide -> opens /help
+  await login(page, 0);
+  await page.goto(`${base}/financials`);
+  await page.getByRole('button', { name: 'Guide pas à pas', exact: true }).click();
+  const syndicDrawer = page.getByRole('dialog', { name: /Guide pas à pas/i });
+  await expect(syndicDrawer).toBeVisible();
+  await expect(syndicDrawer.getByText(/Appels de Fonds/i).first()).toBeVisible();
+  await syndicDrawer.getByRole('button', { name: /Centre d’aide/i }).click();
+  await expect(page).toHaveURL(/\/help/);
+  await expect(page.getByRole('heading', { name: /Guide Complet d’Utilisation/i })).toBeVisible();
+
+  // 3. Resident contextual ? Aide drawer
+  await login(page, 1);
+  await page.getByRole('button', { name: /Guide Résident/i }).click();
+  await expect(page.getByRole('dialog', { name: /Guide pas à pas/i })).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  // 4. Provider contextual ? Aide drawer
+  await login(page, 4);
+  await page.getByRole('button', { name: /Guide Prestataire/i }).click();
+  await expect(page.getByRole('dialog', { name: /Guide pas à pas/i })).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  // 5. Super-Admin contextual ? Guide Admin drawer
+  await login(page, 3);
+  await page.getByRole('button', { name: /Guide Admin/i }).click();
+  await expect(page.getByRole('dialog', { name: /Guide pas à pas/i })).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  expect(pageErrors).toEqual([]);
+});
+
+
 
 

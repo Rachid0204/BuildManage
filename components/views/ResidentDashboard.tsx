@@ -3,7 +3,7 @@ import ResidentPaymentModal from './ResidentPaymentModal';
 import React, { Suspense, useState, useMemo, useRef, useEffect } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Camera, Image as ImageIcon } from 'lucide-react';
+import { Camera, HelpCircle, Image as ImageIcon } from 'lucide-react';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import Modal from '../common/Modal';
@@ -51,6 +51,7 @@ const ServiceProvidersDirectory = React.lazy(() => import('./ServiceProvidersDir
 const MarketplaceView = React.lazy(() => import('./MarketplaceView'));
 const ResidentAGVoting = React.lazy(() => import('./ResidentAGVoting'));
 const Maintenance = React.lazy(() => import('./Maintenance'));
+const ResidentHelpDrawer = React.lazy(() => import('../help/HelpDrawer'));
 
 const ResidentDashboard: React.FC = () => {
   const { userProfile, logout, changePassword } = useAuth();
@@ -58,6 +59,8 @@ const ResidentDashboard: React.FC = () => {
   const { showToast } = useToast();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
 
   const currencyFormatter = useMemo(
     () =>
@@ -518,6 +521,16 @@ const ResidentDashboard: React.FC = () => {
                 title={t('residentPortal.passwordBtn')}
               >
                 🔑 {t('residentPortal.passwordBtn')}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setIsHelpOpen(true)}
+                aria-label={tr('Guide Résident', 'دليل الساكن')}
+                className="inline-flex items-center gap-1 text-xs bg-slate-800 hover:bg-slate-700 text-teal-200 px-2.5 py-1.5 rounded-lg border border-slate-700 font-bold"
+              >
+                <HelpCircle className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">{tr('Aide', 'مساعدة')}</span>
               </button>
 
               <NotificationBell />
@@ -2098,6 +2111,23 @@ const ResidentDashboard: React.FC = () => {
           </button>
         </div>
       </nav>
+      {isHelpOpen && (
+        <Suspense fallback={null}>
+          <ResidentHelpDrawer
+            isOpen={isHelpOpen}
+            onClose={() => setIsHelpOpen(false)}
+            role="resident"
+            contextKey={activeTab}
+            onOpenFullCenter={(articleId) =>
+              navigate(
+                articleId
+                  ? `/guide?role=resident&article=${encodeURIComponent(articleId)}`
+                  : '/guide?role=resident',
+              )
+            }
+          />
+        </Suspense>
+      )}
     </div>
   );
 };

@@ -574,6 +574,21 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
                   )}
                 </button>
               </div>
+              <div className="pt-2 text-center text-xs">
+                <a
+                  href="/guide"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    navigate('/guide');
+                  }}
+                  className="font-semibold text-slate-600 hover:text-teal-700 underline"
+                >
+                  {tr(
+                    'Besoin d’aide ? Consulter le guide pas à pas avec captures d’écran →',
+                    'تحتاج مساعدة؟ تصفح دليل الاستخدام المصور خطوة بخطوة ←',
+                  )}
+                </a>
+              </div>
             </div>
           )}
         </Card>

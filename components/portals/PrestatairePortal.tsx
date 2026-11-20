@@ -1,7 +1,7 @@
 import Form from '../../components/common/Form';
 
-import React, { useState } from 'react';
-import { AlertTriangle, Clock, AlertCircle, Info } from 'lucide-react';
+import React, { Suspense, useState } from 'react';
+import { AlertTriangle, Clock, AlertCircle, Info, HelpCircle } from 'lucide-react';
 import { Navigate, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth, getHomeRouteForRole } from '../../contexts/AuthContext';
@@ -15,6 +15,8 @@ import Card from '../../components/common/Card';
 import Button from '../../components/common/Button';
 import { getMaintenanceRequestsForBuilding, updateMaintenanceRequest } from '../../firebase/services';
 
+const HelpDrawer = React.lazy(() => import('../help/HelpDrawer'));
+
 const PrestatairePortal: React.FC = () => {
   const { userProfile, logout } = useAuth();
   const { selectedBuilding } = useBuilding();
@@ -26,6 +28,7 @@ const PrestatairePortal: React.FC = () => {
   const [activeTicketId, setActiveTicketId] = useState<string | null>(null);
   const [techNote, setTechNote] = useState('');
   const [nextStatus, setNextStatus] = useState<'in_progress' | 'completed'>('in_progress');
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
 
   const { data: rawRequests = [] } = useQuery({
     queryKey: ['maintenance', buildingId, userProfile?.uid],
@@ -146,6 +149,15 @@ const PrestatairePortal: React.FC = () => {
           <span className="text-xs text-slate-300 font-mono hidden sm:inline">
             {userProfile?.email}
           </span>
+          <button
+            type="button"
+            onClick={() => setIsHelpOpen(true)}
+            aria-label={tr('Guide Prestataire', 'دليل مقدم الخدمة')}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-teal-200 border border-slate-700 text-xs font-bold"
+          >
+            <HelpCircle className="w-3.5 h-3.5" />
+            <span>{tr('Aide', 'مساعدة')}</span>
+          </button>
           <LanguageToggle variant="dark" />
           <Button variant="secondary" onClick={handleLogout}>
             {t('header.logout')}
@@ -286,6 +298,23 @@ const PrestatairePortal: React.FC = () => {
           </Card>
         )}
       </main>
+      {isHelpOpen && (
+        <Suspense fallback={null}>
+          <HelpDrawer
+            isOpen={isHelpOpen}
+            onClose={() => setIsHelpOpen(false)}
+            role="provider"
+            contextKey="interventions"
+            onOpenFullCenter={(articleId) =>
+              navigate(
+                articleId
+                  ? `/guide?role=provider&article=${encodeURIComponent(articleId)}`
+                  : '/guide?role=provider',
+              )
+            }
+          />
+        </Suspense>
+      )}
     </div>
   );
 };

@@ -37,7 +37,8 @@ export type View =
   | 'analytics'
   | 'settings'
   | 'chat'
-  | 'marketplace';
+  | 'marketplace'
+  | 'help';
 
 export interface UserProfile {
   firebaseUid?: string;
