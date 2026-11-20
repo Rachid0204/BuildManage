@@ -3,17 +3,14 @@ import React, { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { remoteMutation } from "../../firebase/services";
 import { getAuthenticatedRequestHeaders } from "../../utils/security";
+import { apiUrl } from "../../utils/apiBase";
+import { saveOrShareBlob } from "../../utils/nativeBridge";
 import { useI18n } from "../../hooks/useI18n";
 import { useAuth } from "../../contexts/AuthContext";
 import type { Building } from "../../types";
 import { useToast } from "../common/Toast";
 function download(name: string, content: string, type = "application/json") {
-  const url = URL.createObjectURL(new Blob([content], { type })),
-    a = document.createElement("a");
-  a.href = url;
-  a.download = name;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  void saveOrShareBlob(new Blob([content], { type }), name, name);
 }
 const csv = (rows: any[]) => {
   const keys = [...new Set(rows.flatMap(Object.keys))],
@@ -65,7 +62,7 @@ export default function FinancialTools({ building }: { building: Building }) {
   const { data: report, refetch: refetchReport } = useQuery({
     queryKey: ['financialReport', building.id],
     queryFn: async ({ signal }): Promise<any> => {
-      const response = await fetch(`/api/reports?buildingId=${encodeURIComponent(building.id)}`, {
+      const response = await fetch(apiUrl(`/api/reports?buildingId=${encodeURIComponent(building.id)}`), {
         headers: getAuthenticatedRequestHeaders(), signal, cache: 'no-store',
       });
       const data = await response.json();

@@ -7,7 +7,7 @@ import Button from '../common/Button';
 import Modal from '../common/Modal';
 import { PlusIcon, TrashIcon, DocumentsIcon } from '../icons/IconComponents';
 import { useI18n } from '../../hooks/useI18n';
-import { uploadDocument, deleteDocument } from '../../firebase/services';
+import { uploadDocument, deleteDocument, openAuthenticatedUpload } from '../../firebase/services';
 import {
   generateArchiveDocumentPDFBlobUrl,
   downloadArchiveDocumentPDF,
@@ -86,11 +86,12 @@ const Documents: React.FC<{
   }, [previewDoc]);
 
   const handleDownloadDoc = async (docItem: Document) => {
-    if (
+    if (docItem.url && docItem.url.startsWith('/api/uploads/')) {
+      await openAuthenticatedUpload(docItem.url, docItem.name);
+    } else if (
       docItem.url &&
       docItem.url !== '#' &&
-      (docItem.url.startsWith('/api/uploads/') ||
-        docItem.url.startsWith('data:') ||
+      (docItem.url.startsWith('data:') ||
         docItem.url.startsWith('blob:') ||
         docItem.url.startsWith('http'))
     ) {

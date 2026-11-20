@@ -2,6 +2,7 @@ import { normalFont,boldFont } from '../assets/pdfFonts';
 import { jsPDF } from "jspdf";
 import { buildAnnualRepartitionSummary } from '../shared/annualRepartition';
 import { getRecordedReserveSplit, isIncomeTransaction } from '../utils/security';
+import { saveOrShareBlob, saveOrSharePdf } from '../utils/nativeBridge';
 import type {
   Invoice,
   Building,
@@ -98,7 +99,7 @@ export const generateInvoicePDF = (invoice: Invoice, building: Building, residen
   for(const item of items){const lines=doc.splitTextToSize(sanitizePdfText(`${item.description}${item.period?' · '+item.period:''}`),135);if(y+lines.length*5>247){doc.addPage();header();y=44;}for(const [index,line] of lines.entries()){if(y>247){doc.addPage();header();y=44;}doc.text(line,14,y);if(index===0)doc.text(currencyFormatter.format(item.amount),196,y,{align:'right'});y+=5;}y+=3;}
   y+=5;write(`Montant facturé : ${currencyFormatter.format(invoice.totalAmount)}`);write(`Déjà réglé : ${currencyFormatter.format(invoice.paidAmount||0)}`);doc.setFont('helvetica','bold');write(`Reste à payer : ${currencyFormatter.format(Math.max(0,invoice.totalAmount-(invoice.paidAmount||0)))}`);doc.setFont('helvetica','normal');y+=6;write(`Banque : ${building.bankName||syndic?.bankName||'Non renseignée - contacter le syndic'}`);write(`RIB : ${building.bankRib||syndic?.rib||'Non renseigné - contacter le syndic'}`);write(`Référence du virement : ${invoice.invoiceNumber}`);
   for(let page=1;page<=doc.getNumberOfPages();page++){doc.setPage(page);doc.setFontSize(8);doc.text(`${page} / ${doc.getNumberOfPages()}`,196,285,{align:'right'});}
-  doc.save(`Avis_Charges_${invoice.invoiceNumber}.pdf`);return doc;
+  void saveOrSharePdf(doc, `Avis_Charges_${invoice.invoiceNumber}.pdf`);return doc;
 };
 
 // 2. GENERATE OFFICIAL MOROCCAN QUITTANCE DE PAIEMENT (Loi 18-00 & Loi 106-12)
@@ -118,7 +119,7 @@ export const generateQuittancePDF = (
   doc.setFont('helvetica','bold');write('Montant enregistré',currencyFormatter.format(quittance.amount));doc.setFont('helvetica','normal');write('Fonds courant',allocation ? currencyFormatter.format(allocation.chargesCourantesAmount) : 'Non documenté');write('Fonds de réserve',allocation ? currencyFormatter.format(allocation.reserveFundAmount) : 'Non documenté');
   if(q.voidedAt){write('Annulation',new Date(q.voidedAt).toLocaleDateString('fr-MA'));write('Motif',q.voidReason);}else{y+=6;write('Signature du syndic','________________________________');}
   doc.setFontSize(8);doc.setTextColor(100,116,139);doc.text('Reçu établi à partir du règlement enregistré dans ImmoGest.',14,285);
-  const fileName=`Quittance_${quittance.quittanceNumber}_Lot_${quittance.apartmentNumber.replace(/\s+/g,'_')}.pdf`;if(options.autoDownload!==false)doc.save(fileName);return{doc,fileName,outputBlobUri:()=>doc.output('bloburl')};
+  const fileName=`Quittance_${quittance.quittanceNumber}_Lot_${quittance.apartmentNumber.replace(/\s+/g,'_')}.pdf`;if(options.autoDownload!==false)void saveOrSharePdf(doc, fileName);return{doc,fileName,outputBlobUri:()=>doc.output('bloburl')};
 };
 
 // 3. GENERATE MISE EN DEMEURE (Article 25 de la Loi 18-00)
@@ -200,7 +201,7 @@ export const generateMiseEnDemeurePDF = (resident: Resident, apartment: Apartmen
   doc.setFont("helvetica", "normal");
   doc.text("[Signature & Cachet]", 140, y + 16);
 
-  doc.save(`Mise_En_Demeure_${resident.name.replace(/\s+/g, '_')}_Apt_${apartment.number}.pdf`);
+  void saveOrSharePdf(doc, `Mise_En_Demeure_${resident.name.replace(/\s+/g, '_')}_Apt_${apartment.number}.pdf`);
 };
 
 // 4. GENERATE PROCÈS-VERBAL D'ASSEMBLÉE GÉNÉRALE (PV AG)
@@ -525,7 +526,7 @@ export const generatePvAgPDF = (ag: AssembleeGenerale, building: Building, syndi
   doc.text('(Signature & Cachet)', 150, y + 14);
 
   const safeName = (building.name || 'Immeuble').replace(/\s+/g, '_');
-  doc.save(`PV_Assemblee_Generale_${safeName}_${ag.date || 'session'}.pdf`);
+  void saveOrSharePdf(doc, `PV_Assemblee_Generale_${safeName}_${ag.date || 'session'}.pdf`);
 };
 
 // 4B. GENERATE CONVOCATION & BLANK PROCURATION PDF (LOI 18-00 ART. 16-2 & 16-6)
@@ -724,7 +725,7 @@ export const generateConvocationAgPDF = (ag: AssembleeGenerale, building: Buildi
   doc.text('Signature précédée de « Bon pour pouvoir »', 192, y + 58, { align: 'right' });
 
   const safeName = (building.name || 'Immeuble').replace(/\s+/g, '_');
-  doc.save(`Convocation_AG_${safeName}_${ag.date || 'session'}.pdf`);
+  void saveOrSharePdf(doc, `Convocation_AG_${safeName}_${ag.date || 'session'}.pdf`);
 };
 
 // 5. GENERATE TRANSACTION ACCOUNTING VOUCHER (PIÈCE COMPTABLE LOI 18-00)
@@ -884,21 +885,14 @@ export const generateTransactionVoucherPDF = (
   doc.text("(Émargement / Reçu)", 81, y + 26);
   doc.text("(Vérification comptes)", 144, y + 26);
 
-  doc.save(`Piece_Comptable_${trx.id}_${trx.date.split('T')[0]}.pdf`);
+  void saveOrSharePdf(doc, `Piece_Comptable_${trx.id}_${trx.date.split('T')[0]}.pdf`);
 };
 
-// Helper to trigger browser download of a UTF-8 CSV file (with BOM for Excel compatibility)
+// Helper to trigger browser download or native Share Sheet of a UTF-8 CSV file (with BOM for Excel compatibility)
 const downloadCSVFile = (csvContent: string, fileName: string) => {
   const bom = '\uFEFF';
   const blob = new Blob([bom + csvContent], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.setAttribute('href', url);
-  link.setAttribute('download', fileName);
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
+  void saveOrShareBlob(blob, fileName, fileName);
 };
 
 export const escapeCSVCell = (value: string | number | undefined | null): string => {
@@ -1122,7 +1116,7 @@ export const exportResidentsPDF = (building: Building, syndic?: Syndic) => {
 
   const dateStr = new Date().toISOString().split('T')[0];
   const safeName = building.name.replace(/[^a-zA-Z0-9_-]/g, '_');
-  doc.save(`Registre_Residents_${safeName}_${dateStr}.pdf`);
+  void saveOrSharePdf(doc, `Registre_Residents_${safeName}_${dateStr}.pdf`);
 };
 
 // 8. EXPORT APARTMENT INVENTORY AS CSV
@@ -1391,7 +1385,7 @@ export const exportApartmentsPDF = (
 
   const dateStr = new Date().toISOString().split('T')[0];
   const safeName = building.name.replace(/[^a-zA-Z0-9_-]/g, '_');
-  doc.save(`Inventaire_Lots_Tantiemes_${safeName}_${dateStr}.pdf`);
+  void saveOrSharePdf(doc, `Inventaire_Lots_Tantiemes_${safeName}_${dateStr}.pdf`);
 };
 
 /**
@@ -1625,7 +1619,7 @@ export const exportResidentCredentialsPDF = (
   );
 
   const safeName = resident.name.replace(/[^a-zA-Z0-9_-]/g, '_');
-  doc.save(`Fiche_Acces_Resident_${safeName}.pdf`);
+  void saveOrSharePdf(doc, `Fiche_Acces_Resident_${safeName}.pdf`);
 };
 
 /**
@@ -1822,7 +1816,7 @@ export const exportPrestataireCredentialsPDF = (
   );
 
   const safeName = prestataire.name.replace(/[^a-zA-Z0-9_-]/g, '_');
-  doc.save(`Fiche_Acces_Prestataire_${safeName}.pdf`);
+  void saveOrSharePdf(doc, `Fiche_Acces_Prestataire_${safeName}.pdf`);
 };
 
 /**
@@ -2075,7 +2069,7 @@ export const exportBuildingSummaryReportPDF = (
   );
 
   const safeBld = building.name.replace(/[^a-zA-Z0-9_-]/g, '_');
-  doc.save(`Rapport_Synthese_${safeBld}.pdf`);
+  void saveOrSharePdf(doc, `Rapport_Synthese_${safeBld}.pdf`);
 };
 
 /**
@@ -2169,7 +2163,7 @@ export const downloadArchiveDocumentPDF = (
   const safeName = docItem.name.endsWith('.pdf')
     ? docItem.name
     : `${docItem.name.replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
-  doc.save(safeName);
+  void saveOrSharePdf(doc, safeName);
 };
 
 // Phase 2.2: Arabic-safe Latin transliteration fallback for jsPDF standard Helvetica font
@@ -2321,7 +2315,7 @@ export const exportAnnualRepartitionPDF = (
     { align: 'center' }
   );
 
-  doc.save(`Etat_Repartition_Annuel_${building.name.replace(/\s+/g, '_')}_${fiscalYear}.pdf`);
+  void saveOrSharePdf(doc, `Etat_Repartition_Annuel_${building.name.replace(/\s+/g, '_')}_${fiscalYear}.pdf`);
 };
 
 /**
@@ -2473,7 +2467,7 @@ export const exportMiseEnDemeurePDF = (
     apartments.length > 1
       ? `Lots_${apartments.map((a) => a.number).join('-')}`
       : `Lot_${apartments[0]?.number || resident.id}`;
-  doc.save(`Mise_En_Demeure_${fileLotSuffix.replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`);
+  void saveOrSharePdf(doc, `Mise_En_Demeure_${fileLotSuffix.replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`);
 };
 
 /**
@@ -2646,7 +2640,7 @@ export const exportResidentStatementPDF = (
     { align: 'center' }
   );
 
-  doc.save(
+  void saveOrSharePdf(doc, 
     `Releve_Compte_${sanitizePdfText(resident.name).replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`
   );
 };
@@ -2989,7 +2983,7 @@ export const generateSubscriptionInvoicePDF = (
   });
 
   const safeNum = sanitizePdfText(docNumber).replace(/[^A-Za-z0-9_-]/g, '_');
-  doc.save(`${isCashReceipt ? 'Recu_Facture' : 'Facture_SaaS'}_${safeNum}.pdf`);
+  void saveOrSharePdf(doc, `${isCashReceipt ? 'Recu_Facture' : 'Facture_SaaS'}_${safeNum}.pdf`);
   return doc;
 };
 

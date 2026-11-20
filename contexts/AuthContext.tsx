@@ -33,6 +33,7 @@ import {
   isAlreadyHashedPassword,
   setActiveAuthContext,
 } from '../utils/security';
+import { apiUrl } from '../utils/apiBase';
 
 
 export interface RegisterAccountInput {
@@ -225,7 +226,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const exchangeFirebaseSession = useCallback(async (firebaseUser: User): Promise<UserProfile> => {
     const epoch = epochRef.current;
     const token = await firebaseUser.getIdToken(true);
-    const response = await fetch('/api/auth/firebase-session', { method: 'POST',
+    const response = await fetch(apiUrl('/api/auth/firebase-session'), { method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(15000) });
     const data = await response.json().catch(() => ({}));
     if (epoch !== epochRef.current) throw new Error('La session a changé.');
@@ -260,7 +261,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           if (current()) persistSession(null);
           return 'invalid';
         }
-        const response = await fetch('/api/auth/session', { signal: controller.signal,
+        const response = await fetch(apiUrl('/api/auth/session'), { signal: controller.signal,
           cache: 'no-store', headers: { Authorization: `Bearer ${cached.serverToken}` } });
         if ([401, 403].includes(response.status)) {
           if (current()) { persistSession(null); void signOut(auth).catch(() => {}); }
@@ -372,7 +373,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const identifier = email.trim().toLowerCase();
       const password = String(pass || '');
       if (!identifier || !password || isAlreadyHashedPassword(password)) throw new Error('Identifiants invalides.');
-      const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      const response = await fetch(apiUrl('/api/auth/login'), { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ identifier, password }), signal: AbortSignal.timeout(15000) });
       const data = await response.json().catch(() => ({}));
       if (response.ok && data.profile && data.token) {
@@ -430,7 +431,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setLoading(true);
     try {
       const initialName = optionsArg?.initialBuildingName?.trim() || (input as any).initialBuildingName?.trim();
-      const response = await fetch('/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      const response = await fetch(apiUrl('/api/auth/register'), { method: 'POST', headers: { 'Content-Type': 'application/json' },
         signal: AbortSignal.timeout(15000),
         body: JSON.stringify({ email: input.email.trim().toLowerCase(), password: input.password,
           profile: { role: input.role, displayName: input.companyName || input.name, phone: input.phone },
@@ -457,7 +458,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (!userProfile) throw new Error('Authentification requise.');
     const password = String(newPassword || '');
     if (password.length < 10 || isAlreadyHashedPassword(password)) throw new Error('Mot de passe invalide.');
-    const response = await fetch('/api/auth/change-password', { method: 'POST',
+    const response = await fetch(apiUrl('/api/auth/change-password'), { method: 'POST',
       signal: AbortSignal.timeout(15000),
       headers: getAuthenticatedRequestHeaders(), body: JSON.stringify({ newPassword: password }) });
     const data = await response.json().catch(() => ({}));
@@ -479,7 +480,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const logout = async () => {
     try {
-      await fetch('/api/auth/logout', {
+      await fetch(apiUrl('/api/auth/logout'), {
         method: 'POST',
         headers: getAuthenticatedRequestHeaders(),
         signal: AbortSignal.timeout(5000),

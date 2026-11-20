@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { useI18n } from "../../hooks/useI18n";
 import Form from "../common/Form";
 import { useToast } from "../common/Toast";
+import { apiUrl } from "../../utils/apiBase";
 export default function AccountAction() {
   const { tr } = useI18n(),
     params = new URLSearchParams(window.location.search),
@@ -15,7 +16,7 @@ export default function AccountAction() {
     if (mode !== "verify" && password.length < 10) throw new Error(tr("Le mot de passe doit contenir au moins 10 caractères.", "يجب أن تتكون كلمة المرور من 10 أحرف على الأقل."));
     setBusy(true);
     try {
-      const response = await fetch("/api/auth/recovery/complete", {
+      const response = await fetch(apiUrl("/api/auth/recovery/complete"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token: params.get("token"), password }),

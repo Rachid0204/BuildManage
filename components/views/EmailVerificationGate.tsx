@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { getAuthenticatedRequestHeaders } from "../../utils/security";
+import { apiUrl } from "../../utils/apiBase";
 import { useAuth } from "../../contexts/AuthContext";
 import { useI18n } from "../../hooks/useI18n";
 import Button from "../common/Button";
@@ -12,7 +13,7 @@ export default function EmailVerificationGate() {
   const { showToast } = useToast();
   const resend = async () => {
     try {
-      const r = await fetch("/api/auth/verification/request", {
+      const r = await fetch(apiUrl("/api/auth/verification/request"), {
         method: "POST",
         headers: getAuthenticatedRequestHeaders(),
         body: JSON.stringify({ idToken: await auth.currentUser?.getIdToken(true) }),
