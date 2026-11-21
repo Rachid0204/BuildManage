@@ -1394,6 +1394,15 @@ const LandingPage: React.FC<LandingPageProps> = ({
             >
               {tr('Guide d’utilisation (captures)', 'دليل الاستخدام بالصور')}
             </Link>
+            <Link to="/privacy" className="hover:text-white underline">
+              {tr('Confidentialité', 'الخصوصية')}
+            </Link>
+            <Link to="/terms" className="hover:text-white underline">
+              {tr('CGU', 'الشروط')}
+            </Link>
+            <Link to="/account-deletion" className="hover:text-rose-300 underline">
+              {tr('Suppression de compte', 'حذف الحساب')}
+            </Link>
             <span>
               &copy; {new Date().getFullYear()} Syndik Maroc.{' '}
               {language === 'ar' ? 'جميع الحقوق محفوظة.' : 'Tous droits réservés.'}

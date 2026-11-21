@@ -30,6 +30,7 @@ const ResidentDashboard = React.lazy(() => import('./components/views/ResidentDa
 const SyndicPortal = React.lazy(() => import('./components/portals/SyndicPortal'));
 const PrestatairePortal = React.lazy(() => import('./components/portals/PrestatairePortal'));
 const HelpCenter = React.lazy(() => import('./components/views/HelpCenter'));
+const LegalCompliancePage = React.lazy(() => import('./components/views/LegalCompliancePage'));
 const PwaInstallPrompt = React.lazy(() => import('./components/common/PwaInstallPrompt'));
 
 const NativeShellBridge: React.FC = () => {
@@ -447,6 +448,18 @@ const App: React.FC = () => {
             <Route
               path="/guide"
               element={<HelpCenter mode="public" />}
+            />
+            <Route
+              path="/privacy"
+              element={<LegalCompliancePage section="privacy" />}
+            />
+            <Route
+              path="/terms"
+              element={<LegalCompliancePage section="terms" />}
+            />
+            <Route
+              path="/account-deletion"
+              element={<LegalCompliancePage section="account-deletion" />}
             />
 
             <Route

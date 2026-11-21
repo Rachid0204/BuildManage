@@ -274,6 +274,33 @@ const SettingsForm: React.FC<SettingsProps> = ({ syndic, onUpdate }) => {
           </div>
         </Form>
       </Card>
+
+      <Card className="border border-slate-200">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900">
+              {tr('Confidentialité, Conformité & Compte', 'الخصوصية والامتثال وإدارة الحساب')}
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              {tr(
+                'Consultez la politique de confidentialité (Loi 09-08), les CGU ou gérez la suppression de votre compte.',
+                'اطلع على سياسة الخصوصية (القانون 09-08) وشروط الاستخدام أو اطلب حذف حسابك.',
+              )}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-3 text-xs font-semibold">
+            <a href="/privacy" className="text-teal-700 hover:text-teal-900 underline">
+              {tr('Confidentialité', 'سياسة الخصوصية')}
+            </a>
+            <a href="/terms" className="text-slate-600 hover:text-slate-900 underline">
+              {tr('CGU', 'الشروط')}
+            </a>
+            <a href="/account-deletion" className="text-rose-700 hover:text-rose-900 underline">
+              {tr('Supprimer mon compte', 'حذف حسابي')}
+            </a>
+          </div>
+        </div>
+      </Card>
     </div>
   );
 };

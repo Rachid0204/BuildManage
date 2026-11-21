@@ -64,7 +64,7 @@
     "mobile:sync:ios": "cap sync ios",
     "mobile:open:android": "cap open android",
     "mobile:open:ios": "cap open ios",
-    "test:mobile": "node --import ./tests/helpers/networkGuard.mjs --import tsx --test tests/mobilePushAndCors.test.ts",
+    "test:mobile": "node --import ./tests/helpers/networkGuard.mjs --import tsx --test tests/mobilePushAndCors.test.ts tests/storeCompliance.test.ts",
     "test:capacitor": "node --import ./tests/helpers/networkGuard.mjs --import tsx --test tests/capacitorConfig.test.ts",
     "test:ui:responsive": "playwright test tests/ui/responsiveDevices.spec.ts"
   },

@@ -54,6 +54,11 @@ import { hashPassword, verifyPassword } from './server/passwords';
 import { validateProductionEnvironment } from './server/productionConfig';
 import { createApiCorsMiddleware } from './server/corsPolicy';
 import {
+  cancelAccountDeletionRequest,
+  getActiveAccountDeletionRequest,
+  submitAccountDeletionRequest,
+} from './server/accountDeletion';
+import {
   deliverPushOutbox,
   listUserDeviceTokens,
   queuePushNotification,
@@ -1263,6 +1268,89 @@ async function startServer() {
       return res.status(outcome.status).json(outcome.body);
     } catch {
       return res.status(500).json({ ok: false, error: "Suppression du jeton push impossible." });
+    }
+  });
+
+  // Account Deletion Requests (CNDP Law 09-08, Apple App Store Guideline 5.1.1(v), Google Play Data Safety)
+  app.get("/api/account/deletion-request", async (req, res) => {
+    try {
+      const outcome = await repository.transaction(async (state) => {
+        const caller = await extractAndVerifyCaller(req, state);
+        if (!caller) return { status: 401, body: { ok: false, error: "Authentification requise." } };
+        const active = getActiveAccountDeletionRequest(state, caller.uid);
+        return {
+          status: 200,
+          body: {
+            ok: true,
+            request: active
+              ? {
+                  id: active.id,
+                  status: active.status,
+                  requestedAt: active.requestedAt,
+                  revokedPushTokens: active.revokedPushTokens,
+                }
+              : null,
+          },
+        };
+      });
+      return res.status(outcome.status).json(outcome.body);
+    } catch {
+      return res.status(500).json({ ok: false, error: "Lecture du statut de suppression impossible." });
+    }
+  });
+
+  app.post("/api/account/deletion-request", async (req, res) => {
+    try {
+      const confirmEmail = typeof req.body?.confirmEmail === "string" ? req.body.confirmEmail : "";
+      const reason = typeof req.body?.reason === "string" ? req.body.reason : undefined;
+      const outcome = await repository.transaction(async (state) => {
+        const caller = await extractAndVerifyCaller(req, state);
+        if (!caller) return { status: 401, body: { ok: false, error: "Authentification requise." } };
+        const result = submitAccountDeletionRequest(state, {
+          uid: caller.uid,
+          email: caller.email || "",
+          role: caller.role,
+          syndicId: caller.syndicId,
+          confirmEmail,
+          reason,
+        });
+        if (!result.ok) {
+          return { status: result.status, body: { ok: false, error: result.error } };
+        }
+        return {
+          status: result.alreadyPending ? 200 : 201,
+          body: {
+            ok: true,
+            alreadyPending: result.alreadyPending,
+            request: {
+              id: result.request.id,
+              status: result.request.status,
+              requestedAt: result.request.requestedAt,
+              revokedPushTokens: result.request.revokedPushTokens,
+            },
+          },
+        };
+      });
+      if (outcome.status === 201) {
+        void deliverOutbox(repository, 2).catch(() => {});
+      }
+      return res.status(outcome.status).json(outcome.body);
+    } catch {
+      return res.status(500).json({ ok: false, error: "Enregistrement de la demande de suppression impossible." });
+    }
+  });
+
+  app.delete("/api/account/deletion-request", async (req, res) => {
+    try {
+      const outcome = await repository.transaction(async (state) => {
+        const caller = await extractAndVerifyCaller(req, state);
+        if (!caller) return { status: 401, body: { ok: false, error: "Authentification requise." } };
+        const { cancelled } = cancelAccountDeletionRequest(state, caller.uid);
+        return { status: 200, body: { ok: true, cancelled } };
+      });
+      return res.status(outcome.status).json(outcome.body);
+    } catch {
+      return res.status(500).json({ ok: false, error: "Annulation de la demande impossible." });
     }
   });
 

@@ -93,3 +93,28 @@ Backend dispatch (`server/pushNotifications.ts`) uses `firebase-admin/messaging`
 4. **App Review Notes (Guideline 3.1.1 B2B Companion App):**
    - Provide a demo Syndic account and a demo Resident account in App Store Connect Review Information.
    - Note that SyndicUnion is a B2B Moroccan property management (Loi 18-00 / 106-12) companion app; cabinet SaaS contracts are provisioned externally on the web portal, while the iOS app provides account access, property operations, official PDF invoices/receipts, and real-world condo fee proof submission without any in-app subscription purchase flow.
+
+---
+
+## 6. Automated GitHub Actions Mobile Builds (`.github/workflows/mobile-build.yml`)
+
+You can generate downloadable Android **`.apk`** (sideloadable test build) and signed **`.aab`** (Google Play bundle) artifacts directly from **GitHub → Actions → Build SyndicUnion Mobile Apps → Run workflow**, or by pushing a tag matching `mobile-v*`.
+
+### Optional Repository Secrets
+| Secret Name | Purpose |
+| --- | --- |
+| `ANDROID_GOOGLE_SERVICES_JSON_BASE64` | Base64-encoded `google-services.json` from Firebase Console (enables FCM push notifications) |
+| `ANDROID_KEYSTORE_BASE64` | Base64-encoded `.jks` release upload keystore (for signed Google Play `.aab`) |
+| `ANDROID_KEYSTORE_PASSWORD` | Keystore password |
+| `ANDROID_KEY_ALIAS` | Key alias inside keystore |
+| `ANDROID_KEY_PASSWORD` | Key password |
+
+---
+
+## 7. Mandatory Store Listing Compliance URLs
+
+Configure these public bilingual (FR/AR) routes in **Google Play Console** and **App Store Connect** (using your production domain, e.g. `https://immogest.cloud.run`):
+
+- **Privacy Policy URL:** `/privacy` (CNDP Moroccan Law 09-08, Data Safety & App Privacy)
+- **Terms of Service URL:** `/terms` (Moroccan Law 18-00 & 106-12)
+- **Account Deletion URL (Play Store & Apple Guideline 5.1.1(v)):** `/account-deletion` (authenticated 1-click self-service deletion request via `POST /api/account/deletion-request`, immediate FCM/APNs push token revocation, plus unauthenticated support instructions)
