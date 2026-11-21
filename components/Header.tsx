@@ -61,7 +61,7 @@ const Header: React.FC<HeaderProps> = ({
   const syndicInitials = getInitials(syndic?.name);
 
   return (
-    <header className="flex items-center justify-between h-16 sm:h-20 px-3 sm:px-6 bg-white border-b border-slate-200 shrink-0">
+    <header className="sticky top-0 z-30 lg:static flex items-center justify-between min-h-16 sm:min-h-20 px-3 sm:px-6 bg-white border-b border-slate-200 shrink-0 pt-safe">
       <div className="flex items-center gap-2.5 min-w-0 flex-1">
         {onOpenMobileMenu && (
           <button

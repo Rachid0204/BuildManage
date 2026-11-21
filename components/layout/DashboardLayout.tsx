@@ -142,10 +142,10 @@ const DashboardLayout: React.FC = () => {
 
     return (
         <div
-            className="flex h-[100dvh] bg-slate-100 flex-col overflow-hidden"
+            className="flex min-h-[100dvh] lg:h-[100dvh] bg-slate-100 flex-col lg:overflow-hidden"
             dir={language === 'ar' ? 'rtl' : 'ltr'}
         >
-            <div className="flex-1 flex overflow-hidden relative">
+            <div className="flex-1 flex min-h-0 lg:overflow-hidden relative">
                 <Sidebar 
                     syndic={syndic} 
                     activeView={activeView} 
@@ -155,7 +155,7 @@ const DashboardLayout: React.FC = () => {
                     isOpen={isMobileMenuOpen}
                     onClose={() => setIsMobileMenuOpen(false)}
                 />
-                <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+                <div className="flex-1 flex flex-col min-w-0 min-h-0 lg:overflow-hidden">
                     <Header 
                         syndic={syndic} 
                         selectedBuilding={selectedBuilding} 
@@ -166,7 +166,7 @@ const DashboardLayout: React.FC = () => {
                             setIsHelpOpen(true);
                         }}
                     />
-                    <main className="flex-1 overflow-x-hidden overflow-y-auto bg-slate-100 p-3 sm:p-6 pb-24 lg:pb-6">
+                    <main className="flex-1 min-h-0 overflow-x-clip lg:overflow-y-auto bg-slate-100 p-3 sm:p-6 pb-24 lg:pb-6">
                         {cmiReturnBanner && (
                             <div
                                 role={cmiReturnBanner.status === 'ok' ? 'status' : 'alert'}
