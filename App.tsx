@@ -22,7 +22,9 @@ import type { Prestataire, SubscriptionPlan, Syndic, UserRole } from './types';
 
 import RouteErrorBoundary from './components/common/RouteErrorBoundary';
 import PortalSkeleton from './components/common/PortalSkeleton';
-import { initNativeShell } from './utils/nativeBridge';
+import { useToast } from './components/common/Toast';
+import { initNativeShell, isNativeApp } from './utils/nativeBridge';
+import { useNativePush } from './hooks/useNativePush';
 const AdminPortal = React.lazy(() => import('./components/views/AdminDashboard'));
 const ResidentDashboard = React.lazy(() => import('./components/views/ResidentDashboard'));
 const SyndicPortal = React.lazy(() => import('./components/portals/SyndicPortal'));
@@ -32,7 +34,19 @@ const PwaInstallPrompt = React.lazy(() => import('./components/common/PwaInstall
 
 const NativeShellBridge: React.FC = () => {
   const navigate = useNavigate();
+  const { currentUser, userProfile } = useAuth();
+  const { showToast } = useToast();
+
   useEffect(() => initNativeShell((path) => navigate(path)), [navigate]);
+
+  useNativePush({
+    enabled: Boolean(currentUser && userProfile),
+    uid: userProfile?.uid,
+    navigate: (path) => navigate(path),
+    onForegroundMessage: (title, body) =>
+      showToast(body ? `${title} — ${body}` : title, 'info'),
+  });
+
   return null;
 };
 
@@ -409,7 +423,7 @@ const LandingRouteWrapper: React.FC<{ onDone: () => void }> = ({ onDone }) => {
 };
 
 const App: React.FC = () => {
-  const [showLanding, setShowLanding] = React.useState(true);
+  const [showLanding, setShowLanding] = React.useState(() => !isNativeApp());
   const { currentUser, userProfile, loading, sessionError } = useAuth();
 
   useEffect(() => {

@@ -53,6 +53,15 @@ import {
 import { hashPassword, verifyPassword } from './server/passwords';
 import { validateProductionEnvironment } from './server/productionConfig';
 import { createApiCorsMiddleware } from './server/corsPolicy';
+import {
+  deliverPushOutbox,
+  listUserDeviceTokens,
+  queuePushNotification,
+  registerDeviceToken,
+  sanitizePushPlatform,
+  sanitizePushToken,
+  unregisterDeviceToken,
+} from './server/pushNotifications';
 import { registerLiveUpdates } from './server/realtime';
 import {
   createAdmissionStore,
@@ -1152,6 +1161,16 @@ async function startServer() {
         } catch (e) {
           console.error("Email dispatcher failed");
         }
+      if (
+        res.statusCode < 400 &&
+        ["/api/commands", "/api/ag/vote", "/api/jobs/outbox"].includes(req.path)
+      ) {
+        if (req.path === "/api/jobs/outbox") {
+          await deliverPushOutbox(repository, 25).catch(() => {});
+        } else {
+          void deliverPushOutbox(repository, 10).catch(() => {});
+        }
+      }
       if (format === "send") send(payload);
       else json(payload);
     };
@@ -1174,6 +1193,77 @@ async function startServer() {
   // API Health check
   app.get("/api/health", (_req, res) => {
     res.json({ status: "ok", revision: process.env.K_REVISION || 'local', timestamp: new Date().toISOString() });
+  });
+
+  // Mobile Push Notification Device Token Registry (FCM / APNs)
+  app.get("/api/devices/push-token", async (req, res) => {
+    try {
+      const outcome = await repository.transaction(async (state) => {
+        const caller = await extractAndVerifyCaller(req, state);
+        if (!caller) return { status: 401, body: { ok: false, error: "Authentification requise." } };
+        const tokens = listUserDeviceTokens(state, caller.uid);
+        return {
+          status: 200,
+          body: {
+            ok: true,
+            count: tokens.length,
+            platforms: [...new Set(tokens.map((t) => t.platform))],
+          },
+        };
+      });
+      return res.status(outcome.status).json(outcome.body);
+    } catch {
+      return res.status(500).json({ ok: false, error: "Impossible de lire les appareils enregistrés." });
+    }
+  });
+
+  app.post("/api/devices/push-token", async (req, res) => {
+    try {
+      const token = sanitizePushToken(req.body?.token);
+      const platform = sanitizePushPlatform(req.body?.platform);
+      const deviceLabel =
+        typeof req.body?.deviceLabel === "string"
+          ? req.body.deviceLabel.trim().slice(0, 80)
+          : undefined;
+      const outcome = await repository.transaction(async (state) => {
+        const caller = await extractAndVerifyCaller(req, state);
+        if (!caller) return { status: 401, body: { ok: false, error: "Authentification requise." } };
+        if (!token || !platform) {
+          return { status: 400, body: { ok: false, error: "Jeton push ou plateforme invalide." } };
+        }
+        const record = registerDeviceToken(state, {
+          uid: caller.uid,
+          token,
+          platform,
+          deviceLabel,
+        });
+        return {
+          status: 200,
+          body: { ok: true, platform: record.platform, updatedAt: record.updatedAt },
+        };
+      });
+      return res.status(outcome.status).json(outcome.body);
+    } catch (err: any) {
+      return res.status(400).json({ ok: false, error: err?.message || "Enregistrement du jeton push impossible." });
+    }
+  });
+
+  app.delete("/api/devices/push-token", async (req, res) => {
+    try {
+      const rawToken = typeof req.body?.token === "string" ? req.body.token.trim() : undefined;
+      const outcome = await repository.transaction(async (state) => {
+        const caller = await extractAndVerifyCaller(req, state);
+        if (!caller) return { status: 401, body: { ok: false, error: "Authentification requise." } };
+        if (rawToken && rawToken !== "*" && !sanitizePushToken(rawToken)) {
+          return { status: 400, body: { ok: false, error: "Jeton push invalide." } };
+        }
+        const removed = unregisterDeviceToken(state, { uid: caller.uid, token: rawToken });
+        return { status: 200, body: { ok: true, removed } };
+      });
+      return res.status(outcome.status).json(outcome.body);
+    } catch {
+      return res.status(500).json({ ok: false, error: "Suppression du jeton push impossible." });
+    }
   });
 
   // Server-side authentication endpoint for Syndics, Residents (Email or CIN), and Providers (Prestataires)
@@ -3671,15 +3761,24 @@ async function startServer() {
         );
         if (syndic.createdBy) notifiedUids.add(String(syndic.createdBy));
         for (const uid of notifiedUids) {
+          const reminderTitle = "Rappel de renouvellement d'abonnement";
+          const reminderBody = `Votre abonnement (${syndic.subscriptionPlan}) arrive à échéance le ${expiryFormatted}.`;
           notifs.push({
             id: crypto.randomUUID(),
             userId: uid,
-            title: "Rappel de renouvellement d'abonnement",
-            message: `Votre abonnement (${syndic.subscriptionPlan}) arrive à échéance le ${expiryFormatted}. Renouvelez par CMI, PayPal, Virement ou Espèces.`,
+            title: reminderTitle,
+            message: `${reminderBody} Renouvelez par CMI, PayPal, Virement ou Espèces.`,
             type: "warning",
             read: false,
             link: "/settings",
             createdAt: nowIso,
+          });
+          queuePushNotification(state, {
+            uid,
+            title: reminderTitle,
+            body: reminderBody,
+            type: "warning",
+            link: "/settings",
           });
         }
         sentMap[syndic.id] = nowIso;
@@ -3700,6 +3799,7 @@ async function startServer() {
       if (dispatched.emailQueued) {
         await deliverOutbox(repository, 5).catch(() => {});
       }
+      void deliverPushOutbox(repository, 5).catch(() => {});
       return res.json({
         ok: true,
         email: dispatched.email,

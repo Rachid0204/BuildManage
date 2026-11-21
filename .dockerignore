@@ -9,3 +9,6 @@ dist-server
 functions/lib
 test-results
 playwright-report
+android
+ios
+resources

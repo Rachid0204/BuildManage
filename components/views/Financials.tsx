@@ -33,6 +33,7 @@ import {
   generateMonthlyCharges,
   normalizeBillingPeriodKey,
   getPrestatairesForBuilding,
+  openAuthenticatedUpload,
 } from '../../firebase/services';
 import {
   generateInvoicePDF,
@@ -56,6 +57,8 @@ import { isChargeEffectivelyOverdue, todayCasablancaIsoDate } from '../../shared
 import Loading from '../common/Loading';
 import { useI18n } from '../../hooks/useI18n';
 import { useToast } from '../common/Toast';
+import { resolveAssetUrl } from '../../utils/apiBase';
+import { isNativeApp } from '../../utils/nativeBridge';
 
 interface FinancialsProps {
   building: Building;
@@ -2472,7 +2475,18 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                     <p className="text-xs text-slate-500 italic mt-1">"{proof.receiptNote}"</p>
                   )}
                   {proof.receiptUrl?.startsWith('/api/uploads/') && (
-                    <a href={proof.receiptUrl} target="_blank" rel="noopener noreferrer" className="inline-block text-xs font-semibold text-teal-700 underline">
+                    <a
+                      href={resolveAssetUrl(proof.receiptUrl)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => {
+                        if (isNativeApp()) {
+                          e.preventDefault();
+                          void openAuthenticatedUpload(proof.receiptUrl!);
+                        }
+                      }}
+                      className="inline-block text-xs font-semibold text-teal-700 hover:text-teal-900 underline"
+                    >
                       {tr('Ouvrir le justificatif', 'فتح إثبات الأداء')}
                     </a>
                   )}

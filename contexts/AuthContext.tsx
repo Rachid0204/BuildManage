@@ -34,6 +34,7 @@ import {
   setActiveAuthContext,
 } from '../utils/security';
 import { apiUrl } from '../utils/apiBase';
+import { unregisterStoredNativePushToken } from '../hooks/useNativePush';
 
 
 export interface RegisterAccountInput {
@@ -480,6 +481,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const logout = async () => {
     try {
+      await unregisterStoredNativePushToken();
       await fetch(apiUrl('/api/auth/logout'), {
         method: 'POST',
         headers: getAuthenticatedRequestHeaders(),
