@@ -603,6 +603,40 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
                   )}
                 </a>
               </div>
+              <div className="pt-2 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
+                <a
+                  href="/privacy"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    navigate('/privacy');
+                  }}
+                  className="hover:text-teal-700 underline"
+                >
+                  {tr('Confidentialité', 'سياسة الخصوصية')}
+                </a>
+                <span aria-hidden="true">·</span>
+                <a
+                  href="/terms"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    navigate('/terms');
+                  }}
+                  className="hover:text-teal-700 underline"
+                >
+                  {tr('Conditions (CGU)', 'شروط الاستخدام')}
+                </a>
+                <span aria-hidden="true">·</span>
+                <a
+                  href="/account-deletion"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    navigate('/account-deletion');
+                  }}
+                  className="hover:text-rose-700 underline"
+                >
+                  {tr('Suppression de compte', 'حذف الحساب')}
+                </a>
+              </div>
             </div>
           )}
         </Card>

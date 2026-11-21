@@ -1438,6 +1438,29 @@ const ResidentDashboard: React.FC = () => {
             </div>
           </>
         )}
+        <footer className="mt-8 pt-4 pb-6 flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 text-xs text-slate-500 border-t border-slate-200">
+          <button
+            type="button"
+            onClick={() => navigate('/privacy')}
+            className="hover:text-teal-700 underline"
+          >
+            {tr('Confidentialité', 'سياسة الخصوصية')}
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate('/terms')}
+            className="hover:text-teal-700 underline"
+          >
+            {tr('Conditions (CGU)', 'شروط الاستخدام')}
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate('/account-deletion')}
+            className="hover:text-rose-700 underline"
+          >
+            {tr('Supprimer mon compte', 'حذف حسابي')}
+          </button>
+        </footer>
       </main>
 
       {/* Modal: Official Document Preview for Resident */}
