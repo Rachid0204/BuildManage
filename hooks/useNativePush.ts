@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { apiUrl } from '../utils/apiBase';
 import {
   getCapacitorPlugins,
@@ -9,9 +9,41 @@ import { getAuthenticatedRequestHeaders } from '../utils/security';
 
 const PUSH_TOKEN_STORAGE_KEY = 'syndik_native_push_token_v1';
 
+function readStoredPushToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return (
+      window.localStorage.getItem(PUSH_TOKEN_STORAGE_KEY) ||
+      window.sessionStorage.getItem(PUSH_TOKEN_STORAGE_KEY)
+    );
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredPushToken(token: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(PUSH_TOKEN_STORAGE_KEY, token);
+    window.sessionStorage.removeItem(PUSH_TOKEN_STORAGE_KEY);
+  } catch {
+    // Ignore storage quota / private mode failures
+  }
+}
+
+function clearStoredPushToken(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(PUSH_TOKEN_STORAGE_KEY);
+    window.sessionStorage.removeItem(PUSH_TOKEN_STORAGE_KEY);
+  } catch {
+    // Ignore storage errors
+  }
+}
+
 export async function unregisterStoredNativePushToken(): Promise<void> {
   if (typeof window === 'undefined' || !isNativeApp()) return;
-  const token = window.sessionStorage.getItem(PUSH_TOKEN_STORAGE_KEY);
+  const token = readStoredPushToken();
   if (!token) return;
   try {
     await fetch(apiUrl('/api/devices/push-token'), {
@@ -23,7 +55,7 @@ export async function unregisterStoredNativePushToken(): Promise<void> {
   } catch {
     // Non-blocking cleanup on logout
   } finally {
-    window.sessionStorage.removeItem(PUSH_TOKEN_STORAGE_KEY);
+    clearStoredPushToken();
   }
 }
 
@@ -41,8 +73,8 @@ async function syncDeviceTokenToServer(token: string): Promise<void> {
       }),
       signal: AbortSignal.timeout(10_000),
     });
-    if (response.ok && typeof window !== 'undefined') {
-      window.sessionStorage.setItem(PUSH_TOKEN_STORAGE_KEY, token);
+    if (response.ok) {
+      writeStoredPushToken(token);
     }
   } catch {
     // Retry on next app launch / session restore
@@ -60,6 +92,13 @@ export function useNativePush(options: {
   onForegroundMessage?: (title: string, body: string) => void;
 }): void {
   const { enabled, uid, navigate, onForegroundMessage } = options;
+  const navigateRef = useRef(navigate);
+  const onForegroundRef = useRef(onForegroundMessage);
+
+  useEffect(() => {
+    navigateRef.current = navigate;
+    onForegroundRef.current = onForegroundMessage;
+  }, [navigate, onForegroundMessage]);
 
   useEffect(() => {
     if (!enabled || !uid || !isNativeApp()) return;
@@ -89,8 +128,9 @@ export function useNativePush(options: {
           PushNotifications.addListener(
             'pushNotificationReceived',
             (notification: { title?: string; body?: string }) => {
-              if (!disposed && onForegroundMessage && (notification?.title || notification?.body)) {
-                onForegroundMessage(
+              const handler = onForegroundRef.current;
+              if (!disposed && handler && (notification?.title || notification?.body)) {
+                handler(
                   notification.title || 'SyndicUnion',
                   notification.body || '',
                 );
@@ -106,7 +146,7 @@ export function useNativePush(options: {
               if (disposed) return;
               const link = action?.notification?.data?.link;
               if (typeof link === 'string' && link.startsWith('/')) {
-                navigate(link);
+                navigateRef.current(link);
               }
             },
           ),
@@ -126,5 +166,5 @@ export function useNativePush(options: {
         void Promise.resolve(h).then((item) => item?.remove?.()).catch(() => {});
       }
     };
-  }, [enabled, uid, navigate, onForegroundMessage]);
+  }, [enabled, uid]);
 }

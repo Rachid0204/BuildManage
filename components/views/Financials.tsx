@@ -33,6 +33,7 @@ import {
   generateMonthlyCharges,
   normalizeBillingPeriodKey,
   getPrestatairesForBuilding,
+  openAuthenticatedUpload,
 } from '../../firebase/services';
 import {
   generateInvoicePDF,
@@ -2472,9 +2473,13 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                     <p className="text-xs text-slate-500 italic mt-1">"{proof.receiptNote}"</p>
                   )}
                   {proof.receiptUrl?.startsWith('/api/uploads/') && (
-                    <a href={proof.receiptUrl} target="_blank" rel="noopener noreferrer" className="inline-block text-xs font-semibold text-teal-700 underline">
+                    <button
+                      type="button"
+                      onClick={() => void openAuthenticatedUpload(proof.receiptUrl!)}
+                      className="inline-block text-xs font-semibold text-teal-700 hover:text-teal-900 underline"
+                    >
                       {tr('Ouvrir le justificatif', 'فتح إثبات الأداء')}
-                    </a>
+                    </button>
                   )}
                 </div>
 

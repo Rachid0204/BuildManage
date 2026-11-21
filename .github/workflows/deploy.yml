@@ -93,6 +93,9 @@ jobs:
       - name: Verify isolated monthly billing and retry idempotency
         run: npm run test:monthly-billing
 
+      - name: Verify mobile CORS, FCM/APNs push notifications, and Capacitor native shell config
+        run: npm run test:mobile && npm run test:capacitor
+
       - name: Verify production operations and encrypted recovery
         run: npm run test:production && npm run test:recovery
 

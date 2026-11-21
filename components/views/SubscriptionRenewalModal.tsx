@@ -513,6 +513,7 @@ const SubscriptionRenewalModal: React.FC<{
 
   useEffect(() => {
     if (
+      isIosNativeApp() ||
       !isOpen ||
       paymentTab !== 'paypal' ||
       !billingConfig?.paypal.enabled ||

@@ -38,3 +38,19 @@ dist-server/
 *.enc.json
 test-results/
 playwright-report/
+
+# Capacitor / Mobile native secrets & build artifacts
+android/app/google-services.json
+ios/App/App/GoogleService-Info.plist
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/app/src/main/assets/public/
+ios/App/Pods/
+ios/DerivedData/
+ios/App/App/public/
+*.jks
+*.keystore
+*.p12
+*.mobileprovision

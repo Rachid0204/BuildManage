@@ -7,6 +7,7 @@ import { I18nProvider } from './hooks/useI18n';
 import { AuthProvider } from './contexts/AuthContext';
 import { ToastProvider } from './components/common/Toast';
 import LiveDataSync from './components/LiveDataSync';
+import { isNativeApp } from './utils/nativeBridge';
 
 const queryClient = new QueryClient({
   mutationCache: new MutationCache({
@@ -45,6 +46,7 @@ if (
   typeof window !== 'undefined' &&
   'serviceWorker' in navigator &&
   !navigator.webdriver &&
+  !isNativeApp() &&
   (import.meta as ImportMeta & { env?: { PROD?: boolean } }).env?.PROD
 ) {
   window.addEventListener('load', () => {

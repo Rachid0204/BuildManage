@@ -23,7 +23,7 @@ import type { Prestataire, SubscriptionPlan, Syndic, UserRole } from './types';
 import RouteErrorBoundary from './components/common/RouteErrorBoundary';
 import PortalSkeleton from './components/common/PortalSkeleton';
 import { useToast } from './components/common/Toast';
-import { initNativeShell } from './utils/nativeBridge';
+import { initNativeShell, isNativeApp } from './utils/nativeBridge';
 import { useNativePush } from './hooks/useNativePush';
 const AdminPortal = React.lazy(() => import('./components/views/AdminDashboard'));
 const ResidentDashboard = React.lazy(() => import('./components/views/ResidentDashboard'));
@@ -423,7 +423,7 @@ const LandingRouteWrapper: React.FC<{ onDone: () => void }> = ({ onDone }) => {
 };
 
 const App: React.FC = () => {
-  const [showLanding, setShowLanding] = React.useState(true);
+  const [showLanding, setShowLanding] = React.useState(() => !isNativeApp());
   const { currentUser, userProfile, loading, sessionError } = useAuth();
 
   useEffect(() => {

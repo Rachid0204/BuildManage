@@ -13,6 +13,7 @@ import { auth } from '../../firebase/config';
 import { BuildingsIcon } from '../icons/IconComponents';
 import { PLAN_CATALOG } from '../../utils/subscriptionPolicy';
 import { apiUrl } from '../../utils/apiBase';
+import { isIosNativeApp, isNativeApp } from '../../utils/nativeBridge';
 
 interface LoginScreenProps {
   syndics?: Syndic[];
@@ -27,12 +28,14 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const { loginWithEmail, loginWithGoogle, register } = useAuth();
+  const nativeApp = isNativeApp();
+  const iosNativeApp = isIosNativeApp();
 
   const urlMode = searchParams.get('mode');
   const urlPlan = searchParams.get('plan') as SubscriptionPlan | null;
 
   const [isSyndicSignup, setIsSyndicSignup] = useState<boolean>(
-    urlMode === 'syndic-signup'
+    !iosNativeApp && urlMode === 'syndic-signup'
   );
   const [selectedPlan, setSelectedPlan] = useState<SubscriptionPlan>(
     urlPlan && ['starter', 'professional', 'enterprise'].includes(urlPlan)
@@ -66,7 +69,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
   useEffect(() => {
     const modeParam = searchParams.get('mode');
     const planParam = searchParams.get('plan') as SubscriptionPlan | null;
-    if (modeParam === 'syndic-signup') {
+    if (!iosNativeApp && modeParam === 'syndic-signup') {
       setIsSyndicSignup(true);
     } else {
       setIsSyndicSignup(false);
@@ -74,7 +77,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
     if (planParam && ['starter', 'professional', 'enterprise'].includes(planParam)) {
       setSelectedPlan(planParam);
     }
-  }, [searchParams]);
+  }, [searchParams, iosNativeApp]);
 
   const redirectUserToCorrectPage = (profile: UserProfile) => {
     const defaultTarget = getHomeRouteForRole(profile.role);
@@ -165,13 +168,19 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
       <div className="max-w-lg w-full space-y-5">
         {/* Top Bar with Language Switcher */}
         <div className="flex items-center justify-between">
-          <button
-            type="button"
-            onClick={handleReturnToPublicSite}
-            className="text-xs font-semibold text-slate-600 hover:text-slate-900"
-          >
-            {tr('← Accueil & Offres Syndic', '→ الرئيسية وباقات السنديك')}
-          </button>
+          {!iosNativeApp ? (
+            <button
+              type="button"
+              onClick={handleReturnToPublicSite}
+              className="text-xs font-semibold text-slate-600 hover:text-slate-900"
+            >
+              {tr('← Accueil & Offres Syndic', '→ الرئيسية وباقات السنديك')}
+            </button>
+          ) : (
+            <span className="text-[11px] font-bold uppercase tracking-wider text-teal-800">
+              SyndicUnion
+            </span>
+          )}
           <LanguageToggle variant="light" />
         </div>
 
@@ -523,22 +532,24 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
                 </Button>
               </Form>
 
-              <div>
-                <button
-                  type="button"
-                  onClick={handleGoogleSignIn}
-                  disabled={loading}
-                  className="w-full flex items-center justify-center gap-2 py-2 px-4 border border-slate-300 rounded-lg bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 transition-colors"
-                >
-                  <span>🌐</span>
-                  <span>
-                    {tr(
-                      'Continuer avec Google Workspace (Syndic)',
-                      'المتابعة عبر Google Workspace (للسنديك)'
-                    )}
-                  </span>
-                </button>
-              </div>
+              {!nativeApp && (
+                <div>
+                  <button
+                    type="button"
+                    onClick={handleGoogleSignIn}
+                    disabled={loading}
+                    className="w-full flex items-center justify-center gap-2 py-2 px-4 border border-slate-300 rounded-lg bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 transition-colors"
+                  >
+                    <span>🌐</span>
+                    <span>
+                      {tr(
+                        'Continuer avec Google Workspace (Syndic)',
+                        'المتابعة عبر Google Workspace (للسنديك)'
+                      )}
+                    </span>
+                  </button>
+                </div>
+              )}
 
               {/* Information Box for Residents & Service Providers */}
               <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5 text-xs text-slate-600">
@@ -559,22 +570,24 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
                 </p>
               </div>
 
-              {/* B2B Syndic Onboarding Callout */}
-              <div className="pt-3 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs">
-                <span className="text-slate-600 font-medium">
-                  {tr('Vous êtes un nouveau Syndic ?', 'هل أنتم مكتب سنديك جديد؟')}
-                </span>
-                <button
-                  type="button"
-                  onClick={handleReturnToPublicSite}
-                  className="font-bold text-teal-700 hover:text-teal-900 underline"
-                >
-                  {tr(
-                    'Choisir un forfait & créer mon cabinet →',
-                    'اختر باقة وأنشئ مكتب السنديك ←'
-                  )}
-                </button>
-              </div>
+              {/* B2B Syndic Onboarding Callout (omitted on iOS native per App Store Guideline 3.1.1) */}
+              {!iosNativeApp && (
+                <div className="pt-3 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs">
+                  <span className="text-slate-600 font-medium">
+                    {tr('Vous êtes un nouveau Syndic ?', 'هل أنتم مكتب سنديك جديد؟')}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleReturnToPublicSite}
+                    className="font-bold text-teal-700 hover:text-teal-900 underline"
+                  >
+                    {tr(
+                      'Choisir un forfait & créer mon cabinet →',
+                      'اختر باقة وأنشئ مكتب السنديك ←'
+                    )}
+                  </button>
+                </div>
+              )}
               <div className="pt-2 text-center text-xs">
                 <a
                   href="/guide"
