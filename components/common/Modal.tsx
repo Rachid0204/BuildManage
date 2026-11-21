@@ -158,11 +158,11 @@ const Modal: React.FC<ModalProps> = ({
 
         {onSubmit ? (
           <Form onSubmit={onSubmit} onBusyChange={setFormBusy} className="flex flex-col min-h-0">
-            <div className="p-4 sm:p-6 space-y-4 overflow-y-auto text-sm text-slate-700">{children}</div>
+            <div className="p-4 sm:p-6 space-y-4 overflow-y-auto min-h-0 overscroll-contain text-sm text-slate-700">{children}</div>
             {footer && <div className="flex flex-wrap justify-end items-center px-4 sm:px-6 py-3.5 pb-safe bg-slate-50 border-t border-slate-200 gap-2 shrink-0">{footer}</div>}
           </Form>
         ) : <>
-          <div className="p-4 sm:p-6 space-y-4 overflow-y-auto text-sm text-slate-700">{children}</div>
+          <div className="p-4 sm:p-6 space-y-4 overflow-y-auto min-h-0 overscroll-contain text-sm text-slate-700">{children}</div>
           {footer && <div className="flex flex-wrap justify-end items-center px-4 sm:px-6 py-3.5 pb-safe bg-slate-50 border-t border-slate-200 gap-2 shrink-0">{footer}</div>}
         </>}
       </div>

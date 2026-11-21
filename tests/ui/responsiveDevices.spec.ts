@@ -679,3 +679,55 @@ test('Provider and Super-Admin portals render cleanly on 360px with Admin mobile
   await expect(page.locator('table').first()).toBeVisible();
   await assertCleanLayout(page, 'Admin desktop1280 FR');
 });
+
+test('Mobile touch gestures smoothly scroll both public pages and Syndic portal without body scroll lock', async ({
+  browser,
+}) => {
+  const context = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    hasTouch: true,
+    isMobile: true,
+  });
+  const page = await context.newPage();
+  await page.route('**/*', (route) =>
+    route.request().url().startsWith(baseUrl) ? route.continue() : route.abort(),
+  );
+
+  try {
+    const cdp = await context.newCDPSession(page);
+
+    // 1. Public Landing Page touch scroll
+    await page.goto(`${baseUrl}/welcome`, { waitUntil: 'domcontentloaded' });
+    await waitUiQuiet(page);
+    const bodyOverflowY = await page.evaluate(
+      () => window.getComputedStyle(document.body).overflowY,
+    );
+    expect(bodyOverflowY).toBe('visible');
+
+    await cdp.send('Input.synthesizeScrollGesture', {
+      x: 195,
+      y: 620,
+      yDistance: -380,
+      speed: 900,
+    });
+    const landingScrollY = await page.evaluate(() => window.scrollY);
+    expect(landingScrollY).toBeGreaterThan(150);
+
+    // 2. Syndic Portal (DashboardLayout) mobile touch scroll
+    await applySession(page, 'fr', tokens.syndic);
+    await page.goto(`${baseUrl}/financials`, { waitUntil: 'domcontentloaded' });
+    await waitUiQuiet(page);
+    await page.evaluate(() => window.scrollTo(0, 0));
+
+    await cdp.send('Input.synthesizeScrollGesture', {
+      x: 195,
+      y: 620,
+      yDistance: -380,
+      speed: 900,
+    });
+    const syndicScrollY = await page.evaluate(() => window.scrollY);
+    expect(syndicScrollY).toBeGreaterThan(150);
+  } finally {
+    await context.close();
+  }
+});
