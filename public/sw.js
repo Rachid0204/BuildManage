@@ -3,13 +3,13 @@
 // upload, and HTML/JS requests straight through to the network so users never see
 // stale financial balances, AG votes, or outdated application bundles.
 
-const CACHE_NAME = 'syndicunion-pwa-assets-v2';
+const CACHE_NAME = 'syndicunion-pwa-assets-v3';
 const STATIC_ASSETS = [
   '/manifest.webmanifest',
-  '/icons/syndicunion-icon.svg',
-  '/icons/favicon-32x32.png',
-  '/icons/icon-192.png',
-  '/icons/icon-512.png',
+  '/icons/syndicunion-icon.svg?v=2',
+  '/icons/favicon-32x32.png?v=2',
+  '/icons/icon-192.png?v=2',
+  '/icons/icon-512.png?v=2',
   '/icons/apple-touch-icon.png',
 ];
 
@@ -49,7 +49,7 @@ self.addEventListener('fetch', (event) => {
   if (
     url.pathname.startsWith('/api/') ||
     url.pathname.startsWith('/uploads/') ||
-    !STATIC_ASSETS.includes(url.pathname)
+    !STATIC_ASSETS.includes(`${url.pathname}${url.search}`)
   ) {
     return;
   }

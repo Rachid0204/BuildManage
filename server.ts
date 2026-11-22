@@ -4189,10 +4189,10 @@ async function startServer() {
           else if (filePath.startsWith(guidesPath))
             res.setHeader("Cache-Control", "public, max-age=86400");
           else if (filePath.startsWith(iconsPath))
-            res.setHeader("Cache-Control", "public, max-age=604800");
+            res.setHeader("Cache-Control", "public, max-age=3600, must-revalidate");
           else if (filePath.endsWith(".webmanifest")) {
             res.setHeader("Content-Type", "application/manifest+json; charset=utf-8");
-            res.setHeader("Cache-Control", "public, max-age=3600");
+            res.setHeader("Cache-Control", "no-cache");
           } else if (path.basename(filePath) === "sw.js") {
             res.setHeader("Cache-Control", "no-cache");
           } else if (filePath.endsWith(".html")) shellHeaders(res);

@@ -122,7 +122,7 @@ const PwaInstallPrompt: React.FC = () => {
     >
       <div className="flex items-start gap-3">
         <img
-          src="/icons/icon-192.png"
+          src="/icons/icon-192.png?v=2"
           alt="SyndicUnion"
           className="w-11 h-11 rounded-xl shrink-0 border border-amber-400/30"
         />
