@@ -1,16 +1,19 @@
-import { readFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { chromium } from '@playwright/test';
 
 const ROOT = process.cwd();
 const ICONS_DIR = path.join(ROOT, 'public', 'icons');
-const SVG_PATH = path.join(ICONS_DIR, 'syndik-icon.svg');
+const SVG_PATH = path.join(ICONS_DIR, 'syndicunion-icon.svg');
 
 function resolveChromiumExecutable(): string | undefined {
   if (process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH) {
     return process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
   }
-  return '/usr/bin/chromium';
+  if (existsSync('/usr/bin/chromium')) return '/usr/bin/chromium';
+  if (existsSync('/usr/bin/chromium-browser')) return '/usr/bin/chromium-browser';
+  if (existsSync('/usr/bin/google-chrome')) return '/usr/bin/google-chrome';
+  return undefined;
 }
 
 async function renderIcon(
@@ -68,9 +71,10 @@ async function main() {
 
   try {
     const page = await browser.newPage({ deviceScaleFactor: 1 });
+    await renderIcon(page, svgMarkup, 32, 'favicon-32x32.png');
     await renderIcon(page, svgMarkup, 192, 'icon-192.png');
     await renderIcon(page, svgMarkup, 512, 'icon-512.png');
-    // Maskable icon: full-bleed teal background with 12% safe-zone inset for Android adaptive masks
+    // Maskable icon: full-bleed Atlas Emerald background with 12% safe-zone inset for Android adaptive masks
     await renderIcon(page, svgMarkup, 512, 'icon-maskable-512.png', {
       fullBleedBg: 'linear-gradient(135deg, #0f766e 0%, #042f2e 100%)',
       paddingRatio: 0.12,

@@ -1207,7 +1207,7 @@ const AdminGatewaysTab: React.FC<AdminGatewaysTabProps> = ({
                   setBankHolder(e.target.value);
                   setDirty(true);
                 }}
-                placeholder="Ex: IMMOGEST MAROC SARL"
+                placeholder="Ex: SYNDICUNION MAROC SARL"
                 className="mt-1 w-full p-2 rounded-lg border border-slate-300 bg-white"
               />
             </label>
@@ -1425,7 +1425,7 @@ const AdminGatewaysTab: React.FC<AdminGatewaysTabProps> = ({
                   setCashBeneficiary(e.target.value);
                   setDirty(true);
                 }}
-                placeholder="Ex: ImmoGest Maroc SARL"
+                placeholder="Ex: SyndicUnion Maroc SARL"
                 className="mt-1 w-full p-2 rounded-lg border border-slate-300 bg-white"
               />
             </label>

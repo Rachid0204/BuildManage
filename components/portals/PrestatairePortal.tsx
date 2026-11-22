@@ -13,6 +13,7 @@ import LanguageToggle from '../../components/common/LanguageToggle';
 
 import Card from '../../components/common/Card';
 import Button from '../../components/common/Button';
+import BrandLogo from '../../components/common/BrandLogo';
 import { getMaintenanceRequestsForBuilding, updateMaintenanceRequest } from '../../firebase/services';
 
 const HelpDrawer = React.lazy(() => import('../help/HelpDrawer'));
@@ -131,13 +132,16 @@ const PrestatairePortal: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50" dir={language === 'ar' ? 'rtl' : 'ltr'}>
+    <div className="min-h-screen bg-[#f8f7f4]" dir={language === 'ar' ? 'rtl' : 'ltr'}>
       <header className="bg-slate-900 text-white px-4 sm:px-6 py-4 flex flex-wrap justify-between items-center gap-3 sm:gap-4">
-        <div className="min-w-0">
-          <span className="text-[11px] uppercase tracking-wider font-bold px-2.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-400/30">
-            {t('providerPortal.badge')}
-          </span>
-          <h1 className="text-lg sm:text-xl font-bold mt-1 truncate">
+        <div className="min-w-0 space-y-1">
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <BrandLogo variant="lockup" theme="dark" size="xs" />
+            <span className="text-[11px] uppercase tracking-wider font-bold px-2.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-400/30">
+              {t('providerPortal.badge')}
+            </span>
+          </div>
+          <h1 className="text-lg sm:text-xl font-bold truncate">
             {userProfile?.displayName || tr('Artisan Partenaire', 'حرفي شريك')}
           </h1>
           <p className="text-xs text-slate-400 truncate">

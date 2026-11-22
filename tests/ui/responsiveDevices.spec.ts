@@ -462,7 +462,7 @@ test('PWA manifest, service worker, brand icons, and HTML metadata are properly 
     theme_color: string;
     icons: Array<{ src: string; sizes: string; purpose?: string }>;
   };
-  expect(manifest.short_name).toBe('Syndik');
+  expect(manifest.short_name).toBe('SyndicUnion');
   expect(manifest.display).toBe('standalone');
   expect(manifest.theme_color).toBe('#0f766e');
   expect(manifest.icons.length).toBeGreaterThanOrEqual(4);
@@ -472,7 +472,8 @@ test('PWA manifest, service worker, brand icons, and HTML metadata are properly 
   expect(swRes.headers.get('cache-control') || '').toContain('no-cache');
 
   for (const iconPath of [
-    '/icons/syndik-icon.svg',
+    '/icons/syndicunion-icon.svg',
+    '/icons/favicon-32x32.png',
     '/icons/icon-192.png',
     '/icons/icon-512.png',
     '/icons/icon-maskable-512.png',

@@ -154,7 +154,7 @@ export async function deliverOutbox(repo: StateRepository, limit = 5) {
         headers: { Authorization: "Bearer " + process.env.SENDGRID_API_KEY, "Content-Type": "application/json" },
         body: JSON.stringify({
           personalizations: [{ to: [{ email: item.to }] }],
-          from: { email: process.env.SENDGRID_FROM_EMAIL, name: "ImmoGest" },
+          from: { email: process.env.SENDGRID_FROM_EMAIL, name: "SyndicUnion" },
           subject: item.subject, content: [{ type: "text/plain", value: decrypt(item.encryptedText) }],
         }),
       });

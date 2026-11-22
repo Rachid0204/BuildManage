@@ -6,6 +6,7 @@ import Card from '../common/Card';
 import Button from '../common/Button';
 import Modal from '../common/Modal';
 import LanguageToggle from '../common/LanguageToggle';
+import BrandLogo from '../common/BrandLogo';
 import { saveOrShareBlob } from '../../utils/nativeBridge';
 import AdminGatewaysTab from './admin/AdminGatewaysTab';
 import AdminCommercialTab from './admin/AdminCommercialTab';
@@ -139,7 +140,7 @@ const AdminDashboard: React.FC = () => {
   const [newManagerName, setNewManagerName] = useState('');
   const [newEmail, setNewEmail] = useState('');
   const [newPassword, setNewPassword] = useState(
-    () => `Syndik-${generateSecureRandomDigits(6)}!`,
+    () => `SyndicUnion-${generateSecureRandomDigits(6)}!`,
   );
   const [newPhone, setNewPhone] = useState('+212 6 00 00 00 00');
   const [newCity, setNewCity] = useState('Casablanca');
@@ -990,7 +991,7 @@ const AdminDashboard: React.FC = () => {
     });
     const csv = `\uFEFF${[headers.map(escapeCsvCell).join(';'), ...rows].join('\r\n')}`;
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const fileName = `syndik-saas-paiements-${new Date().toISOString().slice(0, 10)}.csv`;
+    const fileName = `syndicunion-saas-paiements-${new Date().toISOString().slice(0, 10)}.csv`;
     void saveOrShareBlob(blob, fileName, fileName);
   };
 
@@ -1052,16 +1053,14 @@ const AdminDashboard: React.FC = () => {
 
   return (
     <div
-      className="min-h-screen bg-slate-100"
+      className="min-h-screen bg-[#f8f7f4]"
       dir={language === 'ar' ? 'rtl' : 'ltr'}
     >
       <nav className="bg-slate-900 text-white shadow-sm">
         <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16 items-center gap-2">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="text-lg sm:text-xl font-bold text-white tracking-tight whitespace-nowrap">
-                Syndik Admin
-              </span>
+            <div className="flex items-center gap-2.5 min-w-0">
+              <BrandLogo variant="lockup" theme="dark" size="xs" suffix="Admin" />
               <span className="hidden sm:inline-flex px-2.5 py-0.5 bg-rose-600 text-xs font-bold rounded-full text-white whitespace-nowrap">
                 {t('adminPortal.badge')}
               </span>

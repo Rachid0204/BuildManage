@@ -427,7 +427,7 @@ const SubscriptionRenewalModal: React.FC<{
   const effectivePricing = promoPricing || localPricing;
   const totalMad = effectivePricing.amountMad;
   const paypalAmount = effectivePricing.paypalAmount;
-  const motifSuggestion = `SYNDIK-${syndic.id.slice(0, 8).toUpperCase()}`;
+  const motifSuggestion = `SYNDICUNION-${syndic.id.slice(0, 8).toUpperCase()}`;
 
   const selectionRef = useRef({
     syndicId: syndic.id,
@@ -1085,8 +1085,8 @@ const SubscriptionRenewalModal: React.FC<{
       onClose={onClose}
       maxWidthClass="max-w-3xl"
       title={tr(
-        'Renouveler ou changer votre abonnement Syndik',
-        'تجديد أو تغيير اشتراك منصة Syndik',
+        'Renouveler ou changer votre abonnement SyndicUnion',
+        'تجديد أو تغيير اشتراك منصة SyndicUnion',
       )}
       footer={
         <Button variant="secondary" onClick={onClose}>
@@ -1289,7 +1289,7 @@ const SubscriptionRenewalModal: React.FC<{
             </div>
             <p>
               {tr(
-                'Aucun moyen de paiement (CMI, PayPal, Virement ou Espèces) n’est encore activé par l’administrateur. Contactez le support Syndik pour activer votre renouvellement.',
+                'Aucun moyen de paiement (CMI, PayPal, Virement ou Espèces) n’est encore activé par l’administrateur. Contactez le support SyndicUnion pour activer votre renouvellement.',
                 'لم تقم الإدارة بتفعيل بوابات الدفع بعد. تواصلوا مع دعم المنصة لتجديد اشتراككم.',
               )}
             </p>
@@ -1434,7 +1434,7 @@ const SubscriptionRenewalModal: React.FC<{
                   <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
                     <div className="text-xs text-slate-600">
                       {tr(
-                        'Vous serez redirigé vers la page de paiement officielle du CMI puis ramené automatiquement sur Syndik.',
+                        'Vous serez redirigé vers la page de paiement officielle du CMI puis ramené automatiquement sur SyndicUnion.',
                         'سيتم توجيهكم إلى صفحة الدفع الرسمية CMI ثم العودة تلقائياً إلى المنصة.',
                       )}
                     </div>

@@ -118,7 +118,7 @@ export const generateQuittancePDF = (
   const allocation = getRecordedReserveSplit(quittance);
   doc.setFont('helvetica','bold');write('Montant enregistré',currencyFormatter.format(quittance.amount));doc.setFont('helvetica','normal');write('Fonds courant',allocation ? currencyFormatter.format(allocation.chargesCourantesAmount) : 'Non documenté');write('Fonds de réserve',allocation ? currencyFormatter.format(allocation.reserveFundAmount) : 'Non documenté');
   if(q.voidedAt){write('Annulation',new Date(q.voidedAt).toLocaleDateString('fr-MA'));write('Motif',q.voidReason);}else{y+=6;write('Signature du syndic','________________________________');}
-  doc.setFontSize(8);doc.setTextColor(100,116,139);doc.text('Reçu établi à partir du règlement enregistré dans ImmoGest.',14,285);
+  doc.setFontSize(8);doc.setTextColor(100,116,139);doc.text('Reçu établi à partir du règlement enregistré dans SyndicUnion.',14,285);
   const fileName=`Quittance_${quittance.quittanceNumber}_Lot_${quittance.apartmentNumber.replace(/\s+/g,'_')}.pdf`;if(options.autoDownload!==false)void saveOrSharePdf(doc, fileName);return{doc,fileName,outputBlobUri:()=>doc.output('bloburl')};
 };
 
@@ -1431,7 +1431,7 @@ export const exportResidentCredentialsPDF = (
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(10);
-  doc.text('Portail Numérique Copropriétaire & Résident — Syndik Maroc', 105, 32, {
+  doc.text('Portail Numérique Copropriétaire & Résident — SyndicUnion Maroc', 105, 32, {
     align: 'center',
   });
   doc.setFontSize(8.5);
@@ -1612,7 +1612,7 @@ export const exportResidentCredentialsPDF = (
   doc.setFontSize(7.5);
   doc.setTextColor(100, 116, 139);
   doc.text(
-    `Fiche d'accès individuelle générée par le Syndic — ${sanitizePdfText(building.name)} (${sanitizePdfText(building.city)}) — Syndik Maroc`,
+    `Fiche d'accès individuelle générée par le Syndic — ${sanitizePdfText(building.name)} (${sanitizePdfText(building.city)}) — SyndicUnion Maroc`,
     105,
     286,
     { align: 'center' }
@@ -1809,7 +1809,7 @@ export const exportPrestataireCredentialsPDF = (
   doc.setFontSize(7.5);
   doc.setTextColor(100, 116, 139);
   doc.text(
-    `Accréditation Prestataire émise par le Syndic — ${sanitizePdfText(building.name)} — Syndik Maroc`,
+    `Accréditation Prestataire émise par le Syndic — ${sanitizePdfText(building.name)} — SyndicUnion Maroc`,
     105,
     286,
     { align: 'center' }
@@ -2062,7 +2062,7 @@ export const exportBuildingSummaryReportPDF = (
   doc.setFontSize(7.5);
   doc.setTextColor(100, 116, 139);
   doc.text(
-    `Rapport de Synthèse Copropriété généré via Syndik Maroc — ${sanitizePdfText(building.name)} (${issueDate})`,
+    `Rapport de Synthèse Copropriété généré via SyndicUnion Maroc — ${sanitizePdfText(building.name)} (${issueDate})`,
     105,
     287,
     { align: 'center' }
@@ -2138,7 +2138,7 @@ function buildArchiveDocumentJsPDF(docItem: BuildingDocument, building: Building
   doc.setFontSize(8);
   doc.setTextColor(100, 116, 139);
   doc.text(
-    `Archive Numérique Certifiée — ${sanitizePdfText(building.name)} — Consultation Directe Syndik`,
+    `Archive Numérique Certifiée — ${sanitizePdfText(building.name)} — Consultation Directe SyndicUnion`,
     105,
     285,
     { align: 'center' }
@@ -2634,7 +2634,7 @@ export const exportResidentStatementPDF = (
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(100, 116, 139);
   doc.text(
-    `Relevé de compte généré par ${sanitizePdfText(syndic?.name || 'ImmoGest')} — Conforme à la Loi n° 18-00 relative à la copropriété`,
+    `Relevé de compte généré par ${sanitizePdfText(syndic?.name || 'SyndicUnion')} — Conforme à la Loi n° 18-00 relative à la copropriété`,
     105,
     284,
     { align: 'center' }
@@ -2668,16 +2668,18 @@ export const generateSubscriptionInvoicePDF = (
     payment.receiptNumber ||
     `FAC-${payment.id.slice(0, 8).toUpperCase()}`;
 
-  // Header Banner
+  // Header Banner (Atlas Emerald & Warm Gold accent)
   doc.setFillColor(15, 23, 42);
   doc.rect(0, 0, 210, 36, 'F');
   doc.setFillColor(15, 118, 110);
-  doc.rect(0, 36, 210, 3, 'F');
+  doc.rect(0, 36, 150, 3, 'F');
+  doc.setFillColor(217, 119, 6);
+  doc.rect(150, 36, 60, 3, 'F');
 
   doc.setTextColor(255, 255, 255);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(15);
-  doc.text(sanitizePdfText(issuer?.companyName || 'ImmoGest Maroc'), 14, 15);
+  doc.text(sanitizePdfText(issuer?.companyName || 'SyndicUnion Maroc'), 14, 15);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8.5);
   doc.setTextColor(203, 213, 225);
@@ -2689,10 +2691,11 @@ export const generateSubscriptionInvoicePDF = (
     doc.text(sanitizePdfText(issuer.address).slice(0, 70), 14, 28);
   }
 
-  doc.setTextColor(255, 255, 255);
+  doc.setTextColor(251, 191, 36);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(12);
   doc.text(docTitle, 196, 15, { align: 'right' });
+  doc.setTextColor(255, 255, 255);
   doc.setFontSize(9.5);
   doc.text(`N° ${sanitizePdfText(docNumber)}`, 196, 22, { align: 'right' });
   if (payment.receiptNumber && payment.receiptNumber !== docNumber) {
@@ -2706,7 +2709,7 @@ export const generateSubscriptionInvoicePDF = (
   // Issuer vs Client Boxes
   let y = 48;
   doc.setDrawColor(226, 232, 240);
-  doc.setFillColor(248, 250, 252);
+  doc.setFillColor(248, 247, 244);
   doc.roundedRect(14, y, 88, 42, 2, 2, 'FD');
   doc.roundedRect(108, y, 88, 42, 2, 2, 'FD');
 
@@ -2720,7 +2723,7 @@ export const generateSubscriptionInvoicePDF = (
   doc.setFontSize(9);
   doc.text(
     sanitizePdfText(
-      `${issuer?.companyName || 'ImmoGest Maroc'}${issuer?.legalForm ? ` ${issuer.legalForm}` : ''}`,
+      `${issuer?.companyName || 'SyndicUnion Maroc'}${issuer?.legalForm ? ` ${issuer.legalForm}` : ''}`,
     ).slice(0, 42),
     18,
     y + 13,
@@ -2969,7 +2972,7 @@ export const generateSubscriptionInvoicePDF = (
   doc.setFontSize(7.5);
   doc.setTextColor(100, 116, 139);
   const footerLegal = [
-    issuer?.companyName || 'ImmoGest Maroc',
+    issuer?.companyName || 'SyndicUnion Maroc',
     issuer?.ice ? `ICE ${issuer.ice}` : null,
     issuer?.rc ? `RC ${issuer.rc}` : null,
     issuer?.ifNumber ? `IF ${issuer.ifNumber}` : null,

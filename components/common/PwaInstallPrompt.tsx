@@ -117,19 +117,19 @@ const PwaInstallPrompt: React.FC = () => {
   return (
     <aside
       dir={language === 'ar' ? 'rtl' : 'ltr'}
-      aria-label={tr("Installer l'application Syndik", 'تثبيت تطبيق Syndik')}
-      className="print:hidden fixed bottom-20 md:bottom-5 inset-x-3 sm:inset-x-auto sm:end-5 z-40 max-w-sm ms-auto bg-slate-900 text-white rounded-2xl border border-teal-500/40 shadow-2xl p-3.5 sm:p-4 pb-safe"
+      aria-label={tr("Installer l'application SyndicUnion", 'تثبيت تطبيق SyndicUnion')}
+      className="print:hidden fixed bottom-20 md:bottom-5 inset-x-3 sm:inset-x-auto sm:end-5 z-40 max-w-sm ms-auto bg-slate-900 text-white rounded-2xl border border-amber-400/35 shadow-2xl p-3.5 sm:p-4 pb-safe"
     >
       <div className="flex items-start gap-3">
         <img
           src="/icons/icon-192.png"
-          alt="Syndik"
-          className="w-11 h-11 rounded-xl shrink-0 border border-teal-500/30"
+          alt="SyndicUnion"
+          className="w-11 h-11 rounded-xl shrink-0 border border-amber-400/30"
         />
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
             <p className="text-sm font-bold text-white leading-snug">
-              {tr('Installer Syndik sur votre appareil', 'ثبّت Syndik على جهازك')}
+              {tr('Installer SyndicUnion sur votre appareil', 'ثبّت SyndicUnion على جهازك')}
             </p>
             <button
               type="button"

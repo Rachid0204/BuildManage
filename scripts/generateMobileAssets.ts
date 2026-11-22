@@ -3,7 +3,7 @@ import path from 'node:path';
 import { chromium, type Page } from '@playwright/test';
 
 const ROOT = process.cwd();
-const SVG_PATH = path.join(ROOT, 'public', 'icons', 'syndik-icon.svg');
+const SVG_PATH = path.join(ROOT, 'public', 'icons', 'syndicunion-icon.svg');
 const RESOURCES_DIR = path.join(ROOT, 'resources');
 const ANDROID_RES = path.join(ROOT, 'android', 'app', 'src', 'main', 'res');
 const IOS_ASSETS = path.join(ROOT, 'ios', 'App', 'App', 'Assets.xcassets');
@@ -14,6 +14,7 @@ function resolveChromiumExecutable(): string | undefined {
   }
   if (existsSync('/usr/bin/chromium')) return '/usr/bin/chromium';
   if (existsSync('/usr/bin/chromium-browser')) return '/usr/bin/chromium-browser';
+  if (existsSync('/usr/bin/google-chrome')) return '/usr/bin/google-chrome';
   return undefined;
 }
 
@@ -92,7 +93,7 @@ async function renderSplash(
   const subSize = Math.round(minDim * 0.02);
   const bg = dark
     ? 'radial-gradient(circle at 50% 38%, #134e4a 0%, #0f172a 68%, #020617 100%)'
-    : 'linear-gradient(150deg, #0f766e 0%, #0d5c57 48%, #042f2e 100%)';
+    : 'linear-gradient(150deg, #0f766e 0%, #0b5550 48%, #042f2e 100%)';
 
   const html = `<!doctype html>
 <html>
@@ -116,16 +117,16 @@ async function renderSplash(
         width: ${iconSize}px;
         height: ${iconSize}px;
         border-radius: ${Math.round(iconSize * 0.22)}px;
-        background: rgba(255, 255, 255, 0.12);
-        border: ${Math.max(2, Math.round(iconSize * 0.015))}px solid rgba(255, 255, 255, 0.24);
+        background: rgba(255, 255, 255, 0.1);
+        border: ${Math.max(2, Math.round(iconSize * 0.015))}px solid rgba(251, 191, 36, 0.34);
         display: flex;
         align-items: center;
         justify-content: center;
         box-shadow: 0 ${Math.round(iconSize * 0.08)}px ${Math.round(iconSize * 0.2)}px rgba(0, 0, 0, 0.28);
       }
       .badge svg {
-        width: ${Math.round(iconSize * 0.78)}px;
-        height: ${Math.round(iconSize * 0.78)}px;
+        width: ${Math.round(iconSize * 0.8)}px;
+        height: ${Math.round(iconSize * 0.8)}px;
         display: block;
       }
       .title {
@@ -134,19 +135,22 @@ async function renderSplash(
         font-weight: 800;
         letter-spacing: -0.02em;
       }
+      .title .accent {
+        color: #fbbf24;
+      }
       .subtitle {
         margin-top: ${Math.round(minDim * 0.012)}px;
         font-size: ${subSize}px;
         font-weight: 600;
         letter-spacing: 0.16em;
         text-transform: uppercase;
-        color: rgba(204, 251, 241, 0.9);
+        color: rgba(254, 243, 199, 0.92);
       }
     </style>
   </head>
   <body>
     <div class="badge">${svgMarkup}</div>
-    <div class="title">SyndicUnion</div>
+    <div class="title">Syndic<span class="accent">U</span>nion</div>
     <div class="subtitle">Copropriété · Loi 18-00 &amp; 106-12</div>
   </body>
 </html>`;

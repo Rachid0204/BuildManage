@@ -23,6 +23,7 @@ import {
 } from '../icons/IconComponents';
 import NotificationBell from '../common/NotificationBell';
 import LanguageToggle from '../common/LanguageToggle';
+import BrandLogo from '../common/BrandLogo';
 import { useI18n } from '../../hooks/useI18n';
 import {
   getMaintenanceRequestsForResident,
@@ -470,8 +471,8 @@ const ResidentDashboard: React.FC = () => {
       <nav className="bg-slate-900 text-white shadow-sm">
         <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16 items-center gap-2">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="text-lg sm:text-xl font-bold tracking-tight text-white whitespace-nowrap">Syndik</span>
+            <div className="flex items-center gap-2.5 min-w-0">
+              <BrandLogo variant="lockup" theme="dark" size="xs" />
               <span
                 className={`hidden sm:inline-flex text-xs px-2.5 py-0.5 rounded-full font-bold whitespace-nowrap ${
                   isOwnerResident

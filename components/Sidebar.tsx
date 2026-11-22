@@ -23,6 +23,7 @@ import {
   MarketplaceIcon,
 } from './icons/IconComponents';
 import { HelpCircle } from 'lucide-react';
+import BrandLogo from './common/BrandLogo';
 
 type View =
   | 'dashboard'
@@ -315,12 +316,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   const sidebarContent = (
     <div className="w-72 lg:w-64 h-full flex-shrink-0 bg-slate-900 text-white flex flex-col shadow-xl lg:shadow-none">
       <div className="h-16 lg:h-20 flex items-center justify-between px-5 border-b border-slate-800">
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-lg bg-teal-600 flex items-center justify-center font-bold text-white text-base">
-            S
-          </div>
-          <h1 className="text-xl lg:text-2xl font-bold text-white tracking-tight">Syndik</h1>
-        </div>
+        <BrandLogo variant="lockup" theme="dark" size="sm" />
         {onClose && (
           <button
             type="button"

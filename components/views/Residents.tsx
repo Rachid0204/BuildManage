@@ -423,7 +423,7 @@ const CredentialsModal: React.FC<CredentialsModalProps> = ({
   const buildingName = building.name;
   const password = resident.generatedPassword || resident.invitationCode || resident.invitationToken || '';
   const portalUrl =
-    typeof window !== 'undefined' ? `${window.location.origin}/login` : 'https://syndik.ma/login';
+    typeof window !== 'undefined' ? `${window.location.origin}/login` : 'https://syndicunion.ma/login';
 
   const shareText = tr(
     `Bonjour ${resident.name},\nVoici vos identifiants officiels d'accès au Portail Copropriétaire (${buildingName}${

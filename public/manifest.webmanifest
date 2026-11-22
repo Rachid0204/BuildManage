@@ -1,7 +1,7 @@
 {
-  "name": "Syndik — Gestion de Copropriété Maroc (Loi 18-00)",
-  "short_name": "Syndik",
-  "description": "Plateforme SaaS marocaine de gestion de copropriété conforme à la Loi 18-00 et 106-12 : comptabilité tantièmes, quittances PDF, AG en ligne et portails résidents & prestataires.",
+  "name": "SyndicUnion — Gestion de Copropriété Maroc (Loi 18-00)",
+  "short_name": "SyndicUnion",
+  "description": "La copropriété unie, transparente et conforme à la Loi 18-00 et 106-12 : comptabilité tantièmes, quittances PDF, AG en ligne et portails résidents & prestataires.",
   "lang": "fr",
   "dir": "auto",
   "start_url": "/",
@@ -9,7 +9,7 @@
   "display": "standalone",
   "orientation": "any",
   "theme_color": "#0f766e",
-  "background_color": "#f8fafc",
+  "background_color": "#f8f7f4",
   "categories": ["business", "finance", "productivity"],
   "icons": [
     {
@@ -31,7 +31,7 @@
       "purpose": "maskable"
     },
     {
-      "src": "/icons/syndik-icon.svg",
+      "src": "/icons/syndicunion-icon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any"

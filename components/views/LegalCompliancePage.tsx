@@ -6,6 +6,7 @@ import { useAuth, getHomeRouteForRole } from '../../contexts/AuthContext';
 import LanguageToggle from '../common/LanguageToggle';
 import Button from '../common/Button';
 import Card from '../common/Card';
+import BrandLogo from '../common/BrandLogo';
 import { apiUrl } from '../../utils/apiBase';
 import { getAuthenticatedRequestHeaders } from '../../utils/security';
 
@@ -191,10 +192,8 @@ const LegalCompliancePage: React.FC<{ section: LegalSection }> = ({ section }) =
               <span>{tr('Retour', 'رجوع')}</span>
             </button>
             <div className="min-w-0">
-              <div className="text-sm font-extrabold tracking-tight truncate">
-                SyndicUnion · Syndik
-              </div>
-              <div className="text-[11px] text-teal-300 truncate">
+              <BrandLogo variant="lockup" theme="dark" size="xs" />
+              <div className="text-[11px] text-amber-300/90 truncate mt-0.5">
                 {tr('Conformité Légale, Confidentialité & Données', 'الامتثال القانوني والخصوصية وحماية البيانات')}
               </div>
             </div>
@@ -235,7 +234,7 @@ const LegalCompliancePage: React.FC<{ section: LegalSection }> = ({ section }) =
                 <ShieldCheck className="w-3.5 h-3.5" />
                 {tr('Loi 09-08 (CNDP Maroc) · App Store & Google Play', 'القانون 09-08 (CNDP المغرب) · App Store و Google Play')}
               </span>
-              <h1 className="text-2xl font-extrabold text-slate-900 mt-2">
+              <h1 className="text-2xl font-extrabold text-slate-900 mt-2 font-display">
                 {tr('Politique de Confidentialité — SyndicUnion', 'سياسة الخصوصية — SyndicUnion')}
               </h1>
               <p className="text-xs text-slate-500 mt-1">
@@ -249,8 +248,8 @@ const LegalCompliancePage: React.FC<{ section: LegalSection }> = ({ section }) =
               </h2>
               <p>
                 {tr(
-                  'SyndicUnion (Syndik) collecte uniquement les données strictement nécessaires à la gestion de la copropriété au Maroc conformément aux Lois n° 18-00 et 106-12 :',
-                  'يجمع تطبيق SyndicUnion (Syndik) فقط البيانات الضرورية لتدبير الملكية المشتركة بالمغرب وفق القانونين 18-00 و 106-12:',
+                  'SyndicUnion collecte uniquement les données strictement nécessaires à la gestion de la copropriété au Maroc conformément aux Lois n° 18-00 et 106-12 :',
+                  'يجمع تطبيق SyndicUnion فقط البيانات الضرورية لتدبير الملكية المشتركة بالمغرب وفق القانونين 18-00 و 106-12:',
                 )}
               </p>
               <ul className="list-disc ps-5 space-y-1">
@@ -322,11 +321,11 @@ const LegalCompliancePage: React.FC<{ section: LegalSection }> = ({ section }) =
         {section === 'terms' && (
           <Card className="p-6 sm:p-8 space-y-6 border border-slate-200">
             <div className="border-b border-slate-200 pb-4">
-              <h1 className="text-2xl font-extrabold text-slate-900">
+              <h1 className="text-2xl font-extrabold text-slate-900 font-display">
                 {tr('Conditions Générales d’Utilisation (CGU)', 'الشروط العامة للاستخدام')}
               </h1>
               <p className="text-xs text-slate-500 mt-1">
-                {tr('SyndicUnion (Syndik Maroc) · Dernière mise à jour : Novembre 2026', 'SyndicUnion (Syndik المغرب) · آخر تحديث: نوفمبر 2026')}
+                {tr('SyndicUnion Maroc · Dernière mise à jour : Novembre 2026', 'SyndicUnion المغرب · آخر تحديث: نوفمبر 2026')}
               </p>
             </div>
 

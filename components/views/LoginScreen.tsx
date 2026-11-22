@@ -14,6 +14,7 @@ import { BuildingsIcon } from '../icons/IconComponents';
 import { PLAN_CATALOG } from '../../utils/subscriptionPolicy';
 import { apiUrl } from '../../utils/apiBase';
 import { isIosNativeApp, isNativeApp } from '../../utils/nativeBridge';
+import BrandLogo from '../common/BrandLogo';
 
 interface LoginScreenProps {
   syndics?: Syndic[];
@@ -162,7 +163,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
 
   return (
     <div
-      className="min-h-screen bg-slate-50 flex items-center justify-center px-4 py-10"
+      className="min-h-screen bg-[#f8f7f4] flex items-center justify-center px-4 py-10"
       dir={language === 'ar' ? 'rtl' : 'ltr'}
     >
       <div className="max-w-lg w-full space-y-5">
@@ -186,13 +187,10 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
 
         {/* Brand Header */}
         <div className="text-center">
-          <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-teal-700 text-white shadow-sm mb-2.5">
-            <BuildingsIcon />
-          </div>
-          <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">
-            Syndik
+          <h1 className="inline-block">
+            <BrandLogo variant="stacked" theme="light" size="lg" />
           </h1>
-          <p className="text-xs text-slate-500 mt-1 uppercase font-semibold tracking-wider">
+          <p className="text-xs text-slate-500 mt-2 uppercase font-semibold tracking-wider">
             {tr(
               'Plateforme Marocaine de Gestion de Copropriété (Loi 18-00 & 106-12)',
               'المنصة المغربية لتدبير الملكية المشتركة (القانون 18-00 و 106-12)'

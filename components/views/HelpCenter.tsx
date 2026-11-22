@@ -8,6 +8,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import LanguageToggle from '../common/LanguageToggle';
+import { BrandMark } from '../common/BrandLogo';
 import { useI18n } from '../../hooks/useI18n';
 import { useAuth, getHomeRouteForRole } from '../../contexts/AuthContext';
 import {
@@ -168,7 +169,7 @@ const HelpCenter: React.FC<HelpCenterProps> = ({
                 aria-label={
                   currentUser
                     ? tr('Retour à mon portail', 'العودة إلى بوابتك')
-                    : tr('Accueil Syndik', 'الرئيسية')
+                    : tr('Accueil SyndicUnion', 'الرئيسية')
                 }
                 className="inline-flex items-center justify-center gap-2 min-w-[36px] min-h-[36px] rounded-lg text-xs font-bold text-slate-300 hover:text-white hover:bg-slate-800 px-1.5 sm:px-2 transition-colors shrink-0"
               >
@@ -176,19 +177,17 @@ const HelpCenter: React.FC<HelpCenterProps> = ({
                 <span className="hidden sm:inline">
                   {currentUser
                     ? tr('Retour à mon portail', 'العودة إلى بوابتك')
-                    : tr('Accueil Syndik', 'الرئيسية')}
+                    : tr('Accueil SyndicUnion', 'الرئيسية')}
                 </span>
               </button>
               <span className="text-slate-700 hidden sm:inline">|</span>
               <div className="flex items-center gap-2 min-w-0">
-                <div className="w-7 h-7 rounded-lg bg-teal-600 flex items-center justify-center font-bold text-white text-sm shrink-0">
-                  S
-                </div>
+                <BrandMark size="xs" theme="dark" />
                 <span className="font-extrabold text-sm sm:text-base truncate sm:hidden">
-                  {tr('Aide Syndik', 'دليل Syndik')}
+                  {tr('Aide SyndicUnion', 'دليل SyndicUnion')}
                 </span>
                 <span className="hidden sm:inline font-extrabold text-base truncate">
-                  {tr('Centre d’Aide & Guides Syndik', 'مركز المساعدة وأدلة Syndik')}
+                  {tr('Centre d’Aide & Guides SyndicUnion', 'مركز المساعدة وأدلة SyndicUnion')}
                 </span>
               </div>
             </div>
@@ -229,17 +228,17 @@ const HelpCenter: React.FC<HelpCenterProps> = ({
         <section className="rounded-2xl bg-gradient-to-br from-slate-900 via-slate-900 to-teal-950 text-white p-5 sm:p-7 shadow-sm space-y-4">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="space-y-1.5 max-w-2xl">
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-teal-500/20 border border-teal-400/30 text-teal-200 text-[11px] font-bold">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-500/20 border border-amber-400/30 text-amber-200 text-[11px] font-bold">
                 <BookOpen className="w-3.5 h-3.5" />
                 {tr(
                   `${ALL_USER_GUIDES.length} guides pas à pas avec captures d’écran`,
                   `${ALL_USER_GUIDES.length} دليلاً خطوة بخطوة بالصور`,
                 )}
               </span>
-              <h1 className="text-xl sm:text-2xl font-extrabold tracking-tight">
+              <h1 className="text-xl sm:text-2xl font-extrabold tracking-tight font-display">
                 {tr(
-                  'Guide Complet d’Utilisation — Syndik Maroc',
-                  'الدليل الشامل لاستخدام منصة Syndik المغرب',
+                  'Guide Complet d’Utilisation — SyndicUnion Maroc',
+                  'الدليل الشامل لاستخدام منصة SyndicUnion المغرب',
                 )}
               </h1>
               <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">

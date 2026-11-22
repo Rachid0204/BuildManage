@@ -633,7 +633,7 @@ const SubscriptionStatusCard: React.FC<{ syndic: Syndic }> = ({ syndic }) => {
         >
           {isCancelled
             ? tr(
-                'Votre abonnement est actuellement suspendu. Contactez l’administration Syndik pour le réactiver.',
+                'Votre abonnement est actuellement suspendu. Contactez l’administration SyndicUnion pour le réactiver.',
                 'اشتراككم معلق حالياً. يرجى التواصل مع إدارة المنصة لإعادة تفعيله.',
               )
             : isExpired

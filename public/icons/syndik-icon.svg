@@ -1,47 +1,56 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Syndik">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="SyndicUnion">
   <defs>
-    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+    <linearGradient id="su-bg" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#0f766e" />
+      <stop offset="55%" stop-color="#0b5550" />
       <stop offset="100%" stop-color="#042f2e" />
     </linearGradient>
-    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#2dd4bf" />
-      <stop offset="100%" stop-color="#34d399" />
+    <linearGradient id="su-gold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fbbf24" />
+      <stop offset="55%" stop-color="#f59e0b" />
+      <stop offset="100%" stop-color="#d97706" />
+    </linearGradient>
+    <linearGradient id="su-rim" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#5eead4" stop-opacity="0.34" />
+      <stop offset="100%" stop-color="#f59e0b" stop-opacity="0.22" />
     </linearGradient>
   </defs>
-  <rect width="512" height="512" rx="112" fill="url(#bg)" />
-  <rect x="24" y="24" width="464" height="464" rx="92" fill="none" stroke="#2dd4bf" stroke-opacity="0.22" stroke-width="6" />
-  <!-- Stylized Moroccan residential complex silhouette -->
-  <g fill="#ffffff">
-    <!-- Main central tower -->
-    <rect x="164" y="128" width="184" height="260" rx="18" />
-    <!-- Left wing -->
-    <rect x="96" y="204" width="60" height="184" rx="12" fill-opacity="0.88" />
-    <!-- Right wing -->
-    <rect x="356" y="204" width="60" height="184" rx="12" fill-opacity="0.88" />
-  </g>
-  <!-- Teal accent roofline & Moroccan arch entrance -->
-  <rect x="150" y="106" width="212" height="16" rx="8" fill="url(#accent)" />
-  <g fill="#0f766e">
-    <!-- Central tower windows (3x3 grid) -->
-    <rect x="192" y="160" width="32" height="32" rx="6" />
-    <rect x="240" y="160" width="32" height="32" rx="6" />
-    <rect x="288" y="160" width="32" height="32" rx="6" />
-    <rect x="192" y="212" width="32" height="32" rx="6" />
-    <rect x="240" y="212" width="32" height="32" rx="6" />
-    <rect x="288" y="212" width="32" height="32" rx="6" />
-    <rect x="192" y="264" width="32" height="32" rx="6" />
-    <rect x="288" y="264" width="32" height="32" rx="6" />
-    <!-- Pointed Moroccan arch doorway -->
-    <path d="M226 388 V324 C226 300 256 286 256 286 C256 286 286 300 286 324 V388 Z" />
-    <!-- Wing windows -->
-    <rect x="114" y="232" width="24" height="28" rx="5" />
-    <rect x="114" y="280" width="24" height="28" rx="5" />
-    <rect x="114" y="328" width="24" height="28" rx="5" />
-    <rect x="374" y="232" width="24" height="28" rx="5" />
-    <rect x="374" y="280" width="24" height="28" rx="5" />
-    <rect x="374" y="328" width="24" height="28" rx="5" />
-  </g>
-  <!-- Ground line accent -->
-  <rect x="84" y="388" width="344" height="14" rx="7" fill="url(#accent)" />
+
+  <!-- Rounded squircle tile -->
+  <rect width="512" height="512" rx="116" fill="url(#su-bg)" />
+  <rect x="20" y="20" width="472" height="472" rx="98" fill="none" stroke="url(#su-rim)" stroke-width="6" />
+
+  <!-- Moroccan pointed arch crown -->
+  <path
+    d="M158 214 C158 152 198 106 256 76 C314 106 354 152 354 214 L322 214 C322 169 294 134 256 112 C218 134 190 169 190 214 Z"
+    fill="#ffffff"
+  />
+
+  <!-- Architectural pillar capitals -->
+  <rect x="108" y="206" width="84" height="24" rx="8" fill="#ffffff" />
+  <rect x="320" y="206" width="84" height="24" rx="8" fill="#ffffff" />
+
+  <!-- Subtle Moroccan brass accent bar under capitals -->
+  <rect x="122" y="236" width="58" height="10" rx="5" fill="url(#su-gold)" />
+  <rect x="332" y="236" width="58" height="10" rx="5" fill="url(#su-gold)" />
+
+  <!-- Outer pillars + unified U-portal -->
+  <path
+    d="M122 254 H152 V384 H164 V412 H108 V384 H122 Z"
+    fill="#ffffff"
+  />
+  <path
+    d="M360 254 H390 V384 H404 V412 H348 V384 H360 Z"
+    fill="#ffffff"
+  />
+  <path
+    d="M170 254 H202 V328 C202 360 226 384 256 384 C286 384 310 360 310 328 V254 H342 V328 C342 378 304 416 256 416 C208 416 170 378 170 328 Z"
+    fill="#ffffff"
+  />
+
+  <!-- Flowing golden S emblem mathematically centered (x=256) inside the U-portal -->
+  <path
+    d="M292 192 C282 178 270 174 256 174 C232 174 216 190 216 214 C216 244 230 262 246 275 C262 288 268 298 268 314 C268 329 263 336 254 336 C244 336 237 332 231 325 L220 340 C230 354 242 358 256 358 C280 358 296 342 296 318 C296 288 282 270 266 257 C250 244 244 234 244 218 C244 203 249 196 258 196 C268 196 275 200 281 207 Z"
+    fill="url(#su-gold)"
+  />
 </svg>

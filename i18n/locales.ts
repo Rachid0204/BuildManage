@@ -75,7 +75,7 @@ export const translations = {
             cta: "Start Free Trial",
         },
         features: {
-            subtitle: "Why Choose Syndik?",
+            subtitle: "Why Choose SyndicUnion?",
             title: "Everything you need to manage your buildings",
             management: {
                 title: "Complete Management",
@@ -581,7 +581,7 @@ export const translations = {
             cta: "Démarrer l'essai gratuit",
         },
         features: {
-            subtitle: "Pourquoi choisir Syndik ?",
+            subtitle: "Pourquoi choisir SyndicUnion ?",
             title: "Tout ce dont vous avez besoin pour gérer vos immeubles",
             management: {
                 title: "Gestion Complète",
@@ -1087,7 +1087,7 @@ export const translations = {
             cta: "ابدأ التجربة المجانية",
         },
         features: {
-            subtitle: "لماذا تختار Syndik؟",
+            subtitle: "لماذا تختار SyndicUnion؟",
             title: "كل ما تحتاجه لإدارة عماراتك",
             management: {
                 title: "إدارة شاملة",

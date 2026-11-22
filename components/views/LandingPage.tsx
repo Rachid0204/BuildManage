@@ -14,6 +14,7 @@ import {
 } from '../icons/IconComponents';
 import { PLAN_CATALOG, isUnlimitedPlan } from '../../utils/subscriptionPolicy';
 import type { SubscriptionPlan } from '../../types';
+import BrandLogo from '../common/BrandLogo';
 
 interface LandingPageProps {
   onLoginClick: () => void;
@@ -259,28 +260,24 @@ const LandingPage: React.FC<LandingPageProps> = ({
 
   return (
     <div
-      className="min-h-screen bg-stone-50 text-slate-900 flex flex-col font-sans antialiased"
+      className="min-h-screen bg-[#f8f7f4] text-slate-900 flex flex-col font-sans antialiased"
       dir={language === 'ar' ? 'rtl' : 'ltr'}
     >
       {/* Top Navigation */}
-      <header className="bg-white/95 backdrop-blur-md border-b border-slate-200 sticky top-0 z-40">
+      <header className="bg-white/95 backdrop-blur-md border-b border-slate-200/90 sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16 items-center gap-2 sm:gap-4">
             <a
               href="#top"
-              className="flex items-center gap-2 sm:gap-2.5 focus:outline-none shrink-0"
+              className="flex items-center focus:outline-none shrink-0"
             >
-              <div className="w-8 h-8 sm:w-9 sm:h-9 bg-teal-700 rounded-lg flex items-center justify-center text-white shadow-xs shrink-0">
-                <BuildingsIcon />
-              </div>
-              <div className="flex items-baseline gap-2">
-                <span className="font-extrabold text-lg sm:text-xl text-slate-900 tracking-tight">
-                  Syndik
-                </span>
-                <span className="hidden sm:inline-block text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-teal-50 text-teal-800 border border-teal-200">
-                  Loi 18-00 &amp; 106-12
-                </span>
-              </div>
+              <BrandLogo
+                variant="lockup"
+                theme="light"
+                size="sm"
+                showBadge
+                badgeText={tr('Loi 18-00 & 106-12', 'القانون 18-00 و 106-12')}
+              />
             </a>
 
             <nav
@@ -481,8 +478,8 @@ const LandingPage: React.FC<LandingPageProps> = ({
               <div
                 role="region"
                 aria-label={tr(
-                  'Aperçu interactif de la plateforme Syndik',
-                  'معاينة تفاعلية لمنصة سنديك',
+                  'Aperçu interactif de la plateforme SyndicUnion',
+                  'معاينة تفاعلية لمنصة SyndicUnion',
                 )}
                 className="rounded-2xl border border-slate-200 bg-white shadow-xl overflow-hidden"
               >
@@ -1303,10 +1300,10 @@ const LandingPage: React.FC<LandingPageProps> = ({
             <p className="text-xs font-bold uppercase tracking-[0.14em] text-teal-800">
               {tr('Questions fréquentes', 'الأسئلة المتكررة')}
             </p>
-            <h2 className="mt-1.5 text-2xl sm:text-3xl font-extrabold text-slate-900">
+            <h2 className="mt-1.5 text-2xl sm:text-3xl font-extrabold text-slate-900 font-display">
               {tr(
-                'Tout savoir avant de lancer votre cabinet sur Syndik',
-                'كل ما تحتاج معرفته قبل انطلاق مكتبك على سنديك',
+                'Tout savoir avant de lancer votre cabinet sur SyndicUnion',
+                'كل ما تحتاج معرفته قبل انطلاق مكتبك على SyndicUnion',
               )}
             </h2>
           </div>
@@ -1340,9 +1337,9 @@ const LandingPage: React.FC<LandingPageProps> = ({
           </div>
 
           {/* Closing Conversion Banner */}
-          <div className="mt-12 rounded-2xl bg-slate-900 text-white p-7 sm:p-9 flex flex-col md:flex-row md:items-center justify-between gap-6">
+          <div className="mt-12 rounded-2xl bg-slate-900 text-white p-7 sm:p-9 flex flex-col md:flex-row md:items-center justify-between gap-6 border border-slate-800">
             <div className="space-y-1.5 max-w-xl">
-              <h3 className="text-xl sm:text-2xl font-extrabold">
+              <h3 className="text-xl sm:text-2xl font-extrabold font-display">
                 {tr(
                   'Prêt à moderniser la gestion de vos copropriétés ?',
                   'مستعد لعصرنة تدبير عماراتك؟',
@@ -1377,8 +1374,8 @@ const LandingPage: React.FC<LandingPageProps> = ({
       {/* Footer */}
       <footer className="bg-slate-950 text-slate-300 py-8 mt-auto border-t border-slate-800">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row justify-between items-center gap-4">
-          <div className="flex items-center gap-2.5">
-            <span className="font-bold text-lg text-white">Syndik</span>
+          <div className="flex items-center gap-3 flex-wrap justify-center sm:justify-start">
+            <BrandLogo variant="lockup" theme="dark" size="xs" />
             <span className="text-xs text-slate-400">
               •{' '}
               {tr(
@@ -1404,7 +1401,7 @@ const LandingPage: React.FC<LandingPageProps> = ({
               {tr('Suppression de compte', 'حذف الحساب')}
             </Link>
             <span>
-              &copy; {new Date().getFullYear()} Syndik Maroc.{' '}
+              &copy; {new Date().getFullYear()} SyndicUnion Maroc.{' '}
               {language === 'ar' ? 'جميع الحقوق محفوظة.' : 'Tous droits réservés.'}
             </span>
           </div>

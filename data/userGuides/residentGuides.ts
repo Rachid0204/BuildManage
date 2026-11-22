@@ -30,8 +30,8 @@ export const RESIDENT_GUIDES: UserGuideArticle[] = [
           'افتح صفحة تسجيل الدخول، أدخل بريدك الإلكتروني أو رقم بطاقتك الوطنية مع كلمة المرور المؤقتة المكتوبة في بطاقة الولوج.',
         screenshot: {
           src: '/guides/screenshots/resident/login.jpg',
-          altFr: 'Écran de connexion sécurisée au portail BuildManage / Syndik Maroc',
-          altAr: 'شاشة تسجيل الدخول الآمن إلى بوابة Syndik المغرب',
+          altFr: 'Écran de connexion sécurisée au portail SyndicUnion Maroc',
+          altAr: 'شاشة تسجيل الدخول الآمن إلى بوابة SyndicUnion المغرب',
           captionFr:
             'Page de connexion unique : accès Syndic, Copropriétaire, Locataire et Prestataire Agréé.',
           captionAr:

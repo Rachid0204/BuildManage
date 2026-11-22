@@ -74,7 +74,7 @@ const PrestataireCredentialsModal: React.FC<{
     prestataire.invitationCode ||
     '';
   const portalUrl =
-    typeof window !== 'undefined' ? `${window.location.origin}/login` : 'https://syndik.ma/login';
+    typeof window !== 'undefined' ? `${window.location.origin}/login` : 'https://syndicunion.ma/login';
 
   const shareText = tr(
     `Bonjour ${prestataire.contactPerson || prestataire.name},\nVoici vos identifiants officiels d'accès au Portail Prestataire Agréé (${building.name}) :\n• Lien de connexion : ${portalUrl}\n• Entreprise : ${prestataire.name} (${categoryLabel})\n• Identifiant (Email) : ${prestataire.email}\n• Mot de passe temporaire : ${password}\nNote : Lors de votre première connexion, il vous sera demandé de définir un mot de passe personnel.`,

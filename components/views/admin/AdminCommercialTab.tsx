@@ -31,7 +31,7 @@ const AdminCommercialTab: React.FC<AdminCommercialTabProps> = ({
   const [dirty, setDirty] = useState(false);
 
   // Issuer Profile
-  const [companyName, setCompanyName] = useState('ImmoGest Maroc');
+  const [companyName, setCompanyName] = useState('SyndicUnion Maroc');
   const [legalForm, setLegalForm] = useState('SARL');
   const [ice, setIce] = useState('');
   const [rc, setRc] = useState('');
@@ -81,7 +81,7 @@ const AdminCommercialTab: React.FC<AdminCommercialTabProps> = ({
     const iss = adminBillingConfig.issuerProfile;
     const com = adminBillingConfig.commercialPolicy;
     if (iss) {
-      setCompanyName(iss.companyName || 'ImmoGest Maroc');
+      setCompanyName(iss.companyName || 'SyndicUnion Maroc');
       setLegalForm(iss.legalForm || 'SARL');
       setIce(iss.ice || '');
       setRc(iss.rc || '');
