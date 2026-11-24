@@ -792,8 +792,23 @@ try {
       expiryAfterFirst,
     );
 
-    // Invalid webhook headers / signature rejected
+    // Invalid webhook headers / signature rejected without touching revision or recording gateway events
+    const revBeforeInvalidWebhooks = diskAfterReplay.__revision;
+    const gwBeforeInvalidWebhooks = (diskAfterReplay.__gatewayEvents || []).length;
     assert.equal((await httpCall('/api/webhooks/paypal', { body: {} })).status, 400);
+    assert.equal(
+      (await httpCall('/api/webhooks/paypal', {
+        body: { event_type: 'PAYMENT.CAPTURE.COMPLETED' },
+        headers: {
+          'paypal-auth-algo': 'SHA256withRSA',
+          'paypal-cert-url': 'https://evil.invalid/cert.pem',
+          'paypal-transmission-id': 'tx-bad-host',
+          'paypal-transmission-sig': 'VALID-SIG',
+          'paypal-transmission-time': new Date().toISOString(),
+        },
+      })).status,
+      400,
+    );
     assert.equal(
       (await httpCall('/api/webhooks/paypal', {
         body: { event_type: 'PAYMENT.CAPTURE.COMPLETED' },
@@ -807,6 +822,9 @@ try {
       })).status,
       401,
     );
+    const diskAfterInvalidWebhooks = readDiskState();
+    assert.equal(diskAfterInvalidWebhooks.__revision, revBeforeInvalidWebhooks);
+    assert.equal((diskAfterInvalidWebhooks.__gatewayEvents || []).length, gwBeforeInvalidWebhooks);
 
     // Amount/currency tamper check: PayPal returns USD instead of EUR -> 409, no payment
     const tamperedOrderRes = await httpCall('/api/subscription/paypal/create-order', {
@@ -1524,6 +1542,7 @@ try {
       return { status: r.status, text: await r.text() };
     };
 
+    const revBeforeBadCmi = readDiskState().__revision;
     const badHashCb = await postCmiWebhook({
       oid,
       amount: '923.40',
@@ -1533,6 +1552,13 @@ try {
       HASH: 'invalid-signature',
     });
     assert.equal(badHashCb.text, 'FAILURE');
+    assert.equal(readDiskState().__revision, revBeforeBadCmi);
+
+    // Malformed CMI callback (missing HASH / invalid oid) rejected 400 before touching DB
+    const malformedCmi = await postCmiWebhook({ oid: 'invalid', amount: '10.00' });
+    assert.equal(malformedCmi.status, 400);
+    assert.equal(malformedCmi.text, 'FAILURE');
+    assert.equal(readDiskState().__revision, revBeforeBadCmi);
 
     // 5. Tampered amount with valid HASH -> FAILURE
     const tamperedFields: Record<string, string> = {

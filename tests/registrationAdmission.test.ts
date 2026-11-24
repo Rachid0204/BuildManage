@@ -80,3 +80,78 @@ await test('two admission stores atomically share quotas without platform state 
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+await test('BoundedSlidingWindow and LoginAttemptGuard enforce memory cap, progressive delay, and (account+IP) isolation', () => {
+  return import('../server/requestGuard').then(({ BoundedSlidingWindow, createLoginAttemptGuard }) => {
+    const small = new BoundedSlidingWindow(3);
+    small.record('k1', 60_000, 1000);
+    small.record('k2', 60_000, 1001);
+    small.record('k3', 60_000, 1002);
+    small.record('k4', 60_000, 1003);
+    assert.equal(small.count('k1', 60_000, 1004).count, 0);
+    assert.equal(small.count('k4', 60_000, 1004).count, 1);
+
+    const guard = createLoginAttemptGuard(new BoundedSlidingWindow(100));
+    const now = 5_000_000;
+    for (let i = 0; i < 5; i++) {
+      const check = guard.checkBeforeLogin('198.51.100.1', 'victim@example.ma', now + i);
+      assert.equal(check.allowed, true);
+      assert.equal(check.delayMs, 0);
+      guard.recordLoginFailure('198.51.100.1', 'victim@example.ma', now + i);
+    }
+    const sixth = guard.checkBeforeLogin('198.51.100.1', 'victim@example.ma', now + 10);
+    assert.equal(sixth.allowed, true);
+    assert.equal(sixth.delayMs, 100);
+
+    for (let i = 5; i < 10; i++) {
+      guard.recordLoginFailure('198.51.100.1', 'victim@example.ma', now + 20 + i);
+    }
+    assert.equal(guard.checkBeforeLogin('198.51.100.1', 'victim@example.ma', now + 50).allowed, false);
+    // Victim on another IP is completely unaffected (neither delayed nor locked out).
+    const otherIp = guard.checkBeforeLogin('198.51.100.2', 'victim@example.ma', now + 50);
+    assert.equal(otherIp.allowed, true);
+    assert.equal(otherIp.delayMs, 0);
+
+    // Valid login clears (account, IP) without resetting the attacker IP's global spray counter.
+    guard.clearAccountIp('198.51.100.1', 'victim@example.ma');
+    assert.equal(guard.checkBeforeLogin('198.51.100.1', 'victim@example.ma', now + 60).allowed, true);
+    for (let i = 0; i < 10; i++) {
+      guard.recordLoginFailure('198.51.100.1', `spray-${i}@example.ma`, now + 100 + i);
+    }
+    assert.equal(guard.checkBeforeLogin('198.51.100.1', 'fresh@example.ma', now + 200).allowed, false);
+  });
+});
+
+await test('pre-body unauthenticated IP rate limiter blocks webhook and auth floods before JSON parsing', async () => {
+  const { bodyParserErrorHandler, createUnauthenticatedIpRateLimiter } = await import('../server/requestGuard');
+  const app = express();
+  app.set('trust proxy', 1);
+  let parsedCount = 0;
+  const countBeforeParse: express.RequestHandler = (_req, _res, next) => { parsedCount++; next(); };
+  app.use('/api', createUnauthenticatedIpRateLimiter());
+  app.use('/api', countBeforeParse, express.json({ limit: '100kb' }), bodyParserErrorHandler);
+  app.post(['/api/webhooks/paypal', '/api/auth/firebase-session'], (_req, res) => res.json({ ok: true }));
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise<void>(resolve => server.once('listening', resolve));
+  const addr = server.address(); assert.ok(addr && typeof addr === 'object');
+  try {
+    for (let i = 0; i < 60; i++) {
+      const resp: Response = await fetch(`http://127.0.0.1:${addr.port}/api/webhooks/paypal`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': `10.0.0.${i}, 198.51.100.77` },
+        body: '{}',
+      });
+      assert.equal(resp.status, 200);
+    }
+    const beforeBlocked = parsedCount;
+    const blockedWebhook = await fetch(`http://127.0.0.1:${addr.port}/api/webhooks/paypal`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '10.9.9.9, 198.51.100.77' },
+      body: JSON.stringify({ pad: 'x'.repeat(150_000) }),
+    });
+    assert.equal(blockedWebhook.status, 429);
+    assert.equal(parsedCount, beforeBlocked);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close(e => e ? reject(e) : resolve()));
+  }
+});

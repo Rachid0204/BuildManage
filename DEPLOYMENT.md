@@ -12,6 +12,8 @@ is needed only for `npm run test:emulator`.
 | Variable | Where | Purpose |
 | --- | --- | --- |
 | `NODE_ENV=production` | Backend | Enforces durable Firestore and required configuration |
+| `SYNDIK_STATE_BACKEND=firestore` | Backend | Required durable Firestore state adapter; local `file` mode is refused in production |
+| `SYNDIK_UPLOAD_BACKEND=gcs` | Backend | Required private Cloud Storage upload adapter; local disk uploads are refused in production |
 | `SYNDIK_SERVER_SECRET` | Backend secret store | At least 32 random characters, stable across instances; legacy session HMAC fallback and v1 encrypted records |
 | `SYNDIK_SESSION_SECRET` | Backend secret store | Optional dedicated session HMAC signing key (at least 32 random characters, distinct from other secrets); falls back to `SYNDIK_SERVER_SECRET` |
 | `SYNDIK_ENCRYPTION_KEYS` | Backend secret store | Required JSON keyring (`{"primary":{"kid":"enc-v2","key":"<32+ random chars>"},"retired":[]}`) for durable AES-GCM records; primary key must differ from signing secrets |

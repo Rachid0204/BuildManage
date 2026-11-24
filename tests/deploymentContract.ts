@@ -181,6 +181,8 @@ test('manifest and docs match production configuration contract',()=>{
  assert.match(envExample,/^SYNDIK_ENCRYPTION_KEYS=$/m);
  assert.match(envExample,/"primary"\s*:\s*\{\s*"kid"/);
  const deploymentDoc=readFileSync('DEPLOYMENT.md','utf8');
+ assert.match(deploymentDoc,/\| `SYNDIK_STATE_BACKEND=firestore` \|/);
+ assert.match(deploymentDoc,/\| `SYNDIK_UPLOAD_BACKEND=gcs` \|/);
  assert.match(deploymentDoc,/\| `SYNDIK_SESSION_SECRET` \|/);
  assert.match(deploymentDoc,/\| `SYNDIK_ENCRYPTION_KEYS` \|.*"primary"/);
  assert.match(deploymentDoc,/## Troubleshooting a failed revision/);

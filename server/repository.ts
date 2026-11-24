@@ -38,11 +38,21 @@ export const sharedState = new Proxy({} as State, {
 });
 export interface StateRepository {
   transaction<T>(run: (state: State) => Promise<T>): Promise<T>;
+  readRevision?(): Promise<number>;
   cleanupGenerations?(now?: number): Promise<unknown>;
   watchRevision?(onRevision: (revision: number) => void, onError: (error: Error) => void): () => void;
 }
 export class FileRepository implements StateRepository {
   constructor(public directory: string) {}
+  async readRevision(): Promise<number> {
+    try {
+      const state = JSON.parse(await readFile(path.join(this.directory, "shared-state.json"), "utf8"));
+      return Number(state?.__revision) || 0;
+    } catch (error: any) {
+      if (error?.code === "ENOENT") return 0;
+      throw new Error("Unreadable database; restore a verified backup");
+    }
+  }
   async cleanupGenerations(now=Date.now()) {
     return this.transaction(async () => {
       const {readdir}=await import('node:fs/promises');let deleted=0;
@@ -276,6 +286,16 @@ export class FirestoreRepository implements StateRepository {
   watchRevision(onRevision: (revision: number) => void, onError: (error: Error) => void) {
     return this.db.doc('platform_internal/state_revision').onSnapshot(
       snapshot => onRevision(Number(snapshot.data()?.revision) || 0), onError);
+  }
+  async readRevision(): Promise<number> {
+    try {
+      const meta = await this.db.doc("platform_internal/state_revision").get();
+      return Number(meta.data()?.revision) || 0;
+    } catch (error: any) {
+      if (typeof error?.code === "number" && !error?.rejected && !error?.status)
+        throw dependencyFailure("database", error);
+      throw error;
+    }
   }
   async transaction<T>(run: (state: State) => Promise<T>): Promise<T> {
     const ref = this.db.doc("platform_internal/state_revision");
