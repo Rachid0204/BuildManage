@@ -51,7 +51,7 @@ import {
   readOperationStatus,
 } from './server/operationStatus';
 import { hashPassword, verifyPassword } from './server/passwords';
-import { validateProductionEnvironment } from './server/productionConfig';
+import { ProductionConfigError, validateProductionEnvironment } from './server/productionConfig';
 import { createApiCorsMiddleware } from './server/corsPolicy';
 import {
   cancelAccountDeletionRequest,
@@ -4232,7 +4232,9 @@ async function startServer() {
 }
 
 startServer().catch(error => {
-  console.error(error instanceof Error ? error.message : "Server startup failed");
+  if (!(error instanceof ProductionConfigError)) {
+    console.error(error instanceof Error ? error.message : "Server startup failed");
+  }
   process.exitCode = 1;
 });
 

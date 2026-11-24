@@ -10,8 +10,10 @@ trigger is not stored here and has not been inspected or modified by this change
 
 `server/productionConfig.ts` exports a typed Zod schema. Both `startServer()` and
 `createRepository()` validate before fallback, SDK initialization or listening.
-In production, invalid configuration exits with code 1 and
-`PRODUCTION_CONFIG_INVALID`, listing field names only, never their values.
+In production, invalid configuration emits one `ERROR` JSON line on `stderr`
+(`event: "production_config_invalid"`, `fields`) and exits with code 1 and
+`PRODUCTION_CONFIG_INVALID`. Non-secret target/mode fields report `expected X, got Y`;
+secret and keyring values are never included.
 Development and emulator workflows retain their existing behavior.
 
 Required keys are shown in `deploy/runtime.env.example`:

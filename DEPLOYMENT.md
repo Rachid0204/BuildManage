@@ -12,7 +12,9 @@ is needed only for `npm run test:emulator`.
 | Variable | Where | Purpose |
 | --- | --- | --- |
 | `NODE_ENV=production` | Backend | Enforces durable Firestore and required configuration |
-| `SYNDIK_SERVER_SECRET` | Backend secret store | At least 32 random characters, stable across instances; session HMAC and encrypted outbox |
+| `SYNDIK_SERVER_SECRET` | Backend secret store | At least 32 random characters, stable across instances; legacy session HMAC fallback and v1 encrypted records |
+| `SYNDIK_SESSION_SECRET` | Backend secret store | Optional dedicated session HMAC signing key (at least 32 random characters, distinct from other secrets); falls back to `SYNDIK_SERVER_SECRET` |
+| `SYNDIK_ENCRYPTION_KEYS` | Backend secret store | Required JSON keyring (`{"primary":{"kid":"enc-v2","key":"<32+ random chars>"},"retired":[]}`) for durable AES-GCM records; primary key must differ from signing secrets |
 | `PUBLIC_APP_URL` | Backend | Exact public HTTPS origin, used for recovery links |
 | `FIRESTORE_DATABASE_ID` | Backend | Exact named database in `deploy/target.json`; production rejects `(default)` |
 | `GOOGLE_CLOUD_PROJECT` | Backend and migration job | Explicit staging/production project |
@@ -63,6 +65,77 @@ frontend HTTP checks on ports 3000 and 31847. `npm run test:container` builds an
 starts the actual runtime-only Docker image on both ports with networking disabled.
 Both use disposable random secrets and no credentials. These tests do not establish
 production IAM, database readiness, bucket access or email delivery. CI runs both.
+
+## Troubleshooting a failed revision
+
+When `server/productionConfig.ts` rejects the runtime environment at the start of
+`startServer()`, the container exits with code `1` before opening the HTTP listener.
+Cloud Run surfaces that symptom generically as:
+`container failed to start and listen on PORT=8080`.
+
+Before exiting, the process writes one structured JSON line to `stderr` with
+`severity: "ERROR"`, `event: "production_config_invalid"`, `fields: [...]`, and
+`message: "PRODUCTION_CONFIG_INVALID: ..."`. Non-secret target/mode fields report
+`expected X, got Y`; secret and keyring values are never logged.
+
+### Finding the failure in Cloud Logging
+
+Filter Cloud Logging by the structured event on the Cloud Run service:
+
+```text
+resource.type="cloud_run_revision"
+resource.labels.service_name="buildmanage"
+resource.labels.location="europe-west1"
+jsonPayload.event="production_config_invalid"
+```
+
+### Operator `gcloud` commands
+
+Run these read-only commands from an authorized workstation to inspect the
+deployed service name, environment bindings, and revision error logs (secret
+bindings appear as `secretKeyRef` names/versions rather than secret values):
+
+```bash
+# 1. List Cloud Run services in europe-west1 (verify canonical service name is buildmanage)
+gcloud run services list \
+  --project=immogest-7faaf \
+  --region=europe-west1
+
+# 2. Describe revision status, plain env vars, and Secret Manager bindings
+gcloud run services describe buildmanage \
+  --project=immogest-7faaf \
+  --region=europe-west1 \
+  --format="yaml(status.latestCreatedRevisionName,status.latestReadyRevisionName,status.conditions,spec.template.spec.containers[0].env)"
+
+# 3. Read structured startup validation errors and container ERROR logs
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name="buildmanage" AND resource.labels.location="europe-west1" AND (jsonPayload.event="production_config_invalid" OR severity>=ERROR)' \
+  --project=immogest-7faaf \
+  --limit=20 \
+  --format="table(timestamp,resource.labels.revision_name,jsonPayload.event,jsonPayload.fields,jsonPayload.message,textPayload)"
+```
+
+### Field-by-field checklist
+
+| Field in `fields` | What to check |
+| --- | --- |
+| `NODE_ENV` | Must equal `production` (set in `Dockerfile`; remove any override setting another value). |
+| `SYNDIK_STATE_BACKEND` | Must equal `firestore`. |
+| `SYNDIK_UPLOAD_BACKEND` | Must equal `gcs`. |
+| `SYNDIK_AUTH_PROVIDER` | Must equal `firebase`. |
+| `GOOGLE_CLOUD_PROJECT` | Must be explicitly set to `immogest-7faaf` (`deploy/target.json` `projectId`); Cloud Run does not inject it automatically. |
+| `FIRESTORE_DATABASE_ID` | Must equal `ai-studio-immogest-6d16b790-183d-49fd-9d4f-086d99dc2be3` (`deploy/target.json` `databaseId`); `(default)` is rejected. |
+| `PUBLIC_APP_URL` | Must be a bare `https://` origin (`https://immogest.cloud.run`) with no path, query, hash, credentials, or `localhost`. |
+| `SYNDIK_UPLOAD_BUCKET` | Must be a valid GCS bucket name (`3–222` lowercase alphanumeric/`.`/`_`/`-` characters, e.g. `immogest-7faaf-uploads`) for the private upload bucket. |
+| `SYNDIK_SERVER_SECRET` | Bind from Secret Manager: >= 32 random chars, trimmed, >= 12 distinct chars, not a placeholder or repeated pattern. Preserve the existing stable secret across deploys. |
+| `SYNDIK_SESSION_SECRET` | Optional Secret Manager binding; when set, must satisfy the 32+ random-char rules and differ from `SYNDIK_SERVER_SECRET`, `SYNDIK_SCHEDULER_SECRET`, and the primary encryption key. |
+| `SYNDIK_ENCRYPTION_KEYS` | Bind from Secret Manager: valid JSON `{"primary":{"kid":"<id>","key":"<32+ random chars>"},"retired":[...]}` with unique `kid` identifiers, 32+ char keys, and a primary key distinct from `SYNDIK_SERVER_SECRET` and `SYNDIK_SESSION_SECRET`. |
+| `SYNDIK_SCHEDULER_SECRET` | Bind from Secret Manager: >= 32 random chars, distinct from `SYNDIK_SERVER_SECRET` and `SYNDIK_SESSION_SECRET`, matching the scheduled Cloud Functions secret. |
+| `K_SERVICE` / `CLOUD_RUN_SERVICE` | Cloud Run sets `K_SERVICE` automatically to the service name; must equal `buildmanage` (`deploy/target.json` `service`). Deploying to a differently named Cloud Run service fails validation. |
+| `CLOUD_RUN_PROJECT_ID` / `FIREBASE_PROJECT_ID` | Optional; if set, must equal `immogest-7faaf` (`deploy/target.json` `projectId`). |
+| `CLOUD_RUN_REGION` | Optional; if set, must equal `europe-west1` (`deploy/target.json` `region`). |
+| `TRUST_PROXY_HOPS` | Optional; if set, must contain digits only (e.g. `1` behind Cloud Run). |
+| `FIRESTORE_EMULATOR_HOST`, `FIREBASE_AUTH_EMULATOR_HOST`, `STORAGE_EMULATOR_HOST`, `FIREBASE_STORAGE_EMULATOR_HOST`, `FUNCTIONS_EMULATOR`, `SYNDIK_TEST_MODE` | Must be unset (or empty) in production; emulator hosts and test bypasses are refused. |
 
 ## Firebase account email setup
 
