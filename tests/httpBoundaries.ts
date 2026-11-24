@@ -305,7 +305,29 @@ try {
     assert.equal(response.status, 400);
   }
   assert.ok(limited);
+  const readyWarm = await call('/api/ready', { 'X-Forwarded-For': '203.0.113.70' });
+  assert.equal(readyWarm.status, 200);
+  assert.equal(readyWarm.data.status, 'ready');
+  assert.equal(readyWarm.data.revision, revBeforeWebhook);
+
   writeFileSync(join(dataDir, 'shared-state.json'), 'unreadable platform state');
+  // Within the short readiness cache window, /api/ready serves the cached revision without hitting disk; >60/min from one IP returns 429.
+  assert.equal((await call('/api/ready', { 'X-Forwarded-For': '203.0.113.70' })).status, 200);
+  let readyLimited = false;
+  for (let i = 0; i < 65; i++) {
+    const rr = await call('/api/ready', { 'X-Forwarded-For': '203.0.113.71' });
+    if (rr.status === 429) { readyLimited = true; break; }
+  }
+  assert.equal(readyLimited, true);
+  // Malformed CMI callback rejected 400 FAILURE before touching repository.transaction.
+  const badCmiPreDb = await fetch(`http://127.0.0.1:${port}/api/webhooks/cmi`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Forwarded-For': '203.0.113.72' },
+    body: 'oid=bad&amount=10',
+  });
+  assert.equal(badCmiPreDb.status, 400);
+  assert.equal(await badCmiPreDb.text(), 'FAILURE');
+
   const blocked = await call('/api/auth/register', {}, { email: 'last@audit.invalid', password });
   assert.equal(blocked.status, 429); assert.equal(blocked.data.code, 'AUTH_RATE_LIMITED');
   assert.equal((await call('/api/auth/login', { 'X-Forwarded-For': '203.0.113.10' }, { identifier: owner.email, password: 'any' })).status, 429);

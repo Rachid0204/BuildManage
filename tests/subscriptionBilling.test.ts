@@ -1542,6 +1542,7 @@ try {
       return { status: r.status, text: await r.text() };
     };
 
+    const revBeforeBadCmi = readDiskState().__revision;
     const badHashCb = await postCmiWebhook({
       oid,
       amount: '923.40',
@@ -1551,6 +1552,13 @@ try {
       HASH: 'invalid-signature',
     });
     assert.equal(badHashCb.text, 'FAILURE');
+    assert.equal(readDiskState().__revision, revBeforeBadCmi);
+
+    // Malformed CMI callback (missing HASH / invalid oid) rejected 400 before touching DB
+    const malformedCmi = await postCmiWebhook({ oid: 'invalid', amount: '10.00' });
+    assert.equal(malformedCmi.status, 400);
+    assert.equal(malformedCmi.text, 'FAILURE');
+    assert.equal(readDiskState().__revision, revBeforeBadCmi);
 
     // 5. Tampered amount with valid HASH -> FAILURE
     const tamperedFields: Record<string, string> = {

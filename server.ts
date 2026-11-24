@@ -73,10 +73,12 @@ import {
   registrationAdmission,
 } from './server/registrationAdmission';
 import {
+  EphemeralGatewayEventBuffer,
   bodyParserErrorHandler,
   createLoginAttemptGuard,
   createUnauthenticatedIpRateLimiter,
   normalizedClientIp,
+  validateCmiWebhookEnvelope,
   validatePayPalWebhookEnvelope,
 } from './server/requestGuard';
 import { buildingReport } from './server/reports';
@@ -138,6 +140,7 @@ import type {
   AdminBillingConfigUpdateInput,
   AssembleeGenerale,
   Building,
+  GatewayEventRecord,
   SubscriptionPlan,
   SubscriptionPromoCode,
 } from './types';
@@ -1076,7 +1079,9 @@ async function startServer() {
 
   const repository = createRepository(),
     sharedStore: ServerStore = sharedState,
-    loginGuard = createLoginAttemptGuard();
+    loginGuard = createLoginAttemptGuard(),
+    ephemeralGatewayEvents = new EphemeralGatewayEventBuffer<GatewayEventRecord>(100);
+  let readyCache: { revision: number; expiresAt: number } | undefined;
   // Must precede every wrapped identity route and all platform transactions.
   app.use(registrationAdmission(createAdmissionStore(), req => {
     const token = String(req.headers.authorization || '').replace(/^Bearer /, '');
@@ -3588,29 +3593,40 @@ async function startServer() {
   app.post(
     "/api/webhooks/cmi",
     wrap(async (req, res) => {
-      const payload = (req.body && typeof req.body === "object"
-        ? req.body
-        : {}) as Record<string, unknown>;
-      const oid = String(payload.oid || "").trim();
-      const procReturnCode = String(payload.ProcReturnCode || "").trim();
-      const responseLabel = String(payload.Response || "").trim();
-      const transId = String(
-        payload.TransId || payload.AuthCode || payload.transid || "",
-      ).trim();
-      const callbackAmount = Number(payload.amount);
-      const callbackAmountCents = Number.isFinite(callbackAmount)
-        ? Math.round(callbackAmount * 100)
-        : -1;
-      const callbackCurrency = String(payload.currency || "").trim();
-
       const replyPlain = (code: number, token: "ACTION=POSTAUTH" | "APPROVED" | "FAILURE") => {
         res.status(code).type("text/plain").send(token);
+      };
+
+      const envelope = validateCmiWebhookEnvelope(req.body);
+      if (!envelope.ok) {
+        return replyPlain(400, "FAILURE");
+      }
+      const {
+        payload,
+        oid,
+        procReturnCode,
+        responseLabel,
+        transId,
+        callbackAmount,
+        callbackAmountCents,
+        callbackCurrency,
+      } = envelope.value;
+
+      const recordEphemeralCmiEvent = (
+        event: Omit<GatewayEventRecord, "id" | "createdAt">,
+      ) => {
+        ephemeralGatewayEvents.record({
+          id: crypto.randomUUID(),
+          ...event,
+          message: String(event.message || "").slice(0, 500),
+          createdAt: new Date().toISOString(),
+        });
       };
 
       const outcome = await repository.transaction(async (state) => {
         const cmiSecrets = resolvePlatformBillingConfig(state).cmiSecrets;
         if (!cmiSecrets.storeKey || !cmiSecrets.clientId) {
-          recordGatewayEvent(state, {
+          recordEphemeralCmiEvent({
             gateway: "cmi",
             eventType: "CMI_CALLBACK",
             status: "error",
@@ -3622,7 +3638,7 @@ async function startServer() {
         }
 
         if (!verifyCmiCallbackHash(payload, cmiSecrets.storeKey)) {
-          recordGatewayEvent(state, {
+          recordEphemeralCmiEvent({
             gateway: "cmi",
             eventType: "CMI_CALLBACK_INVALID_HASH",
             status: "rejected",
@@ -3636,7 +3652,7 @@ async function startServer() {
 
         const intent = oid ? state.__cmiIntents?.[oid] : undefined;
         if (!intent) {
-          recordGatewayEvent(state, {
+          recordEphemeralCmiEvent({
             gateway: "cmi",
             eventType: "CMI_CALLBACK_UNKNOWN_OID",
             status: "rejected",
@@ -3887,7 +3903,10 @@ async function startServer() {
     const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 100));
     const gateway = String(req.query.gateway || "").trim().toLowerCase();
     const status = String(req.query.status || "").trim().toLowerCase();
-    const all = [...(sharedStore.__gatewayEvents || [])].reverse();
+    const all = [
+      ...(sharedStore.__gatewayEvents || []),
+      ...ephemeralGatewayEvents.list(),
+    ].sort((a: any, b: any) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
     const filtered = all
       .filter((ev: any) => {
         if (gateway && String(ev.gateway || "").toLowerCase() !== gateway) return false;
@@ -4154,9 +4173,26 @@ async function startServer() {
       ),
     });
   });
-  api.get("/api/ready", async (_req, res) =>
-    res.json({ status: "ready", revision: sharedStore.__revision || 0, runtimeRevision: process.env.K_REVISION || 'local',
-      checks: { databaseRead: 'ok', storageWrite: 'not_checked' } }),
+  app.get(
+    "/api/ready",
+    wrap(async (_req, res) => {
+      const now = Date.now();
+      let revision: number;
+      if (readyCache && readyCache.expiresAt > now) {
+        revision = readyCache.revision;
+      } else {
+        revision = repository.readRevision
+          ? await repository.readRevision()
+          : await repository.transaction(async (s) => Number(s.__revision) || 0);
+        readyCache = { revision, expiresAt: now + 2000 };
+      }
+      return res.json({
+        status: "ready",
+        revision,
+        runtimeRevision: process.env.K_REVISION || "local",
+        checks: { databaseRead: "ok", storageWrite: "not_checked" },
+      });
+    }, false),
   );
   api.get('/api/diagnostics', async (req, res) => {
     const caller = await extractAndVerifyCaller(req, sharedStore);
