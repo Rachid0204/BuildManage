@@ -121,6 +121,7 @@ const UNAUTHENTICATED_ROUTE_RULES: Readonly<Record<string, RouteLimitRule>> = {
   'POST /api/webhooks/paypal': { method: 'POST', bucket: 'webhook-paypal', limit: 60, windowMs: MINUTE, code: 'RATE_LIMITED' },
   'POST /api/webhooks/cmi': { method: 'POST', bucket: 'webhook-cmi', limit: 60, windowMs: MINUTE, code: 'RATE_LIMITED' },
   'POST /api/subscription/cmi/return': { method: 'POST', bucket: 'cmi-return', limit: 60, windowMs: MINUTE, code: 'RATE_LIMITED' },
+  'POST /api/csp-report': { method: 'POST', bucket: 'csp-report', limit: 30, windowMs: MINUTE, code: 'RATE_LIMITED' },
 };
 
 /**

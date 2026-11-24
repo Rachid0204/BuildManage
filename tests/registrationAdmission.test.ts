@@ -155,3 +155,84 @@ await test('pre-body unauthenticated IP rate limiter blocks webhook and auth flo
     await new Promise<void>((resolve, reject) => server.close(e => e ? reject(e) : resolve()));
   }
 });
+
+await test('securityHeaders supports CSP_MODE=report-only vs enforce, parses cleanly, and omits localhost in production', async () => {
+  const {
+    applyHtmlShellHeaders,
+    buildContentSecurityPolicy,
+    createCspReportHandler,
+    createSecurityHeadersMiddleware,
+    parseContentSecurityPolicy,
+    resolveCspMode,
+  } = await import('../server/securityHeaders');
+
+  assert.equal(resolveCspMode({}), 'report-only');
+  assert.equal(resolveCspMode({ CSP_MODE: 'report-only' }), 'report-only');
+  assert.equal(resolveCspMode({ CSP_MODE: 'enforce' }), 'enforce');
+
+  const prodPolicy = buildContentSecurityPolicy({
+    NODE_ENV: 'production',
+    PUBLIC_APP_URL: 'https://immogest.cloud.run',
+  });
+  const parsed = parseContentSecurityPolicy(prodPolicy);
+  assert.deepEqual(parsed.get('default-src'), ["'self'"]);
+  assert.equal(parsed.get('script-src')?.includes("'unsafe-inline'"), false);
+  assert.equal(parsed.get('script-src')?.includes("'unsafe-eval'"), false);
+  assert.ok(parsed.get('connect-src')?.includes('https://immogest.cloud.run'));
+  assert.equal(
+    parsed.get('connect-src')?.some((origin) => origin.includes('127.0.0.1') || origin.includes('localhost')),
+    false,
+  );
+  assert.ok(parsed.get('form-action')?.includes('https://payment.cmi.co.ma'));
+  assert.ok(parsed.get('form-action')?.includes('https://testpayment.cmi.co.ma'));
+
+  const app = express();
+  const enforceEnv: NodeJS.ProcessEnv = { NODE_ENV: 'production', CSP_MODE: 'enforce', PUBLIC_APP_URL: 'https://immogest.cloud.run' };
+  app.use(createSecurityHeadersMiddleware(enforceEnv));
+  app.use('/api/csp-report', express.json({ limit: '8kb', type: ['application/json', 'application/reports+json'] }));
+  app.post('/api/csp-report', createCspReportHandler(enforceEnv));
+  app.get('/shell', (_req, res) => {
+    applyHtmlShellHeaders(res, enforceEnv);
+    res.type('text/html').send('<!doctype html><html><body>ok</body></html>');
+  });
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise<void>(resolve => server.once('listening', resolve));
+  const addr = server.address(); assert.ok(addr && typeof addr === 'object');
+  const warnLines: string[] = [];
+  const origWarn = console.warn;
+  console.warn = (...args: unknown[]) => { warnLines.push(args.join(' ')); };
+  try {
+    const shell = await fetch(`http://127.0.0.1:${addr.port}/shell`);
+    assert.equal(shell.status, 200);
+    assert.equal(shell.headers.get('content-security-policy-report-only'), null);
+    assert.ok(parseContentSecurityPolicy(shell.headers.get('content-security-policy') || '').size >= 10);
+
+    const reportRes = await fetch(`http://127.0.0.1:${addr.port}/api/csp-report`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/reports+json' },
+      body: JSON.stringify([
+        {
+          type: 'csp-violation',
+          url: 'https://immogest.cloud.run/dashboard?oobCode=never-log-me',
+          body: {
+            blockedURL: 'https://tracker.invalid/p.js#frag-secret',
+            effectiveDirective: 'script-src-elem',
+            disposition: 'enforce',
+            statusCode: 200,
+          },
+        },
+      ]),
+    });
+    assert.equal(reportRes.status, 204);
+    assert.equal(warnLines.length, 1);
+    const entry = JSON.parse(warnLines[0]);
+    assert.equal(entry.mode, 'enforce');
+    assert.equal(entry.documentUri, 'https://immogest.cloud.run/dashboard');
+    assert.equal(entry.blockedUri, 'https://tracker.invalid/p.js');
+    assert.equal(warnLines[0].includes('never-log-me'), false);
+    assert.equal(warnLines[0].includes('frag-secret'), false);
+  } finally {
+    console.warn = origWarn;
+    await new Promise<void>((resolve, reject) => server.close(e => e ? reject(e) : resolve()));
+  }
+});

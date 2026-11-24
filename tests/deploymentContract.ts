@@ -162,6 +162,15 @@ test('nonproduction local development stays compatible',async()=>{
  const {validateProductionEnvironment}=await import('../server/productionConfig');
  assert.equal(validateProductionEnvironment({NODE_ENV:'test',SYNDIK_STATE_BACKEND:'file'}),undefined);
 });
+test('CSP_MODE accepts report-only or enforce and rejects invalid modes in production',async()=>{
+ const {validateProductionEnvironment}=await import('../server/productionConfig');
+ assert.equal(validateProductionEnvironment({...good,CSP_MODE:undefined})?.CSP_MODE,undefined);
+ assert.equal(validateProductionEnvironment({...good,CSP_MODE:'report-only'})?.CSP_MODE,'report-only');
+ assert.equal(validateProductionEnvironment({...good,CSP_MODE:'enforce'})?.CSP_MODE,'enforce');
+ for (const invalid of ['off','disabled','enforced','']) {
+  assert.throws(()=>validateProductionEnvironment({...good,CSP_MODE:invalid}),/PRODUCTION_CONFIG_INVALID.*CSP_MODE/);
+ }
+});
 test('manifest and docs match production configuration contract',()=>{
  const target=JSON.parse(readFileSync('deploy/target.json','utf8'));
  const firebase=JSON.parse(readFileSync('firebase.json','utf8'));
@@ -179,12 +188,14 @@ test('manifest and docs match production configuration contract',()=>{
  const envExample=readFileSync('.env.example','utf8');
  assert.match(envExample,/^SYNDIK_SESSION_SECRET=$/m);
  assert.match(envExample,/^SYNDIK_ENCRYPTION_KEYS=$/m);
+ assert.match(envExample,/^CSP_MODE=report-only$/m);
  assert.match(envExample,/"primary"\s*:\s*\{\s*"kid"/);
  const deploymentDoc=readFileSync('DEPLOYMENT.md','utf8');
  assert.match(deploymentDoc,/\| `SYNDIK_STATE_BACKEND=firestore` \|/);
  assert.match(deploymentDoc,/\| `SYNDIK_UPLOAD_BACKEND=gcs` \|/);
  assert.match(deploymentDoc,/\| `SYNDIK_SESSION_SECRET` \|/);
  assert.match(deploymentDoc,/\| `SYNDIK_ENCRYPTION_KEYS` \|.*"primary"/);
+ assert.match(deploymentDoc,/\| `CSP_MODE` \|/);
  assert.match(deploymentDoc,/## Troubleshooting a failed revision/);
  assert.match(deploymentDoc,/production_config_invalid/);
  assert.match(deploymentDoc,/gcloud run services list/);

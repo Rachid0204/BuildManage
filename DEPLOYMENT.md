@@ -30,6 +30,7 @@ is needed only for `npm run test:emulator`.
 | `SYNDIK_BOOTSTRAP_ADMIN_EMAIL` | Backend | Optional exact email of a verified Google account allowed to bootstrap platform administration |
 | `SYNDIK_BACKUP_KEY` | Operator secret store | Separate backup encryption key, at least 32 random characters; required only for backup/restore |
 | `TRUST_PROXY_HOPS` | Backend | Exact trusted reverse-proxy hop count; zero by default |
+| `CSP_MODE` | Backend | Optional Content-Security-Policy mode: `report-only` (default) or `enforce` |
 
 Use workload identity/application default credentials for the runtime service
 account. Grant access only to the intended Firestore database and private upload
@@ -137,6 +138,7 @@ gcloud logging read \
 | `CLOUD_RUN_PROJECT_ID` / `FIREBASE_PROJECT_ID` | Optional; if set, must equal `immogest-7faaf` (`deploy/target.json` `projectId`). |
 | `CLOUD_RUN_REGION` | Optional; if set, must equal `europe-west1` (`deploy/target.json` `region`). |
 | `TRUST_PROXY_HOPS` | Optional; if set, must contain digits only (e.g. `1` behind Cloud Run). |
+| `CSP_MODE` | Optional; if set, must equal `report-only` (default) or `enforce`. |
 | `FIRESTORE_EMULATOR_HOST`, `FIREBASE_AUTH_EMULATOR_HOST`, `STORAGE_EMULATOR_HOST`, `FIREBASE_STORAGE_EMULATOR_HOST`, `FUNCTIONS_EMULATOR`, `SYNDIK_TEST_MODE` | Must be unset (or empty) in production; emulator hosts and test bypasses are refused. |
 
 ## Firebase account email setup
