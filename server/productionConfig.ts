@@ -62,12 +62,73 @@ export const productionEnvironmentSchema = z.object({
  { path: ['SYNDIK_SCHEDULER_SECRET'], message: 'Must differ from session-signing and legacy compatibility keys' });
 export type ProductionEnvironment = z.infer<typeof productionEnvironmentSchema>;
 
+const NON_SECRET_EXPECTED: Readonly<Record<string, string>> = {
+ SYNDIK_STATE_BACKEND: 'firestore',
+ SYNDIK_UPLOAD_BACKEND: 'gcs',
+ SYNDIK_AUTH_PROVIDER: 'firebase',
+ GOOGLE_CLOUD_PROJECT: target.projectId,
+ FIRESTORE_DATABASE_ID: target.databaseId,
+ FIREBASE_PROJECT_ID: target.projectId,
+ K_SERVICE: target.service,
+ CLOUD_RUN_PROJECT_ID: target.projectId,
+ CLOUD_RUN_SERVICE: target.service,
+ CLOUD_RUN_REGION: target.region,
+};
+
+const SECRET_ENV_KEYS = [
+ 'SYNDIK_SERVER_SECRET',
+ 'SYNDIK_SESSION_SECRET',
+ 'SYNDIK_ENCRYPTION_KEYS',
+ 'SYNDIK_SCHEDULER_SECRET',
+ 'SYNDIK_BACKUP_KEY',
+ 'SENDGRID_API_KEY',
+ 'PAYPAL_CLIENT_SECRET',
+] as const;
+
+function formatObservedValue(raw: string | undefined, secretValues: ReadonlySet<string>): string {
+ if (raw === undefined) return 'undefined';
+ if (raw === '') return '""';
+ if (secretValues.has(raw)) return '[REDACTED]';
+ const bounded = raw.length > 120 ? `${raw.slice(0, 120)}...` : raw;
+ return /^[^\s,"'\\]+$/.test(bounded) && !/[\x00-\x1f\x7f]/.test(bounded)
+  ? bounded
+  : JSON.stringify(bounded);
+}
+
+export class ProductionConfigError extends Error {
+ readonly code: 'PRODUCTION_CONFIG_INVALID';
+ readonly fields: string[];
+
+ constructor(fields: string[], message: string) {
+  super(message);
+  this.name = 'ProductionConfigError';
+  this.code = 'PRODUCTION_CONFIG_INVALID';
+  this.fields = fields;
+ }
+}
+
 export function validateProductionEnvironment(env: NodeJS.ProcessEnv = process.env): ProductionEnvironment | undefined {
  if (env.NODE_ENV !== 'production') return undefined;
  const result = productionEnvironmentSchema.safeParse(env);
  if (!result.success) {
   const fields = [...new Set(result.error.issues.map(issue => issue.path.join('.')))];
-  throw new Error(`PRODUCTION_CONFIG_INVALID: ${fields.join(', ')}. See docs/deployment-contract.md; no fallback is permitted.`);
+  const secretValues = new Set(
+   SECRET_ENV_KEYS.map(key => env[key]).filter((v): v is string => typeof v === 'string' && v.length > 0),
+  );
+  const details = fields.map(field => {
+   if (Object.hasOwn(NON_SECRET_EXPECTED, field)) {
+    return `${field} (expected ${NON_SECRET_EXPECTED[field]}, got ${formatObservedValue(env[field], secretValues)})`;
+   }
+   return field;
+  });
+  const message = `PRODUCTION_CONFIG_INVALID: ${details.join(', ')}. See docs/deployment-contract.md; no fallback is permitted.`;
+  console.error(JSON.stringify({
+   severity: 'ERROR',
+   event: 'production_config_invalid',
+   fields,
+   message,
+  }));
+  throw new ProductionConfigError(fields, message);
  }
  return result.data;
 }
