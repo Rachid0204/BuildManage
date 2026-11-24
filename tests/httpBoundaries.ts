@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { createServer } from 'node:net';
@@ -8,6 +8,9 @@ import { hashPasswordSync, computeSessionSignature } from '../utils/security';
 
 const root = resolve(import.meta.dirname, '..');
 const dataDir = mkdtempSync(join(tmpdir(), 'buildmanage-boundaries-'));
+const testDistDir = join(dataDir, 'dist');
+mkdirSync(testDistDir, { recursive: true });
+writeFileSync(join(testDistDir, 'index.html'), '<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>SyndicUnion</title></head><body><div id="root"></div></body></html>');
 const password = 'Synthetic-Test-Password-42!';
 const owner = { uid: 'owner-a', email: 'owner@audit.invalid', displayName: 'Owner', role: 'syndic' as const, syndicId: 's-a', buildingId: 'b-a' };
 const unverifiedOwner = { uid: 'owner-unv', email: 'unverified@audit.invalid', displayName: 'Unverified', role: 'syndic' as const, syndicId: 's-unv', buildingId: 'b-unv', emailVerified: false };
@@ -42,7 +45,7 @@ const port = await new Promise<number>((resolvePort) => { const server = createS
   server.close(() => resolvePort(value));
 }); });
 const child = spawn(process.execPath, ['--import', join(root, 'tests/helpers/networkGuard.mjs'), '--import', 'tsx', 'server.ts'], {
-  cwd: root, env: { ...process.env, PORT: String(port), NODE_ENV: 'test', SYNDIK_STATE_BACKEND: 'file', SYNDIK_DATA_DIR: dataDir,
+  cwd: root, env: { ...process.env, PORT: String(port), NODE_ENV: 'test', SYNDIK_STATE_BACKEND: 'file', SYNDIK_DATA_DIR: dataDir, SYNDIK_TEST_DIST_DIR: testDistDir,
     TRUST_PROXY_HOPS: '1', SYNDIK_SERVER_SECRET: 'synthetic-server-secret-12345678901234567890', FIREBASE_SERVICE_ACCOUNT_JSON: '' }, stdio: ['ignore', 'pipe', 'pipe'],
 });
 let logs = '';
@@ -330,6 +333,112 @@ try {
   assert.equal(badCmiPreDb.status, 400);
   assert.equal(await badCmiPreDb.text(), 'FAILURE');
 
+  // Browser security headers on every HTML shell route and API response + CSP parsing.
+  const parseCsp = (raw: string): Map<string, string[]> => {
+    assert.ok(raw.length > 0 && !/[\r\n\0]/.test(raw), 'CSP must be a non-empty single-line header');
+    const directives = new Map<string, string[]>();
+    const parts = raw.split(';').map((s) => s.trim()).filter(Boolean);
+    assert.ok(parts.length >= 8, `Expected structured CSP directives, got: ${raw}`);
+    for (const part of parts) {
+      const tokens = part.split(/\s+/).filter(Boolean);
+      const name = tokens[0]?.toLowerCase();
+      assert.ok(name && /^[a-z0-9-]+$/.test(name), `Invalid directive name in: ${part}`);
+      assert.equal(directives.has(name), false, `Duplicate CSP directive: ${name}`);
+      directives.set(name, tokens.slice(1));
+    }
+    return directives;
+  };
+  for (const htmlRoute of ['/', '/index.html', '/login', '/privacy']) {
+    const htmlRes = await fetch(`http://127.0.0.1:${port}${htmlRoute}`);
+    assert.equal(htmlRes.status, 200, `Expected 200 HTML for ${htmlRoute}`);
+    assert.match(htmlRes.headers.get('content-type') || '', /text\/html/i);
+    const hsts = htmlRes.headers.get('strict-transport-security') || '';
+    assert.match(hsts, /max-age=15552000\b/);
+    assert.equal(/preload/i.test(hsts), false, 'HSTS must not include preload');
+    const perms = htmlRes.headers.get('permissions-policy') || '';
+    assert.match(perms, /camera=\(self\)/);
+    assert.match(perms, /microphone=\(\)/);
+    assert.match(perms, /geolocation=\(\)/);
+    assert.equal(htmlRes.headers.get('cross-origin-opener-policy'), 'same-origin-allow-popups');
+    assert.equal(htmlRes.headers.get('x-frame-options'), 'SAMEORIGIN');
+    assert.equal(htmlRes.headers.get('referrer-policy'), 'strict-origin-when-cross-origin');
+    assert.equal(htmlRes.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(htmlRes.headers.get('content-security-policy'), null);
+    const cspRaw = htmlRes.headers.get('content-security-policy-report-only') || '';
+    const csp = parseCsp(cspRaw);
+    assert.deepEqual(csp.get('default-src'), ["'self'"]);
+    const scriptSrc = csp.get('script-src') || [];
+    assert.ok(scriptSrc.includes("'self'"));
+    assert.ok(scriptSrc.includes('https://www.paypal.com'));
+    assert.ok(scriptSrc.includes('https://apis.google.com'));
+    assert.equal(scriptSrc.includes("'unsafe-inline'"), false, 'script-src must not allow unsafe-inline');
+    assert.equal(scriptSrc.includes("'unsafe-eval'"), false, 'script-src must not allow unsafe-eval');
+    const connectSrc = csp.get('connect-src') || [];
+    assert.ok(connectSrc.includes("'self'"));
+    assert.ok(connectSrc.includes('https://identitytoolkit.googleapis.com'));
+    assert.ok(connectSrc.includes('https://securetoken.googleapis.com'));
+    assert.ok(connectSrc.includes('https://www.paypal.com'));
+    const frameSrc = csp.get('frame-src') || [];
+    assert.ok(frameSrc.includes('https://www.paypal.com'));
+    assert.ok(frameSrc.includes('https://immogest-7faaf.firebaseapp.com'));
+    assert.ok(frameSrc.includes('https://accounts.google.com'));
+    const imgSrc = csp.get('img-src') || [];
+    assert.ok(imgSrc.includes("'self'") && imgSrc.includes('data:') && imgSrc.includes('blob:'));
+    assert.deepEqual(csp.get('report-uri'), ['/api/csp-report']);
+  }
+  const apiHealth = await fetch(`http://127.0.0.1:${port}/api/health`);
+  assert.equal(apiHealth.status, 200);
+  assert.match(apiHealth.headers.get('strict-transport-security') || '', /max-age=15552000\b/);
+  assert.equal(apiHealth.headers.get('cross-origin-opener-policy'), 'same-origin-allow-popups');
+  assert.match(apiHealth.headers.get('permissions-policy') || '', /camera=\(self\)/);
+  assert.equal(apiHealth.headers.get('x-content-type-options'), 'nosniff');
+
+  // With shared-state.json unreadable, POST /api/csp-report still returns 204, logs one sanitized JSON line, enforces tiny 8kb limit, rate-limits, and NEVER calls repository.
+  const logsBeforeCsp = logs.length;
+  const cspReportRes = await fetch(`http://127.0.0.1:${port}/api/csp-report`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/csp-report', 'X-Forwarded-For': '203.0.113.80' },
+    body: JSON.stringify({
+      'csp-report': {
+        'document-uri': 'https://immogest.cloud.run/login?token=secret-query-marker',
+        'blocked-uri': 'https://evil.invalid/inject.js?leak=secret-query-marker',
+        'violated-directive': 'script-src-elem',
+        'effective-directive': 'script-src-elem',
+        disposition: 'report',
+        'status-code': 200,
+      },
+    }),
+  });
+  assert.equal(cspReportRes.status, 204);
+  const newCspLogs = logs.slice(logsBeforeCsp).trim().split('\n').filter(Boolean);
+  assert.equal(newCspLogs.length, 1, `Expected 1 JSON log line for CSP report, got: ${JSON.stringify(newCspLogs)}`);
+  const parsedCspLog = JSON.parse(newCspLogs[0]);
+  assert.equal(parsedCspLog.event, 'csp_violation_report');
+  assert.equal(parsedCspLog.severity, 'WARNING');
+  assert.equal(parsedCspLog.effectiveDirective, 'script-src-elem');
+  assert.equal(parsedCspLog.blockedUri, 'https://evil.invalid/inject.js');
+  assert.equal(newCspLogs[0].includes('secret-query-marker'), false, 'CSP log must strip query tokens');
+
+  // Tiny body limit (~8kb) rejects 12kb CSP report with 413 without touching repository.
+  const oversizedCsp = await fetch(`http://127.0.0.1:${port}/api/csp-report`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/csp-report', 'X-Forwarded-For': '203.0.113.81' },
+    body: JSON.stringify({ 'csp-report': { 'blocked-uri': 'x'.repeat(12_000) } }),
+  });
+  assert.equal(oversizedCsp.status, 413);
+
+  // Rate limit on POST /api/csp-report blocks floods with 429 before body parsing and without touching repository.
+  let cspRateLimited = false;
+  for (let i = 0; i < 35; i++) {
+    const r = await fetch(`http://127.0.0.1:${port}/api/csp-report`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/csp-report', 'X-Forwarded-For': '203.0.113.82' },
+      body: '{"csp-report":{"effective-directive":"img-src"}}',
+    });
+    if (r.status === 429) { cspRateLimited = true; break; }
+  }
+  assert.equal(cspRateLimited, true);
+
   const blocked = await call('/api/auth/register', {}, { email: 'last@audit.invalid', password });
   assert.equal(blocked.status, 429); assert.equal(blocked.data.code, 'AUTH_RATE_LIMITED');
   assert.equal((await call('/api/auth/login', { 'X-Forwarded-For': '203.0.113.10' }, { identifier: owner.email, password: 'any' })).status, 429);
@@ -345,7 +454,7 @@ try {
   assert.equal((await call('/api/commands', {}, { operation: 'deleteBuilding', args: ['b-a'], operationId: 'op:1234567890123:unauth' })).status, 401);
   assert.equal((await call('/api/auth/firebase-session', {}, {})).status, 401);
   assert.equal(readFileSync(join(dataDir, 'shared-state.json'), 'utf8'), 'unreadable platform state');
-  console.log('PASS: body limits, IP rate limits, non-DoS login lockouts, and webhook/auth guards stop before platform state.');
+  console.log('PASS: body limits, IP rate limits, non-DoS login lockouts, security headers, CSP report-only, and webhook/auth guards stop before platform state.');
 } finally {
   clearTimeout(timeout);
   if (child.exitCode === null && child.signalCode === null) { const done = new Promise<void>((r) => child.once('exit', () => r())); child.kill(); await done; }

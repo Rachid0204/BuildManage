@@ -81,6 +81,11 @@ import {
   validateCmiWebhookEnvelope,
   validatePayPalWebhookEnvelope,
 } from './server/requestGuard';
+import {
+  applyHtmlShellHeaders,
+  createCspReportHandler,
+  createSecurityHeadersMiddleware,
+} from './server/securityHeaders';
 import { buildingReport } from './server/reports';
 import {
   createRepository,
@@ -1041,6 +1046,7 @@ async function startServer() {
     );
   };
 
+  app.use(createSecurityHeadersMiddleware());
   app.use("/api", createApiCorsMiddleware());
   // Rate-limit unauthenticated routes BEFORE body parsing and BEFORE any repository transaction.
   app.use("/api", createUnauthenticatedIpRateLimiter());
@@ -1048,6 +1054,10 @@ async function startServer() {
   const jsonDefaultParser = express.json({ limit: "100kb" });
   const jsonCommandParser = express.json({ limit: "1mb" });
   const jsonUploadParser = express.json({ limit: "8mb" });
+  const jsonCspReportParser = express.json({
+    limit: "8kb",
+    type: ["application/json", "application/csp-report", "application/reports+json"],
+  });
   const urlencodedCmiParser = express.urlencoded({ extended: false, limit: "32kb" });
 
   app.use("/api", async (req, res, next) => {
@@ -1067,6 +1077,9 @@ async function startServer() {
       }
       return jsonCommandParser(req, res, next);
     }
+    if (req.method === "POST" && fullPath === "/api/csp-report") {
+      return jsonCspReportParser(req, res, next);
+    }
     if (
       req.method === "POST" &&
       (fullPath === "/api/webhooks/cmi" || fullPath === "/api/subscription/cmi/return")
@@ -1076,6 +1089,9 @@ async function startServer() {
     return jsonDefaultParser(req, res, next);
   });
   app.use("/api", bodyParserErrorHandler);
+
+  // Stateless CSP violation collector: logs one JSON line and never touches repository or admission stores.
+  app.post("/api/csp-report", createCspReportHandler());
 
   const repository = createRepository(),
     sharedStore: ServerStore = sharedState,
@@ -4310,7 +4326,10 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), "dist");
+    const distPath =
+      process.env.NODE_ENV !== "production" && process.env.SYNDIK_TEST_DIST_DIR
+        ? path.resolve(process.env.SYNDIK_TEST_DIST_DIR)
+        : path.join(process.cwd(), "dist");
     const assetsPath = path.join(distPath, "assets") + path.sep;
     const guidesPath = path.join(distPath, "guides", "screenshots") + path.sep;
     const iconsPath = path.join(distPath, "icons") + path.sep;
@@ -4318,10 +4337,7 @@ async function startServer() {
     // it should not be framed by other origins. Vite content-hashes everything under
     // /assets, so those files never change in place and can be cached indefinitely.
     const shellHeaders = (res: express.Response) => {
-      res.setHeader("Cache-Control", "no-cache");
-      res.setHeader("X-Frame-Options", "SAMEORIGIN");
-      res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
-      res.setHeader("X-Content-Type-Options", "nosniff");
+      applyHtmlShellHeaders(res);
     };
     app.use(
       express.static(distPath, {

@@ -162,6 +162,15 @@ test('nonproduction local development stays compatible',async()=>{
  const {validateProductionEnvironment}=await import('../server/productionConfig');
  assert.equal(validateProductionEnvironment({NODE_ENV:'test',SYNDIK_STATE_BACKEND:'file'}),undefined);
 });
+test('CSP_MODE accepts report-only or enforce and rejects invalid modes in production',async()=>{
+ const {validateProductionEnvironment}=await import('../server/productionConfig');
+ assert.equal(validateProductionEnvironment({...good,CSP_MODE:undefined})?.CSP_MODE,undefined);
+ assert.equal(validateProductionEnvironment({...good,CSP_MODE:'report-only'})?.CSP_MODE,'report-only');
+ assert.equal(validateProductionEnvironment({...good,CSP_MODE:'enforce'})?.CSP_MODE,'enforce');
+ for (const invalid of ['off','disabled','enforced','']) {
+  assert.throws(()=>validateProductionEnvironment({...good,CSP_MODE:invalid}),/PRODUCTION_CONFIG_INVALID.*CSP_MODE/);
+ }
+});
 test('manifest and docs match production configuration contract',()=>{
  const target=JSON.parse(readFileSync('deploy/target.json','utf8'));
  const firebase=JSON.parse(readFileSync('firebase.json','utf8'));
@@ -179,15 +188,48 @@ test('manifest and docs match production configuration contract',()=>{
  const envExample=readFileSync('.env.example','utf8');
  assert.match(envExample,/^SYNDIK_SESSION_SECRET=$/m);
  assert.match(envExample,/^SYNDIK_ENCRYPTION_KEYS=$/m);
+ assert.match(envExample,/^CSP_MODE=report-only$/m);
  assert.match(envExample,/"primary"\s*:\s*\{\s*"kid"/);
  const deploymentDoc=readFileSync('DEPLOYMENT.md','utf8');
  assert.match(deploymentDoc,/\| `SYNDIK_STATE_BACKEND=firestore` \|/);
  assert.match(deploymentDoc,/\| `SYNDIK_UPLOAD_BACKEND=gcs` \|/);
  assert.match(deploymentDoc,/\| `SYNDIK_SESSION_SECRET` \|/);
  assert.match(deploymentDoc,/\| `SYNDIK_ENCRYPTION_KEYS` \|.*"primary"/);
+ assert.match(deploymentDoc,/\| `CSP_MODE` \|/);
  assert.match(deploymentDoc,/## Troubleshooting a failed revision/);
  assert.match(deploymentDoc,/production_config_invalid/);
  assert.match(deploymentDoc,/gcloud run services list/);
  assert.match(deploymentDoc,/gcloud run services describe/);
  assert.match(deploymentDoc,/gcloud logging read/);
+});
+test('Firebase Hosting headers mirror production security headers and report-only CSP',async()=>{
+ const target=JSON.parse(readFileSync('deploy/target.json','utf8'));
+ const firebase=JSON.parse(readFileSync('firebase.json','utf8'));
+ const {
+  COOP_HEADER_VALUE,
+  HSTS_HEADER_VALUE,
+  PERMISSIONS_POLICY_VALUE,
+  buildContentSecurityPolicy,
+  parseContentSecurityPolicy,
+ }=await import('../server/securityHeaders');
+ const rules:Array<{source:string;headers:Array<{key:string;value:string}>}>=firebase.hosting.headers||[];
+ const globalRule=rules.find(r=>r.source==='**');
+ assert.ok(globalRule,'Expected a "**" rule in firebase.json hosting.headers');
+ const headerMap=new Map(globalRule.headers.map(h=>[h.key.toLowerCase(),h.value]));
+ assert.equal(headerMap.get('strict-transport-security'),HSTS_HEADER_VALUE);
+ assert.equal(headerMap.get('permissions-policy'),PERMISSIONS_POLICY_VALUE);
+ assert.equal(headerMap.get('cross-origin-opener-policy'),COOP_HEADER_VALUE);
+ assert.equal(headerMap.get('x-frame-options'),'SAMEORIGIN');
+ assert.equal(headerMap.get('referrer-policy'),'strict-origin-when-cross-origin');
+ assert.equal(headerMap.get('x-content-type-options'),'nosniff');
+ const expectedCsp=buildContentSecurityPolicy({NODE_ENV:'production',PUBLIC_APP_URL:target.publicAppUrl});
+ const hostingCsp=headerMap.get('content-security-policy-report-only')||'';
+ assert.equal(hostingCsp,expectedCsp);
+ assert.ok(parseContentSecurityPolicy(hostingCsp).size>=10);
+ const assetsRule=rules.find(r=>r.source==='/assets/**');
+ assert.ok(assetsRule,'Expected "/assets/**" immutable cache rule in firebase.json hosting.headers');
+ assert.equal(
+  assetsRule.headers.find(h=>h.key.toLowerCase()==='cache-control')?.value,
+  'public, max-age=31536000, immutable',
+ );
 });
