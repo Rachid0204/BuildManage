@@ -4326,7 +4326,10 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), "dist");
+    const distPath =
+      process.env.NODE_ENV !== "production" && process.env.SYNDIK_TEST_DIST_DIR
+        ? path.resolve(process.env.SYNDIK_TEST_DIST_DIR)
+        : path.join(process.cwd(), "dist");
     const assetsPath = path.join(distPath, "assets") + path.sep;
     const guidesPath = path.join(distPath, "guides", "screenshots") + path.sep;
     const iconsPath = path.join(distPath, "icons") + path.sep;

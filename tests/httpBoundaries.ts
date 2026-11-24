@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { createServer } from 'node:net';
@@ -8,6 +8,9 @@ import { hashPasswordSync, computeSessionSignature } from '../utils/security';
 
 const root = resolve(import.meta.dirname, '..');
 const dataDir = mkdtempSync(join(tmpdir(), 'buildmanage-boundaries-'));
+const testDistDir = join(dataDir, 'dist');
+mkdirSync(testDistDir, { recursive: true });
+writeFileSync(join(testDistDir, 'index.html'), '<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>SyndicUnion</title></head><body><div id="root"></div></body></html>');
 const password = 'Synthetic-Test-Password-42!';
 const owner = { uid: 'owner-a', email: 'owner@audit.invalid', displayName: 'Owner', role: 'syndic' as const, syndicId: 's-a', buildingId: 'b-a' };
 const unverifiedOwner = { uid: 'owner-unv', email: 'unverified@audit.invalid', displayName: 'Unverified', role: 'syndic' as const, syndicId: 's-unv', buildingId: 'b-unv', emailVerified: false };
@@ -42,7 +45,7 @@ const port = await new Promise<number>((resolvePort) => { const server = createS
   server.close(() => resolvePort(value));
 }); });
 const child = spawn(process.execPath, ['--import', join(root, 'tests/helpers/networkGuard.mjs'), '--import', 'tsx', 'server.ts'], {
-  cwd: root, env: { ...process.env, PORT: String(port), NODE_ENV: 'test', SYNDIK_STATE_BACKEND: 'file', SYNDIK_DATA_DIR: dataDir,
+  cwd: root, env: { ...process.env, PORT: String(port), NODE_ENV: 'test', SYNDIK_STATE_BACKEND: 'file', SYNDIK_DATA_DIR: dataDir, SYNDIK_TEST_DIST_DIR: testDistDir,
     TRUST_PROXY_HOPS: '1', SYNDIK_SERVER_SECRET: 'synthetic-server-secret-12345678901234567890', FIREBASE_SERVICE_ACCOUNT_JSON: '' }, stdio: ['ignore', 'pipe', 'pipe'],
 });
 let logs = '';
