@@ -687,6 +687,7 @@ export interface GatewayEventRecord {
   gateway: 'paypal' | 'cmi' | 'bank_transfer' | 'cash' | 'system';
   eventType: string;
   status: 'ok' | 'ignored' | 'rejected' | 'error';
+  reason?: string;
   httpStatus: number;
   syndicId?: string;
   reference?: string;

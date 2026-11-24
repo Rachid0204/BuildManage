@@ -114,6 +114,7 @@ import {
 } from './server/firebaseIdentity';
 import {
   activatePlatformSubscription,
+  findProcessedGatewayPayment,
   voidPlatformSubscriptionPayment,
 } from './server/domain/building.service';
 import {
@@ -3022,25 +3023,6 @@ async function startServer() {
             403,
           );
         }
-        const existing = (
-          state.syndik_prod_subscription_payments_v1 || []
-        ).find(
-          (p: any) => !p.voidedAt && p.externalOrderId === body.orderId,
-        );
-        if (existing) {
-          if (existing.syndicId !== body.syndicId) {
-            throw new OperationError(
-              "Cette commande appartient à un autre cabinet.",
-              403,
-            );
-          }
-          return {
-            alreadyCaptured: true as const,
-            payment: existing,
-            store: filterStoreForCaller(state, caller),
-            revision: state.__revision || 0,
-          };
-        }
         const mappedIntentId = state.__paypalOrders?.[body.orderId];
         const mappedIntent = mappedIntentId
           ? state.__paypalIntents?.[mappedIntentId]
@@ -3051,6 +3033,60 @@ async function startServer() {
             403,
           );
         }
+        const existing = findProcessedGatewayPayment(state, {
+          externalOrderIds: [body.orderId],
+          paymentId: mappedIntent?.paymentId,
+        });
+        if (existing) {
+          if (existing.syndicId !== body.syndicId) {
+            throw new OperationError(
+              "Cette commande appartient à un autre cabinet.",
+              403,
+            );
+          }
+          if (existing.voidedAt) {
+            recordGatewayEvent(state, {
+              gateway: "paypal",
+              eventType: "CAPTURE_ORDER_COMPLETED",
+              status: "ignored",
+              reason: "already_processed",
+              httpStatus: 409,
+              syndicId: existing.syndicId,
+              orderId: body.orderId,
+              reference: existing.reference,
+              message: "Commande PayPal déjà traitée puis remboursée ou annulée.",
+            });
+            return {
+              alreadyRefundedOrVoided: true as const,
+            };
+          }
+          return {
+            alreadyRefundedOrVoided: false as const,
+            alreadyCaptured: true as const,
+            payment: existing,
+            store: filterStoreForCaller(state, caller),
+            revision: state.__revision || 0,
+          };
+        }
+        if (
+          mappedIntent &&
+          (mappedIntent.status === "refunded" ||
+            mappedIntent.status === "reversed")
+        ) {
+          recordGatewayEvent(state, {
+            gateway: "paypal",
+            eventType: "CAPTURE_ORDER_COMPLETED",
+            status: "ignored",
+            reason: "already_processed",
+            httpStatus: 409,
+            syndicId: mappedIntent.syndicId,
+            orderId: body.orderId,
+            message: "Intent PayPal déjà remboursé ou annulé.",
+          });
+          return {
+            alreadyRefundedOrVoided: true as const,
+          };
+        }
         const billing = resolvePlatformBillingConfig(state);
         if (!billing.paypalSecrets.enabled) {
           throw new OperationError(
@@ -3059,6 +3095,7 @@ async function startServer() {
           );
         }
         return {
+          alreadyRefundedOrVoided: false as const,
           alreadyCaptured: false as const,
           caller,
           hasMappedIntent: Boolean(mappedIntent),
@@ -3069,6 +3106,13 @@ async function startServer() {
           },
         };
       });
+
+      if (preflight.alreadyRefundedOrVoided) {
+        throw new OperationError(
+          "Cette commande PayPal a déjà été remboursée ou annulée.",
+          409,
+        );
+      }
 
       if (preflight.alreadyCaptured) {
         return res.json({
@@ -3088,7 +3132,10 @@ async function startServer() {
             ? state.__paypalIntents?.[remoteOrder.customId]
             : undefined;
           return Boolean(
-            recoveredIntent && recoveredIntent.syndicId === body.syndicId,
+            recoveredIntent &&
+              recoveredIntent.syndicId === body.syndicId &&
+              recoveredIntent.status !== "refunded" &&
+              recoveredIntent.status !== "reversed",
           );
         });
         if (!ownerVerified) {
@@ -3103,10 +3150,13 @@ async function startServer() {
 
       const finalized = await repository.transaction(async (state) => {
         const caller = preflight.caller;
-        const payments = (state.syndik_prod_subscription_payments_v1 ??= []);
-        const existing = payments.find(
-          (p: any) => !p.voidedAt && p.externalOrderId === body.orderId,
-        );
+        const intentKey = state.__paypalOrders?.[body.orderId] || capture.customId;
+        const intent = intentKey ? state.__paypalIntents?.[intentKey] : undefined;
+        const existing = findProcessedGatewayPayment(state, {
+          externalOrderIds: [body.orderId, capture.orderId],
+          externalCaptureIds: [capture.captureId],
+          paymentId: intent?.paymentId,
+        });
         if (existing) {
           if (existing.syndicId !== body.syndicId) {
             throw new OperationError(
@@ -3114,7 +3164,22 @@ async function startServer() {
               403,
             );
           }
+          if (existing.voidedAt) {
+            recordGatewayEvent(state, {
+              gateway: "paypal",
+              eventType: "CAPTURE_ORDER_COMPLETED",
+              status: "ignored",
+              reason: "already_processed",
+              httpStatus: 409,
+              syndicId: existing.syndicId,
+              orderId: capture.orderId || body.orderId,
+              reference: capture.captureId || existing.reference,
+              message: "Commande PayPal déjà traitée puis remboursée ou annulée.",
+            });
+            return { alreadyRefundedOrVoided: true as const };
+          }
           return {
+            alreadyRefundedOrVoided: false as const,
             alreadyCaptured: true,
             payment: existing,
             store: filterStoreForCaller(state, caller),
@@ -3122,13 +3187,25 @@ async function startServer() {
           };
         }
 
-        const intentKey = state.__paypalOrders?.[body.orderId] || capture.customId;
-        const intent = intentKey ? state.__paypalIntents?.[intentKey] : undefined;
         if (!intent || intent.syndicId !== body.syndicId) {
           throw new OperationError(
             "Commande PayPal introuvable ou non autorisée pour ce cabinet.",
             403,
           );
+        }
+        if (intent.status === "refunded" || intent.status === "reversed") {
+          recordGatewayEvent(state, {
+            gateway: "paypal",
+            eventType: "CAPTURE_ORDER_COMPLETED",
+            status: "ignored",
+            reason: "already_processed",
+            httpStatus: 409,
+            syndicId: intent.syndicId,
+            orderId: capture.orderId || body.orderId,
+            reference: capture.captureId || undefined,
+            message: "Intent PayPal déjà remboursé ou annulé.",
+          });
+          return { alreadyRefundedOrVoided: true as const };
         }
         if (
           capture.status !== "COMPLETED" ||
@@ -3187,12 +3264,20 @@ async function startServer() {
         });
 
         return {
+          alreadyRefundedOrVoided: false as const,
           alreadyCaptured: false,
           payment,
           store: filterStoreForCaller(state, caller),
           revision: (state.__revision || 0) + 1,
         };
       });
+
+      if (finalized.alreadyRefundedOrVoided) {
+        throw new OperationError(
+          "Cette commande PayPal a déjà été remboursée ou annulée.",
+          409,
+        );
+      }
 
       return res.json({
         ok: true,
@@ -3301,6 +3386,7 @@ async function startServer() {
               gateway: "paypal",
               eventType,
               status: "ignored",
+              reason: "payment_not_found_or_already_voided",
               httpStatus: 200,
               orderId: relatedOrderId || undefined,
               reference: linkedCaptureId || refundId || undefined,
@@ -3319,6 +3405,13 @@ async function startServer() {
             reason,
             "paypalWebhookRefundSubscription",
           );
+          if (eventType === "PAYMENT.CAPTURE.REVERSED" && state.__paypalIntents) {
+            for (const intent of Object.values(state.__paypalIntents) as any[]) {
+              if (intent?.paymentId === match.id) {
+                intent.status = "reversed";
+              }
+            }
+          }
           recordGatewayEvent(state, {
             gateway: "paypal",
             eventType,
@@ -3349,7 +3442,10 @@ async function startServer() {
         ? Math.round(parsedAmount * 100)
         : -1;
 
-      if (captureStatus !== "COMPLETED" || (!customId && !relatedOrderId)) {
+      if (
+        captureStatus !== "COMPLETED" ||
+        (!customId && !relatedOrderId && !captureId)
+      ) {
         return res.json({ ok: true, ignored: true });
       }
 
@@ -3359,17 +3455,68 @@ async function startServer() {
         const intent = intentKey
           ? state.__paypalIntents?.[intentKey]
           : undefined;
+        const existingPayment = findProcessedGatewayPayment(state, {
+          externalOrderIds: [relatedOrderId, intent?.orderId],
+          externalCaptureIds: [captureId],
+          paymentId: intent?.paymentId,
+        });
+        if (existingPayment) {
+          recordGatewayEvent(state, {
+            gateway: "paypal",
+            eventType,
+            status: "ignored",
+            reason: "already_processed",
+            httpStatus: 200,
+            syndicId: existingPayment.syndicId || intent?.syndicId,
+            orderId:
+              relatedOrderId ||
+              existingPayment.externalOrderId ||
+              intent?.orderId ||
+              undefined,
+            reference: captureId || existingPayment.reference || undefined,
+            message: existingPayment.voidedAt
+              ? "Capture PayPal déjà traitée puis remboursée ou annulée."
+              : "Capture PayPal déjà traitée.",
+          });
+          return {
+            ignored: true,
+            reason: "already_processed",
+            paymentId: existingPayment.id,
+          };
+        }
+        if (!customId && !relatedOrderId) {
+          return { ignored: true };
+        }
         if (!intent) {
           recordGatewayEvent(state, {
             gateway: "paypal",
             eventType,
             status: "ignored",
+            reason: "unknown_intent",
             httpStatus: 200,
             orderId: relatedOrderId || undefined,
             reference: captureId || undefined,
             message: "Intent PayPal inconnu.",
           });
           return { ignored: true, reason: "unknown_intent" };
+        }
+        if (intent.status && intent.status !== "created") {
+          recordGatewayEvent(state, {
+            gateway: "paypal",
+            eventType,
+            status: "ignored",
+            reason: "already_processed",
+            httpStatus: 200,
+            syndicId: intent.syndicId,
+            orderId: relatedOrderId || intent.orderId || undefined,
+            reference: captureId || undefined,
+            message: `Intent PayPal déjà traité (statut : ${intent.status}).`,
+          });
+          return {
+            ignored: true,
+            reason: "already_processed",
+            ...(intent.paymentId ? { paymentId: intent.paymentId } : {}),
+          };
         }
         if (
           currency !== intent.paypalCurrency ||
@@ -3664,7 +3811,9 @@ async function startServer() {
         }
 
         if (procReturnCode !== "00") {
-          intent.status = "failed";
+          if (intent.status !== "completed" && intent.status !== "refunded") {
+            intent.status = "failed";
+          }
           intent.lastProcReturnCode = procReturnCode;
           recordGatewayEvent(state, {
             gateway: "cmi",
@@ -3677,6 +3826,38 @@ async function startServer() {
             message: `Paiement CMI refusé (ProcReturnCode=${procReturnCode || "?"}, Response=${responseLabel || "?"}).`,
           });
           return { code: 200, token: "APPROVED" as const };
+        }
+
+        const existingPayment = findProcessedGatewayPayment(state, {
+          externalOrderIds: [oid],
+          externalCaptureIds: [transId],
+          paymentId: intent.paymentId,
+        });
+        if (
+          existingPayment ||
+          intent.status === "completed" ||
+          intent.status === "refunded"
+        ) {
+          const isVoided = Boolean(
+            existingPayment?.voidedAt || intent.status === "refunded",
+          );
+          recordGatewayEvent(state, {
+            gateway: "cmi",
+            eventType: "CMI_PAYMENT_POSTAUTH",
+            status: "ignored",
+            reason: "already_processed",
+            httpStatus: 200,
+            syndicId: existingPayment?.syndicId || intent.syndicId,
+            orderId: oid,
+            reference: transId || existingPayment?.reference || undefined,
+            message: isVoided
+              ? "Callback CMI déjà traité puis annulé."
+              : "Callback CMI déjà traité.",
+          });
+          return {
+            code: 200,
+            token: isVoided ? ("APPROVED" as const) : ("ACTION=POSTAUTH" as const),
+          };
         }
 
         if (

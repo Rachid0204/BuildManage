@@ -101,6 +101,84 @@ await test('pure billing helpers enforce production PayPal API host and compute 
   assert.equal(ent.paypalAmount, 150); // overridden 75 * 2
 });
 
+await test('activatePlatformSubscription treats voided gateway externalOrderId/externalCaptureId as already processed', async () => {
+  const { activatePlatformSubscription, voidPlatformSubscriptionPayment } =
+    await import('../server/domain/building.service');
+  const domainState: Record<string, any> = {
+    syndik_prod_syndics_v1: [
+      {
+        id: 'cab-dom',
+        name: 'Cabinet Domain',
+        createdBy: 'uid-admin',
+        subscriptionPlan: 'starter',
+        subscriptionStatus: 'expired',
+        subscriptionExpiry: '2025-01-01T00:00:00.000Z',
+        buildings: [],
+      },
+    ],
+    __subscriptionPromos: [
+      {
+        id: 'p-1',
+        code: 'DOM10',
+        discountType: 'percent',
+        discountValue: 10,
+        active: true,
+        usedCount: 0,
+        createdAt: '2026-01-01T00:00:00.000Z',
+      },
+    ],
+  };
+  const actor = { uid: 'paypal:webhook', role: 'admin' as const };
+  const first = activatePlatformSubscription(domainState, actor, {
+    syndicId: 'cab-dom',
+    plan: 'starter',
+    months: 1,
+    reference: 'CAP-DOM-1',
+    amountMad: 171,
+    method: 'paypal',
+    currency: 'EUR',
+    chargedAmount: 17.1,
+    promoCode: 'DOM10',
+    externalOrderId: 'ORD-DOM-1',
+    externalCaptureId: 'CAP-DOM-1',
+  });
+  assert.equal(domainState.__subscriptionPromos[0].usedCount, 1);
+  const seqAfterFirst = structuredClone(domainState.__subscriptionDocSeq);
+
+  voidPlatformSubscriptionPayment(domainState, actor, first.id, 'Refunded');
+  assert.ok(first.voidedAt);
+  assert.equal(domainState.syndik_prod_syndics_v1[0].subscriptionStatus, 'expired');
+  assert.equal(
+    domainState.syndik_prod_syndics_v1[0].subscriptionExpiry,
+    '2025-01-01T00:00:00.000Z',
+  );
+  assert.equal(domainState.__subscriptionPromos[0].usedCount, 0);
+
+  const replayed = activatePlatformSubscription(domainState, actor, {
+    syndicId: 'cab-dom',
+    plan: 'starter',
+    months: 1,
+    reference: 'CAP-DOM-1',
+    amountMad: 171,
+    method: 'paypal',
+    currency: 'EUR',
+    chargedAmount: 17.1,
+    promoCode: 'DOM10',
+    externalOrderId: 'ORD-DOM-1',
+    externalCaptureId: 'CAP-DOM-1',
+  });
+  assert.equal(replayed.id, first.id);
+  assert.ok(replayed.voidedAt);
+  assert.equal(domainState.syndik_prod_subscription_payments_v1.length, 1);
+  assert.equal(domainState.syndik_prod_syndics_v1[0].subscriptionStatus, 'expired');
+  assert.equal(
+    domainState.syndik_prod_syndics_v1[0].subscriptionExpiry,
+    '2025-01-01T00:00:00.000Z',
+  );
+  assert.equal(domainState.__subscriptionPromos[0].usedCount, 0);
+  assert.deepEqual(domainState.__subscriptionDocSeq, seqAfterFirst);
+});
+
 // Setup PayPal loopback mock server
 interface MockOrderRecord {
   orderId: string;
@@ -1784,6 +1862,277 @@ try {
       token: adminToken,
     });
     assert.equal(remind2.status, 429, JSON.stringify(remind2.data));
+  });
+
+  await test('PayPal & CMI replay idempotency across refunds/voids (COMPLETED x2, REFUNDED x2, COMPLETED after REFUNDED, and capture-order after REFUNDED)', async () => {
+    const ppHeaders = (txId: string) => ({
+      'paypal-auth-algo': 'SHA256withRSA',
+      'paypal-cert-url': 'https://api.sandbox.paypal.com/cert.pem',
+      'paypal-transmission-id': txId,
+      'paypal-transmission-sig': 'VALID-SIG',
+      'paypal-transmission-time': new Date().toISOString(),
+    });
+
+    const created = await httpCall('/api/subscription/paypal/create-order', {
+      token: syndicAToken,
+      body: {
+        syndicId: 'cab-a',
+        plan: 'starter',
+        months: 3,
+        promoCode: 'MAROC10',
+        paymentSourceHint: 'paypal',
+      },
+    });
+    assert.equal(created.status, 200, JSON.stringify(created.data));
+    const orderId = created.data.orderId as string;
+    const mockRec = mockOrders.get(orderId)!;
+    assert.ok(mockRec);
+    const captureId = `PP-CAP-REFUND-REPLAY-${orderId}`;
+    mockRec.status = 'COMPLETED';
+    mockRec.captureId = captureId;
+    const amountValue = Number(created.data.amount).toFixed(2);
+    const currencyCode = String(created.data.currency);
+
+    const beforeSeq = structuredClone(readDiskState().__subscriptionDocSeq || {});
+    const promoUsesBefore = (readDiskState().__subscriptionPromos || []).find(
+      (p: any) => p.code === 'MAROC10',
+    )?.usedCount;
+
+    const completedPayload = (evtId: string) => ({
+      id: evtId,
+      event_type: 'PAYMENT.CAPTURE.COMPLETED',
+      resource: {
+        id: captureId,
+        status: 'COMPLETED',
+        custom_id: mockRec.customId,
+        amount: { currency_code: currencyCode, value: amountValue },
+        supplementary_data: { related_ids: { order_id: orderId } },
+      },
+    });
+
+    const refundPayload = (evtId: string) => ({
+      id: evtId,
+      event_type: 'PAYMENT.CAPTURE.REFUNDED',
+      resource: {
+        id: `PP-REF-${evtId}`,
+        status: 'COMPLETED',
+        links: [
+          {
+            rel: 'up',
+            href: `https://api-m.sandbox.paypal.com/v2/payments/captures/${captureId}`,
+          },
+        ],
+      },
+    });
+
+    // 1. First COMPLETED -> creates 1 payment, extends subscription once, increments promo & invoice sequence once
+    const comp1 = await httpCall('/api/webhooks/paypal', {
+      body: completedPayload('WH-RPL-COMP-1'),
+      headers: ppHeaders('tx-rpl-comp-1'),
+    });
+    assert.equal(comp1.status, 200, JSON.stringify(comp1.data));
+    assert.equal(comp1.data.ignored, false);
+    const paymentId = comp1.data.paymentId as string;
+    assert.ok(paymentId);
+
+    const stateAfterComp1 = readDiskState();
+    const paymentsAfterComp1 = stateAfterComp1.syndik_prod_subscription_payments_v1.filter(
+      (p: any) => p.externalCaptureId === captureId || p.externalOrderId === orderId,
+    );
+    assert.equal(paymentsAfterComp1.length, 1);
+    assert.equal(paymentsAfterComp1[0].voidedAt, undefined);
+    const expiryAfterComp1 = stateAfterComp1.syndik_prod_syndics_v1.find(
+      (s: any) => s.id === 'cab-a',
+    ).subscriptionExpiry;
+    const seqAfterComp1 = structuredClone(stateAfterComp1.__subscriptionDocSeq);
+    assert.equal(
+      (stateAfterComp1.__subscriptionPromos || []).find((p: any) => p.code === 'MAROC10')?.usedCount,
+      Number(promoUsesBefore) + 1,
+    );
+    assert.notDeepEqual(seqAfterComp1, beforeSeq);
+
+    // 2. Second COMPLETED (same captureId) -> 1 payment total, ignored with reason already_processed
+    const comp2 = await httpCall('/api/webhooks/paypal', {
+      body: completedPayload('WH-RPL-COMP-2'),
+      headers: ppHeaders('tx-rpl-comp-2'),
+    });
+    assert.equal(comp2.status, 200, JSON.stringify(comp2.data));
+    assert.equal(comp2.data.ignored, true);
+    assert.equal(comp2.data.reason, 'already_processed');
+    assert.equal(comp2.data.paymentId, paymentId);
+
+    const stateAfterComp2 = readDiskState();
+    assert.equal(
+      stateAfterComp2.syndik_prod_subscription_payments_v1.filter(
+        (p: any) => p.externalCaptureId === captureId || p.externalOrderId === orderId,
+      ).length,
+      1,
+    );
+    assert.equal(
+      stateAfterComp2.syndik_prod_syndics_v1.find((s: any) => s.id === 'cab-a').subscriptionExpiry,
+      expiryAfterComp1,
+    );
+    assert.deepEqual(stateAfterComp2.__subscriptionDocSeq, seqAfterComp1);
+    const gwAfterComp2 = (stateAfterComp2.__gatewayEvents || []).at(-1);
+    assert.equal(gwAfterComp2?.status, 'ignored');
+    assert.equal(gwAfterComp2?.reason, 'already_processed');
+
+    // 3. First REFUNDED -> voids payment and rolls back subscription expiry + promo usage
+    const ref1 = await httpCall('/api/webhooks/paypal', {
+      body: refundPayload('WH-RPL-REF-1'),
+      headers: ppHeaders('tx-rpl-ref-1'),
+    });
+    assert.equal(ref1.status, 200, JSON.stringify(ref1.data));
+    assert.equal(ref1.data.ignored, false);
+    assert.equal(ref1.data.voidedPaymentId, paymentId);
+
+    const stateAfterRef1 = readDiskState();
+    const voidedRec1 = stateAfterRef1.syndik_prod_subscription_payments_v1.find(
+      (p: any) => p.id === paymentId,
+    );
+    assert.ok(voidedRec1?.voidedAt);
+    const voidedAtAfterRef1 = voidedRec1.voidedAt;
+    const expiryAfterRef1 = stateAfterRef1.syndik_prod_syndics_v1.find(
+      (s: any) => s.id === 'cab-a',
+    ).subscriptionExpiry;
+    assert.ok(Date.parse(expiryAfterRef1) < Date.parse(expiryAfterComp1));
+    assert.equal(
+      (stateAfterRef1.__subscriptionPromos || []).find((p: any) => p.code === 'MAROC10')?.usedCount,
+      promoUsesBefore,
+    );
+    const voidAuditCountAfterRef1 = (stateAfterRef1.syndik_prod_audit_v1 || []).filter(
+      (a: any) => a.operation === 'paypalWebhookRefundSubscription' && a.detail?.paymentId === paymentId,
+    ).length;
+    assert.equal(voidAuditCountAfterRef1, 1);
+
+    // 4. Second REFUNDED -> still 1 void, expiry and voidedAt unchanged
+    const ref2 = await httpCall('/api/webhooks/paypal', {
+      body: refundPayload('WH-RPL-REF-2'),
+      headers: ppHeaders('tx-rpl-ref-2'),
+    });
+    assert.equal(ref2.status, 200, JSON.stringify(ref2.data));
+    assert.equal(ref2.data.ignored, true);
+    const stateAfterRef2 = readDiskState();
+    assert.equal(
+      stateAfterRef2.syndik_prod_subscription_payments_v1.find((p: any) => p.id === paymentId)?.voidedAt,
+      voidedAtAfterRef1,
+    );
+    assert.equal(
+      stateAfterRef2.syndik_prod_syndics_v1.find((s: any) => s.id === 'cab-a').subscriptionExpiry,
+      expiryAfterRef1,
+    );
+    assert.equal(
+      (stateAfterRef2.syndik_prod_audit_v1 || []).filter(
+        (a: any) => a.operation === 'paypalWebhookRefundSubscription' && a.detail?.paymentId === paymentId,
+      ).length,
+      1,
+    );
+
+    // 5. Re-delivered COMPLETED after REFUNDED (same captureId) -> payment stays voided, expiry NOT extended, gateway event ignored/already_processed
+    const comp3 = await httpCall('/api/webhooks/paypal', {
+      body: completedPayload('WH-RPL-COMP-3'),
+      headers: ppHeaders('tx-rpl-comp-3'),
+    });
+    assert.equal(comp3.status, 200, JSON.stringify(comp3.data));
+    assert.equal(comp3.data.ignored, true);
+    assert.equal(comp3.data.reason, 'already_processed');
+    assert.equal(comp3.data.paymentId, paymentId);
+
+    const stateAfterComp3 = readDiskState();
+    const paymentsAfterComp3 = stateAfterComp3.syndik_prod_subscription_payments_v1.filter(
+      (p: any) => p.externalCaptureId === captureId || p.externalOrderId === orderId,
+    );
+    assert.equal(paymentsAfterComp3.length, 1);
+    assert.ok(paymentsAfterComp3[0].voidedAt, 'payment must remain voided after COMPLETED replay');
+    assert.equal(paymentsAfterComp3[0].voidedAt, voidedAtAfterRef1);
+    assert.equal(
+      stateAfterComp3.syndik_prod_syndics_v1.find((s: any) => s.id === 'cab-a').subscriptionExpiry,
+      expiryAfterRef1,
+    );
+    assert.deepEqual(stateAfterComp3.__subscriptionDocSeq, seqAfterComp1);
+    assert.equal(
+      (stateAfterComp3.__subscriptionPromos || []).find((p: any) => p.code === 'MAROC10')?.usedCount,
+      promoUsesBefore,
+    );
+    const gwAfterComp3 = (stateAfterComp3.__gatewayEvents || []).at(-1);
+    assert.equal(gwAfterComp3?.status, 'ignored');
+    assert.equal(gwAfterComp3?.reason, 'already_processed');
+
+    // 6. Synchronous /api/subscription/paypal/capture-order on refunded order -> rejected 409 without calling PayPal /capture or extending expiry
+    const hitsBeforeSyncReplay = captureHits.length;
+    const syncAfterRefund = await httpCall('/api/subscription/paypal/capture-order', {
+      token: syndicAToken,
+      body: { orderId, syndicId: 'cab-a' },
+    });
+    assert.equal(syncAfterRefund.status, 409, JSON.stringify(syncAfterRefund.data));
+    assert.equal(captureHits.length, hitsBeforeSyncReplay);
+    const stateAfterSyncReplay = readDiskState();
+    assert.equal(
+      stateAfterSyncReplay.syndik_prod_subscription_payments_v1.filter(
+        (p: any) => p.externalCaptureId === captureId || p.externalOrderId === orderId,
+      ).length,
+      1,
+    );
+    assert.equal(
+      stateAfterSyncReplay.syndik_prod_syndics_v1.find((s: any) => s.id === 'cab-a').subscriptionExpiry,
+      expiryAfterRef1,
+    );
+
+    // 7. CMI server-to-server callback replay after void -> payment stays voided, expiry NOT extended, gateway event ignored/already_processed
+    const cmiInit = await httpCall('/api/subscription/cmi/create-payment', {
+      method: 'POST',
+      token: syndicAToken,
+      body: { syndicId: 'cab-a', plan: 'starter', months: 1 },
+    });
+    assert.equal(cmiInit.status, 200, JSON.stringify(cmiInit.data));
+    const cmiOid = cmiInit.data.oid as string;
+    const cmiFields: Record<string, string> = {
+      oid: cmiOid,
+      amount: '190.00',
+      currency: '504',
+      ProcReturnCode: '00',
+      TransId: 'CMI-TX-REPLAY-VOID-1',
+      Response: 'Approved',
+      encoding: 'UTF-8',
+    };
+    cmiFields.HASH = computeCmiHashVer3(cmiFields, 'CmiSuperSecretStoreKey#2026');
+    const postCmi = async () => {
+      const r = await fetch(`http://127.0.0.1:${serverPort}/api/webhooks/cmi`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams(cmiFields).toString(),
+      });
+      return { status: r.status, text: await r.text() };
+    };
+    assert.equal((await postCmi()).text, 'ACTION=POSTAUTH');
+    const cmiPaid = readDiskState().syndik_prod_subscription_payments_v1.find(
+      (p: any) => p.externalOrderId === cmiOid,
+    );
+    assert.ok(cmiPaid);
+    const voidCmi = await command(adminToken, 'voidSubscriptionPayment', [
+      cmiPaid.id,
+      'Remboursement carte CMI',
+    ]);
+    assert.equal(voidCmi.status, 200, JSON.stringify(voidCmi.data));
+    const expiryAfterCmiVoid = readDiskState().syndik_prod_syndics_v1.find(
+      (s: any) => s.id === 'cab-a',
+    ).subscriptionExpiry;
+
+    const cmiReplayAfterVoid = await postCmi();
+    assert.equal(cmiReplayAfterVoid.status, 200);
+    const stateAfterCmiReplay = readDiskState();
+    const cmiMatches = stateAfterCmiReplay.syndik_prod_subscription_payments_v1.filter(
+      (p: any) => p.externalOrderId === cmiOid,
+    );
+    assert.equal(cmiMatches.length, 1);
+    assert.ok(cmiMatches[0].voidedAt, 'CMI payment must remain voided after callback replay');
+    assert.equal(
+      stateAfterCmiReplay.syndik_prod_syndics_v1.find((s: any) => s.id === 'cab-a').subscriptionExpiry,
+      expiryAfterCmiVoid,
+    );
+    const gwAfterCmiReplay = (stateAfterCmiReplay.__gatewayEvents || []).at(-1);
+    assert.equal(gwAfterCmiReplay?.status, 'ignored');
+    assert.equal(gwAfterCmiReplay?.reason, 'already_processed');
   });
 } finally {
   clearTimeout(killTimer);
