@@ -249,9 +249,11 @@ try {
   assert.ok(Number(lockedAttacker.headers.get('retry-after')) > 0);
   assert.equal(readPersisted().__revision, revBeforeBadLogins);
 
-  // Legitimate owner on another IP is NOT locked out!
-  const legitOwner = await call('/api/auth/login', { 'X-Forwarded-For': '203.0.113.20' }, { identifier: owner.email, password });
-  assert.equal(legitOwner.status, 200);
+  // Legitimate owner on another IP is NOT locked out, and 65+ valid logins from a shared CGNAT/office IP succeed without false-positive 429s!
+  for (let i = 0; i < 65; i++) {
+    const legitOwner = await call('/api/auth/login', { 'X-Forwarded-For': '203.0.113.20' }, { identifier: owner.email, password });
+    assert.equal(legitOwner.status, 200);
+  }
 
   // Same non-DoS protection when an attacker targets a resident's Moroccan CIN.
   const revAfterLegit = readPersisted().__revision;

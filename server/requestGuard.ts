@@ -112,7 +112,7 @@ interface RouteLimitRule {
 
 const UNAUTHENTICATED_ROUTE_RULES: Readonly<Record<string, RouteLimitRule>> = {
   'GET /api/ready': { method: 'GET', bucket: 'ready', limit: 60, windowMs: MINUTE, code: 'RATE_LIMITED' },
-  'POST /api/auth/login': { method: 'POST', bucket: 'login', limit: 40, windowMs: 15 * MINUTE, code: 'AUTH_RATE_LIMITED' },
+  'POST /api/auth/login': { method: 'POST', bucket: 'login', limit: 120, windowMs: MINUTE, code: 'AUTH_RATE_LIMITED' },
   'POST /api/auth/recovery/request': { method: 'POST', bucket: 'recovery', limit: 10, windowMs: 15 * MINUTE, code: 'AUTH_RATE_LIMITED' },
   'POST /api/auth/recovery/complete': { method: 'POST', bucket: 'recovery', limit: 10, windowMs: 15 * MINUTE, code: 'AUTH_RATE_LIMITED' },
   'POST /api/auth/firebase-session': { method: 'POST', bucket: 'firebase-session', limit: 30, windowMs: 15 * MINUTE, code: 'AUTH_RATE_LIMITED' },
