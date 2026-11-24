@@ -72,6 +72,13 @@ import {
   createAdmissionStore,
   registrationAdmission,
 } from './server/registrationAdmission';
+import {
+  bodyParserErrorHandler,
+  createLoginAttemptGuard,
+  createUnauthenticatedIpRateLimiter,
+  normalizedClientIp,
+  validatePayPalWebhookEnvelope,
+} from './server/requestGuard';
 import { buildingReport } from './server/reports';
 import {
   createRepository,
@@ -992,9 +999,6 @@ async function startServer() {
     ),
   );
 
-  app.use(express.json({ limit: "15mb" }));
-  app.use("/api", createApiCorsMiddleware());
-
   process.env.SYNDIK_SERVER_SECRET ||= LEGACY_SERVER_SECRET;
   if (process.env.SYNDIK_SERVER_SECRET.length < 32) {
     process.env.SYNDIK_SERVER_SECRET = LEGACY_SERVER_SECRET;
@@ -1004,8 +1008,75 @@ async function startServer() {
   process.env.PUBLIC_APP_URL ||= "https://immogest.cloud.run";
   process.env.FIRESTORE_DATABASE_ID ||=
     firebaseConfig.firestoreDatabaseId || "(default)";
+
+  const hasValidCallerCredential = async (req: express.Request): Promise<boolean> => {
+    const cookie =
+      req.path.startsWith("/api/uploads/") && req.method === "GET"
+        ? String(req.headers.cookie || "")
+            .split(";")
+            .map((v) => v.trim())
+            .find((v) => v.startsWith("syndik_session="))
+            ?.slice(15)
+        : undefined;
+    const token =
+      String(req.headers.authorization || "").replace(/^Bearer /, "") || cookie;
+    if (!token) return false;
+    if (token.startsWith("syndik-srv1.")) {
+      return Boolean(verifyServerSessionToken(token));
+    }
+    return Boolean(await verifiedFirebaseIdentity(token));
+  };
+
+  const scheduler = (req: express.Request) => {
+    const secret = process.env.SYNDIK_SCHEDULER_SECRET || "";
+    return (
+      secret.length >= 32 &&
+      timingSafeStringEqual(
+        String(req.headers["x-syndik-scheduler"] || ""),
+        secret,
+      )
+    );
+  };
+
+  app.use("/api", createApiCorsMiddleware());
+  // Rate-limit unauthenticated routes BEFORE body parsing and BEFORE any repository transaction.
+  app.use("/api", createUnauthenticatedIpRateLimiter());
+
+  const jsonDefaultParser = express.json({ limit: "100kb" });
+  const jsonCommandParser = express.json({ limit: "1mb" });
+  const jsonUploadParser = express.json({ limit: "8mb" });
+  const urlencodedCmiParser = express.urlencoded({ extended: false, limit: "32kb" });
+
+  app.use("/api", async (req, res, next) => {
+    const fullPath = `/api${req.path}`.replace(/\/+$/, "");
+    if (
+      req.method === "POST" &&
+      (fullPath === "/api/uploads" || fullPath === "/api/subscription/upload-proof")
+    ) {
+      if (!(await hasValidCallerCredential(req))) {
+        return void res.status(401).json({ ok: false, error: "Authentification requise." });
+      }
+      return jsonUploadParser(req, res, next);
+    }
+    if (req.method === "POST" && fullPath === "/api/commands") {
+      if (!(await hasValidCallerCredential(req))) {
+        return void res.status(401).json({ ok: false, error: "Authentification requise." });
+      }
+      return jsonCommandParser(req, res, next);
+    }
+    if (
+      req.method === "POST" &&
+      (fullPath === "/api/webhooks/cmi" || fullPath === "/api/subscription/cmi/return")
+    ) {
+      return urlencodedCmiParser(req, res, next);
+    }
+    return jsonDefaultParser(req, res, next);
+  });
+  app.use("/api", bodyParserErrorHandler);
+
   const repository = createRepository(),
-    sharedStore: ServerStore = sharedState;
+    sharedStore: ServerStore = sharedState,
+    loginGuard = createLoginAttemptGuard();
   // Must precede every wrapped identity route and all platform transactions.
   app.use(registrationAdmission(createAdmissionStore(), req => {
     const token = String(req.headers.authorization || '').replace(/^Bearer /, '');
@@ -1031,10 +1102,39 @@ async function startServer() {
     }
     if (payload && 'revision' in payload) payload.revision = (state.__revision || 0) + 1;
   };
+  const PUBLIC_WRAPPED_PATHS = new Set([
+    "/api/ready",
+    "/api/auth/login",
+    "/api/auth/register",
+    "/api/auth/firebase-session",
+    "/api/auth/recovery/request",
+    "/api/auth/recovery/complete",
+    "/api/webhooks/paypal",
+    "/api/webhooks/cmi",
+  ]);
   const wrap =
     (handler: express.RequestHandler, transactional = true) => async (req: express.Request, res: express.Response) => {
       const requestId = crypto.randomUUID();
       res.setHeader('X-Request-ID', requestId);
+      if (req.path.startsWith("/api/jobs/")) {
+        if (!scheduler(req)) {
+          return void res.status(403).json({ error: "Ordonnanceur non autorisé." });
+        }
+      } else if (!PUBLIC_WRAPPED_PATHS.has(req.path)) {
+        if (!(await hasValidCallerCredential(req))) {
+          if (req.path === "/api/auth/logout") {
+            res.clearCookie("syndik_session", { path: "/" });
+            return void res.json({ ok: true });
+          }
+          if (req.path === "/api/archives") {
+            return void res.status(403).json({ error: "Accès refusé." });
+          }
+          if (req.path === "/api/diagnostics") {
+            return void res.status(403).json({ error: "Accès réservé au gestionnaire." });
+          }
+          return void res.status(401).json({ ok: false, error: "Authentification requise." });
+        }
+      }
       const json = res.json.bind(res),
         send = res.send.bind(res);
       let payload: any,
@@ -1058,12 +1158,7 @@ async function startServer() {
             return res;
           }) as any;
           await handler(req, res, error => { if (error) throw error; });
-          if (
-            res.statusCode >= 400 &&
-            !["/api/auth/login", "/api/auth/recovery/request"].includes(
-              req.path,
-            )
-          )
+          if (res.statusCode >= 400)
             throw Object.assign(new Error(payload?.error || "Rejected"), {
               rejected: true,
             });
@@ -1181,14 +1276,23 @@ async function startServer() {
     };
   const api = {
     get: (route: string, handler: (req: express.Request, res: express.Response) => unknown) => app.get(route, wrap(handler)),
-    post: (route: string, handler: (req: express.Request, res: express.Response) => unknown) => app.post(route, wrap(handler)),
+    post: (
+      route: string,
+      handler: (req: express.Request, res: express.Response) => unknown,
+      preflight?: express.RequestHandler,
+    ) => (preflight ? app.post(route, preflight, wrap(handler)) : app.post(route, wrap(handler))),
   };
-  registerIdentityRoutes(api, extractAndVerifyCaller);
-  registerLiveUpdates(app, repository, async (req, state) => {
-    const caller = await extractAndVerifyCaller(req, state);
-    if (caller) assertOnboarded(caller, state);
-    return caller;
-  });
+  registerIdentityRoutes(api, extractAndVerifyCaller, loginGuard);
+  registerLiveUpdates(
+    app,
+    repository,
+    async (req, state) => {
+      const caller = await extractAndVerifyCaller(req, state);
+      if (caller) assertOnboarded(caller, state);
+      return caller;
+    },
+    hasValidCallerCredential,
+  );
   app.use("/api", (_req, res, next) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Cache-Control", "no-store");
@@ -1202,6 +1306,9 @@ async function startServer() {
 
   // Mobile Push Notification Device Token Registry (FCM / APNs)
   app.get("/api/devices/push-token", async (req, res) => {
+    if (!(await hasValidCallerCredential(req))) {
+      return res.status(401).json({ ok: false, error: "Authentification requise." });
+    }
     try {
       const outcome = await repository.transaction(async (state) => {
         const caller = await extractAndVerifyCaller(req, state);
@@ -1223,6 +1330,9 @@ async function startServer() {
   });
 
   app.post("/api/devices/push-token", async (req, res) => {
+    if (!(await hasValidCallerCredential(req))) {
+      return res.status(401).json({ ok: false, error: "Authentification requise." });
+    }
     try {
       const token = sanitizePushToken(req.body?.token);
       const platform = sanitizePushPlatform(req.body?.platform);
@@ -1254,6 +1364,9 @@ async function startServer() {
   });
 
   app.delete("/api/devices/push-token", async (req, res) => {
+    if (!(await hasValidCallerCredential(req))) {
+      return res.status(401).json({ ok: false, error: "Authentification requise." });
+    }
     try {
       const rawToken = typeof req.body?.token === "string" ? req.body.token.trim() : undefined;
       const outcome = await repository.transaction(async (state) => {
@@ -1273,6 +1386,9 @@ async function startServer() {
 
   // Account Deletion Requests (CNDP Law 09-08, Apple App Store Guideline 5.1.1(v), Google Play Data Safety)
   app.get("/api/account/deletion-request", async (req, res) => {
+    if (!(await hasValidCallerCredential(req))) {
+      return res.status(401).json({ ok: false, error: "Authentification requise." });
+    }
     try {
       const outcome = await repository.transaction(async (state) => {
         const caller = await extractAndVerifyCaller(req, state);
@@ -1300,6 +1416,9 @@ async function startServer() {
   });
 
   app.post("/api/account/deletion-request", async (req, res) => {
+    if (!(await hasValidCallerCredential(req))) {
+      return res.status(401).json({ ok: false, error: "Authentification requise." });
+    }
     try {
       const confirmEmail = typeof req.body?.confirmEmail === "string" ? req.body.confirmEmail : "";
       const reason = typeof req.body?.reason === "string" ? req.body.reason : undefined;
@@ -1341,6 +1460,9 @@ async function startServer() {
   });
 
   app.delete("/api/account/deletion-request", async (req, res) => {
+    if (!(await hasValidCallerCredential(req))) {
+      return res.status(401).json({ ok: false, error: "Authentification requise." });
+    }
     try {
       const outcome = await repository.transaction(async (state) => {
         const caller = await extractAndVerifyCaller(req, state);
@@ -1356,25 +1478,40 @@ async function startServer() {
 
   // Server-side authentication endpoint for Syndics, Residents (Email or CIN), and Providers (Prestataires)
   // Allows unauthenticated clients (new browser, incognito, mobile) to verify credentials against sharedStore
+  const loginPreflight: express.RequestHandler = async (req, res, next) => {
+    const identifier = String(req.body?.identifier || req.body?.email || "")
+      .trim()
+      .toLowerCase();
+    const password = String(req.body?.password || "");
+    if (!identifier || identifier.length > 320 || !password || password.length > 200) {
+      return void res.status(400).json({ error: "Identifiants invalides." });
+    }
+    const ip = normalizedClientIp(req);
+    const decision = loginGuard.checkBeforeLogin(ip, identifier);
+    if (!decision.allowed) {
+      return void res
+        .status(429)
+        .set("Retry-After", String(decision.retryAfter))
+        .json({
+          ok: false,
+          code: "AUTH_RATE_LIMITED",
+          error: "Trop de tentatives. Réessayez dans 15 minutes.",
+          retryAfter: decision.retryAfter,
+        });
+    }
+    if (decision.delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, decision.delayMs));
+    }
+    next();
+  };
   api.post("/api/auth/login", async (req, res) => {
     const identifier = String(req.body?.identifier || req.body?.email || "")
         .trim()
         .toLowerCase(),
-      password = String(req.body?.password || "");
-    if (!identifier || !password || password.length > 200)
+      password = String(req.body?.password || ""),
+      clientIp = normalizedClientIp(req);
+    if (!identifier || identifier.length > 320 || !password || password.length > 200)
       return res.status(400).json({ error: "Identifiants invalides." });
-    const attempts = (sharedStore.__authAttempts ??= {}),
-      keys = [`ip:${req.ip}`, `account:${identifier}`].map((k) =>
-        crypto.createHash("sha256").update(k).digest("hex"),
-      );
-    for (const [i, key] of keys.entries()) {
-      if (!attempts[key] || attempts[key].since < Date.now() - 15 * 60000)
-        attempts[key] = { count: 0, since: Date.now() };
-      if (attempts[key].count >= (i === 0 ? 100 : 10))
-        return res
-          .status(429)
-          .json({ error: "Trop de tentatives. Réessayez dans 15 minutes." });
-    }
     const records = [
       ...(sharedStore.syndik_prod_registered_users_v1 || []),
       ...(sharedStore.syndik_prod_resident_accounts_v1 || []),
@@ -1392,7 +1529,10 @@ async function startServer() {
         const matching = records.filter((a: any) => accountUid(a) === uid);
         try {
           firebaseCredential = await firebasePasswordLogin(account.email.trim().toLowerCase(), password);
-          if (firebaseCredential.user.uid !== account.firebaseUid) return res.status(401).json({ error: 'Identifiants invalides.' });
+          if (firebaseCredential.user.uid !== account.firebaseUid) {
+            loginGuard.recordLoginFailure(clientIp, identifier);
+            return res.status(401).json({ error: 'Identifiants invalides.' });
+          }
           if (matching.some((a: any) => a.password || a.passwordHash)) {
             for (const a of matching) { delete a.password; delete a.passwordHash; }
             (sharedStore.__sessionVersions ??= {})[uid] = (sharedStore.__sessionVersions?.[uid] || 0) + 1;
@@ -1406,8 +1546,6 @@ async function startServer() {
               for (const a of matching) { delete a.password; delete a.passwordHash; }
               (sharedStore.__sessionVersions ??= {})[uid] = (sharedStore.__sessionVersions?.[uid] || 0) + 1;
               firebaseCredential = { user: fbUser, idToken: '', authTime: Math.floor(Date.now() / 1000) };
-            } else if (fbUser?.passwordHash) {
-              for (const a of matching) { delete a.password; delete a.passwordHash; }
             }
           }
         }
@@ -1431,12 +1569,12 @@ async function startServer() {
       : !usesFirebaseAuth() && verifyPassword(password, account.passwordHash || account.password, account.email));
     const trusted = lookupCandidateProfilesInStore(sharedStore, uid)[0];
     if (!passwordValid || !trusted || invitationExpired(sharedStore, trusted)) {
-      for (const key of keys) attempts[key].count++;
+      loginGuard.recordLoginFailure(clientIp, identifier);
       return res
         .status(401)
         .json({ error: "Identifiants invalides ou invitation expirée." });
     }
-    for (const key of keys) delete attempts[key];
+    loginGuard.clearAccountIp(clientIp, identifier);
     if (!account.firebaseUid && !account.passwordHash?.startsWith("scrypt$v1$")) {
       const upgraded = hashPassword(password);
       for (const item of records)
@@ -1463,14 +1601,25 @@ async function startServer() {
     if (firebaseCredential?.idToken && !wasLinked && !firebaseCredential.user.emailVerified)
       res.locals.afterCommit = () => sendFirebaseVerification(firebaseCredential.idToken);
     return res.json({ ok: true, profile, firebaseAuth: Boolean(firebaseCredential), token: issueServerSessionToken(profile) });
-  });
+  }, loginPreflight);
 
-  api.post("/api/auth/firebase-session", async (req, res) => {
-    const token = String(req.headers.authorization || "").replace(
-      /^Bearer /,
-      "",
-    );
+  const firebaseSessionPreflight: express.RequestHandler = async (req, res, next) => {
+    const token = String(req.headers.authorization || "").replace(/^Bearer /, "");
     const decoded = await verifiedFirebaseIdentity(token);
+    if (!decoded || !decoded.email) {
+      return void res.status(401).json({
+        error: "Une identité Firebase avec email vérifié est requise.",
+      });
+    }
+    res.locals.verifiedFirebaseDecoded = decoded;
+    next();
+  };
+  api.post("/api/auth/firebase-session", async (req, res) => {
+    const decoded =
+      res.locals.verifiedFirebaseDecoded ||
+      (await verifiedFirebaseIdentity(
+        String(req.headers.authorization || "").replace(/^Bearer /, ""),
+      ));
     if (!decoded || !decoded.email) {
       return res.status(401).json({
         error: "Une identité Firebase avec email vérifié est requise.",
@@ -1596,7 +1745,7 @@ async function startServer() {
       profile,
       token: issueServerSessionToken(profile),
     });
-  });
+  }, firebaseSessionPreflight);
 
   // Self-registration endpoint for new non-admin accounts (Syndic / Resident / Provider)
   api.post("/api/auth/register", async (req, res) => {
@@ -3053,38 +3202,18 @@ async function startServer() {
   app.post(
     "/api/webhooks/paypal",
     wrap(async (req, res) => {
-      const authAlgo = String(req.headers["paypal-auth-algo"] || "").trim();
-      const certUrl = String(req.headers["paypal-cert-url"] || "").trim();
-      const transmissionId = String(
-        req.headers["paypal-transmission-id"] || "",
-      ).trim();
-      const transmissionSig = String(
-        req.headers["paypal-transmission-sig"] || "",
-      ).trim();
-      const transmissionTime = String(
-        req.headers["paypal-transmission-time"] || "",
-      ).trim();
-
-      if (
-        !authAlgo ||
-        !certUrl ||
-        !transmissionId ||
-        !transmissionSig ||
-        !transmissionTime
-      ) {
-        await repository.transaction(async (state) => {
-          recordGatewayEvent(state, {
-            gateway: "paypal",
-            eventType: String(req.body?.event_type || "WEBHOOK"),
-            status: "rejected",
-            httpStatus: 400,
-            message: "En-têtes de signature PayPal manquants.",
-          });
-        });
-        return res
-          .status(400)
-          .json({ error: "En-têtes de signature PayPal manquants." });
+      const envelope = validatePayPalWebhookEnvelope(req.headers, req.body);
+      if (!envelope.ok) {
+        return res.status(400).json({ error: envelope.error });
       }
+      const {
+        authAlgo,
+        certUrl,
+        transmissionId,
+        transmissionSig,
+        transmissionTime,
+        eventType,
+      } = envelope.value;
 
       const webhookCreds = await repository.transaction(async (state) => {
         const secrets = resolvePlatformBillingConfig(state).paypalSecrets;
@@ -3123,21 +3252,11 @@ async function startServer() {
         },
       );
       if (!verified) {
-        await repository.transaction(async (state) => {
-          recordGatewayEvent(state, {
-            gateway: "paypal",
-            eventType: String(req.body?.event_type || "WEBHOOK"),
-            status: "rejected",
-            httpStatus: 401,
-            message: "Signature webhook PayPal invalide.",
-          });
-        });
         return res
           .status(401)
           .json({ error: "Signature webhook PayPal invalide." });
       }
 
-      const eventType = String(req.body?.event_type || "");
       const resource = (req.body?.resource || {}) as Record<string, any>;
 
       if (
@@ -3461,7 +3580,6 @@ async function startServer() {
   };
   app.post(
     "/api/subscription/cmi/return",
-    express.urlencoded({ extended: false }),
     handleCmiBrowserReturn,
   );
   app.get("/api/subscription/cmi/return", handleCmiBrowserReturn);
@@ -3469,7 +3587,6 @@ async function startServer() {
   // Official CMI Server-to-Server Callback (expects plain-text ACTION=POSTAUTH / APPROVED / FAILURE)
   app.post(
     "/api/webhooks/cmi",
-    express.urlencoded({ extended: false }),
     wrap(async (req, res) => {
       const payload = (req.body && typeof req.body === "object"
         ? req.body
@@ -4058,16 +4175,6 @@ async function startServer() {
       warnings: HAS_CONFIGURED_SESSION_SECRET ? [] : ['SESSION_SECRET_NOT_CONFIGURED'],
     });
   });
-  const scheduler = (req: express.Request) => {
-    const secret = process.env.SYNDIK_SCHEDULER_SECRET || "";
-    return (
-      secret.length >= 32 &&
-      timingSafeStringEqual(
-        String(req.headers["x-syndik-scheduler"] || ""),
-        secret,
-      )
-    );
-  };
   app.post("/api/jobs/lifecycle",wrap(async(req:express.Request,res:express.Response)=>{
     if(!scheduler(req))return res.status(403).json({error:'Ordonnanceur non autorisé.'});
     return res.json(await runLifecycle(repository,lifecycleStorage(UPLOADS_DIR)));
@@ -4149,13 +4256,13 @@ async function startServer() {
     return res.json({ ok: true, updatedInvoices, updatedCharges });
   });
 
-  api.post("/api/shared-state", async (_req, res) =>
+  app.post("/api/shared-state", (_req, res) =>
     res.status(403).json({
       error:
         "Les écritures globales sont désactivées. Utilisez les opérations serveur.",
     }),
   );
-  api.post("/api/shared-state/reset", async (_req, res) =>
+  app.post("/api/shared-state/reset", (_req, res) =>
     res.status(403).json({ error: "La remise à zéro web est désactivée." }),
   );
 

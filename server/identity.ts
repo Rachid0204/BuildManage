@@ -7,6 +7,7 @@ import { OperationError, appendAudit } from "./operations";
 import { usesFirebaseAuth, identityAccounts, accountUid, prepareFirebaseRecovery,
   sendFirebaseReset, sendFirebaseVerification, firebaseAdminAuth } from './firebaseIdentity';
 import { queueFirebaseMutation } from './identityMutations';
+import { normalizedClientIp, type LoginAttemptGuard } from './requestGuard';
 const digest = (token: string) =>
   createHash("sha256").update(token).digest("hex");
 export function createIdentityAction(
@@ -36,7 +37,26 @@ export function createIdentityAction(
     `Ouvrez ce lien personnel valable 30 minutes :\n${url}\n\nSi vous n’êtes pas à l’origine de cette demande, ignorez cet email.`,
   );
 }
-export function registerIdentityRoutes(api: any, authenticate: any) {
+export function registerIdentityRoutes(api: any, authenticate: any, loginGuard?: LoginAttemptGuard) {
+  const recoveryPreflight = (req: any, res: any, next: any) => {
+    const email = String(req.body?.email || "").toLowerCase().trim();
+    if (!email || email.length > 320 || !email.includes("@")) {
+      return res.json({
+        ok: true,
+        message: "Si un compte existe, un lien personnel sera envoyé.",
+      });
+    }
+    if (loginGuard) {
+      const cooldown = loginGuard.checkRecoveryCooldown(normalizedClientIp(req), email);
+      if (!cooldown.allowed) {
+        return res
+          .status(429)
+          .set("Retry-After", String(cooldown.retryAfter))
+          .json({ error: "Veuillez patienter une minute." });
+      }
+    }
+    return next();
+  };
   api.post("/api/auth/recovery/request", async (req: any, res: any) => {
     const state = currentState(),
       email = String(req.body?.email || "")
@@ -48,21 +68,17 @@ export function registerIdentityRoutes(api: any, authenticate: any) {
       return res
         .status(503)
         .json({ error: "Email indisponible. Contactez votre syndic." });
-    const key = digest(`${req.ip}:${email}`),
-      rate = (state.__recoveryAttempts ??= {})[key];
-    if (rate && rate > Date.now() - 60000)
-      return res.status(429).json({ error: "Veuillez patienter une minute." });
-    state.__recoveryAttempts[key] = Date.now();
     if (firebase) {
       if (account) await prepareFirebaseRecovery(state, account);
       if (account) queueFirebaseMutation(state, { kind: 'reset', target: accountUid(account),
         firebaseUid: account.firebaseUid, email });
     } else if (account) createIdentityAction(state, email, 'reset');
+    loginGuard?.recordRecoveryAttempt(normalizedClientIp(req), email);
     return res.json({
       ok: true,
       message: "Si un compte existe, un lien personnel sera envoyé.",
     });
-  });
+  }, recoveryPreflight);
   api.post("/api/auth/verification/request", async (req: any, res: any) => {
     const state = currentState(),
       caller = await authenticate(req, state);
@@ -113,6 +129,13 @@ export function registerIdentityRoutes(api: any, authenticate: any) {
     }
     return res.json({ ok: true });
   });
+  const completePreflight = (req: any, res: any, next: any) => {
+    const token = String(req.body?.token || "");
+    if (!token || token.length > 256) {
+      return res.status(400).json({ ok: false, code: "OPERATION_ERROR", error: "Lien expiré ou déjà utilisé." });
+    }
+    return next();
+  };
   api.post("/api/auth/recovery/complete", async (req: any, res: any) => {
     const state = currentState(),
       token = String(req.body?.token || ""),
@@ -180,7 +203,7 @@ export function registerIdentityRoutes(api: any, authenticate: any) {
       { email: action.email },
     );
     return res.json({ ok: true });
-  });
+  }, completePreflight);
 }
 
 

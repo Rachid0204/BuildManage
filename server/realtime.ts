@@ -5,11 +5,16 @@ import type { State, StateRepository } from './repository';
 // Stream revision numbers only. Business records are always fetched through the
 // authenticated, tenant-filtered state endpoint, including after reconnecting.
 export function registerLiveUpdates(app: Express, repository: StateRepository,
-  authenticate: (request: Request, state: State) => Promise<unknown>) {
+  authenticate: (request: Request, state: State) => Promise<unknown>,
+  preauthorize?: (request: Request) => Promise<boolean>) {
   app.get('/api/events', async (req, res) => {
     const requestId = randomUUID();
     res.setHeader('X-Request-ID', requestId);
     try {
+      if (preauthorize && !(await preauthorize(req))) {
+        res.status(401).json({ error: 'Authentification requise.' });
+        return;
+      }
       const caller = await repository.transaction(state => authenticate(req, state));
       if (res.destroyed) return;
       if (!caller) { res.status(401).json({ error: 'Authentification requise.' }); return; }

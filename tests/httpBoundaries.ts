@@ -12,22 +12,22 @@ const password = 'Synthetic-Test-Password-42!';
 const owner = { uid: 'owner-a', email: 'owner@audit.invalid', displayName: 'Owner', role: 'syndic' as const, syndicId: 's-a', buildingId: 'b-a' };
 const unverifiedOwner = { uid: 'owner-unv', email: 'unverified@audit.invalid', displayName: 'Unverified', role: 'syndic' as const, syndicId: 's-unv', buildingId: 'b-unv', emailVerified: false };
 const admin = { uid: 'admin-fixture', email: 'admin@audit.invalid', displayName: 'Admin', role: 'admin' as const };
-const resident = (id: string, email: string) => ({ id, name: id, email, isOwner: true, hasAccount: true, mustChangePassword: false });
+const resident = (id: string, email: string, cin?: string) => ({ id, name: id, email, ...(cin ? { cin } : {}), isOwner: true, hasAccount: true, mustChangePassword: false });
 const record = (profile: typeof owner | typeof unverifiedOwner | typeof admin) => ({ uid: profile.uid, email: profile.email, passwordHash: hashPasswordSync(password, profile.email), profile });
 const state = {
   syndik_prod_registered_users_v1: [record(owner), record(unverifiedOwner), record(admin)],
   syndik_prod_syndics_v1: [
     { id: 's-a', createdBy: owner.uid, subscriptionPlan: 'starter', subscriptionStatus: 'trialing', subscriptionExpiry: '2099-01-01', buildings: [
-      { id: 'b-a', syndicId: 's-a', residents: [resident('r-a', 'a@audit.invalid')], apartments: [{ id: 'lot-a', number: '1', ownerId: 'r-a', tantiemes: 1000 }] },
+      { id: 'b-a', syndicId: 's-a', residents: [resident('r-a', 'a@audit.invalid', 'AB123456')], apartments: [{ id: 'lot-a', number: '1', ownerId: 'r-a', tantiemes: 1000 }] },
     ] },
     { id: 's-unv', createdBy: unverifiedOwner.uid, subscriptionPlan: 'starter', subscriptionStatus: 'trialing', subscriptionExpiry: '2099-01-01', buildings: [
       { id: 'b-unv', syndicId: 's-unv', residents: [], apartments: [] },
     ] },
-    { id: 's-b', createdBy: 'owner-b', buildings: [{ id: 'b-b', residents: [resident('r-b', 'b@audit.invalid')], apartments: [] }] },
+    { id: 's-b', createdBy: 'owner-b', buildings: [{ id: 'b-b', residents: [resident('r-b', 'b@audit.invalid', 'AB123456')], apartments: [] }] },
   ],
   syndik_prod_resident_accounts_v1: [
     { residentId: 'r-a', email: 'a@audit.invalid', syndicId: 's-a', buildingId: 'b-a', passwordHash: hashPasswordSync(password, 'a@audit.invalid'), mustChangePassword: false },
-    { residentId: 'r-b', email: 'b@audit.invalid', syndicId: 's-b', buildingId: 'b-b', passwordHash: hashPasswordSync(password, 'b@audit.invalid'), mustChangePassword: false },
+    { residentId: 'r-b', email: 'b@audit.invalid', cin: 'AB123456', syndicId: 's-b', buildingId: 'b-b', passwordHash: hashPasswordSync(password, 'b@audit.invalid'), mustChangePassword: false },
   ],
   syndik_prod_charges_v1: [{ id: 'c-a', buildingId: 'b-a', syndicId: 's-a', residentId: 'r-a', amount: 100, paidAmount: 0, status: 'unpaid' },
     { id: 'c-b', buildingId: 'b-b', syndicId: 's-b', residentId: 'r-b', amount: 100, status: 'unpaid' }],
@@ -43,17 +43,17 @@ const port = await new Promise<number>((resolvePort) => { const server = createS
 }); });
 const child = spawn(process.execPath, ['--import', join(root, 'tests/helpers/networkGuard.mjs'), '--import', 'tsx', 'server.ts'], {
   cwd: root, env: { ...process.env, PORT: String(port), NODE_ENV: 'test', SYNDIK_STATE_BACKEND: 'file', SYNDIK_DATA_DIR: dataDir,
-    SYNDIK_SERVER_SECRET: 'synthetic-server-secret-12345678901234567890', FIREBASE_SERVICE_ACCOUNT_JSON: '' }, stdio: ['ignore', 'pipe', 'pipe'],
+    TRUST_PROXY_HOPS: '1', SYNDIK_SERVER_SECRET: 'synthetic-server-secret-12345678901234567890', FIREBASE_SERVICE_ACCOUNT_JSON: '' }, stdio: ['ignore', 'pipe', 'pipe'],
 });
 let logs = '';
 child.stderr.on('data', (d) => { logs += d; });
-const timeout = setTimeout(() => child.kill(), 30_000);
+const timeout = setTimeout(() => child.kill(), 45_000);
 const bearer = (token: string) => ({ Authorization: `Bearer ${token}` });
 const call = async (route: string, headers: Record<string, string> = {}, body?: unknown) => {
   const response = await fetch(`http://127.0.0.1:${port}${route}`, { headers: { 'Content-Type': 'application/json', ...headers },
     ...(body === undefined ? {} : { method: 'POST', body: JSON.stringify(body) }) });
   const text = await response.text(); let data: any; try { data = JSON.parse(text); } catch { data = text; }
-  return { status: response.status, data };
+  return { status: response.status, data, headers: response.headers };
 };
 try {
   await new Promise<void>((ready, reject) => {
@@ -216,8 +216,88 @@ try {
   assert.equal((await call(docUpload.data.url, provHeaders)).status, 403);
 
   console.log('PASS: registration isolation, token verification, roles, scoped voting, proof review and private files.');
-  // Exhaust admission, then make the platform file unreadable: the real route
-  // must still return 429, proving it never enters the platform transaction.
+
+  // Regression: per-route body limits, zero-write bad login throttling, non-DoS lockout, and pre-transaction webhook rejection.
+  const readPersisted = () => JSON.parse(readFileSync(join(dataDir, 'shared-state.json'), 'utf8'));
+  const revBeforeAbuse = readPersisted().__revision;
+  const oversized = { identifier: owner.email, password: 'wrong', pad: 'x'.repeat(140_000) };
+  assert.equal((await call('/api/auth/login', { 'X-Forwarded-For': '203.0.113.5' }, oversized)).status, 413);
+  assert.equal((await call('/api/ag/vote', ownerHeaders, { agId: 'ag-a', resolutionId: 'resolution', choice: 'for', pad: 'x'.repeat(140_000) })).status, 413);
+  assert.equal((await call('/api/webhooks/paypal', { 'X-Forwarded-For': '203.0.113.6' }, { event_type: 'PAYMENT.CAPTURE.COMPLETED', pad: 'x'.repeat(140_000) })).status, 413);
+  assert.equal(readPersisted().__revision, revBeforeAbuse);
+
+  // Valid large upload (>100 KB) still succeeds for authenticated user, while unauthenticated upload is rejected 401 before buffering.
+  const largePdf = Buffer.alloc(180_000, 0x20);
+  Buffer.from('%PDF-1.4\n').copy(largePdf);
+  assert.equal((await call('/api/uploads', {}, { name: 'unauth.pdf', buildingId: 'b-a', dataUrl: 'data:application/pdf;base64,' + largePdf.toString('base64') })).status, 401);
+  assert.equal(readPersisted().__revision, revBeforeAbuse);
+  const largeUpload = await call('/api/uploads', ownerHeaders, { name: 'large.pdf', buildingId: 'b-a', dataUrl: 'data:application/pdf;base64,' + largePdf.toString('base64') });
+  assert.equal(largeUpload.status, 200, JSON.stringify(largeUpload.data));
+
+  const revBeforeBadLogins = readPersisted().__revision;
+
+  // N bad logins from attacker IP (even spoofing leftmost X-Forwarded-For with TRUST_PROXY_HOPS=1) -> 429 with ZERO repository writes.
+  for (let i = 0; i < 10; i++) {
+    const bad = await call('/api/auth/login', { 'X-Forwarded-For': `198.51.100.${i}, 203.0.113.10` }, { identifier: owner.email, password: `wrong-${i}` });
+    assert.equal(bad.status, 401);
+    const snap = readPersisted();
+    assert.equal(snap.__revision, revBeforeBadLogins);
+    assert.equal('__authAttempts' in snap, false);
+  }
+  const lockedAttacker = await call('/api/auth/login', { 'X-Forwarded-For': '198.51.100.250, 203.0.113.10' }, { identifier: owner.email, password: 'wrong-11' });
+  assert.equal(lockedAttacker.status, 429);
+  assert.ok(Number(lockedAttacker.headers.get('retry-after')) > 0);
+  assert.equal(readPersisted().__revision, revBeforeBadLogins);
+
+  // Legitimate owner on another IP is NOT locked out!
+  const legitOwner = await call('/api/auth/login', { 'X-Forwarded-For': '203.0.113.20' }, { identifier: owner.email, password });
+  assert.equal(legitOwner.status, 200);
+
+  // Same non-DoS protection when an attacker targets a resident's Moroccan CIN.
+  const revAfterLegit = readPersisted().__revision;
+  for (let i = 0; i < 10; i++) {
+    const badCin = await call('/api/auth/login', { 'X-Forwarded-For': '203.0.113.11' }, { identifier: 'AB123456', password: `wrong-cin-${i}` });
+    assert.equal(badCin.status, 401);
+  }
+  assert.equal((await call('/api/auth/login', { 'X-Forwarded-For': '203.0.113.11' }, { identifier: 'AB123456', password: 'wrong-cin-11' })).status, 429);
+  assert.equal(readPersisted().__revision, revAfterLegit);
+  const legitCin = await call('/api/auth/login', { 'X-Forwarded-For': '203.0.113.21' }, { identifier: 'AB123456', password });
+  assert.equal(legitCin.status, 200);
+
+  // PayPal webhook with missing or junk headers is rejected 400 with zero repository writes or gateway events.
+  const revBeforeWebhook = readPersisted().__revision;
+  const junkPayPalCases: Array<{ headers: Record<string, string>; body: Record<string, unknown> }> = [
+    { headers: {}, body: { event_type: 'PAYMENT.CAPTURE.COMPLETED' } },
+    {
+      headers: {
+        'paypal-auth-algo': 'SHA256withRSA',
+        'paypal-cert-url': 'https://evil.invalid/cert.pem',
+        'paypal-transmission-id': 'tx-junk-1',
+        'paypal-transmission-sig': 'JUNK-SIG',
+        'paypal-transmission-time': new Date().toISOString(),
+      },
+      body: { event_type: 'PAYMENT.CAPTURE.COMPLETED' },
+    },
+    {
+      headers: {
+        'paypal-auth-algo': 'SHA256withRSA',
+        'paypal-cert-url': 'https://api.sandbox.paypal.com/cert.pem',
+        'paypal-transmission-id': 'tx-junk-2',
+        'paypal-transmission-sig': 'JUNK-SIG',
+        'paypal-transmission-time': 'not-an-iso-timestamp',
+      },
+      body: { event_type: 'PAYMENT.CAPTURE.COMPLETED' },
+    },
+  ];
+  for (const c of junkPayPalCases) {
+    const res = await call('/api/webhooks/paypal', { 'X-Forwarded-For': '203.0.113.30', ...c.headers }, c.body);
+    assert.equal(res.status, 400);
+  }
+  assert.equal(readPersisted().__revision, revBeforeWebhook);
+  assert.equal((readPersisted().__gatewayEvents || []).length, 0);
+
+  // Exhaust admission, then make the platform file unreadable: the real routes
+  // must still reject before ever entering the platform transaction.
   let limited = false;
   for (let i = 0; i < 11; i++) {
     const response = await call('/api/auth/register', {}, { email: `burst${i}@audit.invalid`, password: 'short' });
@@ -228,8 +308,20 @@ try {
   writeFileSync(join(dataDir, 'shared-state.json'), 'unreadable platform state');
   const blocked = await call('/api/auth/register', {}, { email: 'last@audit.invalid', password });
   assert.equal(blocked.status, 429); assert.equal(blocked.data.code, 'AUTH_RATE_LIMITED');
+  assert.equal((await call('/api/auth/login', { 'X-Forwarded-For': '203.0.113.10' }, { identifier: owner.email, password: 'any' })).status, 429);
+  assert.equal((await call('/api/auth/login', { 'X-Forwarded-For': '203.0.113.40' }, oversized)).status, 413);
+  // Exhaust pre-body recovery IP limit (10/15m), then send an oversized body: 429 (not 413/500) proves the IP limiter runs BEFORE body parsing and BEFORE repository.transaction.
+  for (let i = 0; i < 10; i++) {
+    assert.equal((await call('/api/auth/recovery/request', { 'X-Forwarded-For': '203.0.113.60' }, { email: 'invalid-no-at' })).status, 200);
+  }
+  const preBodyBlocked = await call('/api/auth/recovery/request', { 'X-Forwarded-For': '99.99.99.99, 203.0.113.60' }, oversized);
+  assert.equal(preBodyBlocked.status, 429);
+  assert.equal((await call('/api/webhooks/paypal', { 'X-Forwarded-For': '203.0.113.30', ...junkPayPalCases[1].headers }, junkPayPalCases[1].body)).status, 400);
+  assert.equal((await call('/api/shared-state')).status, 401);
+  assert.equal((await call('/api/commands', {}, { operation: 'deleteBuilding', args: ['b-a'], operationId: 'op:1234567890123:unauth' })).status, 401);
+  assert.equal((await call('/api/auth/firebase-session', {}, {})).status, 401);
   assert.equal(readFileSync(join(dataDir, 'shared-state.json'), 'utf8'), 'unreadable platform state');
-  console.log('PASS: real registration route rejects bursts before reading platform state.');
+  console.log('PASS: body limits, IP rate limits, non-DoS login lockouts, and webhook/auth guards stop before platform state.');
 } finally {
   clearTimeout(timeout);
   if (child.exitCode === null && child.signalCode === null) { const done = new Promise<void>((r) => child.once('exit', () => r())); child.kill(); await done; }
