@@ -191,6 +191,7 @@ const EXTRACTED_ROUTE_MODULES: ReadonlyArray<{
     ],
   },
   { file: 'server/routes/jobs.ts', exportedFns: ['registerJobsRoutes'] },
+  { file: 'server/routes/static.ts', exportedFns: ['registerStaticRoutes'] },
 ];
 
 test('server.ts delegates extracted route areas to dedicated server/routes/* modules with explicit deps', () => {
@@ -199,9 +200,13 @@ test('server.ts delegates extracted route areas to dedicated server/routes/* mod
     const fullPath = join(ROOT, mod.file);
     assert.equal(existsSync(fullPath), true, `Expected extracted route module ${mod.file} to exist`);
     const modSource = readFileSync(fullPath, 'utf8');
+    // Ensure no top-level mutable globals (top-level `let` or `var`) are introduced in route modules.
+    assert.doesNotMatch(modSource, /^(?:let|var)\s+/m, `Unexpected top-level mutable global in ${mod.file}`);
     for (const fnName of mod.exportedFns) {
       assert.match(modSource, new RegExp(`export\\s+(async\\s+)?function\\s+${fnName}\\b`));
       assert.match(serverSource, new RegExp(`\\b${fnName}\\s*\\(`));
     }
   }
+  assert.doesNotMatch(serverSource, /\bapi\.(?:get|post)\s*\(/);
+  assert.doesNotMatch(serverSource, /\bapp\.(?:put|patch|delete)\s*\(/);
 });
