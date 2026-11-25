@@ -180,6 +180,7 @@ const EXTRACTED_ROUTE_MODULES: ReadonlyArray<{
   { file: 'server/routes/uploads.ts', exportedFns: ['registerUploadsRoutes'] },
   { file: 'server/routes/webhooks.ts', exportedFns: ['registerPayPalWebhookRoutes', 'registerCmiWebhookRoutes'] },
   { file: 'server/routes/subscription.ts', exportedFns: ['registerSubscriptionRoutes', 'registerCmiSubscriptionRoutes'] },
+  { file: 'server/routes/admin.ts', exportedFns: ['registerAdminRoutes'] },
 ];
 
 test('server.ts delegates extracted route areas to dedicated server/routes/* modules with explicit deps', () => {
