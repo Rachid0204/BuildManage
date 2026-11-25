@@ -621,6 +621,29 @@ export function voidPlatformSubscriptionPayment(
   payment.voidReason = reason;
   payment.voidedBy = actor.uid;
 
+  if (state.__paypalIntents && typeof state.__paypalIntents === 'object') {
+    const mappedIntentKey =
+      payment.externalOrderId && state.__paypalOrders?.[payment.externalOrderId];
+    if (mappedIntentKey && state.__paypalIntents[mappedIntentKey]) {
+      state.__paypalIntents[mappedIntentKey].status = 'refunded';
+    }
+    for (const intent of Object.values(state.__paypalIntents) as any[]) {
+      if (
+        intent &&
+        (intent.paymentId === payment.id ||
+          (payment.externalOrderId && intent.orderId === payment.externalOrderId))
+      ) {
+        intent.status = 'refunded';
+      }
+    }
+  }
+  if (
+    payment.externalOrderId &&
+    state.__cmiIntents?.[payment.externalOrderId]
+  ) {
+    state.__cmiIntents[payment.externalOrderId].status = 'refunded';
+  }
+
   if (payment.promoCode) {
     const promos: SubscriptionPromoCode[] = state.__subscriptionPromos || [];
     const promo = promos.find(
@@ -717,6 +740,34 @@ export function voidPlatformSubscriptionPayment(
   return payment;
 }
 
+export function findProcessedGatewayPayment(
+  state: State,
+  keys: {
+    externalOrderIds?: (string | undefined)[];
+    externalCaptureIds?: (string | undefined)[];
+    paymentId?: string;
+  },
+): SubscriptionPayment | undefined {
+  const payments: SubscriptionPayment[] =
+    state.syndik_prod_subscription_payments_v1 || [];
+  const orderIds = new Set(
+    (keys.externalOrderIds || []).map((v) => String(v || '').trim()).filter(Boolean),
+  );
+  const captureIds = new Set(
+    (keys.externalCaptureIds || []).map((v) => String(v || '').trim()).filter(Boolean),
+  );
+  const paymentId = String(keys.paymentId || '').trim();
+  if (orderIds.size === 0 && captureIds.size === 0 && !paymentId) {
+    return undefined;
+  }
+  return payments.find(
+    (p) =>
+      (p.externalOrderId && orderIds.has(p.externalOrderId)) ||
+      (p.externalCaptureId && captureIds.has(p.externalCaptureId)) ||
+      (paymentId && p.id === paymentId),
+  );
+}
+
 export function activatePlatformSubscription(
   state: State,
   actor: Actor,
@@ -750,18 +801,12 @@ export function activatePlatformSubscription(
   const payments: SubscriptionPayment[] = (state.syndik_prod_subscription_payments_v1 ??=
     []);
 
-  if (input.externalOrderId) {
-    const existingByOrder = payments.find(
-      (p) => !p.voidedAt && p.externalOrderId === input.externalOrderId,
-    );
-    if (existingByOrder) return existingByOrder;
-  }
-  if (input.externalCaptureId) {
-    const existingByCapture = payments.find(
-      (p) => !p.voidedAt && p.externalCaptureId === input.externalCaptureId,
-    );
-    if (existingByCapture) return existingByCapture;
-  }
+  const existingGateway = findProcessedGatewayPayment(state, {
+    externalOrderIds: [input.externalOrderId],
+    externalCaptureIds: [input.externalCaptureId],
+  });
+  if (existingGateway) return existingGateway;
+
   if (input.requestId) {
     const existingByRequest = payments.find(
       (p) => !p.voidedAt && p.requestId === input.requestId,
@@ -781,6 +826,14 @@ export function activatePlatformSubscription(
   );
   const months = z.number().int().min(1).max(12).parse(input.months);
   const reference = z.string().min(1).max(200).parse(input.reference).trim();
+  if (
+    input.method === 'paypal' ||
+    input.method === 'card' ||
+    input.method === 'cmi'
+  ) {
+    const existingByGatewayRef = payments.find((p) => p.reference === reference);
+    if (existingByGatewayRef) return existingByGatewayRef;
+  }
 
   const billing = resolvePlatformBillingConfig(state).publicConfig;
   const promo = input.promoCode
