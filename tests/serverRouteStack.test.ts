@@ -190,6 +190,7 @@ const EXTRACTED_ROUTE_MODULES: ReadonlyArray<{
       'registerSharedStateGuardRoutes',
     ],
   },
+  { file: 'server/routes/jobs.ts', exportedFns: ['registerJobsRoutes'] },
 ];
 
 test('server.ts delegates extracted route areas to dedicated server/routes/* modules with explicit deps', () => {
