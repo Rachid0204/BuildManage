@@ -68,6 +68,10 @@ try {
   await expect(page.getByText('Firebase browser cabinet', { exact: true }).first()).toBeVisible();
   const data = await page.evaluate(() => JSON.parse(localStorage.getItem('syndik_auth_session_v1')!));
   assert.equal(data.profile.emailVerified, true, 'Verified profile survives a page refresh');
+  assert.equal(data.sessionTransport, 'cookie');
+  assert.equal('serverToken' in data, false, 'Web localStorage must not contain serverToken');
+  const sessionCookie = (await page.context().cookies(base)).find(c => c.name === 'syndik_session');
+  assert.ok(sessionCookie?.value && sessionCookie.httpOnly, 'Expected HttpOnly syndik_session cookie');
   await page.route('**/api/auth/session', route => route.fulfill({ status: 503, json: { error: 'Synthetic session outage' } }));
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Connexion au serveur interrompue' })).toBeVisible();
@@ -80,13 +84,16 @@ try {
     return (await import(modulePath)).auth.currentUser?.uid || null;
   })).toBeNull();
   await page.unroute('**/api/auth/session');
-  assert.equal((await fetch(`${base}/api/auth/session`, { headers: { Authorization: `Bearer ${data.serverToken}` } })).status, 200,
-    'Local session recovery does not revoke other signed-in sessions');
+  assert.equal((await fetch(`${base}/api/auth/session`, {
+    headers: { Cookie: `syndik_session=${sessionCookie.value}`, 'X-Syndik-CSRF': '1' },
+  })).status, 200, 'Local session recovery does not revoke other signed-in sessions');
   await page.getByPlaceholder('Ex: contact@moncabinet.ma ou CIN BK124578').fill('browser@example.test');
   await page.locator('input[type=password]').fill('Browser-Password-42!');
   await page.getByRole('button', { name: 'Se connecter', exact: true }).click();
   await expect(page.getByText('Firebase browser cabinet', { exact: true }).first()).toBeVisible({ timeout: 30000 });
-  assert.equal((await page.evaluate(() => JSON.parse(localStorage.getItem('syndik_auth_session_v1')!))).profile.emailVerified, true);
+  const freshStored = await page.evaluate(() => JSON.parse(localStorage.getItem('syndik_auth_session_v1')!));
+  assert.equal(freshStored.profile.emailVerified, true);
+  assert.equal('serverToken' in freshStored, false);
   assert.deepEqual(failures, [], 'No browser runtime errors');
   console.log('Firebase browser registration, SDK sign-in, resend, persistence and verification passed.');
   console.log('Firebase browser interruption recovery, local reset and fresh SDK sign-in passed.');

@@ -31,9 +31,18 @@ import {
   createSignedSessionEnvelope,
   getAuthenticatedRequestHeaders,
   isAlreadyHashedPassword,
+  isWebCookieSessionEnabled,
   setActiveAuthContext,
+  verifySignedSessionEnvelope,
 } from '../utils/security';
 import { apiUrl } from '../utils/apiBase';
+import {
+  clearNativeSessionToken,
+  getNativePlatform,
+  isNativeApp,
+  readNativeSessionToken,
+  writeNativeSessionToken,
+} from '../utils/nativeBridge';
 import { unregisterStoredNativePushToken } from '../hooks/useNativePush';
 
 
@@ -175,6 +184,22 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setSessionRetrying(false);
   }, []);
 
+  const buildSessionBootstrapHeaders = useCallback((extra: Record<string, string> = {}): Record<string, string> => {
+    const headers: Record<string, string> = {
+      'X-Syndik-CSRF': '1',
+    };
+    if (isWebCookieSessionEnabled()) {
+      headers['X-Syndik-Session-Transport'] = 'cookie';
+    }
+    if (isNativeApp()) {
+      headers['X-Syndik-Client-Platform'] = getNativePlatform();
+    }
+    return { ...headers, ...extra };
+  }, []);
+
+  const sessionCredentialsMode = (): RequestCredentials =>
+    isNativeApp() ? 'omit' : 'same-origin';
+
   const persistSession = useCallback((
     profile: UserProfile | null,
     firebaseUser?: User | null,
@@ -187,6 +212,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     profileRef.current = profile;
     if (!profile) {
       localStorage.removeItem(SESSION_STORAGE_KEY);
+      void clearNativeSessionToken();
       setActiveAuthContext(null, null);
       setUser(null);
       setUserProfile(null);
@@ -195,6 +221,17 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (!firebaseUser && auth.currentUser && auth.currentUser.uid !== (profile.firebaseUid || profile.uid)) {
       void signOut(auth).catch(() => {});
     }
+
+    if (isWebCookieSessionEnabled()) {
+      // Web cookie mode: never store any bearer token in localStorage or JS memory.
+      const envelope = createSignedSessionEnvelope(profile, undefined, 'cookie');
+      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(envelope));
+      setActiveAuthContext(profile, null);
+      setUserProfile(profile);
+      setUser(firebaseUser || createVerifiedIdentityAdapter(profile, ''));
+      return;
+    }
+
     const existingEnvelopeRaw = localStorage.getItem(SESSION_STORAGE_KEY);
     let preservedServerToken = serverToken;
     if (!preservedServerToken && existingEnvelopeRaw) {
@@ -207,8 +244,16 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         // ignore
       }
     }
-    const envelope = createSignedSessionEnvelope(profile, preservedServerToken);
-    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(envelope));
+    if (isNativeApp()) {
+      if (preservedServerToken) {
+        void writeNativeSessionToken(preservedServerToken);
+      }
+      const nativeEnvelope = createSignedSessionEnvelope(profile, undefined, 'bearer');
+      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(nativeEnvelope));
+    } else {
+      const envelope = createSignedSessionEnvelope(profile, preservedServerToken);
+      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(envelope));
+    }
     setActiveAuthContext(profile, preservedServerToken || null);
     setUserProfile(profile);
     setUser(firebaseUser || createVerifiedIdentityAdapter(profile, preservedServerToken || ''));
@@ -226,12 +271,20 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const exchangeFirebaseSession = useCallback(async (firebaseUser: User): Promise<UserProfile> => {
     const epoch = epochRef.current;
+    const webCookie = isWebCookieSessionEnabled();
     const token = await firebaseUser.getIdToken(true);
-    const response = await fetch(apiUrl('/api/auth/firebase-session'), { method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(15000) });
+    const response = await fetch(apiUrl('/api/auth/firebase-session'), {
+      method: 'POST',
+      credentials: sessionCredentialsMode(),
+      headers: buildSessionBootstrapHeaders({
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
     const data = await response.json().catch(() => ({}));
     if (epoch !== epochRef.current) throw new Error('La session a changé.');
-    if (!response.ok || !data.profile || !data.token)
+    if (!response.ok || !data.profile || (!webCookie && !data.token))
       throw Object.assign(new Error(data.error || 'Connexion au serveur impossible.'), { status: response.status });
     persistSession(data.profile, firebaseUser, data.token);
     if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent !== 'undefined') {
@@ -241,7 +294,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       await syncAllSharedStateFromServer(true);
     }
     return data.profile;
-  }, [persistSession]);
+  }, [buildSessionBootstrapHeaders, persistSession]);
 
   const restoreSession = useCallback(() => {
     if (sessionRequestRef.current) return sessionRequestRef.current;
@@ -253,24 +306,74 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setSessionRetrying(true);
     const task = (async (): Promise<'authenticated' | 'empty' | 'invalid' | 'unavailable'> => {
       try {
+        const webCookie = isWebCookieSessionEnabled();
         const raw = localStorage.getItem(SESSION_STORAGE_KEY);
-        if (!raw) return 'empty';
-        let cached: { serverToken?: string };
-        try { cached = JSON.parse(raw); } catch { if (current()) persistSession(null); return 'invalid'; }
-        if (!cached || typeof cached !== 'object' || Array.isArray(cached) ||
-            typeof cached.serverToken !== 'string' || !cached.serverToken.trim()) {
-          if (current()) persistSession(null);
-          return 'invalid';
+        let bearerTokenToSend: string | null = null;
+
+        if (!raw) {
+          if (isNativeApp()) {
+            const nativeToken = await readNativeSessionToken();
+            if (!nativeToken) return 'empty';
+            bearerTokenToSend = nativeToken;
+          } else {
+            return 'empty';
+          }
+        } else {
+          let cached: Record<string, unknown>;
+          try { cached = JSON.parse(raw); } catch { if (current()) persistSession(null); return 'invalid'; }
+          if (!cached || typeof cached !== 'object' || Array.isArray(cached)) {
+            if (current()) persistSession(null);
+            return 'invalid';
+          }
+          const legacyToken =
+            typeof cached.serverToken === 'string' && cached.serverToken.trim()
+              ? cached.serverToken.trim()
+              : null;
+          const isCookieHint =
+            webCookie && cached.sessionTransport === 'cookie' && !('serverToken' in cached);
+          const isNativeBearerHint =
+            isNativeApp() && cached.sessionTransport === 'bearer';
+
+          if (legacyToken) {
+            // Compatibility window: exchange pre-existing localStorage serverToken once for HttpOnly cookie, then scrub it
+            bearerTokenToSend = legacyToken;
+          } else if (isCookieHint) {
+            if ('profile' in cached && !verifySignedSessionEnvelope(cached)) {
+              if (current()) persistSession(null);
+              return 'invalid';
+            }
+            bearerTokenToSend = null;
+          } else if (isNativeBearerHint) {
+            if (!verifySignedSessionEnvelope(cached)) {
+              if (current()) persistSession(null);
+              return 'invalid';
+            }
+            bearerTokenToSend = await readNativeSessionToken();
+            if (!bearerTokenToSend) {
+              if (current()) persistSession(null);
+              return 'invalid';
+            }
+          } else {
+            if (current()) persistSession(null);
+            return 'invalid';
+          }
         }
-        const response = await fetch(apiUrl('/api/auth/session'), { signal: controller.signal,
-          cache: 'no-store', headers: { Authorization: `Bearer ${cached.serverToken}` } });
+
+        const response = await fetch(apiUrl('/api/auth/session'), {
+          signal: controller.signal,
+          cache: 'no-store',
+          credentials: sessionCredentialsMode(),
+          headers: buildSessionBootstrapHeaders(
+            bearerTokenToSend ? { Authorization: `Bearer ${bearerTokenToSend}` } : {},
+          ),
+        });
         if ([401, 403].includes(response.status)) {
           if (current()) { persistSession(null); void signOut(auth).catch(() => {}); }
           return 'invalid';
         }
         if (!response.ok) throw new Error('Session service unavailable');
         const data = await response.json().catch(() => ({}));
-        if (!data.profile || !data.token) throw new Error('Incomplete session response');
+        if (!data.profile || (!webCookie && !data.token)) throw new Error('Incomplete session response');
         if (current()) {
           persistSession(data.profile, undefined, data.token);
           if (typeof window !== 'undefined' && typeof CustomEvent !== 'undefined') {
@@ -297,7 +400,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     // Empty/malformed sessions can resolve before the promise is assigned.
     void task.finally(() => { if (sessionRequestRef.current === task) sessionRequestRef.current = null; });
     return task;
-  }, [persistSession]);
+  }, [buildSessionBootstrapHeaders, persistSession]);
 
   const sessionRecoveryFailed = useCallback((error: any, epoch: number) => {
     if (epoch !== epochRef.current) return;
@@ -371,13 +474,19 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     cancelSessionRequest();
     setLoading(true);
     try {
+      const webCookie = isWebCookieSessionEnabled();
       const identifier = email.trim().toLowerCase();
       const password = String(pass || '');
       if (!identifier || !password || isAlreadyHashedPassword(password)) throw new Error('Identifiants invalides.');
-      const response = await fetch(apiUrl('/api/auth/login'), { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identifier, password }), signal: AbortSignal.timeout(15000) });
+      const response = await fetch(apiUrl('/api/auth/login'), {
+        method: 'POST',
+        credentials: sessionCredentialsMode(),
+        headers: buildSessionBootstrapHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ identifier, password }),
+        signal: AbortSignal.timeout(15000),
+      });
       const data = await response.json().catch(() => ({}));
-      if (response.ok && data.profile && data.token) {
+      if (response.ok && data.profile && (webCookie || data.token)) {
         const firebaseUser = data.firebaseAuth
           ? (await signInWithEmailAndPassword(auth, data.profile.email, password)).user : undefined;
         persistSession(data.profile, firebaseUser, data.token);
@@ -431,8 +540,12 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           };
     setLoading(true);
     try {
+      const webCookie = isWebCookieSessionEnabled();
       const initialName = optionsArg?.initialBuildingName?.trim() || (input as any).initialBuildingName?.trim();
-      const response = await fetch(apiUrl('/api/auth/register'), { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      const response = await fetch(apiUrl('/api/auth/register'), {
+        method: 'POST',
+        credentials: sessionCredentialsMode(),
+        headers: buildSessionBootstrapHeaders({ 'Content-Type': 'application/json' }),
         signal: AbortSignal.timeout(15000),
         body: JSON.stringify({ email: input.email.trim().toLowerCase(), password: input.password,
           profile: { role: input.role, displayName: input.companyName || input.name, phone: input.phone },
@@ -444,7 +557,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
               monthlyFees: Number(optionsArg?.initialBuildingFees ?? (input as any).initialBuildingFees ?? 250) } : undefined,
           } : undefined }) });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data.profile || !data.token) throw new Error(data.error || 'Inscription impossible.');
+      if (!response.ok || !data.profile || (!webCookie && !data.token)) throw new Error(data.error || 'Inscription impossible.');
       const firebaseUser = data.firebaseAuth
         ? (await signInWithEmailAndPassword(auth, input.email.trim().toLowerCase(), input.password)).user : undefined;
       persistSession(data.profile, firebaseUser, data.token);
@@ -459,9 +572,13 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (!userProfile) throw new Error('Authentification requise.');
     const password = String(newPassword || '');
     if (password.length < 10 || isAlreadyHashedPassword(password)) throw new Error('Mot de passe invalide.');
-    const response = await fetch(apiUrl('/api/auth/change-password'), { method: 'POST',
+    const response = await fetch(apiUrl('/api/auth/change-password'), {
+      method: 'POST',
+      credentials: sessionCredentialsMode(),
       signal: AbortSignal.timeout(15000),
-      headers: getAuthenticatedRequestHeaders(), body: JSON.stringify({ newPassword: password }) });
+      headers: buildSessionBootstrapHeaders(getAuthenticatedRequestHeaders()),
+      body: JSON.stringify({ newPassword: password }),
+    });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) throw new Error(data.error || 'Le mot de passe n’a pas été enregistré.');
     const updatedProfile = data.profile || { ...userProfile, mustChangePassword: false };
@@ -484,6 +601,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       await unregisterStoredNativePushToken();
       await fetch(apiUrl('/api/auth/logout'), {
         method: 'POST',
+        credentials: sessionCredentialsMode(),
         headers: getAuthenticatedRequestHeaders(),
         signal: AbortSignal.timeout(5000),
       });

@@ -283,28 +283,32 @@ test.afterAll(async () => {
 });
 
 async function login(page: Page, index = 1, language = "fr") {
+  await page.unroute("**/*");
   await page.route("**/*", (route) =>
     new URL(route.request().url()).origin === base
       ? route.continue()
       : route.abort(),
   );
+  await page.goto(`${base}/welcome`);
+  // Wait for any previous identity restoration before replacing the test session.
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  await page.evaluate(() => {
+    localStorage.removeItem("syndik_auth_session_v1");
+  });
   const response = await page.request.post(`${base}/api/auth/login`, {
     data: { identifier: profiles[index].email, password },
   });
   expect(response.status()).toBe(200);
   const data = await response.json();
-  await page.goto(`${base}/welcome`);
-  // Wait for any previous identity restoration before replacing the test session.
-  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
   await page.evaluate(
-    ({ token, language }) => {
+    ({ language }) => {
       localStorage.setItem(
         "syndik_auth_session_v1",
-        JSON.stringify({ serverToken: token }),
+        JSON.stringify({ sessionTransport: "cookie" }),
       );
       localStorage.setItem("syndik_lang", language);
     },
-    { token: data.token, language },
+    { language },
   );
   const home = profiles[index].role === 'admin' ? '/admin' : profiles[index].role === 'provider' ? '/provider' : index === 0 ? '/financials' : '/resident';
   await page.goto(`${base}${home}`);
@@ -1396,12 +1400,16 @@ test('session recovery: temporary verification failure retains the verified view
 test('temporary session failures preserve credentials and offer retry instead of silently logging out', async ({ page }) => {
   await login(page, 0);
   for (const failure of ['server', 'network'] as const) {
-    const token = await page.evaluate(() => JSON.parse(localStorage.getItem('syndik_auth_session_v1')!).serverToken);
+    const storedBefore = await page.evaluate(() => JSON.parse(localStorage.getItem('syndik_auth_session_v1')!));
+    expect(storedBefore.sessionTransport).toBe('cookie');
+    expect('serverToken' in storedBefore).toBe(false);
     await page.route('**/api/auth/session', route => failure === 'server'
       ? route.fulfill({ status: 503, json: { error: 'Synthetic dependency outage' } }) : route.abort());
     await page.reload();
     await expect(page.getByRole('heading', { name: 'Connexion au serveur interrompue' })).toBeVisible();
-    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('syndik_auth_session_v1')!).serverToken)).toBe(token);
+    const storedDuring = await page.evaluate(() => JSON.parse(localStorage.getItem('syndik_auth_session_v1')!));
+    expect(storedDuring.sessionTransport).toBe('cookie');
+    expect('serverToken' in storedDuring).toBe(false);
     await page.unroute('**/api/auth/session');
     await page.getByRole('button', { name: 'Réessayer la connexion' }).click();
     await expect(page.getByRole('button', { name: 'Déconnexion' }).first()).toBeVisible();
@@ -1422,7 +1430,10 @@ test('connection retry verifies the saved session without reloading and transien
     await page.reload();
     await expect(page.getByRole('heading', { name: 'Connexion au serveur interrompue' })).toBeVisible();
     await page.evaluate(() => { (window as any).__retryProbe = 'keep-this-document'; });
-    expect(await page.evaluate(() => !!JSON.parse(localStorage.getItem('syndik_auth_session_v1')!).serverToken)).toBe(true);
+    expect(await page.evaluate(() => {
+      const parsed = JSON.parse(localStorage.getItem('syndik_auth_session_v1')!);
+      return parsed.sessionTransport === 'cookie' && !('serverToken' in parsed);
+    })).toBe(true);
     if (!automatic) {
       available = true;
       await page.getByRole('button', { name: 'Réessayer la connexion', exact: true }).click();
@@ -1556,7 +1567,8 @@ test('live state changes update separate resident and syndic sessions through pa
     await expect(statement.locator('td').nth(2)).toHaveText(`${paid} MAD`);
     expect(await page.evaluate(() => (window as any).__liveProbe)).toBe('syndic-original-document');
     expect(await residentPage.evaluate(() => (window as any).__liveProbe)).toBe('resident-original-document');
-    expect((await page.request.get(`${base}/api/events`)).status()).toBe(401);
+    expect((await fetch(`${base}/api/events`)).status).toBe(401);
+    expect((await page.request.get(`${base}/api/events`)).status()).toBe(403);
   } finally { releaseOldReport(); await residentContext.close(); }
 });
 
@@ -2089,6 +2101,105 @@ test('Help Center (/guide & /help) and contextual ? Guide drawers work across al
 
   expect(pageErrors).toEqual([]);
 });
+
+test('session transport: web sign-in, reload, mutation and logout use HttpOnly cookie without localStorage bearer token, and legacy tokens migrate seamlessly', async ({
+  page,
+}) => {
+  await page.route('**/*', (route) =>
+    new URL(route.request().url()).origin === base
+      ? route.continue()
+      : route.abort(),
+  );
+  const observedAuthHeaders: string[] = [];
+  const observedCsrfHeaders: string[] = [];
+  page.on('request', (req) => {
+    if (req.url().startsWith(`${base}/api/`)) {
+      const authHeader = req.headers()['authorization'];
+      if (authHeader) observedAuthHeaders.push(`${req.method()} ${new URL(req.url()).pathname}`);
+      if (req.headers()['x-syndik-csrf'] === '1') {
+        observedCsrfHeaders.push(`${req.method()} ${new URL(req.url()).pathname}`);
+      }
+    }
+  });
+
+  // 1. Interactive web login through /login form
+  await page.goto(`${base}/login`);
+  await page.getByPlaceholder('Ex: contact@moncabinet.ma ou CIN BK124578').fill(profiles[0].email);
+  await page.locator('input[type=password]').fill(password);
+  await page.getByRole('button', { name: 'Se connecter', exact: true }).click();
+  await expect(page.getByRole('button', { name: /Déconnexion|تسجيل الخروج/ }).first()).toBeVisible();
+
+  // 2. Verify zero bearer token in localStorage, sessionStorage, or document.cookie, while HttpOnly cookie is present
+  const webStorageState = await page.evaluate(() => {
+    const rawEnvelope = localStorage.getItem('syndik_auth_session_v1');
+    const parsed = rawEnvelope ? JSON.parse(rawEnvelope) : null;
+    const allLocalValues = Object.keys(localStorage).map((k) => `${k}=${localStorage.getItem(k)}`);
+    const allSessionValues = Object.keys(sessionStorage).map((k) => `${k}=${sessionStorage.getItem(k)}`);
+    return {
+      parsed,
+      hasTokenStringInLocal: allLocalValues.some((v) => v.includes('syndik-srv1.')),
+      hasTokenStringInSession: allSessionValues.some((v) => v.includes('syndik-srv1.')),
+      docCookie: document.cookie,
+    };
+  });
+  expect(webStorageState.parsed?.sessionTransport).toBe('cookie');
+  expect('serverToken' in (webStorageState.parsed || {})).toBe(false);
+  expect(webStorageState.hasTokenStringInLocal).toBe(false);
+  expect(webStorageState.hasTokenStringInSession).toBe(false);
+  expect(webStorageState.docCookie).not.toContain('syndik_session');
+  const cookiesAfterLogin = await page.context().cookies(base);
+  const sessionCookie = cookiesAfterLogin.find((c) => c.name === 'syndik_session');
+  expect(sessionCookie?.httpOnly).toBe(true);
+  expect(sessionCookie?.sameSite).toBe('Strict');
+  expect(observedAuthHeaders).toEqual([]);
+  expect(observedCsrfHeaders.some((entry) => entry.includes('/api/shared-state'))).toBe(true);
+
+  // 3. Reload tab and perform an authenticated mutation purely via HttpOnly cookie + X-Syndik-CSRF
+  await page.reload();
+  await expect(page.getByRole('button', { name: /Déconnexion|تسجيل الخروج/ }).first()).toBeVisible();
+  await page.goto(`${base}/announcements`);
+  await page.getByRole('button', { name: /Nouvelle annonce|Publier une annonce/i }).first().click();
+  const dialog = page.getByRole('dialog');
+  await dialog.locator('input[type=text]').first().fill('Annonce Cookie HttpOnly');
+  await dialog.locator('textarea').first().fill('Mutation authentifiée par cookie HttpOnly et en-tête CSRF.');
+  await dialog.locator('button[type=submit]').click();
+  await expect(page.getByText('Annonce Cookie HttpOnly')).toBeVisible();
+  expect(observedAuthHeaders).toEqual([]);
+  expect(observedCsrfHeaders).toContain('POST /api/commands');
+
+  // 4. Logout clears localStorage session envelope, clears HttpOnly cookie, and revokes the server token
+  const revokedCookieValue = sessionCookie!.value;
+  await page.getByRole('button', { name: /Déconnexion|تسجيل الخروج/ }).first().click();
+  await expect(page.getByRole('heading', { name: 'Connexion à votre espace' })).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem('syndik_auth_session_v1'))).toBeNull();
+  const replayAfterLogout = await fetch(`${base}/api/shared-state`, {
+    headers: { Cookie: `syndik_session=${revokedCookieValue}`, 'X-Syndik-CSRF': '1' },
+  });
+  expect(replayAfterLogout.status).toBe(401);
+
+  // 5. Compatibility window: pre-existing localStorage serverToken (without cookie) migrates seamlessly and is scrubbed
+  const legacyLoginRes = await fetch(`${base}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ identifier: profiles[1].email, password }),
+  });
+  expect(legacyLoginRes.status).toBe(200);
+  const legacyData = await legacyLoginRes.json();
+  expect(typeof legacyData.token).toBe('string');
+  await page.context().clearCookies();
+  await page.goto(`${base}/welcome`);
+  await page.evaluate((legacyToken) => {
+    localStorage.setItem('syndik_auth_session_v1', JSON.stringify({ serverToken: legacyToken }));
+  }, legacyData.token);
+  await page.goto(`${base}/resident`);
+  await expect(page.getByRole('button', { name: /Déconnexion|تسجيل الخروج/ }).first()).toBeVisible();
+  const migratedEnvelope = await page.evaluate(() => JSON.parse(localStorage.getItem('syndik_auth_session_v1')!));
+  expect(migratedEnvelope.sessionTransport).toBe('cookie');
+  expect('serverToken' in migratedEnvelope).toBe(false);
+  const migratedCookie = (await page.context().cookies(base)).find((c) => c.name === 'syndik_session');
+  expect(migratedCookie?.httpOnly).toBe(true);
+});
+
 
 
 

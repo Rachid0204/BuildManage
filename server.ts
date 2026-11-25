@@ -86,6 +86,15 @@ import {
   createCspReportHandler,
   createSecurityHeadersMiddleware,
 } from './server/securityHeaders';
+import {
+  canonicalAuthFingerprintInput,
+  clearSessionCookie,
+  createSessionCsrfMiddleware,
+  extractRequestCredential,
+  setSessionCookie,
+  shouldOmitJsonSessionToken,
+  verifyCookieCsrf,
+} from './server/sessionTransport';
 import { buildingReport } from './server/reports';
 import {
   createRepository,
@@ -467,17 +476,12 @@ async function extractAndVerifyCaller(
   req: express.Request,
   store: ServerStore,
 ): Promise<AuthCallerContext | null> {
-  const cookie =
-    req.path.startsWith("/api/uploads/") && req.method === "GET"
-      ? String(req.headers.cookie || "")
-          .split(";")
-          .map((v) => v.trim())
-          .find((v) => v.startsWith("syndik_session="))
-          ?.slice(15)
-      : undefined;
-  const token =
-    String(req.headers.authorization || "").replace(/^Bearer /, "") || cookie;
-  if (!token) return null;
+  const credential = extractRequestCredential(req);
+  if (!credential || !credential.token) return null;
+  if (credential.source === "cookie" && !verifyCookieCsrf(req).ok) {
+    return null;
+  }
+  const token = credential.token;
   let identity: AuthCallerContext | null = null;
   let firebaseIdentityUid: string | undefined;
   if (token.startsWith("syndik-srv1.")) {
@@ -1018,17 +1022,12 @@ async function startServer() {
     firebaseConfig.firestoreDatabaseId || "(default)";
 
   const hasValidCallerCredential = async (req: express.Request): Promise<boolean> => {
-    const cookie =
-      req.path.startsWith("/api/uploads/") && req.method === "GET"
-        ? String(req.headers.cookie || "")
-            .split(";")
-            .map((v) => v.trim())
-            .find((v) => v.startsWith("syndik_session="))
-            ?.slice(15)
-        : undefined;
-    const token =
-      String(req.headers.authorization || "").replace(/^Bearer /, "") || cookie;
-    if (!token) return false;
+    const credential = extractRequestCredential(req);
+    if (!credential || !credential.token) return false;
+    if (credential.source === "cookie" && !verifyCookieCsrf(req).ok) {
+      return false;
+    }
+    const token = credential.token;
     if (token.startsWith("syndik-srv1.")) {
       return Boolean(verifyServerSessionToken(token));
     }
@@ -1048,8 +1047,9 @@ async function startServer() {
 
   app.use(createSecurityHeadersMiddleware());
   app.use("/api", createApiCorsMiddleware());
-  // Rate-limit unauthenticated routes BEFORE body parsing and BEFORE any repository transaction.
+  // Rate-limit unauthenticated routes and verify cookie CSRF BEFORE body parsing and BEFORE any repository transaction.
   app.use("/api", createUnauthenticatedIpRateLimiter());
+  app.use("/api", createSessionCsrfMiddleware());
 
   const jsonDefaultParser = express.json({ limit: "100kb" });
   const jsonCommandParser = express.json({ limit: "1mb" });
@@ -1100,8 +1100,10 @@ async function startServer() {
   let readyCache: { revision: number; expiresAt: number } | undefined;
   // Must precede every wrapped identity route and all platform transactions.
   app.use(registrationAdmission(createAdmissionStore(), req => {
-    const token = String(req.headers.authorization || '').replace(/^Bearer /, '');
-    const caller = verifyServerSessionToken(token);
+    const credential = extractRequestCredential(req);
+    if (!credential || !credential.token) return undefined;
+    if (credential.source === 'cookie' && !verifyCookieCsrf(req).ok) return undefined;
+    const caller = verifyServerSessionToken(credential.token);
     return caller?.email || caller?.uid;
   }));
   const finalizeIdentityResponse: Parameters<typeof identityTransaction>[4] = (response, results, state, intent) => {
@@ -1144,7 +1146,7 @@ async function startServer() {
       } else if (!PUBLIC_WRAPPED_PATHS.has(req.path)) {
         if (!(await hasValidCallerCredential(req))) {
           if (req.path === "/api/auth/logout") {
-            res.clearCookie("syndik_session", { path: "/" });
+            clearSessionCookie(res);
             return void res.json({ ok: true });
           }
           if (req.path === "/api/archives") {
@@ -1187,14 +1189,18 @@ async function startServer() {
         if (transactional && ['/api/auth/register', '/api/auth/login', '/api/auth/change-password',
             '/api/auth/recovery/request', '/api/auth/logout', '/api/commands'].includes(req.path)) {
           const response = await identityTransaction(repository,
-            identityRequestFingerprint(req.path, String(req.headers.authorization || req.headers.cookie || ''), req.body),
+            identityRequestFingerprint(req.path, canonicalAuthFingerprintInput(req), req.body),
             async state => { await handle(state); return { payload, status: res.statusCode, format }; },
             executeFirebaseMutation, finalizeIdentityResponse, async (state, intent) => {
               if (['/api/auth/register', '/api/auth/login', '/api/auth/recovery/request'].includes(req.path)) return;
-              const token = String(req.headers.authorization || '').replace(/^Bearer /, '');
+              const extracted = extractRequestCredential(req);
+              if (extracted?.source === 'cookie' && !verifyCookieCsrf(req).ok) {
+                throw new OperationError('Requête cross-site refusée.', 403, 'CSRF_REJECTED');
+              }
+              const token = extracted?.token || '';
               let uid: string | undefined;
               if (token.startsWith('syndik-srv1.')) uid = verifyServerSessionToken(token)?.uid;
-              else {
+              else if (token) {
                 try {
                   // Signature/expiry must still be valid. Revocation is the
                   // pending intent's own effect, so it cannot veto its recovery.
@@ -1225,14 +1231,13 @@ async function startServer() {
         }
         if (!identityFinalized && requestState && payload && typeof payload === "object" && "revision" in payload)
           payload.revision = requestState.__revision;
-        if (payload?.token)
-          res.cookie("syndik_session", payload.token, {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === "production",
-            sameSite: "strict",
-            maxAge: 12 * 3600000,
-            path: "/",
-          });
+        if (payload?.token) {
+          setSessionCookie(res, payload.token);
+          if (shouldOmitJsonSessionToken(req)) {
+            const { token: _omitted, ...rest } = payload;
+            payload = rest;
+          }
+        }
       } catch (error: any) {
         if (!error.rejected) {
           res.status(error.status || (error.name === "ZodError" ? 400 : 500));
@@ -4159,7 +4164,7 @@ async function startServer() {
     if (caller)
       (sharedStore.__sessionVersions ??= {})[caller.uid] =
         (sharedStore.__sessionVersions?.[caller.uid] || 0) + 1;
-    res.clearCookie("syndik_session", { path: "/" });
+    clearSessionCookie(res);
     return res.json({ ok: true });
   });
   api.get("/api/reports", async (req, res) => {
