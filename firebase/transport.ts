@@ -131,7 +131,7 @@ export async function syncAllSharedStateFromServer(
   signal?: AbortSignal,
 ): Promise<Record<string, unknown> | null> {
   const headers = getAuthenticatedRequestHeaders();
-  if (!headers['Authorization']) {
+  if (!headers['Authorization'] && !headers['X-Syndik-Uid']) {
     return null;
   }
 

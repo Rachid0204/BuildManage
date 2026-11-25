@@ -102,21 +102,57 @@ export function generateSecureRandomDigits(length = 6): string {
 }
 
 export interface SignedSessionEnvelope {
+  sessionTransport?: 'cookie' | 'bearer';
   profile: UserProfile;
   signature: string;
   issuedAt: number;
   serverToken?: string;
 }
 
+const securityMetaEnv =
+  (import.meta as ImportMeta & { env?: Record<string, string | boolean | undefined> }).env || {};
+
+function detectNativeRuntime(): 'android' | 'ios' | 'web' {
+  if (typeof window === 'undefined') return 'web';
+  const cap = (
+    window as Window & {
+      Capacitor?: { isNativePlatform?: () => boolean; getPlatform?: () => string };
+    }
+  ).Capacitor;
+  if (!cap?.isNativePlatform?.()) return 'web';
+  const p = String(cap.getPlatform?.() || '').toLowerCase();
+  return p === 'android' || p === 'ios' ? p : 'web';
+}
+
+export function isWebCookieSessionEnabled(): boolean {
+  if (detectNativeRuntime() !== 'web') return false;
+  const flag = String(securityMetaEnv.VITE_WEB_SESSION_TRANSPORT || '')
+    .trim()
+    .toLowerCase();
+  if (flag === 'bearer') return false;
+  if (typeof window !== 'undefined') {
+    const winOverride = (
+      window as Window & { __SYNDIK_WEB_SESSION_TRANSPORT__?: string }
+    ).__SYNDIK_WEB_SESSION_TRANSPORT__;
+    if (String(winOverride || '').trim().toLowerCase() === 'bearer') {
+      return false;
+    }
+  }
+  return true;
+}
+
 export function createSignedSessionEnvelope(
   profile: UserProfile,
-  serverToken?: string
+  serverToken?: string,
+  sessionTransport?: 'cookie' | 'bearer'
 ): SignedSessionEnvelope {
+  const omitToken = sessionTransport === 'cookie';
   return {
+    ...(sessionTransport ? { sessionTransport } : {}),
     profile,
     signature: computeSessionSignature(profile),
     issuedAt: Date.now(),
-    ...(serverToken ? { serverToken } : {}),
+    ...(!omitToken && serverToken ? { serverToken } : {}),
   };
 }
 
@@ -172,13 +208,20 @@ export function setActiveAuthContext(profile: UserProfile | null, idToken?: stri
 }
 
 export function getAuthenticatedRequestHeaders(): Record<string, string> {
+  const nativePlatform = detectNativeRuntime();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     Accept: 'application/json',
+    'X-Syndik-CSRF': '1',
   };
+  if (nativePlatform !== 'web') {
+    headers['X-Syndik-Client-Platform'] = nativePlatform;
+  }
 
-  if (inMemoryAuthHeaderToken && inMemoryUserContext) {
-    headers['Authorization'] = `Bearer ${inMemoryAuthHeaderToken}`;
+  if (inMemoryUserContext) {
+    if (inMemoryAuthHeaderToken) {
+      headers['Authorization'] = `Bearer ${inMemoryAuthHeaderToken}`;
+    }
     headers['X-Syndik-Uid'] = inMemoryUserContext.uid;
     headers['X-Syndik-Role'] = inMemoryUserContext.role;
     headers['X-Syndik-Sig'] = inMemoryUserContext.signature;
@@ -197,18 +240,24 @@ export function getAuthenticatedRequestHeaders(): Record<string, string> {
       if (raw) {
         const parsedObj = JSON.parse(raw);
         const verified = verifySignedSessionEnvelope(parsedObj);
-        if (verified && typeof parsedObj.serverToken === 'string' && parsedObj.serverToken) {
-          const sig = computeSessionSignature(verified);
-          const tokenToUse =
-            typeof parsedObj?.serverToken === 'string' && parsedObj.serverToken
-              ? parsedObj.serverToken
-              : '';
-          headers['Authorization'] = `Bearer ${tokenToUse}`;
-          headers['X-Syndik-Uid'] = verified.uid;
-          headers['X-Syndik-Role'] = verified.role;
-          headers['X-Syndik-Sig'] = sig;
-          if (verified.syndicId) headers['X-Syndik-Tenant'] = verified.syndicId;
-          if (verified.buildingId) headers['X-Syndik-Building'] = verified.buildingId;
+        if (verified) {
+          const hasBearerToken =
+            typeof parsedObj.serverToken === 'string' && Boolean(parsedObj.serverToken);
+          const isCookieEnvelope = parsedObj.sessionTransport === 'cookie';
+          if (hasBearerToken || isCookieEnvelope) {
+            const sig = computeSessionSignature(verified);
+            if (hasBearerToken && !isWebCookieSessionEnabled()) {
+              headers['Authorization'] = `Bearer ${parsedObj.serverToken}`;
+            } else if (hasBearerToken && typeof window !== 'undefined' && !isCookieEnvelope) {
+              // Compatibility fallback for in-process callers before AuthContext migrates the envelope
+              headers['Authorization'] = `Bearer ${parsedObj.serverToken}`;
+            }
+            headers['X-Syndik-Uid'] = verified.uid;
+            headers['X-Syndik-Role'] = verified.role;
+            headers['X-Syndik-Sig'] = sig;
+            if (verified.syndicId) headers['X-Syndik-Tenant'] = verified.syndicId;
+            if (verified.buildingId) headers['X-Syndik-Building'] = verified.buildingId;
+          }
         }
       }
     } catch {

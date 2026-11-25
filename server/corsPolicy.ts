@@ -56,6 +56,50 @@ export function isAllowedCorsOrigin(
 }
 
 /**
+ * Web-only origin allowlist for cookie-authenticated CSRF validation.
+ * Explicitly excludes Capacitor native WebView origins (capacitor://localhost, https://localhost)
+ * which must authenticate with Authorization: Bearer tokens instead of cookies.
+ */
+export function isAllowedWebOrigin(
+  origin: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (!origin) return false;
+  const trimmed = origin.trim();
+  if (!trimmed || trimmed === 'null') return false;
+  const publicAppOrigin = normalizeOrigin(env.PUBLIC_APP_URL || '');
+  if (trimmed === 'capacitor://localhost') return false;
+  if (trimmed === 'https://localhost' && publicAppOrigin !== 'https://localhost') {
+    return false;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return false;
+  }
+
+  if (env.NODE_ENV !== 'production') {
+    if (
+      parsed.protocol === 'http:' &&
+      (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1')
+    ) {
+      return true;
+    }
+  }
+
+  if (parsed.protocol !== 'https:') return false;
+  if (publicAppOrigin && parsed.origin === publicAppOrigin) return true;
+
+  const extra = String(env.SYNDIK_CORS_ORIGINS || '')
+    .split(',')
+    .map((entry) => normalizeOrigin(entry))
+    .filter((entry): entry is string => Boolean(entry));
+  return extra.includes(parsed.origin);
+}
+
+/**
  * Strict, fail-closed CORS middleware for /api/* routes supporting Capacitor
  * native WebViews (capacitor://localhost, https://localhost) and configured
  * HTTPS frontend origins without ever echoing arbitrary origins.
@@ -74,7 +118,7 @@ export function createApiCorsMiddleware(env: NodeJS.ProcessEnv = process.env) {
       );
       res.setHeader(
         'Access-Control-Allow-Headers',
-        'Authorization, Content-Type, Accept, X-Idempotency-Key, X-Syndik-Client-Platform',
+        'Authorization, Content-Type, Accept, X-Idempotency-Key, X-Syndik-Client-Platform, X-Syndik-CSRF, X-Syndik-Session-Transport, X-Syndik-Uid, X-Syndik-Role, X-Syndik-Sig, X-Syndik-Tenant, X-Syndik-Building',
       );
       res.setHeader('Access-Control-Max-Age', '600');
     }

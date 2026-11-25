@@ -63,6 +63,16 @@ interface CapacitorPluginRegistry {
       listenerFunc: (payload: any) => void,
     ) => Promise<{ remove: () => Promise<void> }> | { remove: () => Promise<void> };
   };
+  SecureStorage?: {
+    get: (options: { key: string }) => Promise<{ value?: string | null }>;
+    set: (options: { key: string; value: string }) => Promise<void>;
+    remove: (options: { key: string }) => Promise<void>;
+  };
+  Preferences?: {
+    get: (options: { key: string }) => Promise<{ value?: string | null }>;
+    set: (options: { key: string; value: string }) => Promise<void>;
+    remove: (options: { key: string }) => Promise<void>;
+  };
 }
 
 interface CapacitorGlobal {
@@ -98,6 +108,84 @@ export function isAndroidNativeApp(): boolean {
 
 export function getCapacitorPlugins(): CapacitorPluginRegistry {
   return getCapacitor()?.Plugins || {};
+}
+
+const NATIVE_SESSION_TOKEN_KEY = 'syndik_native_bearer_v1';
+
+/**
+ * Reads the Capacitor native bearer token from hardware-backed SecureStorage (if installed),
+ * Capacitor Preferences (if installed), or the isolated native WebView fallback key.
+ * Strictly a no-op returning null on web browsers (0 KiB web bundle overhead).
+ */
+export async function readNativeSessionToken(): Promise<string | null> {
+  if (!isNativeApp()) return null;
+  const { SecureStorage, Preferences } = getCapacitorPlugins();
+  if (SecureStorage?.get) {
+    try {
+      const res = await SecureStorage.get({ key: NATIVE_SESSION_TOKEN_KEY });
+      if (typeof res?.value === 'string' && res.value.trim()) {
+        return res.value.trim();
+      }
+    } catch {
+      // Key missing or plugin unavailable; fall through
+    }
+  }
+  if (Preferences?.get) {
+    try {
+      const res = await Preferences.get({ key: NATIVE_SESSION_TOKEN_KEY });
+      if (typeof res?.value === 'string' && res.value.trim()) {
+        return res.value.trim();
+      }
+    } catch {
+      // Fall through
+    }
+  }
+  try {
+    const raw = window.localStorage.getItem(NATIVE_SESSION_TOKEN_KEY);
+    return raw && raw.trim() ? raw.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function writeNativeSessionToken(token: string): Promise<void> {
+  if (!isNativeApp() || !token) return;
+  const { SecureStorage, Preferences } = getCapacitorPlugins();
+  if (SecureStorage?.set) {
+    try {
+      await SecureStorage.set({ key: NATIVE_SESSION_TOKEN_KEY, value: token });
+      try { window.localStorage.removeItem(NATIVE_SESSION_TOKEN_KEY); } catch {}
+      return;
+    } catch {
+      // Fall through
+    }
+  }
+  if (Preferences?.set) {
+    try {
+      await Preferences.set({ key: NATIVE_SESSION_TOKEN_KEY, value: token });
+      try { window.localStorage.removeItem(NATIVE_SESSION_TOKEN_KEY); } catch {}
+      return;
+    } catch {
+      // Fall through
+    }
+  }
+  try {
+    window.localStorage.setItem(NATIVE_SESSION_TOKEN_KEY, token);
+  } catch {
+    // Ignore WebView storage quota errors
+  }
+}
+
+export async function clearNativeSessionToken(): Promise<void> {
+  if (!isNativeApp()) return;
+  const { SecureStorage, Preferences } = getCapacitorPlugins();
+  if (SecureStorage?.remove) {
+    try { await SecureStorage.remove({ key: NATIVE_SESSION_TOKEN_KEY }); } catch {}
+  }
+  if (Preferences?.remove) {
+    try { await Preferences.remove({ key: NATIVE_SESSION_TOKEN_KEY }); } catch {}
+  }
+  try { window.localStorage.removeItem(NATIVE_SESSION_TOKEN_KEY); } catch {}
 }
 
 function sanitizeFileName(raw: string, fallback = 'document.pdf'): string {

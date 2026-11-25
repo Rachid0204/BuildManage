@@ -220,6 +220,217 @@ try {
 
   console.log('PASS: registration isolation, token verification, roles, scoped voting, proof review and private files.');
 
+  // Regression: Web HttpOnly cookie session transport, layered CSRF defence, Capacitor Bearer parity, logout revocation, and cookie-mode operation recovery.
+  const extractSetCookiePair = (resHeaders: Headers, name = 'syndik_session'): { raw: string; pair: string; value: string } => {
+    const list = typeof (resHeaders as any).getSetCookie === 'function'
+      ? ((resHeaders as any).getSetCookie() as string[])
+      : [resHeaders.get('set-cookie') || ''].filter(Boolean);
+    const hit = list.find((entry) => entry.trim().startsWith(`${name}=`));
+    assert.ok(hit, `Expected Set-Cookie for ${name}, got: ${JSON.stringify(list)}`);
+    const pair = hit.split(';')[0]!.trim();
+    return { raw: hit, pair, value: pair.slice(name.length + 1) };
+  };
+  const cookieLogin = await call(
+    '/api/auth/login',
+    { 'X-Syndik-Session-Transport': 'cookie', 'X-Syndik-CSRF': '1', Origin: 'http://localhost:3000', 'X-Forwarded-For': '203.0.113.90' },
+    { identifier: owner.email, password },
+  );
+  assert.equal(cookieLogin.status, 200, JSON.stringify(cookieLogin.data));
+  assert.equal('token' in (cookieLogin.data || {}), false, 'Cookie-mode login response must omit bearer token from JSON');
+  const ownerCookie = extractSetCookiePair(cookieLogin.headers);
+  assert.match(ownerCookie.raw, /HttpOnly/i);
+  assert.match(ownerCookie.raw, /SameSite=Strict/i);
+  assert.match(ownerCookie.raw, /Path=\//i);
+  assert.match(ownerCookie.raw, /Max-Age=43200\b/i);
+
+  const webCookieHeaders = {
+    Cookie: `${ownerCookie.pair}; unrelated_pref=dark`,
+    'X-Syndik-CSRF': '1',
+    Origin: 'http://localhost:3000',
+    'Sec-Fetch-Site': 'same-origin',
+  };
+  const cookieSessionCheck = await call('/api/auth/session', { ...webCookieHeaders, 'X-Syndik-Session-Transport': 'cookie' });
+  assert.equal(cookieSessionCheck.status, 200, JSON.stringify(cookieSessionCheck.data));
+  assert.equal(cookieSessionCheck.data.profile.uid, owner.uid);
+  assert.equal('token' in cookieSessionCheck.data, false, 'Cookie-mode /api/auth/session must omit bearer token from JSON');
+
+  const cookieSharedState = await call('/api/shared-state', webCookieHeaders);
+  assert.equal(cookieSharedState.status, 200, JSON.stringify(cookieSharedState.data));
+  assert.deepEqual(cookieSharedState.data.store.syndik_prod_syndics_v1.map((s: any) => s.id), ['s-a']);
+
+  // Direct browser navigation to GET /api/uploads/:fileId works with SameSite=Strict cookie alone (no custom header).
+  const cookieDirectUploadGet = await call(docUpload.data.url, { Cookie: ownerCookie.pair, 'Sec-Fetch-Site': 'same-origin' });
+  assert.equal(cookieDirectUploadGet.status, 200);
+  assert.equal(cookieDirectUploadGet.data, '%PDF-1.4\nBUILDING-REGLEMENT');
+
+  // SSE /api/events authenticates via cookie + X-Syndik-CSRF.
+  const sseAbort = new AbortController();
+  const sseRes = await fetch(`http://127.0.0.1:${port}/api/events`, {
+    headers: webCookieHeaders,
+    signal: sseAbort.signal,
+  });
+  assert.equal(sseRes.status, 200);
+  assert.match(sseRes.headers.get('content-type') || '', /text\/event-stream/i);
+  sseAbort.abort();
+
+  // Cookie-authenticated mutation succeeds when CSRF header + allowed web Origin + same-origin Fetch Metadata are present.
+  const cookieCmdOk = await call('/api/commands', webCookieHeaders, {
+    operation: 'addAnnouncement',
+    args: ['b-a', { title: 'Cookie Auth Announcement', content: 'Authenticated via HttpOnly cookie.' }],
+    operationId: crypto.randomUUID(),
+  });
+  assert.equal(cookieCmdOk.status, 200, JSON.stringify(cookieCmdOk.data));
+
+  // Layered CSRF rejections on cookie-authenticated mutations: zero state change!
+  const revBeforeCsrf = JSON.parse(readFileSync(join(dataDir, 'shared-state.json'), 'utf8')).__revision;
+  // 1) Missing X-Syndik-CSRF custom header
+  const csrfNoHeader = await call(
+    '/api/commands',
+    { Cookie: ownerCookie.pair, Origin: 'http://localhost:3000', 'Sec-Fetch-Site': 'same-origin' },
+    { operation: 'addAnnouncement', args: ['b-a', { title: 'Forged 1', content: 'x' }], operationId: crypto.randomUUID() },
+  );
+  assert.equal(csrfNoHeader.status, 403);
+  assert.equal(csrfNoHeader.data.code, 'CSRF_REJECTED');
+  // 2) Disallowed Origin
+  const csrfBadOrigin = await call(
+    '/api/commands',
+    { Cookie: ownerCookie.pair, 'X-Syndik-CSRF': '1', Origin: 'https://evil.attacker.invalid' },
+    { operation: 'addAnnouncement', args: ['b-a', { title: 'Forged 2', content: 'x' }], operationId: crypto.randomUUID() },
+  );
+  assert.equal(csrfBadOrigin.status, 403);
+  assert.equal(csrfBadOrigin.data.code, 'CSRF_REJECTED');
+  // 3) Origin: null (sandboxed iframe)
+  const csrfNullOrigin = await call(
+    '/api/commands',
+    { Cookie: ownerCookie.pair, 'X-Syndik-CSRF': '1', Origin: 'null' },
+    { operation: 'addAnnouncement', args: ['b-a', { title: 'Forged 3', content: 'x' }], operationId: crypto.randomUUID() },
+  );
+  assert.equal(csrfNullOrigin.status, 403);
+  assert.equal(csrfNullOrigin.data.code, 'CSRF_REJECTED');
+  // 4) Native Capacitor origin must NEVER authenticate via cookie
+  const csrfCapOrigin = await call(
+    '/api/commands',
+    { Cookie: ownerCookie.pair, 'X-Syndik-CSRF': '1', Origin: 'capacitor://localhost' },
+    { operation: 'addAnnouncement', args: ['b-a', { title: 'Forged 4', content: 'x' }], operationId: crypto.randomUUID() },
+  );
+  assert.equal(csrfCapOrigin.status, 403);
+  assert.equal(csrfCapOrigin.data.code, 'CSRF_REJECTED');
+  // 5) Sec-Fetch-Site: cross-site and same-site rejected
+  for (const badSite of ['cross-site', 'same-site']) {
+    const csrfBadSite = await call(
+      '/api/commands',
+      { Cookie: ownerCookie.pair, 'X-Syndik-CSRF': '1', Origin: 'http://localhost:3000', 'Sec-Fetch-Site': badSite },
+      { operation: 'addAnnouncement', args: ['b-a', { title: 'Forged 5', content: 'x' }], operationId: crypto.randomUUID() },
+    );
+    assert.equal(csrfBadSite.status, 403);
+    assert.equal(csrfBadSite.data.code, 'CSRF_REJECTED');
+  }
+  // 6) Logout & change-password via cookie without X-Syndik-CSRF are also rejected (prevents logout/password CSRF)
+  assert.equal((await call('/api/auth/logout', { Cookie: ownerCookie.pair, Origin: 'https://evil.attacker.invalid', 'Sec-Fetch-Site': 'cross-site' }, {})).status, 403);
+  assert.equal((await call('/api/auth/change-password', { Cookie: ownerCookie.pair, Origin: 'http://localhost:3000' }, { newPassword: 'ForgedPassword-99!' })).status, 403);
+  assert.equal(JSON.parse(readFileSync(join(dataDir, 'shared-state.json'), 'utf8')).__revision, revBeforeCsrf);
+
+  // Anti-fallback: invalid Authorization bearer MUST fail closed (401) even if a valid syndik_session cookie is present.
+  const antiFallback = await call('/api/shared-state', {
+    ...webCookieHeaders,
+    Authorization: 'Bearer invalid-token-must-not-fallback',
+  });
+  assert.equal(antiFallback.status, 401);
+
+  // Capacitor native Bearer flow continues working with Origin: capacitor://localhost without cookies or X-Syndik-CSRF.
+  const capLogin = await call(
+    '/api/auth/login',
+    { Origin: 'capacitor://localhost', 'X-Syndik-Client-Platform': 'ios', 'X-Forwarded-For': '203.0.113.91' },
+    { identifier: owner.email, password },
+  );
+  assert.equal(capLogin.status, 200);
+  assert.ok(typeof capLogin.data.token === 'string' && capLogin.data.token.startsWith('syndik-srv1.'));
+  const capState = await call('/api/shared-state', {
+    Authorization: `Bearer ${capLogin.data.token}`,
+    Origin: 'capacitor://localhost',
+    'X-Syndik-Client-Platform': 'ios',
+  });
+  assert.equal(capState.status, 200);
+  const corsPreflight = await fetch(`http://127.0.0.1:${port}/api/commands`, {
+    method: 'OPTIONS',
+    headers: { Origin: 'http://localhost:3000', 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'Content-Type, X-Syndik-CSRF' },
+  });
+  assert.equal(corsPreflight.status, 204);
+  assert.match(corsPreflight.headers.get('access-control-allow-headers') || '', /X-Syndik-CSRF/i);
+
+  // Cookie-mode durable client operation recovery (setActiveAuthContext(owner, null) — ZERO bearer token in memory or storage).
+  {
+    const cookieMemory = new Map<string, string>();
+    const cookieStorage = {
+      getItem: (k: string) => cookieMemory.get(k) ?? null,
+      setItem: (k: string, v: string) => { cookieMemory.set(k, v); },
+      removeItem: (k: string) => { cookieMemory.delete(k); },
+    };
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: cookieStorage });
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: { localStorage: cookieStorage, sessionStorage: cookieStorage, dispatchEvent: () => true } });
+    setActiveAuthContext(owner, null);
+    let cookieCmdPosts = 0, cookieStatusReads = 0, cookieOpId = '';
+    const cookieArgs: import('../shared/api/commands').CommandArgs<'addAnnouncement'> = [
+      'b-a',
+      { title: 'Cookie reload-safe announcement', content: 'Cookie mode confidential text.' },
+    ];
+    try {
+      globalThis.fetch = (async (url: any, init: any = {}) => {
+        if (url === '/api/commands') { cookieCmdPosts++; cookieOpId = JSON.parse(init.body).operationId; }
+        if (url === '/api/operations/status') cookieStatusReads++;
+        const mergedHeaders = new Headers(init.headers || {});
+        assert.equal(mergedHeaders.has('authorization'), false, 'Web cookie-mode client must not send Authorization header');
+        assert.equal(mergedHeaders.get('x-syndik-csrf'), '1', 'Web cookie-mode client must send X-Syndik-CSRF: 1');
+        mergedHeaders.set('Cookie', `${ownerCookie.pair}; analytics_dummy=1`);
+        mergedHeaders.set('Origin', 'http://localhost:3000');
+        mergedHeaders.set('Sec-Fetch-Site', 'same-origin');
+        const response = await nativeFetch(new URL(url, `http://127.0.0.1:${port}`), { ...init, headers: mergedHeaders });
+        if (url === '/api/commands' && cookieCmdPosts === 1) {
+          assert.equal(response.status, 200, await response.clone().text());
+          await response.text();
+          throw new TypeError('Synthetic connection lost after cookie commit');
+        }
+        return response;
+      }) as typeof fetch;
+      await assert.rejects(client.remoteMutation('addAnnouncement', cookieArgs), /connection lost/);
+      assert.ok([...cookieMemory.values()].some((v) => v.includes(cookieOpId)));
+      assert.ok([...cookieMemory.values()].every((v) => !v.includes('syndik-srv1.') && !v.includes(ownerCookie.value)));
+      client.clearStateCache();
+      setActiveAuthContext(owner, null);
+      const cookieRecovered = await client.remoteMutation('addAnnouncement', cookieArgs);
+      assert.equal(cookieRecovered.title, 'Cookie reload-safe announcement');
+      assert.equal(cookieCmdPosts, 1);
+      assert.equal(cookieStatusReads, 1);
+    } finally {
+      client.clearStateCache();
+      setActiveAuthContext(null, null);
+      globalThis.fetch = nativeFetch;
+      Reflect.deleteProperty(globalThis, 'window');
+      Reflect.deleteProperty(globalThis, 'localStorage');
+    }
+  }
+
+  // Logout via cookie bumps __sessionVersions[provUid], clears syndik_session with matching attributes, and revokes the cookie.
+  const provCookieLogin = await call(
+    '/api/auth/login',
+    { 'X-Syndik-Session-Transport': 'cookie', 'X-Syndik-CSRF': '1', Origin: 'http://localhost:3000', 'X-Forwarded-For': '203.0.113.92' },
+    { identifier: 'provlock@audit.invalid', password: spacePassword },
+  );
+  assert.equal(provCookieLogin.status, 200);
+  const provCookie = extractSetCookiePair(provCookieLogin.headers);
+  const provCookieHeaders = { Cookie: provCookie.pair, 'X-Syndik-CSRF': '1', Origin: 'http://localhost:3000', 'Sec-Fetch-Site': 'same-origin' };
+  assert.equal((await call('/api/shared-state', provCookieHeaders)).status, 200);
+  const provLogout = await call('/api/auth/logout', provCookieHeaders, {});
+  assert.equal(provLogout.status, 200);
+  const clearedCookie = extractSetCookiePair(provLogout.headers);
+  assert.equal(clearedCookie.value, '');
+  assert.match(clearedCookie.raw, /HttpOnly/i);
+  assert.match(clearedCookie.raw, /SameSite=Strict/i);
+  assert.match(clearedCookie.raw, /Path=\//i);
+  assert.equal((await call('/api/shared-state', provCookieHeaders)).status, 401);
+  console.log('PASS: web cookie authentication, layered CSRF rejections, anti-fallback, Capacitor bearer parity, logout revocation, and cookie operation recovery.');
+
+
   // Regression: per-route body limits, zero-write bad login throttling, non-DoS lockout, and pre-transaction webhook rejection.
   const readPersisted = () => JSON.parse(readFileSync(join(dataDir, 'shared-state.json'), 'utf8'));
   const revBeforeAbuse = readPersisted().__revision;
@@ -452,6 +663,72 @@ try {
   assert.equal((await call('/api/webhooks/paypal', { 'X-Forwarded-For': '203.0.113.30', ...junkPayPalCases[1].headers }, junkPayPalCases[1].body)).status, 400);
   assert.equal((await call('/api/shared-state')).status, 401);
   assert.equal((await call('/api/commands', {}, { operation: 'deleteBuilding', args: ['b-a'], operationId: 'op:1234567890123:unauth' })).status, 401);
+  // Even with shared-state.json unreadable and an oversized 140 KB payload, a forged cross-site cookie POST /api/commands stops with 403 CSRF_REJECTED before body parsing or repository.transaction.
+  const preDbCsrfBlocked = await call(
+    '/api/commands',
+    { Cookie: ownerCookie.pair, Origin: 'https://evil.attacker.invalid', 'Sec-Fetch-Site': 'cross-site' },
+    oversized,
+  );
+  assert.equal(preDbCsrfBlocked.status, 403);
+  assert.equal(preDbCsrfBlocked.data.code, 'CSRF_REJECTED');
+  // Feature flag rollback ('bearer-only') & Firebase Hosting '__session' cookie name helper verification.
+  const { extractRequestCredential, shouldOmitJsonSessionToken, verifyCookieCsrf } = await import('../server/sessionTransport');
+  assert.equal(
+    extractRequestCredential(
+      { headers: { cookie: ownerCookie.pair }, method: 'GET', originalUrl: '/api/shared-state', path: '/api/shared-state' } as any,
+      { SESSION_TRANSPORT_MODE: 'bearer-only' },
+    ),
+    null,
+  );
+  assert.equal(
+    extractRequestCredential(
+      { headers: { cookie: ownerCookie.pair }, method: 'GET', originalUrl: '/api/uploads/file-1', path: '/api/uploads/file-1' } as any,
+      { SESSION_TRANSPORT_MODE: 'bearer-only' },
+    )?.source,
+    'cookie',
+  );
+  assert.equal(
+    extractRequestCredential(
+      { headers: { cookie: '__session=syndik-srv1.test.sig; other=1' }, method: 'GET', originalUrl: '/api/shared-state', path: '/api/shared-state' } as any,
+      { SESSION_TRANSPORT_MODE: 'dual', SESSION_COOKIE_NAME: '__session' },
+    )?.token,
+    'syndik-srv1.test.sig',
+  );
+  assert.equal(
+    shouldOmitJsonSessionToken(
+      { headers: { 'x-syndik-session-transport': 'cookie' } } as any,
+      { SESSION_TRANSPORT_MODE: 'bearer-only' },
+    ),
+    false,
+  );
+  assert.equal(
+    shouldOmitJsonSessionToken(
+      { headers: {} } as any,
+      { SESSION_TRANSPORT_MODE: 'cookie-web' },
+    ),
+    true,
+  );
+  assert.equal(
+    shouldOmitJsonSessionToken(
+      { headers: { 'x-syndik-client-platform': 'android' } } as any,
+      { SESSION_TRANSPORT_MODE: 'cookie-web' },
+    ),
+    false,
+  );
+  assert.equal(
+    verifyCookieCsrf(
+      { headers: { 'x-syndik-csrf': '1', origin: 'https://immogest.cloud.run', 'sec-fetch-site': 'same-origin' }, method: 'POST', originalUrl: '/api/commands', path: '/api/commands' } as any,
+      { NODE_ENV: 'production', PUBLIC_APP_URL: 'https://immogest.cloud.run' },
+    ).ok,
+    true,
+  );
+  assert.equal(
+    verifyCookieCsrf(
+      { headers: { 'x-syndik-csrf': '1', origin: 'http://localhost:3000', 'sec-fetch-site': 'same-origin' }, method: 'POST', originalUrl: '/api/commands', path: '/api/commands' } as any,
+      { NODE_ENV: 'production', PUBLIC_APP_URL: 'https://immogest.cloud.run' },
+    ).ok,
+    false,
+  );
   assert.equal((await call('/api/auth/firebase-session', {}, {})).status, 401);
   assert.equal(readFileSync(join(dataDir, 'shared-state.json'), 'utf8'), 'unreadable platform state');
   console.log('PASS: body limits, IP rate limits, non-DoS login lockouts, security headers, CSP report-only, and webhook/auth guards stop before platform state.');
