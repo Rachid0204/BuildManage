@@ -49,7 +49,7 @@
     "test:domain-kernel": "node --import tsx tests/domainKernelParity.test.ts",
     "test:financial-invariants": "node --import ./tests/helpers/networkGuard.mjs --import tsx --test tests/financialInvariants.test.ts",
     "test:backend-domain": "node --import ./tests/helpers/networkGuard.mjs --import tsx tests/backendDomainParity.test.ts",
-    "test:transport": "node --import ./tests/helpers/networkGuard.mjs --import tsx --test tests/transportBoundaries.test.ts",
+    "test:transport": "node --import ./tests/helpers/networkGuard.mjs --import tsx --test tests/transportBoundaries.test.ts tests/serverRouteStack.test.ts",
     "test:live-sync": "node --import ./tests/helpers/networkGuard.mjs --import tsx --test tests/liveSync.test.ts",
     "test:user-guides": "node --import tsx --test tests/userGuidesIntegrity.test.ts",
     "docs:screenshots": "node --import tsx scripts/captureUserGuides.ts",
