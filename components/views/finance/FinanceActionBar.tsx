@@ -15,16 +15,34 @@ interface FinanceActionBarProps {
 }
 
 export const FinanceMoreMenu: React.FC<{
+  managed: boolean;
+  isAdmin: boolean;
+  archivedCount: number;
   onRecordMiscIncome: () => void;
   onTransferFunds: () => void;
+  onOpenOpeningArrears: () => void;
+  onOpenPeriodLock: () => void;
+  onOpenArchivedItems: () => void;
+  onExportStatementsCsv: () => void;
+  onExportLedgerCsv: () => void;
   onExportAnnualPdf: () => void;
+  onExportFullJson: () => void;
   selectedFiscalYear: number;
   availableFiscalYears: number[];
   onChangeFiscalYear: (year: number) => void;
 }> = ({
+  managed,
+  isAdmin,
+  archivedCount,
   onRecordMiscIncome,
   onTransferFunds,
+  onOpenOpeningArrears,
+  onOpenPeriodLock,
+  onOpenArchivedItems,
+  onExportStatementsCsv,
+  onExportLedgerCsv,
   onExportAnnualPdf,
+  onExportFullJson,
   selectedFiscalYear,
   availableFiscalYears,
   onChangeFiscalYear,
@@ -85,33 +103,113 @@ export const FinanceMoreMenu: React.FC<{
         {open && (
           <div
             role="menu"
-            className="absolute end-0 mt-1.5 w-60 max-w-[calc(100vw-2rem)] rounded-xl bg-white border border-slate-200 shadow-lg py-1.5 z-30 text-xs"
+            className="absolute end-0 mt-1.5 w-72 max-w-[calc(100vw-2rem)] rounded-xl bg-white border border-slate-200 shadow-lg py-2 z-30 text-xs"
           >
+            {managed && (
+              <>
+                <div className="px-3.5 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  {tr('Opérations occasionnelles', 'عمليات عرضية')}
+                </div>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setOpen(false);
+                    onRecordMiscIncome();
+                  }}
+                  className="w-full px-3.5 py-2 text-start text-slate-700 hover:bg-slate-50 flex items-center gap-2 font-medium"
+                >
+                  <PlusIcon />
+                  <span>{tr('Recette diverse', 'تسجيل مدخول آخر')}</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setOpen(false);
+                    onTransferFunds();
+                  }}
+                  className="w-full px-3.5 py-2 text-start text-slate-700 hover:bg-slate-50 flex items-center gap-2 font-medium"
+                >
+                  <FinancialsIcon />
+                  <span>{tr('Virement entre fonds', 'تحويل بين الصناديق')}</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setOpen(false);
+                    onOpenOpeningArrears();
+                  }}
+                  className="w-full px-3.5 py-2 text-start text-slate-700 hover:bg-slate-50 flex items-center gap-2 font-medium"
+                >
+                  <PlusIcon />
+                  <span>{tr('Ajouter un ancien impayé', 'إضافة متأخرات سابقة')}</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setOpen(false);
+                    onOpenPeriodLock();
+                  }}
+                  className="w-full px-3.5 py-2 text-start text-slate-700 hover:bg-slate-50 flex items-center gap-2 font-medium"
+                >
+                  <FinancialsIcon />
+                  <span>{tr('Verrouiller un mois terminé', 'قفل شهر مكتمل')}</span>
+                </button>
+                {archivedCount > 0 && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setOpen(false);
+                      onOpenArchivedItems();
+                    }}
+                    className="w-full px-3.5 py-2 text-start text-slate-700 hover:bg-slate-50 flex items-center gap-2 font-medium"
+                  >
+                    <DocumentsIcon />
+                    <span>
+                      {tr(
+                        `Éléments archivés (${archivedCount})`,
+                        `العناصر المؤرشفة (${archivedCount})`,
+                      )}
+                    </span>
+                  </button>
+                )}
+                <div className="my-1.5 border-t border-slate-100" />
+              </>
+            )}
+
+            <div className="px-3.5 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+              {tr('Exports & documents', 'التصدير والوثائق')}
+            </div>
             <button
               type="button"
               role="menuitem"
               onClick={() => {
                 setOpen(false);
-                onRecordMiscIncome();
+                onExportStatementsCsv();
               }}
               className="w-full px-3.5 py-2 text-start text-slate-700 hover:bg-slate-50 flex items-center gap-2 font-medium"
             >
-              <PlusIcon />
-              <span>{tr('Recette diverse', 'تسجيل مدخول آخر')}</span>
+              <DocumentsIcon />
+              <span>{tr('Exporter situation copropriétaires (CSV)', 'تصدير وضعية الملاك (CSV)')}</span>
             </button>
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                setOpen(false);
-                onTransferFunds();
-              }}
-              className="w-full px-3.5 py-2 text-start text-slate-700 hover:bg-slate-50 flex items-center gap-2 font-medium"
-            >
-              <FinancialsIcon />
-              <span>{tr('Virement entre fonds', 'تحويل بين الصناديق')}</span>
-            </button>
-            <div className="my-1 border-t border-slate-100" />
+            {managed && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setOpen(false);
+                  onExportLedgerCsv();
+                }}
+                className="w-full px-3.5 py-2 text-start text-slate-700 hover:bg-slate-50 flex items-center gap-2 font-medium"
+              >
+                <DocumentsIcon />
+                <span>{tr('Exporter historique opérations (CSV)', 'تصدير سجل العمليات (CSV)')}</span>
+              </button>
+            )}
             <button
               type="button"
               role="menuitem"
@@ -126,6 +224,20 @@ export const FinanceMoreMenu: React.FC<{
                 {tr('Clôture annuelle (PDF)', 'الحصيلة السنوية (PDF)')} ({selectedFiscalYear})
               </span>
             </button>
+            {isAdmin && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setOpen(false);
+                  onExportFullJson();
+                }}
+                className="w-full px-3.5 py-2 text-start text-slate-500 hover:bg-slate-50 flex items-center gap-2 font-mono text-[11px]"
+              >
+                <DocumentsIcon />
+                <span>{tr('Sauvegarde technique (JSON)', 'نسخة احتياطية تقنية (JSON)')}</span>
+              </button>
+            )}
           </div>
         )}
       </div>

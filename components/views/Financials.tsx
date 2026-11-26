@@ -1,8 +1,8 @@
 import BillingFailures from './BillingFailures';
-import FinancialTools from './FinancialTools';
 import React, { useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { Building, Charge, Invoice, Quittance, Syndic, Transaction } from '../../types';
+import OpeningBalancesBanner from './finance/OpeningBalancesBanner';
 import FinanceActionBar, { FinanceMoreMenu } from './finance/FinanceActionBar';
 import FinanceTodoPanel from './finance/FinanceTodoPanel';
 import FinanceKpiCards from './finance/FinanceKpiCards';
@@ -19,8 +19,18 @@ import RecordPaymentModal, { type RecordPaymentModalRequest } from './finance/mo
 import QuittancePreviewModal from './finance/modals/QuittancePreviewModal';
 import FundTransferModal from './finance/modals/FundTransferModal';
 import ReverseExpenseModal from './finance/modals/ReverseExpenseModal';
+import ReversePaymentModal, { type ReversePaymentModalRequest } from './finance/modals/ReversePaymentModal';
+import OpeningArrearsModal from './finance/modals/OpeningArrearsModal';
+import PeriodLockModal from './finance/modals/PeriodLockModal';
+import ArchivedItemsModal from './finance/modals/ArchivedItemsModal';
 import { PayInvoiceModal, VoidInvoiceModal, type PayInvoiceModalRequest } from './finance/modals/InvoiceModals';
 import { buildFinanceTodos } from './finance/financeTodos';
+import {
+  findReversiblePayments,
+  formatLedgerCsv,
+  formatStatementsCsv,
+} from './finance/financeReportExport';
+import { downloadTextFile, useFinancialReport } from './finance/useFinancialReport';
 import { FinancialsIcon } from '../icons/IconComponents';
 import {
   getChargesForBuilding,
@@ -33,6 +43,8 @@ import {
 import { exportAnnualRepartitionPDF } from '../../services/pdfOnDemand';
 import { todayCasablancaIsoDate } from '../../shared/moroccoDate';
 import Loading from '../common/Loading';
+import { useToast } from '../common/Toast';
+import { useAuth } from '../../contexts/AuthContext';
 import { useI18n } from '../../hooks/useI18n';
 import { currencyFormatter, type FinanceTabType } from './finance/financeConstants';
 import {
@@ -51,12 +63,17 @@ interface FinancialsProps {
 }
 
 const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
-  const { tr } = useI18n();
+  const { tr, isAr } = useI18n();
+  const { userProfile } = useAuth();
+  const { showToast } = useToast();
   const nonceRef = useRef(0);
   const nextNonce = () => {
     nonceRef.current += 1;
     return nonceRef.current;
   };
+
+  const managed = ['admin', 'syndic'].includes(userProfile?.role || '');
+  const isAdmin = userProfile?.role === 'admin';
 
   const [activeTab, setActiveTab] = useState<FinanceTabType>('charges');
   const [filterFund, setFilterFund] = useState<'all' | 'courant' | 'reserve'>('all');
@@ -68,6 +85,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
   const [trxModalRequest, setTrxModalRequest] = useState<TransactionModalRequest>(null);
   const [selectedTrxForView, setSelectedTrxForView] = useState<Transaction | null>(null);
   const [reverseExpenseTarget, setReverseExpenseTarget] = useState<Transaction | null>(null);
+  const [reversePaymentRequest, setReversePaymentRequest] = useState<ReversePaymentModalRequest | null>(null);
   const [generateChargesRequest, setGenerateChargesRequest] = useState<GenerateChargesModalRequest>(null);
   const [recordPaymentRequest, setRecordPaymentRequest] = useState<RecordPaymentModalRequest>(null);
   const [selectedQuittanceForPreview, setSelectedQuittanceForPreview] = useState<Quittance | null>(null);
@@ -75,6 +93,15 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
     open: false,
     nonce: 0,
   });
+  const [openingArrearsModal, setOpeningArrearsModal] = useState<{ open: boolean; nonce: number }>({
+    open: false,
+    nonce: 0,
+  });
+  const [periodLockModal, setPeriodLockModal] = useState<{ open: boolean; nonce: number }>({
+    open: false,
+    nonce: 0,
+  });
+  const [archivedModalOpen, setArchivedModalOpen] = useState(false);
   const [payInvoiceRequest, setPayInvoiceRequest] = useState<PayInvoiceModalRequest>(null);
   const [voidInvoiceTarget, setVoidInvoiceTarget] = useState<Invoice | null>(null);
 
@@ -104,6 +131,8 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
     queryFn: () => getPrestatairesForBuilding(building.id),
   });
 
+  const { data: financialReport, refetch: refetchFinancialReport } = useFinancialReport(building.id);
+
   // Shared derived overview selectors
   const availableFiscalYears = useMemo(() => computeAvailableFiscalYears(charges), [charges]);
   const stats = useMemo(
@@ -121,6 +150,20 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
   );
   const currentMonthPeriod = useMemo(() => todayCasablancaIsoDate().slice(0, 7), []);
   const hasBillableLots = useMemo(() => computeHasBillableLots(building), [building]);
+
+  const reversiblePayments = useMemo(
+    () => findReversiblePayments(building.financials?.transactions || []),
+    [building.financials?.transactions],
+  );
+
+  const archivedCount = useMemo(() => {
+    const arch = financialReport?.archives;
+    return (
+      (arch?.apartments?.length || 0) +
+      (arch?.residents?.length || 0) +
+      (arch?.prestataires?.length || 0)
+    );
+  }, [financialReport?.archives]);
 
   const financeTodos = useMemo(
     () =>
@@ -144,7 +187,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
     ],
   );
 
-  // Shared modal openers
+  // Shared modal openers & export handlers
   const openExpenseModal = () => setTrxModalRequest({ mode: 'expense', nonce: nextNonce() });
   const openIncomeModal = () => setTrxModalRequest({ mode: 'income', nonce: nextNonce() });
   const openChargeGeneration = (period?: string) =>
@@ -162,13 +205,54 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
     });
   const openTransferModal = () => setTransferModalState({ open: true, nonce: nextNonce() });
 
+  const ensureLatestReport = async () => {
+    const res = await refetchFinancialReport({ throwOnError: true });
+    return res.data;
+  };
+
+  const handleExportStatementsCsv = async () => {
+    try {
+      const report = await ensureLatestReport();
+      const csvText = formatStatementsCsv(report?.statements || [], isAr);
+      downloadTextFile(`situation-coproprietaires-${building.id}.csv`, csvText);
+      showToast(tr('Export CSV téléchargé.', 'تم تحميل ملف CSV.'), 'success');
+    } catch (err: any) {
+      showToast(err?.message || tr('Export impossible.', 'تعذر التصدير.'), 'error');
+    }
+  };
+
+  const handleExportLedgerCsv = async () => {
+    try {
+      const report = await ensureLatestReport();
+      const csvText = formatLedgerCsv(report?.ledger || [], isAr);
+      downloadTextFile(`historique-operations-${building.id}.csv`, csvText);
+      showToast(tr('Export CSV téléchargé.', 'تم تحميل ملف CSV.'), 'success');
+    } catch (err: any) {
+      showToast(err?.message || tr('Export impossible.', 'تعذر التصدير.'), 'error');
+    }
+  };
+
+  const handleExportFullJson = async () => {
+    try {
+      const report = await ensureLatestReport();
+      downloadTextFile(
+        `sauvegarde-immeuble-${building.id}.json`,
+        JSON.stringify(report, null, 2),
+        'application/json;charset=utf-8',
+      );
+      showToast(tr('Sauvegarde JSON téléchargée.', 'تم تحميل النسخة الاحتياطية JSON.'), 'success');
+    } catch (err: any) {
+      showToast(err?.message || tr('Export impossible.', 'تعذر التصدير.'), 'error');
+    }
+  };
+
   if (loadingCharges || loadingProofs || loadingQuittances) {
     return <Loading message={tr('Chargement des données financières...', 'جاري تحميل البيانات المالية...')} />;
   }
 
   return (
     <div className="space-y-6">
-      <FinancialTools key={building.id} building={building} />
+      <OpeningBalancesBanner key={building.id} building={building} />
       <BillingFailures key={`billing-${building.id}`} building={building} />
 
       {/* Top Header */}
@@ -186,8 +270,16 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
           </p>
         </div>
         <FinanceMoreMenu
+          managed={managed}
+          isAdmin={isAdmin}
+          archivedCount={archivedCount}
           onRecordMiscIncome={openIncomeModal}
           onTransferFunds={openTransferModal}
+          onOpenOpeningArrears={() => setOpeningArrearsModal({ open: true, nonce: nextNonce() })}
+          onOpenPeriodLock={() => setPeriodLockModal({ open: true, nonce: nextNonce() })}
+          onOpenArchivedItems={() => setArchivedModalOpen(true)}
+          onExportStatementsCsv={handleExportStatementsCsv}
+          onExportLedgerCsv={handleExportLedgerCsv}
           onExportAnnualPdf={() =>
             exportAnnualRepartitionPDF(
               building,
@@ -197,6 +289,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
               selectedFiscalYear,
             )
           }
+          onExportFullJson={handleExportFullJson}
           selectedFiscalYear={selectedFiscalYear}
           availableFiscalYears={availableFiscalYears}
           onChangeFiscalYear={setSelectedFiscalYear}
@@ -258,6 +351,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
           building={building}
           syndic={syndic}
           charges={charges}
+          statements={financialReport?.statements || []}
           invoices={invoices}
           quittances={quittances}
           onOpenChargeGeneration={() => openChargeGeneration()}
@@ -289,6 +383,8 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
           onChangeShowVoidedQuittances={setShowVoidedQuittances}
           onOpenNewPayment={openQuittanceModalNew}
           onPreviewQuittance={setSelectedQuittanceForPreview}
+          reversiblePayments={reversiblePayments}
+          onReversePayment={setReversePaymentRequest}
         />
       )}
 
@@ -319,6 +415,8 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
         transaction={selectedTrxForView}
         onClose={() => setSelectedTrxForView(null)}
         onRequestReverseExpense={(trx) => setReverseExpenseTarget(trx)}
+        reversiblePayments={reversiblePayments}
+        onRequestReversePayment={(req) => setReversePaymentRequest(req)}
       />
 
       <GenerateChargesModal
@@ -341,6 +439,12 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
         syndic={syndic}
         quittance={selectedQuittanceForPreview}
         onClose={() => setSelectedQuittanceForPreview(null)}
+        reversibleSummary={
+          selectedQuittanceForPreview?.paymentId
+            ? reversiblePayments.get(selectedQuittanceForPreview.paymentId)
+            : undefined
+        }
+        onRequestReversePayment={(req) => setReversePaymentRequest(req)}
       />
 
       <FundTransferModal
@@ -359,6 +463,38 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
           setReverseExpenseTarget(null);
           setSelectedTrxForView(null);
         }}
+      />
+
+      <ReversePaymentModal
+        building={building}
+        request={reversePaymentRequest}
+        onClose={() => setReversePaymentRequest(null)}
+        onReversed={() => {
+          setSelectedQuittanceForPreview(null);
+          setSelectedTrxForView(null);
+        }}
+      />
+
+      <OpeningArrearsModal
+        building={building}
+        isOpen={openingArrearsModal.open}
+        openNonce={openingArrearsModal.nonce}
+        onClose={() => setOpeningArrearsModal((prev) => ({ ...prev, open: false }))}
+      />
+
+      <PeriodLockModal
+        building={building}
+        closedPeriods={financialReport?.closedPeriods || {}}
+        isOpen={periodLockModal.open}
+        openNonce={periodLockModal.nonce}
+        onClose={() => setPeriodLockModal((prev) => ({ ...prev, open: false }))}
+      />
+
+      <ArchivedItemsModal
+        building={building}
+        archives={financialReport?.archives}
+        isOpen={archivedModalOpen}
+        onClose={() => setArchivedModalOpen(false)}
       />
 
       <PayInvoiceModal

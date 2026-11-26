@@ -1229,8 +1229,8 @@ test('250 MAD monthly fees stay fixed as residents are added and opening setup u
     localStorage.setItem('syndik_lang', 'fr');
   }, token);
   await page.goto(`${base}/financials`);
-  await expect(page.getByText('Avant le premier encaissement : confirmez les soldes initiaux')).toBeVisible();
-  await expect(page.getByLabel('Fonds courant MAD')).toBeVisible();
+  await expect(page.getByRole('region', { name: "Solde de départ de l'immeuble" })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Nouvel immeuble : démarrer à 0 MAD' })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('opening-balances-mobile.png'), fullPage: true });
   const issue = async (expectedRows: number, weightedPreview = false) => {
     await page.getByRole('button', { name: /Appeler les charges du mois/ }).first().click();
@@ -1275,13 +1275,13 @@ test('250 MAD monthly fees stay fixed as residents are added and opening setup u
   await page.getByRole('button', { name: /Virements à vérifier/ }).click();
   await page.getByRole('button', { name: /Valider les virements conformes/ }).click();
   await expect(page.getByRole('alert').filter({ hasText: 'Confirmez les soldes initiaux' }).first()).toBeVisible();
-  await page.getByRole('button', { name: 'Configurer les soldes initiaux' }).click();
-  await expect(page.getByLabel('Fonds courant MAD')).toBeFocused();
-  await page.getByLabel('Fonds courant MAD').fill('0');
-  await page.getByLabel('Réserve MAD', { exact: true }).fill('0');
-  await page.getByLabel('Motif de confirmation des soldes').fill('Verified zero opening funds for this new residence');
-  await page.getByRole('button', { name: 'Confirmer une fois' }).click();
-  await expect(page.getByRole('button', { name: 'Configurer les soldes initiaux' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Saisir des soldes existants' }).click();
+  await expect(page.getByLabel('Argent disponible — Compte courant (MAD)')).toBeFocused();
+  await page.getByLabel('Argent disponible — Compte courant (MAD)').fill('0');
+  await page.getByLabel('Épargne — Fonds de réserve (MAD)').fill('0');
+  await page.getByLabel('Note (optionnel)').fill('Verified zero opening funds for this new residence');
+  await page.getByRole('button', { name: 'Enregistrer les soldes de départ' }).click();
+  await expect(page.getByRole('region', { name: "Solde de départ de l'immeuble" })).toHaveCount(0);
   await page.getByRole('button', { name: /Virements à vérifier/ }).click();
   await page.getByRole('button', { name: 'Valider le virement' }).click();
   await expect.poll(async () => (await disk()).syndik_prod_proofs_v1.find((p: any) => p.id === proofId).status).toBe('approved');
@@ -1513,13 +1513,13 @@ test('live state changes update separate resident and syndic sessions through pa
   test.setTimeout(90_000);
   page.setDefaultTimeout(10_000);
   const owner = await login(page, 0);
-  await page.locator('summary').filter({ hasText: 'Relevés, corrections et clôture' }).click();
+  await page.getByRole('button', { name: /Par copropriétaire/ }).click();
   const statement = page.getByRole('table', { name: 'Relevés des résidents' }).getByRole('row').filter({ hasText: resident.name });
   await expect(statement).toBeVisible();
   await page.getByRole('button', { name: 'Maintenance', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Nouveau ticket travaux', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Finances', exact: true }).click();
-  await page.locator('summary').filter({ hasText: 'Relevés, corrections et clôture' }).click();
+  await page.getByRole('button', { name: /Par copropriétaire/ }).click();
   await expect(statement).toBeVisible();
   const paidBefore = await statement.locator('td').nth(2).textContent();
   const imported = await apiCommand(owner, 'importOpeningArrears', ['b-ui', [{ residentId: 'r-ui', apartmentId: 'lot-ui',
@@ -1562,6 +1562,8 @@ test('live state changes update separate resident and syndic sessions through pa
     await expect(chargeRow.getByText('✓ Réglé', { exact: true })).toBeVisible({ timeout: 20_000 });
     await expect(chargeRow.getByRole('button', { name: 'Quittance PDF', exact: true })).toBeVisible();
     releaseOldReport();
+    await page.getByRole('button', { name: /^Charges appelées/ }).click();
+    await page.getByRole('button', { name: /Par copropriétaire/ }).click();
     await expect(statement.locator('td').nth(2)).not.toHaveText(paidBefore!);
     const reports = await apiCall(owner, '/api/reports?buildingId=b-ui');
     const paid = reports.data.statements.find((row: any) => row.residentId === resident.id).paid;
@@ -2278,8 +2280,130 @@ test('Finance UX phase 1: opens on Charges appelées, surfaces À faire maintena
   expect(savedReceipts[0].amount).toBe(320);
 });
 
+test('Finance UX phase 2: 1-click 0 MAD opening balance, Ajouter un ancien impayé, Par copropriétaire summary, and contextual Annuler ce paiement', async ({ page }) => {
+  test.setTimeout(90_000);
+  page.setDefaultTimeout(10_000);
+  await page.unroute('**/*');
+  await page.route('**/*', (route) =>
+    new URL(route.request().url()).origin === base ? route.continue() : route.abort(),
+  );
 
+  // Register an isolated syndic cabinet with a fresh building (openingBalancesRecordedAt unset)
+  const email = 'phase2-ux@ui.invalid';
+  const reg = await apiCall('', '/api/auth/register', {
+    email,
+    password,
+    profile: { role: 'syndic', displayName: 'Syndic Phase 2' },
+    syndic: {
+      name: 'Cabinet Phase 2',
+      city: 'Casablanca',
+      initialBuilding: {
+        name: 'Résidence Atlas',
+        address: '12 Bd Anfa',
+        apartmentsCount: 2,
+        monthlyFees: 250,
+      },
+    },
+  });
+  expect(reg.status, JSON.stringify(reg.data)).toBe(200);
+  const token = reg.data.token;
+  const cabinetId = reg.data.syndic.id;
+  const freshBuilding = reg.data.syndic.buildings[0];
+  const lot0 = freshBuilding.apartments[0];
 
+  const addedRes = await apiCommand(token, 'addResident', [
+    {
+      syndicId: cabinetId,
+      buildingId: freshBuilding.id,
+      name: 'Karim Benjelloun',
+      email: 'karim.phase2@ui.invalid',
+      phone: '0611223344',
+      isOwner: true,
+      apartmentId: lot0.id,
+    },
+    false,
+  ]);
+  expect(addedRes.status, JSON.stringify(addedRes.data)).toBe(200);
 
+  // Sign in via real HttpOnly cookie session
+  await page.goto(`${base}/welcome`);
+  await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+  const loginRes = await page.request.post(`${base}/api/auth/login`, {
+    data: { identifier: email, password },
+  });
+  expect(loginRes.status()).toBe(200);
+  await page.evaluate(() => {
+    localStorage.setItem('syndik_auth_session_v1', JSON.stringify({ sessionTransport: 'cookie' }));
+    localStorage.setItem('syndik_lang', 'fr');
+  });
 
+  await page.goto(`${base}/financials`);
+  await expect(page.getByRole('heading', { name: 'Finances — Résidence Atlas' })).toBeVisible();
 
+  // 1. Old accounting drawer is completely gone; 1-step starting balance banner is shown
+  await expect(page.getByText('Relevés, corrections et clôture')).toHaveCount(0);
+  const openingBanner = page.getByRole('region', { name: "Solde de départ de l'immeuble" });
+  await expect(openingBanner).toBeVisible();
+
+  await openingBanner.getByRole('button', { name: 'Nouvel immeuble : démarrer à 0 MAD' }).click();
+  const confirmZeroDialog = page.getByRole('dialog');
+  await expect(confirmZeroDialog).toContainText('0,00 MAD');
+  await confirmZeroDialog.getByRole('button', { name: 'Confirmer 0 MAD' }).click();
+  await expect(openingBanner).toHaveCount(0);
+
+  // 2. Plus d'actions hides raw JSON dump for syndic, exposes plain-language occasional actions & CSV exports
+  await page.getByRole('button', { name: /Plus d'actions/ }).click();
+  const menu = page.getByRole('menu');
+  await expect(menu.getByRole('menuitem', { name: 'Sauvegarde technique (JSON)' })).toHaveCount(0);
+  await expect(menu.getByRole('menuitem', { name: 'Exporter situation copropriétaires (CSV)' })).toBeVisible();
+  await expect(menu.getByRole('menuitem', { name: 'Exporter historique opérations (CSV)' })).toBeVisible();
+  await expect(menu.getByRole('menuitem', { name: 'Verrouiller un mois terminé' })).toBeVisible();
+  await menu.getByRole('menuitem', { name: 'Ajouter un ancien impayé' }).click();
+
+  // 3. Guided Ajouter un ancien impayé modal records prior arrear cleanly
+  const arrearDialog = page.getByRole('dialog');
+  await expect(arrearDialog.getByRole('heading', { name: 'Ajouter un ancien impayé' })).toBeVisible();
+  await arrearDialog.getByLabel(/Mois de l'impayé/).fill('2026-08');
+  await arrearDialog.getByLabel(/Montant restant dû \(MAD\)/).fill('420');
+  await arrearDialog.getByLabel(/Note sur le reçu/).fill('Solde reprise 2026');
+  await arrearDialog.getByRole('button', { name: "Enregistrer l'impayé" }).click();
+  await expect(arrearDialog).toBeHidden();
+
+  // Appears in Par copropriétaire resident statements sub-tab
+  await page.getByRole('button', { name: /Par copropriétaire/ }).click();
+  const stmtRow = page
+    .getByRole('table', { name: 'Relevés des résidents' })
+    .getByRole('row')
+    .filter({ hasText: 'Karim Benjelloun' });
+  await expect(stmtRow).toBeVisible();
+  await expect(stmtRow.locator('td').nth(1)).toHaveText('420 MAD');
+  await expect(stmtRow.locator('td').nth(2)).toHaveText('0 MAD');
+  await expect(stmtRow.locator('td').nth(4)).toHaveText('420 MAD');
+
+  // 4. Record payment on that arrear, then cancel it contextually from Reçus (quittances)
+  await page.getByRole('button', { name: /Par lot/ }).click();
+  await page.getByRole('button', { name: 'Encaisser', exact: true }).first().click();
+  const payDialog = page.getByRole('dialog');
+  await payDialog.getByRole('button', { name: /Encaisser et générer le reçu/ }).click();
+  await expect(payDialog).toBeHidden();
+
+  await page.getByRole('button', { name: /Reçus \(quittances\)/ }).click();
+  const receiptRow = page.getByRole('row').filter({ hasText: 'Karim Benjelloun' }).first();
+  await expect(receiptRow).toBeVisible();
+  await receiptRow.getByRole('button', { name: 'Annuler', exact: true }).click();
+
+  const reverseDialog = page.getByRole('dialog');
+  await expect(reverseDialog.getByRole('heading', { name: 'Annuler ce paiement' })).toBeVisible();
+  await reverseDialog.getByRole('button', { name: 'Chèque rejeté / impayé' }).click();
+  await reverseDialog.getByRole('button', { name: /Confirmer l’annulation/ }).click();
+  await expect(reverseDialog).toBeHidden();
+
+  await page.getByRole('checkbox', { name: 'Inclure les reçus annulés' }).check();
+  await expect(page.getByRole('row').filter({ hasText: 'Karim Benjelloun' }).first()).toContainText('Annulée');
+
+  // Resident statement reflects reversal (paid back to 0 MAD, outstanding back to 420 MAD)
+  await page.getByRole('button', { name: /^Charges appelées/ }).click();
+  await page.getByRole('button', { name: /Par copropriétaire/ }).click();
+  await expect(stmtRow.locator('td').nth(2)).toHaveText('0 MAD');
+  await expect(stmtRow.locator('td').nth(4)).toHaveText('420 MAD');
+});

@@ -5,12 +5,15 @@ import Button from '../../../common/Button';
 import InfoTip from '../../../common/InfoTip';
 import { QuittanceIcon } from '../../../icons/IconComponents';
 import { generateQuittancePDF } from '../../../../services/pdfOnDemand';
+import { useAuth } from '../../../../contexts/AuthContext';
 import { useI18n } from '../../../../hooks/useI18n';
 import {
   buildPaymentMethodLabels,
   currencyFormatter,
   formatRecordedFund,
 } from '../financeConstants';
+import type { ReversiblePaymentSummary } from '../financeReportExport';
+import type { ReversePaymentModalRequest } from '../modals/ReversePaymentModal';
 import { computeQuittanceTotals, filterQuittances } from '../financeSelectors';
 
 interface QuittancesTabProps {
@@ -21,6 +24,8 @@ interface QuittancesTabProps {
   onChangeShowVoidedQuittances: (show: boolean) => void;
   onOpenNewPayment: () => void;
   onPreviewQuittance: (quittance: Quittance) => void;
+  reversiblePayments: ReadonlyMap<string, ReversiblePaymentSummary>;
+  onReversePayment: (request: ReversePaymentModalRequest) => void;
 }
 
 const QuittancesTab: React.FC<QuittancesTabProps> = ({
@@ -31,8 +36,12 @@ const QuittancesTab: React.FC<QuittancesTabProps> = ({
   onChangeShowVoidedQuittances,
   onOpenNewPayment,
   onPreviewQuittance,
+  reversiblePayments,
+  onReversePayment,
 }) => {
   const { tr, isAr } = useI18n();
+  const { userProfile } = useAuth();
+  const managed = ['admin', 'syndic'].includes(userProfile?.role || '');
   const [quittanceSearch, setQuittanceSearch] = useState('');
   const [quittanceFilterMethod, setQuittanceFilterMethod] = useState('all');
 
@@ -245,6 +254,27 @@ const QuittancesTab: React.FC<QuittancesTabProps> = ({
                     <QuittanceIcon />
                     <span>{tr('Télécharger PDF', 'تحميل PDF')}</span>
                   </button>
+                  {managed &&
+                    !quit.voidedAt &&
+                    quit.paymentId &&
+                    reversiblePayments.has(quit.paymentId) && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onReversePayment({
+                            paymentId: quit.paymentId!,
+                            residentName: quit.residentName,
+                            apartmentNumber: quit.apartmentNumber,
+                            quittanceNumber: quit.quittanceNumber,
+                            periodLabel: quit.periodCovered,
+                            amount: reversiblePayments.get(quit.paymentId!)!.totalAmount,
+                          })
+                        }
+                        className="min-h-[36px] px-3 py-1.5 text-xs text-rose-700 hover:bg-rose-50 rounded-lg border border-rose-200 font-semibold"
+                      >
+                        {tr('Annuler', 'إلغاء')}
+                      </button>
+                    )}
                 </div>
               </div>
             );
@@ -282,6 +312,10 @@ const QuittancesTab: React.FC<QuittancesTabProps> = ({
               {filteredQuittances.map((quit) => {
                 const apt = building.apartments.find((a) => a.id === quit.apartmentId);
                 const res = building.residents.find((r) => r.id === quit.residentId);
+                const reversibleSummary =
+                  managed && !quit.voidedAt && quit.paymentId
+                    ? reversiblePayments.get(quit.paymentId)
+                    : undefined;
 
                 return (
                   <tr
@@ -353,18 +387,38 @@ const QuittancesTab: React.FC<QuittancesTabProps> = ({
                     <td className="px-4 py-3 text-end whitespace-nowrap">
                       <div className="flex items-center justify-end gap-1.5">
                         <button
+                          type="button"
                           onClick={() => onPreviewQuittance(quit)}
                           className="px-2 py-1 text-xs text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded border border-slate-200 font-medium transition-colors"
                         >
                           {tr('Aperçu', 'معاينة')}
                         </button>
                         <button
+                          type="button"
                           onClick={() => generateQuittancePDF(quit, building, syndic, apt, res)}
                           className="px-2.5 py-1 text-xs bg-teal-700 hover:bg-teal-800 text-white font-semibold rounded shadow-xs transition-colors flex items-center gap-1"
                         >
                           <QuittanceIcon />
                           <span>{tr('Télécharger PDF', 'تحميل PDF')}</span>
                         </button>
+                        {reversibleSummary && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onReversePayment({
+                                paymentId: quit.paymentId!,
+                                residentName: quit.residentName,
+                                apartmentNumber: quit.apartmentNumber,
+                                quittanceNumber: quit.quittanceNumber,
+                                periodLabel: quit.periodCovered,
+                                amount: reversibleSummary.totalAmount,
+                              })
+                            }
+                            className="px-2 py-1 text-xs text-rose-700 hover:bg-rose-50 rounded border border-rose-200 font-semibold transition-colors"
+                          >
+                            {tr('Annuler', 'إلغاء')}
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>

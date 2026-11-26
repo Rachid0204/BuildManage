@@ -45,9 +45,9 @@ Dans « Lots & Appartements », créez tous les appartements/commerces (individu
 
 Dans « Résidents & Accès », enregistrez chaque copropriétaire (et locataire le cas échéant), rattachez son lot et téléchargez sa Fiche d’Accès PDF individuelle.
 
-#### Étape 4 — 4. Confirmer les soldes initiaux de trésorerie (Reprise d’exercice)
+#### Étape 4 — 4. Confirmer le solde de départ de l'immeuble (1ère étape unique)
 
-Dans « Comptabilité & Trésorerie », enregistrez la trésorerie initiale (Fonds Courant + Fonds de Réserve) ainsi que les éventuels arriérés d’ouverture des copropriétaires avant de générer le premier appel de fonds mensuel.
+Dans « Finances », cliquez en 1 clic sur « Nouvel immeuble : démarrer à 0 MAD » (ou « Saisir des soldes existants » si la copropriété a déjà de l'argent en banque). S'il reste d'anciens impayés antérieurs, ajoutez-les via « Plus d'actions → Ajouter un ancien impayé ».
 
 ![Tableau de bord Syndic présentant la synthèse financière et les indicateurs clés de la résidence](../../public/guides/screenshots/syndic/dashboard.jpg)
 *Une fois les 5 étapes cochées, la barre de préparation disparaît et votre tableau de bord reflète la situation réelle.*
@@ -153,9 +153,9 @@ Initialisez la reprise comptable de la copropriété, générez les appels de ch
 
 ### Étapes pas à pas
 
-#### Étape 1 — Enregistrer les soldes initiaux de reprise (une seule fois)
+#### Étape 1 — Confirmer le solde de départ (une seule fois) et les anciens impayés
 
-Dans « Comptabilité & Trésorerie », ouvrez l’assistant « Soldes initiaux » pour saisir le solde bancaire initial du fonds courant, celui du fonds de réserve et les arriérés antérieurs de chaque lot.
+Au premier accès à « Finances », cliquez sur « Nouvel immeuble : démarrer à 0 MAD » ou sur « Saisir des soldes existants » (Compte courant + Fonds de réserve) : la bannière disparaît dès confirmation. Pour reprendre un impayé antérieur au démarrage, utilisez « Plus d'actions → Ajouter un ancien impayé ». Consultez à tout moment le récapitulatif global dans « Charges appelées → Par copropriétaire ».
 
 #### Étape 2 — Appeler les charges du mois et encaisser un paiement
 
@@ -177,7 +177,7 @@ Validez les preuves de virement envoyées par les résidents, importez votre rel
 
 #### Étape 1 — Contrôler et valider les virements envoyés par les copropriétaires
 
-Ouvrez l’onglet « Virements à vérifier » (ou cliquez sur « Vérifier » dans « À faire maintenant »). Ouvrez le justificatif du résident, comparez le montant et la référence avec votre relevé, puis cliquez sur « Valider le virement » (crée automatiquement le reçu PDF dans « Reçus (quittances) ») ou « Rejeter » avec un motif.
+Ouvrez l’onglet « Virements à vérifier » (ou cliquez sur « Vérifier » dans « À faire maintenant »). Ouvrez le justificatif du résident, comparez le montant et la référence avec votre relevé, puis cliquez sur « Valider le virement » (crée automatiquement le reçu PDF dans « Reçus (quittances) ») ou « Rejeter » avec un motif. En cas de chèque rejeté ou d’erreur de saisie, cliquez directement sur « Annuler » en face du reçu dans « Reçus (quittances) ».
 
 ![Onglet Virements à vérifier et Reçus (quittances) dans le module Finances du Syndic](../../public/guides/screenshots/syndic/financials-bank.jpg)
 *Validation 1-clic des virements, import CSV bancaire et registre « Reçus (quittances) » téléchargeable en PDF.*
@@ -204,9 +204,9 @@ Cliquez sur « Enregistrer une dépense » en haut de Finances. Renseignez l’e
 ![Onglet Tout l’historique et formulaire simplifié Enregistrer une dépense](../../public/guides/screenshots/syndic/financials-expenses.jpg)
 *Historique inaltérable : annulation traçable par écriture inverse en cas d’erreur, jamais de suppression silencieuse.*
 
-#### Étape 2 — Virement entre fonds, clôture annuelle ou annulation d’une dépense
+#### Étape 2 — Exports Excel/CSV, verrouillage mensuel et annulation d’opération
 
-Ouvrez le menu « Plus d’actions » pour effectuer un « Virement entre fonds », saisir une « Recette diverse » ou télécharger la « Clôture annuelle (PDF) ». Dans « Tout l’historique », ouvrez le détail d’une dépense et cliquez sur « Annuler cette dépense » avec un motif pour conserver la trace comptable.
+Ouvrez le menu « Plus d'actions » pour effectuer un « Virement entre fonds », « Verrouiller un mois terminé » (protège un mois vérifié contre toute modification accidentelle), exporter vos tableaux CSV (« Exporter situation copropriétaires (CSV) » et « Exporter historique opérations (CSV) ») ou télécharger la « Clôture annuelle (PDF) ». Dans « Tout l'historique », ouvrez une opération pour télécharger son justificatif ou cliquer sur « Annuler cette dépense » / « Annuler ce paiement ».
 
 ---
 
