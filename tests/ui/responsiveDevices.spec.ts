@@ -588,9 +588,11 @@ test('Syndic portal renders mobile cards on 360px, desktop tables on 1280px, and
     await assertCleanLayout(page, `Syndic ${route} xs360 FR`);
   }
 
-  // Verify Financials shows mobile cards on 360px and hides desktop Journal table
+  // Verify Financials opens on Charges appelées cleanly and Tout l'historique shows mobile cards on 360px
   await page.goto(`${baseUrl}/financials`, { waitUntil: 'domcontentloaded' });
   await waitUiQuiet(page);
+  await page.getByRole('button', { name: /Tout l'historique/ }).click();
+  await assertCleanLayout(page, 'Syndic /financials historique xs360 FR');
   const journalTable = page.locator('table').filter({ hasText: 'Date & Réf' });
   await expect(
     page.getByText('Cotisation mensuelle Lot A1').first(),

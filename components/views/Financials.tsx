@@ -6,6 +6,10 @@ import type { Building, Transaction, Charge, Syndic, Quittance, PaymentMethod, I
 import Card from '../common/Card';
 import Button from '../common/Button';
 import Modal from '../common/Modal';
+import InfoTip from '../common/InfoTip';
+import FinanceActionBar, { FinanceMoreMenu } from './finance/FinanceActionBar';
+import FinanceTodoPanel from './finance/FinanceTodoPanel';
+import { buildFinanceTodos } from './finance/financeTodos';
 import {
   PlusIcon,
   FinancialsIcon,
@@ -206,8 +210,10 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
   };
   const { showToast, confirmAction } = useToast();
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<TabType>('transactions');
+  const [activeTab, setActiveTab] = useState<TabType>('charges');
   const [isTrxModalOpen, setIsTrxModalOpen] = useState(false);
+  const [trxDetailsOpen, setTrxDetailsOpen] = useState(false);
+  const [quittanceAccountingOpen, setQuittanceAccountingOpen] = useState(false);
   const [isGenerateModalOpen, setIsGenerateModalOpen] = useState(false);
   const [selectedTrxForView, setSelectedTrxForView] = useState<Transaction | null>(null);
   const [approvingBatch, setApprovingBatch] = useState(false);
@@ -467,6 +473,25 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
     setTrxNotes('');
     setOverdraftOverrideReason('');
     setFormErrors({});
+    setTrxDetailsOpen(false);
+  };
+
+  const openExpenseModal = () => {
+    resetTrxForm();
+    setTrxType('expense');
+    setTrxCategory('maintenance');
+    setTrxDocumentType('facture');
+    setFundType('courant');
+    setIsTrxModalOpen(true);
+  };
+
+  const openIncomeModal = () => {
+    resetTrxForm();
+    setTrxType('income');
+    setTrxCategory('fees');
+    setTrxDocumentType('recu');
+    setFundType('courant');
+    setIsTrxModalOpen(true);
   };
 
   // Mutations
@@ -631,6 +656,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
         )
     );
     lastSyncedQuittanceKeyRef.current = `${charge.id}:${prefilledAmount}`;
+    setQuittanceAccountingOpen(false);
     setIsQuittanceModalOpen(true);
   };
 
@@ -672,6 +698,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
       )
     );
     lastSyncedQuittanceKeyRef.current = '';
+    setQuittanceAccountingOpen(false);
     setIsQuittanceModalOpen(true);
   };
 
@@ -828,6 +855,43 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
 
     return Object.values(grouped).sort((a, b) => b.totalOverdue - a.totalOverdue);
   }, [charges, building, tr]);
+
+  const currentMonthPeriod = useMemo(() => todayCasablancaIsoDate().slice(0, 7), []);
+  const hasBillableLots = useMemo(
+    () =>
+      building.apartments
+        .filter((a: any) => !a.archivedAt)
+        .some((apt) =>
+          Boolean(
+            apt.ownerId ||
+              apt.tenantId ||
+              building.residents.some((r: any) => !r.archivedAt && r.apartmentId === apt.id),
+          ),
+        ),
+    [building.apartments, building.residents],
+  );
+
+  const financeTodos = useMemo(
+    () =>
+      buildFinanceTodos({
+        pendingProofsCount: stats.pendingProofsCount,
+        overdueResidentsCount: overdueResidents.length,
+        overdueAmount: stats.overdueChargesTotal,
+        charges,
+        currentPeriod: currentMonthPeriod,
+        unmatchedBankRows: unmatchedCsvRows.length,
+        hasBillableLots,
+      }),
+    [
+      stats.pendingProofsCount,
+      overdueResidents.length,
+      stats.overdueChargesTotal,
+      charges,
+      currentMonthPeriod,
+      unmatchedCsvRows.length,
+      hasBillableLots,
+    ],
+  );
 
   // Balance Âgée (Aging Report buckets in integer centimes)
   const agingBuckets = useMemo(() => {
@@ -1076,132 +1140,161 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
       <FinancialTools key={building.id} building={building} />
       <BillingFailures key={`billing-${building.id}`} building={building} />
       {/* Top Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-2 border-b border-slate-200">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-2 border-b border-slate-200">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
             <FinancialsIcon />
-            <span>{tr('Gestion Financière & Recouvrement', 'الإدارة المالية والتحصيل')}</span>
+            <span>
+              {tr(`Finances — ${building.name}`, `المالية — ${building.name}`)}
+            </span>
           </h1>
           <p className="text-sm text-slate-500 mt-0.5">
             {tr(
-              `Comptabilité de la copropriété ${building.name} · Tantièmes, Quittances enregistrées et Mises en demeure (Loi 18-00)`,
-              `محاسبة الملكية المشتركة ${building.name} · الحصص الشائعة، وصولات الأداء المعتمدة والإنذارات القانونية (القانون 18-00)`
+              "Suivez l'argent de la copropriété : ce qui est dû, payé et dépensé.",
+              'تابع مالية الملكية المشتركة: المستحقات، المدفوعات والمصاريف.'
             )}
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="inline-flex items-center rounded-lg border border-slate-300 bg-white overflow-hidden">
-            <select
-              aria-label={tr('Exercice fiscal', 'السنة المالية')}
-              value={selectedFiscalYear}
-              onChange={(e) => setSelectedFiscalYear(Number(e.target.value))}
-              className="px-2 py-1.5 text-xs font-mono font-semibold text-slate-700 bg-slate-50 border-e border-slate-200 focus:outline-none"
-            >
-              {availableFiscalYears.map((yr) => (
-                <option key={yr} value={yr}>
-                  {yr}
-                </option>
-              ))}
-            </select>
-            <Button
-              variant="secondary"
-              onClick={() =>
-                exportAnnualRepartitionPDF(
-                  building,
-                  syndic,
-                  charges,
-                  quittances,
-                  selectedFiscalYear
-                )
-              }
-              className="text-xs sm:text-sm flex items-center gap-1.5 border-none rounded-none"
-            >
-              <DocumentsIcon />
-              <span>{tr('Clôture Annuelle (PDF)', 'الحصيلة السنوية (PDF)')}</span>
-            </Button>
-          </div>
-          <Button
-            variant="secondary"
-            onClick={openChargeGeneration}
-            className="text-xs sm:text-sm flex items-center gap-1.5"
-          >
-            <span>{tr('Lancer un appel de fonds', 'إصدار طلب المساهمات')}</span>
-          </Button>
-          <Button
-            onClick={() => setIsTrxModalOpen(true)}
-            className="text-xs sm:text-sm flex items-center gap-1.5"
-          >
-            <PlusIcon />
-            <span>{tr('Nouvelle opération', 'عملية مالية جديدة')}</span>
-          </Button>
-        </div>
+        <FinanceMoreMenu
+          onRecordMiscIncome={openIncomeModal}
+          onTransferFunds={() => {
+            setTransferFromFund('courant');
+            setTransferToFund('reserve');
+            setTransferAmount('');
+            setTransferDate(new Date().toISOString().split('T')[0]);
+            setTransferReason('');
+            setIsTransferModalOpen(true);
+          }}
+          onExportAnnualPdf={() =>
+            exportAnnualRepartitionPDF(
+              building,
+              syndic,
+              charges,
+              quittances,
+              selectedFiscalYear
+            )
+          }
+          selectedFiscalYear={selectedFiscalYear}
+          availableFiscalYears={availableFiscalYears}
+          onChangeFiscalYear={setSelectedFiscalYear}
+        />
       </div>
+
+      {/* Primary Task Buttons */}
+      <FinanceActionBar
+        onRecordPayment={() => openQuittanceModalNew()}
+        onRecordExpense={openExpenseModal}
+        onIssueMonthlyCharges={openChargeGeneration}
+      />
+
+      {/* Actionable 'What to do now' Panel */}
+      <FinanceTodoPanel
+        todos={financeTodos}
+        formatCurrency={(n) => currencyFormatter.format(n)}
+        onVerifyTransfers={() => setActiveTab('verifications')}
+        onChaseOverdue={() => setActiveTab('impayes')}
+        onIssueCharges={(period) => {
+          setPeriodName(period);
+          openChargeGeneration();
+        }}
+      />
 
       {/* KPI Financial Overview Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card className="p-4 border-s-4 border-s-teal-600">
-          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-            {tr('Solde Compte Courant', 'رصيد الحساب الجاري')}
-          </p>
-          <p className="text-2xl font-bold font-mono text-slate-900 mt-1 tabular-nums">
-            {currencyFormatter.format(stats.balance)}
-          </p>
-          <p className="text-[11px] text-slate-500 mt-1 flex items-center gap-1">
-            <span>{tr('Banque :', 'البنك:')}</span>
-            <span className="font-medium text-slate-700">{building.bankName || ''}</span>
-          </p>
+        <Card className="p-0 border-s-4 border-s-teal-600 hover:border-slate-300 transition-colors">
+          <button
+            type="button"
+            onClick={() => {
+              setFilterFund('courant');
+              setActiveTab('transactions');
+            }}
+            className="w-full p-4 text-start cursor-pointer focus:outline-none focus:ring-2 focus:ring-inset focus:ring-teal-500 rounded-e-xl"
+          >
+            <span className="block text-xs font-semibold text-slate-600">
+              {tr('Argent disponible', 'الرصيد المتاح')}
+            </span>
+            <span className="block text-2xl font-bold font-mono text-slate-900 mt-1 tabular-nums">
+              {currencyFormatter.format(stats.balance)}
+            </span>
+            <span className="block text-[11px] text-slate-500 mt-1 truncate">
+              <span>{tr('Compte courant', 'الحساب الجاري')}</span>
+              {building.bankName ? ` · ${building.bankName}` : ''}
+            </span>
+          </button>
         </Card>
 
-        <Card className="p-4 border-s-4 border-s-indigo-600">
-          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-            {tr('Fonds de Réserve (Loi 106-12)', 'صندوق الاحتياط (القانون 106-12)')}
-          </p>
-          <p className="text-2xl font-bold font-mono text-indigo-900 mt-1 tabular-nums">
-            {currencyFormatter.format(stats.reserveFund)}
-          </p>
-          <p className="text-[11px] text-slate-500 mt-1">
-            {tr('Obligation légale pour gros travaux', 'إلزام قانوني للأشغال الكبرى')}
-          </p>
+        <Card className="p-4 border-s-4 border-s-indigo-600 hover:border-slate-300 transition-colors">
+          <div className="flex items-center justify-between gap-1.5">
+            <span className="text-xs font-semibold text-slate-600">
+              {tr('Fonds de réserve', 'صندوق الاحتياط')}
+            </span>
+            <InfoTip label={tr('Information légale fonds de réserve', 'معلومة قانونية حول صندوق الاحتياط')}>
+              {tr(
+                'Obligation légale (Loi n° 106-12) : épargne réservée aux gros travaux et réparations majeures de la copropriété.',
+                'إلزام قانوني (القانون 106-12): مدخرات مخصصة للأشغال والإصلاحات الكبرى للملكية المشتركة.'
+              )}
+            </InfoTip>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setFilterFund('reserve');
+              setActiveTab('transactions');
+            }}
+            className="w-full text-start cursor-pointer focus:outline-none focus:ring-2 focus:ring-teal-500 rounded mt-1"
+          >
+            <span className="block text-2xl font-bold font-mono text-indigo-900 tabular-nums">
+              {currencyFormatter.format(stats.reserveFund)}
+            </span>
+            <span className="block text-[11px] text-slate-500 mt-1">
+              {tr('Réservé aux gros travaux', 'مخصص للأشغال الكبرى')}
+            </span>
+          </button>
         </Card>
 
-        <Card className="p-4 border-s-4 border-s-amber-500">
-          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-            {tr('Charges à Recouvrer', 'مساهمات قيد التحصيل')}
-          </p>
-          <p className="text-2xl font-bold font-mono text-amber-800 mt-1 tabular-nums">
-            {currencyFormatter.format(stats.pendingChargesTotal)}
-          </p>
-          <p className="text-[11px] text-slate-500 mt-1">{tr('En cours de règlement', 'في طور الأداء')}</p>
+        <Card className="p-0 border-s-4 border-s-amber-500 hover:border-slate-300 transition-colors">
+          <button
+            type="button"
+            onClick={() => setActiveTab('charges')}
+            className="w-full p-4 text-start cursor-pointer focus:outline-none focus:ring-2 focus:ring-inset focus:ring-teal-500 rounded-e-xl"
+          >
+            <span className="block text-xs font-semibold text-slate-600">
+              {tr('À encaisser', 'قيد التحصيل')}
+            </span>
+            <span className="block text-2xl font-bold font-mono text-amber-800 mt-1 tabular-nums">
+              {currencyFormatter.format(stats.pendingChargesTotal)}
+            </span>
+            <span className="block text-[11px] text-slate-500 mt-1">
+              {tr('Pas encore en retard', 'ضمن أجل الأداء')}
+            </span>
+          </button>
         </Card>
 
-        <Card className="p-4 border-s-4 border-s-rose-600">
-          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-            {tr('Impayés & Contentieux', 'المتأخرات والمنازعات')}
-          </p>
-          <p className="text-2xl font-bold font-mono text-rose-700 mt-1 tabular-nums">
-            {currencyFormatter.format(stats.overdueChargesTotal)}
-          </p>
-          <p className="text-[11px] text-rose-600 mt-1 font-medium">
-            {overdueResidents.length} {tr('copropriétaires en retard', 'ملاك مشتركين متأخرين')}
-          </p>
+        <Card className="p-0 border-s-4 border-s-rose-600 hover:border-slate-300 transition-colors">
+          <button
+            type="button"
+            onClick={() => setActiveTab('impayes')}
+            className="w-full p-4 text-start cursor-pointer focus:outline-none focus:ring-2 focus:ring-inset focus:ring-teal-500 rounded-e-xl"
+          >
+            <span className="block text-xs font-semibold text-slate-600">
+              {tr('En retard', 'المتأخرات')}
+            </span>
+            <span className="block text-2xl font-bold font-mono text-rose-700 mt-1 tabular-nums">
+              {currencyFormatter.format(stats.overdueChargesTotal)}
+            </span>
+            <span className="block text-[11px] text-rose-600 mt-1 font-medium">
+              {overdueResidents.length}{' '}
+              {tr('copropriétaire(s) en retard', 'ملاك مشتركين متأخرين')}
+            </span>
+          </button>
         </Card>
       </div>
 
       {/* Navigation Tabs */}
       <div className="border-b border-slate-200">
-        <nav className="flex gap-6 overflow-x-auto text-sm font-medium">
+        <nav className="flex gap-5 sm:gap-6 overflow-x-auto text-sm font-medium">
           <button
-            onClick={() => setActiveTab('transactions')}
-            className={`pb-3 border-b-2 whitespace-nowrap transition-colors ${
-              activeTab === 'transactions'
-                ? 'border-teal-600 text-teal-700 font-semibold'
-                : 'border-transparent text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            {tr('Journal des Transactions', 'سجل المعاملات المالية')}
-          </button>
-
-          <button
+            type="button"
             onClick={() => setActiveTab('charges')}
             className={`pb-3 border-b-2 whitespace-nowrap transition-colors ${
               activeTab === 'charges'
@@ -1209,26 +1302,30 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                 : 'border-transparent text-slate-500 hover:text-slate-800'
             }`}
           >
-            {tr('Appels de Charges', 'طلبات المساهمات')} ({charges.length})
+            {tr('Charges appelées', 'المساهمات المطلوبة')} ({charges.length})
           </button>
 
           <button
+            type="button"
             onClick={() => setActiveTab('verifications')}
             className={`pb-3 border-b-2 whitespace-nowrap flex items-center gap-1.5 transition-colors ${
               activeTab === 'verifications'
                 ? 'border-teal-600 text-teal-700 font-semibold'
+                : stats.pendingProofsCount > 0
+                ? 'border-transparent text-amber-800 hover:text-amber-900 font-semibold'
                 : 'border-transparent text-slate-500 hover:text-slate-800'
             }`}
           >
-            <span>{tr('Vérification des Virements', 'مراجعة التحويلات البنكية')}</span>
+            <span>{tr('Virements à vérifier', 'التحويلات للمراجعة')}</span>
             {stats.pendingProofsCount > 0 && (
-              <span className="bg-amber-500 text-white text-[10px] px-1.5 py-0.2 rounded-full font-bold">
+              <span className="bg-amber-500 text-white text-[11px] px-2 py-0.5 rounded-full font-bold">
                 {stats.pendingProofsCount}
               </span>
             )}
           </button>
 
           <button
+            type="button"
             onClick={() => setActiveTab('quittances')}
             className={`pb-3 border-b-2 whitespace-nowrap flex items-center gap-1.5 transition-colors ${
               activeTab === 'quittances'
@@ -1237,10 +1334,13 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
             }`}
           >
             <QuittanceIcon />
-            <span>{tr('Quittances Certifiées', 'وصولات الأداء المعتمدة')} ({activeQuittances.length})</span>
+            <span>
+              {tr('Reçus (quittances)', 'الوصولات (المخالصات)')} ({activeQuittances.length})
+            </span>
           </button>
 
           <button
+            type="button"
             onClick={() => setActiveTab('impayes')}
             className={`pb-3 border-b-2 whitespace-nowrap flex items-center gap-1.5 transition-colors ${
               activeTab === 'impayes'
@@ -1249,7 +1349,24 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
             }`}
           >
             <ShieldAlertIcon />
-            <span>{tr('Recouvrement & Impayés (Loi 18-00)', 'التحصيل والمتأخرات (القانون 18-00)')}</span>
+            <span>{tr('Retards', 'المتأخرات')}</span>
+            {overdueResidents.length > 0 && (
+              <span className="bg-rose-100 text-rose-800 text-[11px] px-1.5 py-0.5 rounded-full font-bold">
+                {overdueResidents.length}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('transactions')}
+            className={`pb-3 border-b-2 whitespace-nowrap transition-colors ${
+              activeTab === 'transactions'
+                ? 'border-teal-600 text-teal-700 font-semibold'
+                : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            {tr("Tout l'historique", 'كل السجل المالي')}
           </button>
         </nav>
       </div>
@@ -1283,8 +1400,8 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                   className="w-full py-1.5 px-2 text-xs border border-slate-300 rounded-lg bg-white"
                 >
                   <option value="all">{tr('Tous les fonds', 'جميع الصناديق')}</option>
-                  <option value="courant">{tr('Compte Courant', 'الحساب الجاري')}</option>
-                  <option value="reserve">{tr('Fonds Réserve (106-12)', 'صندوق الاحتياط (106-12)')}</option>
+                  <option value="courant">{tr('Compte courant', 'الحساب الجاري')}</option>
+                  <option value="reserve">{tr('Fonds de réserve', 'صندوق الاحتياط')}</option>
                 </select>
               </div>
 
@@ -1334,8 +1451,8 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
             <div className="mt-3 pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3 text-xs">
               <span className="text-slate-500 font-medium">
                 {tr(
-                  `Affichage de ${filteredStats.count} écriture(s) sur ${building.financials?.transactions?.length || 0}`,
-                  `عرض ${filteredStats.count} قيد محاسبي من أصل ${building.financials?.transactions?.length || 0}`
+                  `${filteredStats.count} opération(s) affichée(s) sur ${building.financials?.transactions?.length || 0}`,
+                  `عرض ${filteredStats.count} عملية من أصل ${building.financials?.transactions?.length || 0}`
                 )}
               </span>
               <div className="flex items-center gap-4 font-mono">
@@ -1354,15 +1471,23 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
           </Card>
 
           <Card className="overflow-hidden border border-slate-200 shadow-sm">
-            <div className="p-4 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
+            <div className="p-4 bg-slate-50 border-b border-slate-200 flex flex-wrap justify-between items-center gap-3">
               <div>
-                <h3 className="font-semibold text-slate-800 text-sm">
-                  {tr('Grand Livre des Écritures Comptables', 'الدفتر الكبير للقيود المحاسبية')}
-                </h3>
-                <p className="text-[11px] text-slate-500">
+                <div className="flex items-center gap-1.5">
+                  <h3 className="font-semibold text-slate-800 text-sm">
+                    {tr('Historique des entrées et sorties', 'سجل المداخيل والمصاريف')}
+                  </h3>
+                  <InfoTip label={tr('Information légale grand livre', 'معلومة قانونية حول السجل المحاسبي')}>
+                    {tr(
+                      'Grand livre comptable inaltérable (Loi n° 18-00) : séparation stricte entre le compte courant et le fonds de réserve (Loi n° 106-12).',
+                      'السجل المحاسبي العام (القانون 18-00): فصل قانوني بين الحساب الجاري وصندوق الاحتياط (القانون 106-12).'
+                    )}
+                  </InfoTip>
+                </div>
+                <p className="text-xs text-slate-500">
                   {tr(
-                    'Tenue des comptes selon la Loi 18-00 · Séparation légale Budget courant & Fonds de réserve',
-                    'مسك الحسابات وفق القانون 18-00 · الفصل القانوني بين الميزانية الجارية وصندوق الاحتياط'
+                    'Toutes les dépenses, encaissements et virements entre fonds de la copropriété.',
+                    'جميع المصاريف والتحصيلات والتحويلات بين صناديق الإقامة.'
                   )}
                 </p>
               </div>
@@ -1382,14 +1507,11 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                   {tr('Virement entre fonds', 'تحويل بين الصناديق')}
                 </Button>
                 <Button
-                  onClick={() => {
-                    resetTrxForm();
-                    setIsTrxModalOpen(true);
-                  }}
+                  onClick={openExpenseModal}
                   className="text-xs py-1.5 flex items-center gap-1.5"
                 >
                   <PlusIcon />
-                  <span>{tr('Ajouter une opération', 'إضافة عملية')}</span>
+                  <span>{tr('Enregistrer une dépense', 'تسجيل مصروف')}</span>
                 </Button>
               </div>
             </div>
@@ -1537,12 +1659,12 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                           {trx.fundType === 'reserve' ? (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
                               <span className="w-1.5 h-1.5 rounded-full bg-indigo-600"></span>
-                              {tr('Fonds Réserve (106-12)', 'صندوق الاحتياط (106-12)')}
+                              {tr('Fonds de réserve', 'صندوق الاحتياط')}
                             </span>
                           ) : (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-teal-50 text-teal-700 border border-teal-200">
                               <span className="w-1.5 h-1.5 rounded-full bg-teal-600"></span>
-                              {tr('Compte Courant', 'الحساب الجاري')}
+                              {tr('Compte courant', 'الحساب الجاري')}
                             </span>
                           )}
                         </td>
@@ -1577,7 +1699,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                           <div className="flex items-center justify-center gap-1.5">
                             <button
                               onClick={() => generateTransactionVoucherPDF(trx, building, syndic)}
-                              title={tr('Télécharger la pièce comptable PDF (Loi 18-00)', 'تحميل الوثيقة المحاسبية PDF')}
+                              title={tr('Télécharger le justificatif PDF', 'تحميل الوثيقة المحاسبية PDF')}
                               className="p-1.5 text-slate-600 hover:text-teal-700 hover:bg-teal-50 rounded transition-colors border border-slate-200"
                             >
                               <DocumentsIcon />
@@ -1598,25 +1720,38 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                   {filteredTransactions.length === 0 && (
                     <tr>
                       <td colSpan={7} className="px-4 py-12 text-center text-slate-500">
-                        <p className="font-semibold text-sm">{tr('Aucune écriture comptable trouvée', 'لم يتم العثور على أي قيد محاسبي')}</p>
-                        <p className="text-xs mt-1 text-slate-400">
-                          {tr(
-                            'Essayez de modifier vos critères de recherche ou ajoutez une nouvelle opération.',
-                            'حاول تعديل معايير البحث أو أضف عملية مالية جديدة.'
-                          )}
+                        <p className="font-semibold text-sm text-slate-700">
+                          {tr('Aucune opération affichée', 'لا توجد أي عملية معروضة')}
                         </p>
-                        <Button
-                          variant="secondary"
-                          onClick={() => {
-                            setSearchTrx('');
-                            setFilterFund('all');
-                            setFilterType('all');
-                            setFilterCategory('all');
-                          }}
-                          className="mt-3 text-xs"
-                        >
-                          {tr('Réinitialiser les filtres', 'إعادة ضبط الفلاتر')}
-                        </Button>
+                        <p className="text-xs mt-1 text-slate-500">
+                          {searchTrx || filterFund !== 'all' || filterType !== 'all' || filterCategory !== 'all'
+                            ? tr(
+                                'Aucune opération ne correspond aux filtres choisis.',
+                                'لا توجد عملية تطابق الفلاتر المختارة.'
+                              )
+                            : tr(
+                                "Les paiements reçus et les dépenses de l'immeuble apparaîtront ici.",
+                                'ستظهر هنا المدفوعات المستلمة ومصاريف الإقامة.'
+                              )}
+                        </p>
+                        {searchTrx || filterFund !== 'all' || filterType !== 'all' || filterCategory !== 'all' ? (
+                          <Button
+                            variant="secondary"
+                            onClick={() => {
+                              setSearchTrx('');
+                              setFilterFund('all');
+                              setFilterType('all');
+                              setFilterCategory('all');
+                            }}
+                            className="mt-3 text-xs"
+                          >
+                            {tr('Réinitialiser les filtres', 'إعادة ضبط الفلاتر')}
+                          </Button>
+                        ) : (
+                          <Button onClick={openExpenseModal} className="mt-3 text-xs">
+                            {tr('Enregistrer une dépense', 'تسجيل مصروف')}
+                          </Button>
+                        )}
                       </td>
                     </tr>
                   )}
@@ -1627,14 +1762,19 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
         </div>
       )}
 
-      {/* TAB 2: APPELS DE CHARGES & FACTURES */}
+      {/* TAB 2: CHARGES APPELÉES & AVIS */}
       {activeTab === 'charges' && (
         <Card className="overflow-hidden border border-slate-200">
           <div className="p-4 bg-slate-50 border-b border-slate-200 flex flex-wrap justify-between items-center gap-3">
             <div>
-              <h3 className="font-semibold text-slate-800 text-sm">{tr('Appels de Charges & Factures (Avis d’appel)', 'طلبات المساهمات والفواتير (إشعارات الأداء)')}</h3>
+              <h3 className="font-semibold text-slate-800 text-sm">
+                {tr('Charges appelées aux copropriétaires', 'المساهمات المطلوبة من الملاك المشتركين')}
+              </h3>
               <p className="text-xs text-slate-500">
-                {tr('Cotisations configurées par lot ou budget réparti selon les tantièmes, selon le mode choisi à l’émission.', 'مساهمات محددة لكل شقة أو ميزانية موزعة حسب الحصص وفق طريقة الإصدار المختارة.')}
+                {tr(
+                  "Ce que chaque lot doit payer par période, avec l'état du paiement.",
+                  'ما يجب على كل شقة أداؤه حسب الفترة مع حالة الدفع.'
+                )}
               </p>
               <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 mt-2">
                 <button
@@ -1646,7 +1786,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
-                  {tr('Appels par lot', 'المساهمات حسب الوحدة')} ({charges.length})
+                  {tr('Par lot', 'حسب الشقة')} ({charges.length})
                 </button>
                 <button
                   type="button"
@@ -1657,24 +1797,24 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
-                  {tr('Factures / Avis d’appel', 'الفواتير / إشعارات الأداء')} ({invoices.length})
+                  {tr('Avis groupés', 'الإشعارات المجمعة')} ({invoices.length})
                 </button>
               </div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <Button
                 variant="secondary"
                 onClick={openChargeGeneration}
                 className="text-xs"
               >
-                {tr('+ Nouvel Appel Général', '+ طلب مساهمات عام جديد')}
+                {tr('Appeler les charges', 'إصدار المساهمات')}
               </Button>
               <Button
                 onClick={() => openQuittanceModalNew()}
                 className="text-xs bg-teal-700 hover:bg-teal-800 flex items-center gap-1.5"
               >
                 <QuittanceIcon />
-                <span>{tr('+ Émettre une Quittance', '+ إصدار وصل إبراء')}</span>
+                <span>{tr('Encaisser un paiement', 'تحصيل دفعة')}</span>
               </Button>
             </div>
           </div>
@@ -1782,7 +1922,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                           onClick={() => openQuittanceModalForCharge(charge)}
                           className="min-h-[36px] px-3 py-1.5 text-xs bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-semibold rounded-lg border border-emerald-200"
                         >
-                          {tr('+ Quittance', '+ إصدار وصل')}
+                          {tr('Encaisser', 'تحصيل')}
                         </button>
                       </>
                     )}
@@ -1813,8 +1953,19 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
               );
             })}
             {charges.length === 0 && (
-              <div className="px-4 py-10 text-center text-xs text-slate-500">
-                {tr('Aucun appel de charges enregistré.', 'لا توجد مساهمات مسجلة حالياً.')}
+              <div className="px-4 py-10 text-center text-xs text-slate-500 space-y-2">
+                <p className="font-semibold text-sm text-slate-700">
+                  {tr('Aucune charge appelée pour le moment', 'لم تصدر أي مساهمات بعد')}
+                </p>
+                <p>
+                  {tr(
+                    'Cliquez sur « Appeler les charges du mois » pour créer ce que chaque lot doit payer.',
+                    'اضغط على «إصدار مساهمات الشهر» لإنشاء المبالغ المستحقة لكل شقة.'
+                  )}
+                </p>
+                <Button onClick={openChargeGeneration} className="mt-1 text-xs">
+                  {tr('Appeler les charges du mois', 'إصدار مساهمات الشهر')}
+                </Button>
               </div>
             )}
           </div>
@@ -1828,7 +1979,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                   <th className="px-4 py-2.5 text-start">{tr('Échéance', 'تاريخ الاستحقاق')}</th>
                   <th className="px-4 py-2.5 text-start">{tr('Statut', 'الحالة')}</th>
                   <th className="px-4 py-2.5 text-end">{tr('Cotisation', 'المساهمة')}</th>
-                  <th className="px-4 py-2.5 text-end">{tr('Documents & Quittance', 'الوثائق والوصل')}</th>
+                  <th className="px-4 py-2.5 text-end">{tr('Actions', 'إجراءات')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 bg-white">
@@ -1931,7 +2082,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                                 onClick={() => openQuittanceModalForCharge(charge)}
                                 className="px-2 py-0.5 text-[11px] bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-semibold rounded border border-emerald-200 shrink-0"
                               >
-                                {tr('+ Quittance', '+ إصدار وصل')}
+                                {tr('Encaisser', 'تحصيل')}
                               </button>
                             </>
                           )}
@@ -1962,6 +2113,24 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                     </tr>
                   );
                 })}
+                {charges.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="px-4 py-12 text-center text-xs text-slate-500 space-y-2">
+                      <p className="font-semibold text-sm text-slate-700">
+                        {tr('Aucune charge appelée pour le moment', 'لم تصدر أي مساهمات بعد')}
+                      </p>
+                      <p>
+                        {tr(
+                          'Cliquez sur « Appeler les charges du mois » pour créer ce que chaque lot doit payer.',
+                          'اضغط على «إصدار مساهمات الشهر» لإنشاء المبالغ المستحقة لكل شقة.'
+                        )}
+                      </p>
+                      <Button onClick={openChargeGeneration} className="mt-2 text-xs">
+                        {tr('Appeler les charges du mois', 'إصدار مساهمات الشهر')}
+                      </Button>
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -2219,18 +2388,18 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
         </Card>
       )}
 
-      {/* TAB 3: VÉRIFICATION DES VIREMENTS */}
+      {/* TAB 3: VIREMENTS À VÉRIFIER */}
       {activeTab === 'verifications' && (
         <Card className="overflow-hidden border border-slate-200">
           <div className="p-4 bg-slate-50 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <h3 className="font-semibold text-slate-800 text-sm">
-                {tr("File d'Attente des Justificatifs de Virement", 'قائمة انتظار إثباتات التحويل البنكي')}
+                {tr('Virements envoyés par les copropriétaires', 'التحويلات المرسلة من الملاك المشتركين')}
               </h3>
               <p className="text-xs text-slate-500">
                 {tr(
-                  'Vérifiez les virements reçus ou validez en 1 clic les justificatifs pré-vérifiés (montant exact)',
-                  'تحقق من التحويلات البنكية أو صادق بنقرة واحدة على التحويلات المطابقة تلقائياً'
+                  'Comparez la preuve avec votre relevé bancaire puis validez : le reçu PDF est créé automatiquement.',
+                  'قارن إثبات التحويل مع كشفك البنكي ثم صادق عليه ليتم إنشاء الوصل تلقائياً.'
                 )}
               </p>
             </div>
@@ -2509,7 +2678,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                         }
                         className="text-xs bg-emerald-600 hover:bg-emerald-700"
                       >
-                        {tr('Valider & Délivrer Quittance', 'تأكيد وإصدار الوصل')}
+                        {tr('Valider le virement', 'تأكيد التحويل')}
                       </Button>
                       <Button
                         variant="secondary"
@@ -2531,33 +2700,43 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
             ))}
 
             {paymentProofs.length === 0 && (
-              <div className="p-8 text-center text-slate-500 text-xs">
-                {tr('Aucun justificatif de virement en attente de vérification.', 'لا يوجد أي إثبات تحويل بنكي في انتظار المراجعة.')}
+              <div className="p-8 text-center text-slate-500 text-xs space-y-1">
+                <p className="font-semibold text-sm text-slate-700">
+                  {tr('Aucun virement à vérifier', 'لا توجد تحويلات في انتظار المراجعة')}
+                </p>
+                <p>
+                  {tr(
+                    "Lorsqu'un copropriétaire envoie une preuve de virement depuis son espace, elle apparaît ici.",
+                    'عندما يرسل مالك مشترك إثبات تحويل بنكي من فضائه الخاص، يظهر هنا.'
+                  )}
+                </p>
               </div>
             )}
           </div>
         </Card>
       )}
 
-      {/* TAB 4: QUITTANCES CERTIFIÉES */}
+      {/* TAB 4: REÇUS (QUITTANCES) */}
       {activeTab === 'quittances' && (
         <div className="space-y-4">
           <Card className="bg-gradient-to-r from-teal-900 via-teal-800 to-slate-900 text-white p-5 border-none shadow-md">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
               <div className="space-y-1">
                 <div className="flex items-center gap-2">
-                  <span className="text-[11px] font-bold uppercase tracking-wider bg-teal-700/80 text-teal-100 px-2.5 py-0.5 rounded-full border border-teal-500/30">
-                    {tr('Loi n° 18-00 & Loi n° 106-12 (Art. 18 bis)', 'القانون 18-00 والقانون 106-12 (المادة 18 مكرر)')}
-                  </span>
-                  <span className="text-[11px] text-teal-200">{tr('Reçu libératoire officiel', 'وصل إبراء رسمي')}</span>
+                  <h3 className="text-lg font-bold tracking-tight">
+                    {tr('Reçus de paiement (quittances)', 'وصولات الأداء (المخالصات)')}
+                  </h3>
+                  <InfoTip label={tr('Information légale quittances', 'معلومة قانونية حول الوصولات')}>
+                    {tr(
+                      'Conformément aux lois n° 18-00 et 106-12 (Art. 18 bis), chaque quittance officielle libère le copropriétaire pour la période réglée et ventile automatiquement la part du fonds de réserve.',
+                      'وفقاً للقانونين 18-00 و106-12 (المادة 18 مكرر)، يبرئ كل وصل رسمي ذمة المالك المشترك عن الفترة المؤداة ويوزع تلقائياً حصة صندوق الاحتياط.'
+                    )}
+                  </InfoTip>
                 </div>
-                <h3 className="text-lg font-bold tracking-tight">
-                  {tr('Registre Légal des Quittances de Copropriété', 'السجل القانوني لوصولات أداء الملكية المشتركة')}
-                </h3>
                 <p className="text-xs text-teal-100/90 max-w-2xl leading-relaxed">
                   {tr(
-                    'Conformément aux exigences réglementaires marocaines, toute quittance délivrée par le syndic décharge libératoirement le copropriétaire pour la période certifiée et inclut obligatoirement la quote-part du Fonds de Réserve pour travaux.',
-                    'وفقاً للمتطلبات القانونية المغربية، فإن كل وصل أداء يسلمه السنديك يبرئ ذمة المالك المشترك عن الفترة المحددة ويتضمن وجوباً حصة صندوق الاحتياط للأشغال.'
+                    'Tous les reçus officiels délivrés après encaissement, prêts à télécharger ou renvoyer en PDF.',
+                    'جميع الوصولات الرسمية الصادرة بعد التحصيل، جاهزة للتحميل أو الإرسال بصيغة PDF.'
                   )}
                 </p>
               </div>
@@ -2568,7 +2747,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                   className="bg-white text-teal-900 hover:bg-teal-50 font-bold text-xs sm:text-sm shadow-sm flex items-center gap-1.5"
                 >
                   <QuittanceIcon />
-                  <span>{tr('+ Émettre une Quittance', '+ إصدار وصل إبراء')}</span>
+                  <span>{tr('Encaisser un paiement', 'تحصيل دفعة')}</span>
                 </Button>
               </div>
             </div>
@@ -2576,13 +2755,13 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5 pt-4 border-t border-teal-700/60">
               <div className="bg-teal-950/40 p-2.5 rounded-lg border border-teal-600/30">
                 <span className="text-[10px] text-teal-200 font-semibold uppercase block">
-                  {tr('Quittances Actives', 'الوصولات السارية')}
+                  {tr('Reçus valides', 'الوصولات السارية')}
                 </span>
                 <span className="text-lg font-bold font-mono text-white mt-0.5 block">{activeQuittances.length}</span>
               </div>
               <div className="bg-teal-950/40 p-2.5 rounded-lg border border-teal-600/30">
                 <span className="text-[10px] text-teal-200 font-semibold uppercase block">
-                  {tr('Cotisations Quittancées', 'المساهمات المؤداة')}
+                  {tr('Total encaissé', 'مجموع المحصل')}
                 </span>
                 <span className="text-lg font-bold font-mono text-white mt-0.5 block">
                   {currencyFormatter.format(totalQuittancesAmount)}
@@ -2590,7 +2769,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
               </div>
               <div className="bg-teal-950/40 p-2.5 rounded-lg border border-teal-600/30">
                 <span className="text-[10px] text-teal-200 font-semibold uppercase block">
-                  {tr('Réserve documentée (Quittances)', 'الاحتياطي الموثق (الوصولات)')}
+                  {tr('Dont fonds de réserve', 'حصة صندوق الاحتياط')}
                 </span>
                 <span className="text-lg font-bold font-mono text-emerald-300 mt-0.5 block">
                   {currencyFormatter.format(totalReserveFundAmount)}
@@ -2598,7 +2777,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
               </div>
               <div className="bg-teal-950/40 p-2.5 rounded-lg border border-teal-600/30">
                 <span className="text-[10px] text-teal-200 font-semibold uppercase block">
-                  {tr('Dernier Récépissé', 'آخر وصل صادر')}
+                  {tr('Dernier reçu', 'آخر وصل صادر')}
                 </span>
                 <span className="text-xs font-mono font-bold text-teal-100 truncate mt-1 block">
                   {activeQuittances[0]?.quittanceNumber || quittances[0]?.quittanceNumber || tr('Aucun', 'لا يوجد')}
@@ -2614,7 +2793,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                   type="text"
                   value={quittanceSearch}
                   onChange={(e) => setQuittanceSearch(e.target.value)}
-                  placeholder={tr('Filtrer par copropriétaire, lot, N° quittance...', 'تصفية حسب المالك، الشقة، رقم الوصل...')}
+                  placeholder={tr('Filtrer par copropriétaire, lot, N° reçu...', 'تصفية حسب المالك، الشقة، رقم الوصل...')}
                   className="w-full px-3 py-1.5 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-teal-500 focus:border-teal-500"
                 />
               </div>
@@ -2627,7 +2806,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                     onChange={(e) => setShowVoidedQuittances(e.target.checked)}
                     className="rounded text-rose-600 focus:ring-rose-500"
                   />
-                  <span>{tr('Inclure les quittances annulées', 'إظهار الوصولات الملغاة')}</span>
+                  <span>{tr('Inclure les reçus annulés', 'إظهار الوصولات الملغاة')}</span>
                 </label>
 
                 <select
@@ -2699,7 +2878,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                               : 'text-emerald-700 bg-emerald-50'
                           }`}
                         >
-                          {quit.voidedAt ? tr('Annulée', 'ملغى') : tr('Libératoire', 'مُبرئ للذمة')}
+                          {quit.voidedAt ? tr('Annulée', 'ملغى') : tr('Payé', 'مؤدى')}
                         </span>
                       </div>
                     </div>
@@ -2736,13 +2915,13 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
               {filteredQuittances.length === 0 && (
                 <div className="px-4 py-10 text-center text-slate-500">
                   <p className="font-semibold text-sm text-slate-700">
-                    {tr('Aucune quittance trouvée', 'لم يتم العثور على أي وصل')}
+                    {tr('Aucun reçu enregistré', 'لم يتم العثور على أي وصل')}
                   </p>
                   <Button
                     onClick={() => openQuittanceModalNew()}
                     className="mt-3 text-xs bg-teal-700 hover:bg-teal-800"
                   >
-                    {tr('+ Émettre une Quittance', '+ إصدار وصل إبراء')}
+                    {tr('Encaisser un paiement', 'تحصيل دفعة')}
                   </Button>
                 </div>
               )}
@@ -2752,13 +2931,13 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
               <table className="min-w-full divide-y divide-slate-200 text-xs sm:text-sm">
                 <thead className="bg-slate-50 text-slate-600 text-start font-semibold">
                   <tr>
-                    <th className="px-4 py-3 text-start">{tr('N° Quittance & Date', 'رقم الوصل والتاريخ')}</th>
-                    <th className="px-4 py-3 text-start">{tr('Copropriétaire & CIN', 'المالك المشترك و ر.ب.و')}</th>
-                    <th className="px-4 py-3 text-start">{tr('Lot & Tantièmes', 'الوحدة والحصة الشائعة')}</th>
-                    <th className="px-4 py-3 text-start">{tr('Période Réglée', 'الفترة المؤداة')}</th>
-                    <th className="px-4 py-3 text-start">{tr('Ventilation Loi 106-12', 'التوزيع (القانون 106-12)')}</th>
-                    <th className="px-4 py-3 text-end">{tr('Montant Total', 'المبلغ الإجمالي')}</th>
-                    <th className="px-4 py-3 text-start">{tr('Règlement & Traçabilité', 'الأداء والتتبع')}</th>
+                    <th className="px-4 py-3 text-start">{tr('N° Reçu & Date', 'رقم الوصل والتاريخ')}</th>
+                    <th className="px-4 py-3 text-start">{tr('Copropriétaire', 'المالك المشترك')}</th>
+                    <th className="px-4 py-3 text-start">{tr('Lot', 'الشقة')}</th>
+                    <th className="px-4 py-3 text-start">{tr('Période', 'الفترة المؤداة')}</th>
+                    <th className="px-4 py-3 text-start">{tr('Répartition fonds', 'توزيع الصناديق')}</th>
+                    <th className="px-4 py-3 text-end">{tr('Montant', 'المبلغ')}</th>
+                    <th className="px-4 py-3 text-start">{tr('Paiement', 'الأداء')}</th>
                     <th className="px-4 py-3 text-end">{tr('Actions', 'إجراءات')}</th>
                   </tr>
                 </thead>
@@ -2811,7 +2990,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                         <td className="px-4 py-3">
                           <div className="text-[11px] space-y-0.5 font-mono">
                             <div className="text-slate-600">{tr('Courant:', 'الجاري:')} {formatRecordedFund(quit, 'chargesCourantesAmount')}</div>
-                            <div className="text-emerald-700 font-medium">{tr('Réserve (106-12):', 'الاحتياط:')} {formatRecordedFund(quit, 'reserveFundAmount')}</div>
+                            <div className="text-emerald-700 font-medium">{tr('Réserve:', 'الاحتياط:')} {formatRecordedFund(quit, 'reserveFundAmount')}</div>
                           </div>
                         </td>
                         <td className="px-4 py-3 text-end whitespace-nowrap">
@@ -2823,7 +3002,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                             {currencyFormatter.format(quit.amount)}
                           </span>
                           <span className={`text-[10px] font-semibold px-1.5 py-0.2 rounded ${quit.voidedAt ? 'text-rose-700 bg-rose-50' : 'text-emerald-700 bg-emerald-50'}`}>
-                            {quit.voidedAt ? tr('Annulée', 'ملغى') : tr('Libératoire', 'مُبرئ للذمة')}
+                            {quit.voidedAt ? tr('Annulée', 'ملغى') : tr('Payé', 'مؤدى')}
                           </span>
                         </td>
                         <td className="px-4 py-3">
@@ -2859,17 +3038,17 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                     <tr>
                       <td colSpan={8} className="px-4 py-12 text-center text-slate-500">
                         <QuittanceIcon />
-                        <p className="font-semibold text-sm mt-2 text-slate-700">{tr('Aucune quittance trouvée', 'لم يتم العثور على أي وصل')}</p>
-                        <p className="text-xs mt-1 text-slate-400">
+                        <p className="font-semibold text-sm mt-2 text-slate-700">{tr('Aucun reçu enregistré', 'لم يتم العثور على أي وصل')}</p>
+                        <p className="text-xs mt-1 text-slate-500">
                           {quittanceSearch
-                            ? tr('Aucune quittance ne correspond à vos filtres de recherche.', 'لا يوجد وصل يطابق معايير البحث.')
-                            : tr('Délivrez votre première quittance à partir d’un règlement enregistré.', 'أصدر أول وصل مرتبط بدفعة مسجلة.')}
+                            ? tr('Aucun reçu ne correspond à votre recherche.', 'لا يوجد وصل يطابق معايير البحث.')
+                            : tr('Cliquez sur « Encaisser un paiement » lorsqu’un copropriétaire règle ses charges.', 'اضغط على «تحصيل دفعة» عندما يؤدي أحد الملاك المشتركين مساهمته.')}
                         </p>
                         <Button
                           onClick={() => openQuittanceModalNew()}
                           className="mt-3 text-xs bg-teal-700 hover:bg-teal-800"
                         >
-                          {tr('+ Émettre une Quittance', '+ إصدار وصل إبراء')}
+                          {tr('Encaisser un paiement', 'تحصيل دفعة')}
                         </Button>
                       </td>
                     </tr>
@@ -2881,31 +3060,9 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
         </div>
       )}
 
-      {/* TAB 5: RECOUVREMENT & IMPAYÉS */}
+      {/* TAB 5: RETARDS */}
       {activeTab === 'impayes' && (
         <div className="space-y-4">
-          <Card className="bg-rose-50 border border-rose-200 p-4">
-            <div className="flex items-start gap-3">
-              <div className="p-2 bg-rose-100 text-rose-700 rounded-lg shrink-0">
-                <ShieldAlertIcon />
-              </div>
-              <div className="space-y-1">
-                <h4 className="font-bold text-rose-900 text-sm">
-                  {tr(
-                    'Procédure Légale de Recouvrement des Charges (Article 25 - Loi n° 18-00)',
-                    'المسطرة القانونية لتحصيل المساهمات (المادة 25 - القانون رقم 18-00)'
-                  )}
-                </h4>
-                <p className="text-xs text-rose-800 leading-relaxed">
-                  {tr(
-                    "En cas de non-paiement des charges de copropriété, le syndic est habilité à adresser une Mise en Demeure par lettre recommandée avec accusé de réception accordant un délai de 30 jours. À l'expiration de ce délai, le syndic peut demander au Président du Tribunal de Première Instance une Ordonnance d'Injonction de Payer avec exécution provisoire.",
-                    'في حالة عدم أداء مساهمات الملكية المشتركة، يحق للسنديك توجيه إنذار بالأداء عبر رسالة مضمونة مع إشعار بالتوصل يمنح أجلاً مدته 30 يوماً. وبعد انصرام هذا الأجل، يمكن للسنديك تقديم طلب إلى رئيس المحكمة الابتدائية لإصدار أمر بالأداء مشمول بالنفاذ المعجل.'
-                  )}
-                </p>
-              </div>
-            </div>
-          </Card>
-
           {/* Balance Âgée (Aging Report) */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <Card className="p-3.5 border-s-4 border-s-amber-400 bg-white">
@@ -2934,7 +3091,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
             </Card>
             <Card className="p-3.5 border-s-4 border-s-red-800 bg-white">
               <span className="text-[11px] font-semibold text-slate-500 uppercase block">
-                {tr('Contentieux > 90 jours', 'منازعات أكثر من 90 يوماً')}
+                {tr('Plus de 90 jours', 'أكثر من 90 يوماً')}
               </span>
               <span className="text-lg font-bold font-mono text-red-900 mt-1 block tabular-nums">
                 {currencyFormatter.format(agingBuckets.d90_plus)}
@@ -2943,13 +3100,28 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
           </div>
 
           <Card className="overflow-hidden border border-slate-200">
-            <div className="p-4 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
+            <div className="p-4 bg-slate-50 border-b border-slate-200 flex flex-wrap justify-between items-center gap-3">
               <div>
-                <h3 className="font-semibold text-slate-800 text-sm">{tr('Copropriétaires Débiteurs', 'الملاك المشتركون المتأخرون عن الأداء')}</h3>
-                <p className="text-xs text-slate-500">{tr('Générez la mise en demeure formelle ou le relevé de compte en 1 clic', 'إصدار الإنذار الرسمي أو كشف الحساب بنقرة واحدة')}</p>
+                <div className="flex items-center gap-1.5">
+                  <h3 className="font-semibold text-slate-800 text-sm">
+                    {tr('Copropriétaires en retard', 'الملاك المشتركون المتأخرون عن الأداء')}
+                  </h3>
+                  <InfoTip label={tr('Procédure légale en cas de retard', 'المسطرة القانونية في حالة التأخر')}>
+                    {tr(
+                      "Article 25 de la Loi n° 18-00 : en cas de non-paiement, le syndic peut envoyer une mise en demeure par courrier recommandé avec accusé de réception (délai de 30 jours), puis demander une ordonnance d'injonction de payer au Tribunal de Première Instance.",
+                      'المادة 25 من القانون 18-00: في حالة عدم الأداء، يوجه السنديك إنذاراً مضموناً مع إشعار بالتوصل يمنح أجلاً مدته 30 يوماً، ثم يمكنه طلب أمر بالأداء من المحكمة الابتدائية.'
+                    )}
+                  </InfoTip>
+                </div>
+                <p className="text-xs text-slate-500">
+                  {tr(
+                    'Téléchargez un relevé de compte à envoyer en rappel ou une mise en demeure officielle.',
+                    'حمّل كشف حساب للتذكير أو إنذاراً رسمياً بالأداء.'
+                  )}
+                </p>
               </div>
-              <span className="text-xs font-mono font-bold text-rose-700 bg-rose-50 px-2 py-1 rounded">
-                {tr('Total créances :', 'مجموع الديون:')} {currencyFormatter.format(stats.overdueChargesTotal)}
+              <span className="text-xs font-mono font-bold text-rose-700 bg-rose-50 px-2.5 py-1 rounded">
+                {tr('Total en retard :', 'مجموع المتأخرات:')} {currencyFormatter.format(stats.overdueChargesTotal)}
               </span>
             </div>
 
@@ -2978,11 +3150,11 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                           {item.apartments.length > 1 ? tr('Lots', 'شقق') : tr('Lot', 'شقة')} {item.apartmentNumber}
                         </span>
                         <span className="text-xs text-rose-700 font-semibold bg-rose-50 px-2 py-0.5 rounded">
-                          {item.overdueCount} {tr('échéance(s) impayée(s)', 'دفعات غير مؤداة')}
+                          {item.overdueCount} {tr('échéance(s) en retard', 'دفعات متأخرة')}
                         </span>
                       </div>
                       <p className="text-xs text-slate-500 mt-1">
-                        {tr('Ancienneté de la dette depuis le', 'تاريخ أقدم دين منذ')}{' '}
+                        {tr('Depuis le', 'منذ')}{' '}
                         {new Date(item.oldestDate).toLocaleDateString(isAr ? 'ar-MA' : 'fr-MA')} ·{' '}
                         {tr('Tél :', 'الهاتف:')} {resident?.phone || tr('Non renseigné', 'غير متوفر')}
                       </p>
@@ -2990,7 +3162,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
 
                     <div className="flex flex-wrap items-center gap-2.5 shrink-0">
                       <div className="text-end me-1">
-                        <span className="text-xs text-slate-400 block">{tr('Total Dû', 'المبلغ المستحق')}</span>
+                        <span className="text-xs text-slate-400 block">{tr('Reste dû', 'المبلغ المستحق')}</span>
                         <span className="font-mono font-bold text-base text-rose-700">
                           {currencyFormatter.format(item.totalOverdue)}
                         </span>
@@ -3033,7 +3205,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                         className="text-xs bg-rose-700 hover:bg-rose-800 flex items-center gap-1.5"
                       >
                         <ShieldAlertIcon />
-                        <span>{tr('Mise en Demeure (Art. 25)', 'إنذار بالأداء (المادة 25)')}</span>
+                        <span>{tr('Mise en demeure PDF', 'إنذار بالأداء PDF')}</span>
                       </Button>
                     </div>
                   </div>
@@ -3041,11 +3213,16 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
               })}
 
               {overdueResidents.length === 0 && (
-                <div className="p-8 text-center text-slate-500 text-xs">
-                  {tr(
-                    'Aucun impayé constaté. Tous les copropriétaires sont à jour dans leurs cotisations.',
-                    'لا توجد أي متأخرات. جميع الملاك المشتركين في وضعية سليمة.'
-                  )}
+                <div className="p-8 text-center text-slate-500 text-xs space-y-1">
+                  <p className="font-semibold text-sm text-slate-700">
+                    {tr('Aucun copropriétaire en retard', 'لا يوجد أي مالك مشترك متأخر')}
+                  </p>
+                  <p>
+                    {tr(
+                      'Tous les copropriétaires sont à jour dans leurs paiements.',
+                      'جميع الملاك المشتركين في وضعية سليمة.'
+                    )}
+                  </p>
                 </div>
               )}
             </div>
@@ -3053,7 +3230,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
         </div>
       )}
 
-      {/* MODAL 1: ADD TRANSACTION */}
+      {/* MODAL 1: ADD TRANSACTION (EXPENSE / MISC INCOME) */}
       <Modal
         isOpen={isTrxModalOpen}
         onSubmit={handleSubmitTransaction}
@@ -3062,11 +3239,21 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
           setIsTrxModalOpen(false);
           resetTrxForm();
         }}
-        title={tr('Nouvelle Opération Financière (Loi 18-00 & 106-12)', 'عملية مالية جديدة (القانون 18-00 و 106-12)')}
+        title={
+          trxType === 'expense'
+            ? tr('Enregistrer une dépense', 'تسجيل مصروف')
+            : tr('Enregistrer une recette', 'تسجيل مدخول')
+        }
         footer={
-          <div className="flex items-center justify-between w-full">
-            <span className="text-[11px] text-slate-500 hidden sm:inline">
-              {tr("* Pièce justificative requise selon l'Art. 26 de la Loi 18-00", '* الوثيقة المثبتة مطلوبة وفق المادة 26 من القانون 18-00')}
+          <div className="flex items-center justify-between w-full gap-2">
+            <span className="text-[11px] text-slate-500 hidden sm:inline-flex items-center gap-1">
+              <span>{tr('* Champs obligatoires', '* حقول إجبارية')}</span>
+              <InfoTip label={tr('Obligation légale de justificatif', 'الإلزام القانوني للوثائق المثبتة')}>
+                {tr(
+                  "Article 26 de la Loi n° 18-00 : chaque dépense de la copropriété doit être appuyée par une pièce justificative numérotée.",
+                  'المادة 26 من القانون 18-00: يجب أن يستند كل مصروف للملكية المشتركة إلى وثيقة مثبتة مرقمة.'
+                )}
+              </InfoTip>
             </span>
             <div className="flex gap-2 ms-auto">
               <Button
@@ -3083,336 +3270,311 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                 disabled={addTrxMutation.isPending}
                 className="bg-teal-700 hover:bg-teal-800 text-white flex items-center gap-1.5"
               >
-                {addTrxMutation.isPending ? tr('Enregistrement...', 'جاري الحفظ...') : tr('Valider & Enregistrer', 'تأكيد وحفظ')}
+                {addTrxMutation.isPending
+                  ? tr('Enregistrement...', 'جاري الحفظ...')
+                  : tr('Valider & Enregistrer', 'تأكيد وحفظ')}
               </Button>
             </div>
           </div>
         }
       >
         <div className="space-y-4 max-h-[75vh] overflow-y-auto px-1">
-          <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                {tr("1. Nature de l'opération", '1. طبيعة العملية')}
-              </label>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setTrxType('expense');
-                    setTrxCategory('maintenance');
-                    setTrxDocumentType('facture');
-                  }}
-                  className={`py-2 px-3 rounded-lg text-xs font-bold transition-all border flex items-center justify-center gap-1.5 ${
-                    trxType === 'expense'
-                      ? 'bg-rose-50 border-rose-400 text-rose-800 shadow-sm'
-                      : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
-                  }`}
-                >
-                  <span className="w-2 h-2 rounded-full bg-rose-600"></span>
-                  <span>{tr('Dépense / Décaissement (-)', 'مصروف / صرف (-)')}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setTrxType('income');
-                    setTrxCategory('fees');
-                    setTrxDocumentType('recu');
-                  }}
-                  className={`py-2 px-3 rounded-lg text-xs font-bold transition-all border flex items-center justify-center gap-1.5 ${
-                    trxType === 'income'
-                      ? 'bg-emerald-50 border-emerald-400 text-emerald-800 shadow-sm'
-                      : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
-                  }`}
-                >
-                  <span className="w-2 h-2 rounded-full bg-emerald-600"></span>
-                  <span>{tr('Recette / Encaissement (+)', 'مدخول / تحصيل (+)')}</span>
-                </button>
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                {tr('2. Affectation légale des fonds (Loi 18-00 & 106-12)', '2. التخصيص القانوني للصندوق (القانون 18-00 و 106-12)')}
-              </label>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <label
-                  className={`p-2.5 rounded-lg border cursor-pointer text-xs transition-all flex items-start gap-2 ${
-                    fundType === 'courant'
-                      ? 'bg-teal-50 border-teal-400 text-teal-900 shadow-xs'
-                      : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="fundType"
-                    value="courant"
-                    checked={fundType === 'courant'}
-                    onChange={() => setFundType('courant')}
-                    className="mt-0.5 text-teal-600 focus:ring-teal-500"
-                  />
-                  <div>
-                    <span className="font-bold block">{tr('Compte Courant', 'الحساب الجاري')}</span>
-                    <span className="text-[10px] text-slate-500 block leading-tight mt-0.5">
-                      {tr('Dépenses ordinaires, gardiennage, électricité, menues réparations', 'المصاريف العادية، الحراسة، الكهرباء، الإصلاحات البسيطة')}
-                    </span>
-                  </div>
-                </label>
-
-                <label
-                  className={`p-2.5 rounded-lg border cursor-pointer text-xs transition-all flex items-start gap-2 ${
-                    fundType === 'reserve'
-                      ? 'bg-indigo-50 border-indigo-400 text-indigo-900 shadow-xs'
-                      : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="fundType"
-                    value="reserve"
-                    checked={fundType === 'reserve'}
-                    onChange={() => {
-                      setFundType('reserve');
-                      setTrxCategory('reserve');
-                    }}
-                    className="mt-0.5 text-indigo-600 focus:ring-indigo-500"
-                  />
-                  <div>
-                    <span className="font-bold block flex items-center gap-1">
-                      <span>{tr('Fonds de Réserve', 'صندوق الاحتياط')}</span>
-                      <span className="bg-indigo-200 text-indigo-800 text-[9px] px-1 rounded font-mono">
-                        {tr('Loi 106-12', 'قانون 106-12')}
-                      </span>
-                    </span>
-                    <span className="text-[10px] text-slate-500 block leading-tight mt-0.5">
-                      {tr('Gros travaux, étanchéité terrasse, réfection façade ou ascenseur', 'الأشغال الكبرى، عزل السطح، ترميم الواجهة أو المصعد')}
-                    </span>
-                  </div>
-                </label>
-              </div>
-            </div>
+          {/* Compact Expense / Income Switcher */}
+          <div className="inline-flex rounded-lg border border-slate-200 bg-slate-100 p-0.5 text-xs">
+            <button
+              type="button"
+              onClick={() => {
+                setTrxType('expense');
+                setTrxCategory('maintenance');
+                setTrxDocumentType('facture');
+                setFundType('courant');
+              }}
+              className={`px-3 py-1.5 rounded-md font-semibold transition-colors flex items-center gap-1.5 ${
+                trxType === 'expense'
+                  ? 'bg-white text-rose-800 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <span className="w-2 h-2 rounded-full bg-rose-600" />
+              <span>{tr('Dépense (-)', 'مصروف (-)')}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setTrxType('income');
+                setTrxCategory('fees');
+                setTrxDocumentType('recu');
+                setFundType('courant');
+              }}
+              className={`px-3 py-1.5 rounded-md font-semibold transition-colors flex items-center gap-1.5 ${
+                trxType === 'income'
+                  ? 'bg-white text-emerald-800 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <span className="w-2 h-2 rounded-full bg-emerald-600" />
+              <span>{tr('Recette (+)', 'مدخول (+)')}</span>
+            </button>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                {tr('Montant net (MAD) *', 'المبلغ الصافي (درهم) *')}
-              </label>
-              <div className="relative">
-                <input
-                  type="number"
-                  min="0.01"
-                  step="0.01"
-                  value={trxAmount}
-                  onChange={(e) => {
-                    setTrxAmount(e.target.value);
-                    if (formErrors.amount) setFormErrors({ ...formErrors, amount: '' });
-                  }}
-                  placeholder="0.00"
-                  className={`w-full px-3 py-2 border rounded-lg text-sm font-mono font-bold pe-12 ${
-                    formErrors.amount ? 'border-rose-400 bg-rose-50' : 'border-slate-300'
-                  }`}
-                />
-                <span className="absolute end-3 top-2.5 text-xs text-slate-400 font-mono font-bold">
-                  MAD
-                </span>
+          {/* BLOCK 1: L'ESSENTIEL */}
+          <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+              {tr("L'essentiel", 'المعلومات الأساسية')}
+            </h4>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  {tr('Montant (MAD) *', 'المبلغ (درهم) *')}
+                </label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    value={trxAmount}
+                    onChange={(e) => {
+                      setTrxAmount(e.target.value);
+                      if (formErrors.amount) setFormErrors({ ...formErrors, amount: '' });
+                    }}
+                    placeholder="0.00"
+                    className={`w-full px-3 py-2 border rounded-lg text-sm font-mono font-bold pe-12 bg-white ${
+                      formErrors.amount ? 'border-rose-400 bg-rose-50' : 'border-slate-300'
+                    }`}
+                  />
+                  <span className="absolute end-3 top-2.5 text-xs text-slate-400 font-mono font-bold">
+                    MAD
+                  </span>
+                </div>
+                {formErrors.amount && (
+                  <p className="text-[10px] text-rose-600 mt-1">{formErrors.amount}</p>
+                )}
               </div>
-              {formErrors.amount && (
-                <p className="text-[10px] text-rose-600 mt-1">{formErrors.amount}</p>
-              )}
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  {tr('Catégorie *', 'الفئة *')}
+                </label>
+                <select
+                  value={trxCategory}
+                  onChange={(e) => {
+                    const nextCat = e.target.value as Transaction['category'];
+                    setTrxCategory(nextCat);
+                    setFundType(nextCat === 'reserve' ? 'reserve' : 'courant');
+                  }}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs bg-white"
+                >
+                  {trxType === 'expense' ? (
+                    <>
+                      <option value="maintenance">{tr('Maintenance & Dépannages', 'الصيانة والإصلاحات')}</option>
+                      <option value="elevator">{tr('Ascenseur & Équipements', 'المصعد والتجهيزات')}</option>
+                      <option value="salary">{tr('Salaires (Gardien / Concierge)', 'رواتب (الحارس / البواب)')}</option>
+                      <option value="utility">{tr('Électricité & Eau', 'الكهرباء والماء')}</option>
+                      <option value="cleaning">{tr('Nettoyage & Produits', 'النظافة ومواد التنظيف')}</option>
+                      <option value="insurance">{tr('Assurance immeuble', 'تأمين العمارة')}</option>
+                      <option value="bank_fees">{tr('Frais bancaires', 'المصاريف البنكية')}</option>
+                      <option value="legal">{tr('Frais juridiques & recouvrement', 'أتعاب المنازعات والتحصيل')}</option>
+                      <option value="reserve">{tr('Gros travaux (Fonds de réserve)', 'الأشغال الكبرى (صندوق الاحتياط)')}</option>
+                      <option value="other">{tr('Autre dépense', 'مصروف آخر')}</option>
+                    </>
+                  ) : (
+                    <>
+                      <option value="fees">{tr('Cotisations copropriété', 'مساهمات الملكية المشتركة')}</option>
+                      <option value="reserve">{tr('Apport fonds de réserve travaux', 'مساهمة صندوق احتياط الأشغال')}</option>
+                      <option value="reimbursement">{tr('Remboursement assurance / sinistre', 'تعويض تأمين')}</option>
+                      <option value="other">{tr('Autre recette', 'مدخول آخر')}</option>
+                    </>
+                  )}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  {tr('Date *', 'التاريخ *')}
+                </label>
+                <input
+                  type="date"
+                  value={trxDate}
+                  onChange={(e) => setTrxDate(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs bg-white"
+                />
+              </div>
             </div>
 
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
-                {tr('Date comptable *', 'التاريخ المحاسبي *')}
+                {tr('Libellé (courte description) *', 'البيان (وصف مختصر) *')}
               </label>
               <input
-                type="date"
-                value={trxDate}
-                onChange={(e) => setTrxDate(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs"
+                type="text"
+                value={trxDesc}
+                onChange={(e) => {
+                  setTrxDesc(e.target.value);
+                  if (formErrors.description) setFormErrors({ ...formErrors, description: '' });
+                }}
+                placeholder={
+                  trxType === 'expense'
+                    ? tr('Ex: Réparation pompe à eau', 'مثال: إصلاح مضخة المياه')
+                    : tr('Ex: Remboursement sinistre dégât des eaux', 'مثال: تعويض تأمين')
+                }
+                className={`w-full px-3 py-2 border rounded-lg text-xs bg-white ${
+                  formErrors.description ? 'border-rose-400 bg-rose-50' : 'border-slate-300'
+                }`}
               />
+              {formErrors.description && (
+                <p className="text-[10px] text-rose-600 mt-0.5">{formErrors.description}</p>
+              )}
             </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                {tr('Catégorie comptable *', 'الفئة المحاسبية *')}
-              </label>
-              <select
-                value={trxCategory}
-                onChange={(e) => setTrxCategory(e.target.value as any)}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs bg-white"
-              >
-                {trxType === 'expense' ? (
-                  <>
-                    <option value="maintenance">{tr('Maintenance courante & Dépannages', 'الصيانة الجارية والإصلاحات')}</option>
-                    <option value="elevator">{tr('Ascenseur & Équipements mécaniques', 'المصعد والتجهيزات الميكانيكية')}</option>
-                    <option value="salary">{tr('Salaires Concierge / Gardiennage', 'رواتب البواب / الحراسة')}</option>
-                    <option value="utility">{tr('Électricité & Eau (Lydec/Redal/Amendis)', 'الكهرباء والماء')}</option>
-                    <option value="cleaning">{tr('Nettoyage, Produits & Hygiène', 'النظافة ومواد التنظيف')}</option>
-                    <option value="insurance">{tr('Assurance Multirisque Immeuble', 'تأمين العمارة المتعدد المخاطر')}</option>
-                    <option value="bank_fees">{tr('Frais bancaires & Tenue de compte', 'المصاريف البنكية')}</option>
-                    <option value="legal">{tr('Honoraires contentieux & Recouvrement', 'أتعاب المنازعات والتحصيل')}</option>
-                    <option value="reserve">{tr('Gros travaux (Fonds de réserve)', 'الأشغال الكبرى (صندوق الاحتياط)')}</option>
-                    <option value="other">{tr('Autre charge diverse', 'مصاريف أخرى')}</option>
-                  </>
-                ) : (
-                  <>
-                    <option value="fees">{tr('Cotisations ordinaires de copropriété', 'مساهمات الملكية المشتركة العادية')}</option>
-                    <option value="reserve">{tr('Appel de fonds exceptionnel / Réserve travaux', 'طلب مساهمة استثنائي / احتياط الأشغال')}</option>
-                    <option value="reimbursement">{tr('Remboursement sinistre assurance', 'تعويض تأمين')}</option>
-                    <option value="other">{tr('Autre encaissement', 'مدخول آخر')}</option>
-                  </>
-                )}
-              </select>
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-xs">
+              <div className="flex items-center gap-1.5 text-slate-600">
+                <span>
+                  {trxType === 'expense'
+                    ? tr('Payé depuis :', 'مدفوع من:')
+                    : tr('Versé sur :', 'مودع في:')}
+                </span>
+                <select
+                  aria-label={tr('Fonds concerné', 'الصندوق المعني')}
+                  value={fundType}
+                  onChange={(e) => {
+                    const nextFund = e.target.value === 'reserve' ? 'reserve' : 'courant';
+                    setFundType(nextFund);
+                    if (nextFund === 'reserve') setTrxCategory('reserve');
+                  }}
+                  className="px-2 py-1 border border-slate-300 rounded-md bg-white font-semibold text-slate-800 text-xs"
+                >
+                  <option value="courant">{tr('Compte courant', 'الحساب الجاري')}</option>
+                  <option value="reserve">{tr('Fonds de réserve', 'صندوق الاحتياط')}</option>
+                </select>
+                <InfoTip label={tr('Choix du fonds', 'اختيار الصندوق')}>
+                  {tr(
+                    'Compte courant : dépenses habituelles (eau, électricité, gardiennage, entretien). Fonds de réserve (Loi 106-12) : gros travaux votés.',
+                    'الحساب الجاري: المصاريف العادية (الماء، الكهرباء، الحراسة، الصيانة). صندوق الاحتياط (القانون 106-12): الأشغال الكبرى.'
+                  )}
+                </InfoTip>
+              </div>
             </div>
           </div>
 
-          <div className="p-3 bg-slate-50/75 border border-slate-200 rounded-xl space-y-3">
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-semibold text-slate-800">
+          {/* BLOCK 2: JUSTIFICATIF */}
+          <div className="p-3.5 bg-white border border-slate-200 rounded-xl space-y-3">
+            <div className="flex items-center gap-1.5">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                {tr('Justificatif & bénéficiaire', 'الوثيقة المثبتة والمستفيد')}
+              </h4>
+              <InfoTip label={tr('Justificatif obligatoire', 'الوثيقة المثبتة إجبارية')}>
                 {tr(
-                  `3. Tiers concerné (${trxType === 'expense' ? 'Bénéficiaire / Prestataire' : 'Copropriétaire émetteur'})`,
-                  `3. الطرف المعني (${trxType === 'expense' ? 'المستفيد / المهني' : 'المالك المشترك الدافع'})`
+                  "Conservez le numéro de facture ou de reçu pour le contrôle des comptes en Assemblée Générale (Art. 26 Loi 18-00).",
+                  'احتفظ برقم الفاتورة أو الإيصال لمراقبة الحسابات في الجمع العام (المادة 26 من القانون 18-00).'
                 )}
-              </label>
-              {trxType === 'expense' && (
-                <span className="text-[10px] text-slate-500 font-mono">
-                  {tr('Obligation fiscale marocaine : ICE exigé', 'إلزام ضريبي مغربي: رقم ICE مطلوب')}
-                </span>
-              )}
+              </InfoTip>
             </div>
 
             {trxType === 'expense' ? (
-              <div className="space-y-2.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-[11px] text-slate-500 mb-1">
-                    {tr("Sélectionner un prestataire enregistré de l'immeuble :", 'اختر مهنياً مسجلاً في الإقامة:')}
+                  <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                    {tr('Prestataire enregistré (optionnel)', 'مهني مسجل (اختياري)')}
                   </label>
                   <select
                     value={selectedPrestataireId}
                     onChange={(e) => handleSelectPrestataire(e.target.value)}
                     className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs bg-white"
                   >
-                    <option value="">{tr('-- Autre / Nouveau prestataire --', '-- آخر / مهني جديد --')}</option>
+                    <option value="">{tr('-- Saisir un autre fournisseur --', '-- إدخال مورد آخر --')}</option>
                     {prestataires.map((p) => (
                       <option key={p.id} value={p.id}>
-                        {p.name} {p.ice ? `(ICE: ${p.ice})` : ''} - {p.category}
+                        {p.name} {p.ice ? `(ICE: ${p.ice})` : ''}
                       </option>
                     ))}
                   </select>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  <div>
-                    <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                      {tr('Nom / Raison sociale du prestataire *', 'اسم الشركة أو المهني *')}
-                    </label>
-                    <input
-                      type="text"
-                      value={trxThirdPartyName}
-                      onChange={(e) => {
-                        setTrxThirdPartyName(e.target.value);
-                        if (formErrors.thirdParty) setFormErrors({ ...formErrors, thirdParty: '' });
-                      }}
-                      placeholder="Ex: Atlas Ascenseurs SARL"
-                      className={`w-full px-3 py-1.5 border rounded-lg text-xs ${
-                        formErrors.thirdParty ? 'border-rose-400 bg-rose-50' : 'border-slate-300'
-                      }`}
-                    />
-                    {formErrors.thirdParty && (
-                      <p className="text-[10px] text-rose-600 mt-0.5">{formErrors.thirdParty}</p>
-                    )}
-                  </div>
-
-                  <div>
-                    <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                      {tr('ICE Prestataire (15 chiffres)', 'رقم التعريف الموحد للمقاولة ICE (15 رقماً)')}
-                    </label>
-                    <input
-                      type="text"
-                      maxLength={15}
-                      value={trxThirdPartyIce}
-                      onChange={(e) => setTrxThirdPartyIce(e.target.value)}
-                      placeholder="Ex: 001988223000089"
-                      className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs font-mono"
-                    />
-                  </div>
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-700 mb-1">
+                    {tr('Nom / Raison sociale du prestataire *', 'اسم الشركة أو المهني *')}
+                  </label>
+                  <input
+                    type="text"
+                    value={trxThirdPartyName}
+                    onChange={(e) => {
+                      setTrxThirdPartyName(e.target.value);
+                      if (formErrors.thirdParty) setFormErrors({ ...formErrors, thirdParty: '' });
+                    }}
+                    placeholder="Ex: Atlas Ascenseurs SARL"
+                    className={`w-full px-3 py-1.5 border rounded-lg text-xs ${
+                      formErrors.thirdParty ? 'border-rose-400 bg-rose-50' : 'border-slate-300'
+                    }`}
+                  />
+                  {formErrors.thirdParty && (
+                    <p className="text-[10px] text-rose-600 mt-0.5">{formErrors.thirdParty}</p>
+                  )}
                 </div>
               </div>
             ) : (
-              <div className="space-y-2.5">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  <div>
-                    <label className="block text-[11px] text-slate-500 mb-1">
-                      {tr('Lot de copropriété concerné :', 'الوحدة السكنية المعنية:')}
-                    </label>
-                    <select
-                      value={selectedApartmentId}
-                      onChange={(e) => handleSelectApartment(e.target.value)}
-                      className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs bg-white"
-                    >
-                      <option value="">{tr('-- Aucun lot spécifique (Recette générale) --', '-- بدون شقة محددة (مدخول عام) --')}</option>
-                      {building.apartments.map((apt) => {
-                        const res = building.residents.find((r) => r.id === (apt.ownerId || apt.tenantId));
-                        return (
-                          <option key={apt.id} value={apt.id}>
-                            {tr('Lot', 'شقة')} {apt.number} ({res?.name || tr('Copropriétaire', 'مالك مشترك')}) - {apt.tantiemes || 100} {tr('tantièmes', 'جزء')}
-                          </option>
-                        );
-                      })}
-                    </select>
-                  </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                    {tr('Lot concerné (optionnel)', 'الشقة المعنية (اختياري)')}
+                  </label>
+                  <select
+                    value={selectedApartmentId}
+                    onChange={(e) => handleSelectApartment(e.target.value)}
+                    className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs bg-white"
+                  >
+                    <option value="">{tr('-- Aucun lot (recette générale) --', '-- بدون شقة محددة (مدخول عام) --')}</option>
+                    {building.apartments.map((apt) => {
+                      const res = building.residents.find((r) => r.id === (apt.ownerId || apt.tenantId));
+                      return (
+                        <option key={apt.id} value={apt.id}>
+                          {tr('Lot', 'شقة')} {apt.number} ({res?.name || tr('Copropriétaire', 'مالك مشترك')})
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
 
-                  <div>
-                    <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                      {tr('Nom du copropriétaire / émetteur :', 'اسم المالك المشترك / الدافع:')}
-                    </label>
-                    <input
-                      type="text"
-                      value={trxThirdPartyName}
-                      onChange={(e) => setTrxThirdPartyName(e.target.value)}
-                      placeholder="Ex: Ahmed Alami"
-                      className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs"
-                    />
-                  </div>
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-700 mb-1">
+                    {tr('Payé par (nom)', 'الدافع (الاسم)')}
+                  </label>
+                  <input
+                    type="text"
+                    value={trxThirdPartyName}
+                    onChange={(e) => setTrxThirdPartyName(e.target.value)}
+                    placeholder="Ex: Compagnie d'assurance"
+                    className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs"
+                  />
                 </div>
               </div>
             )}
-          </div>
 
-          <div className="p-3 bg-amber-50/50 border border-amber-200/80 rounded-xl space-y-3">
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-bold text-amber-900">
-                {tr('4. Pièce justificative comptable (Obligation Art. 26 Loi 18-00)', '4. الوثيقة المحاسبية المثبتة (إلزام المادة 26 من القانون 18-00)')}
-              </label>
-              <span className="text-[10px] text-amber-700 bg-amber-100 px-2 py-0.5 rounded font-medium">
-                {tr('Traçabilité audit', 'تتبع التدقيق')}
-              </span>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
                 <label className="block text-[11px] font-medium text-slate-700 mb-1">
-                  {tr('Type de pièce justificative *', 'نوع الوثيقة المثبتة *')}
+                  {tr('Type de justificatif *', 'نوع الوثيقة *')}
                 </label>
                 <select
                   value={trxDocumentType}
                   onChange={(e) => setTrxDocumentType(e.target.value as any)}
                   className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs bg-white"
                 >
-                  <option value="facture">{tr('Facture Fournisseur / Prestataire', 'فاتورة المورد / المهني')}</option>
-                  <option value="quittance">{tr('Quittance officielle', 'وصل أداء رسمي')}</option>
-                  <option value="recu">{tr('Reçu / Décharge signée', 'إيصال / إبراء موقع')}</option>
-                  <option value="releve">{tr("Avis d'opéré / Relevé bancaire", 'إشعار بالعملية / كشف بنكي')}</option>
-                  <option value="devis">{tr('Devis approuvé en AG', 'عرض سعر مصادق عليه في الجمع العام')}</option>
-                  <option value="autre">{tr('Autre document comptable', 'وثيقة محاسبية أخرى')}</option>
+                  <option value="facture">{tr('Facture', 'فاتورة')}</option>
+                  <option value="recu">{tr('Reçu / Décharge', 'إيصال / إبراء')}</option>
+                  <option value="releve">{tr('Relevé bancaire', 'كشف بنكي')}</option>
+                  <option value="devis">{tr('Devis validé en AG', 'عرض سعر مصادق عليه')}</option>
+                  <option value="quittance">{tr('Quittance', 'وصل أداء')}</option>
+                  <option value="autre">{tr('Autre document', 'وثيقة أخرى')}</option>
                 </select>
               </div>
 
               <div>
                 <label className="block text-[11px] font-medium text-slate-700 mb-1">
-                  {tr('N° de Pièce / Facture *', 'رقم الوثيقة / الفاتورة *')}
+                  {tr(
+                    trxType === 'expense' ? 'N° de Facture ou reçu *' : 'N° de Facture ou reçu',
+                    trxType === 'expense' ? 'رقم الفاتورة أو الإيصال *' : 'رقم الوثيقة أو الإيصال'
+                  )}
                 </label>
                 <input
                   type="text"
@@ -3430,12 +3592,10 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                   <p className="text-[10px] text-rose-600 mt-0.5">{formErrors.invoiceNumber}</p>
                 )}
               </div>
-            </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
               <div>
                 <label className="block text-[11px] font-medium text-slate-700 mb-1">
-                  {tr('Mode de règlement *', 'طريقة الأداء *')}
+                  {tr('Mode de paiement *', 'طريقة الأداء *')}
                 </label>
                 <select
                   value={trxPaymentMethod}
@@ -3443,77 +3603,86 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                   className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs bg-white"
                 >
                   <option value="virement">{tr('Virement bancaire', 'تحويل بنكي')}</option>
-                  <option value="cheque">{tr('Chèque bancaire', 'شيك بنكي')}</option>
-                  <option value="versement">{tr('Versement espèces à la banque', 'إيداع نقدي بالبنك')}</option>
-                  <option value="especes">{tr('Espèces (Menues dépenses)', 'نقداً (مصاريف بسيطة)')}</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-medium text-slate-700 mb-1">
-                  {tr('N° Chèque / Réf Virement', 'رقم الشيك / مرجع التحويل')}
-                </label>
-                <input
-                  type="text"
-                  value={trxReference}
-                  onChange={(e) => setTrxReference(e.target.value)}
-                  placeholder="Ex: CHQ 894120"
-                  className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-mono"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-medium text-slate-700 mb-1">
-                  {tr("Banque de l'opération", 'بنك العملية')}
-                </label>
-                <select
-                  value={trxBankName}
-                  onChange={(e) => setTrxBankName(e.target.value)}
-                  className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs bg-white"
-                >
-                  {MOROCCAN_BANKS.map((b) => (
-                    <option key={b} value={b}>
-                      {b}
-                    </option>
-                  ))}
+                  <option value="cheque">{tr('Chèque', 'شيك')}</option>
+                  <option value="versement">{tr('Versement agence', 'إيداع بنكي')}</option>
+                  <option value="especes">{tr('Espèces', 'نقداً')}</option>
                 </select>
               </div>
             </div>
           </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">
-              {tr("5. Libellé de l'écriture comptable *", '5. بيان القيد المحاسبي *')}
-            </label>
-            <input
-              type="text"
-              value={trxDesc}
-              onChange={(e) => {
-                setTrxDesc(e.target.value);
-                if (formErrors.description) setFormErrors({ ...formErrors, description: '' });
-              }}
-              placeholder={tr("Ex: Réparation pompe surpresseur d'eau selon devis voté en AG", 'مثال: إصلاح مضخة المياه حسب عرض السعر المصادق عليه')}
-              className={`w-full px-3 py-2 border rounded-lg text-xs ${
-                formErrors.description ? 'border-rose-400 bg-rose-50' : 'border-slate-300'
-              }`}
-            />
-            {formErrors.description && (
-              <p className="text-[10px] text-rose-600 mt-0.5">{formErrors.description}</p>
-            )}
-          </div>
+          {/* BLOCK 3: PLUS DE DÉTAILS (COLLAPSED BY DEFAULT) */}
+          <details
+            open={trxDetailsOpen}
+            onToggle={(e) => setTrxDetailsOpen((e.currentTarget as HTMLDetailsElement).open)}
+            className="rounded-xl border border-slate-200 bg-slate-50/70"
+          >
+            <summary className="px-3.5 py-2.5 text-xs font-semibold text-slate-700 cursor-pointer select-none">
+              {tr('Plus de détails (optionnel : ICE, chèque, banque, notes)', 'تفاصيل إضافية (اختياري: ICE، شيك، بنك، ملاحظات)')}
+            </summary>
+            <div className="px-3.5 pb-3.5 pt-1 space-y-3 border-t border-slate-200/70">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                {trxType === 'expense' && (
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                      {tr('ICE du prestataire (15 chiffres)', 'رقم ICE للمهني (15 رقماً)')}
+                    </label>
+                    <input
+                      type="text"
+                      maxLength={15}
+                      value={trxThirdPartyIce}
+                      onChange={(e) => setTrxThirdPartyIce(e.target.value)}
+                      placeholder="Ex: 001988223000089"
+                      className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-mono bg-white"
+                    />
+                  </div>
+                )}
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">
-              {tr("6. Notes & Référence de Résolution d'AG (Optionnel)", '6. ملاحظات ومرجع قرار الجمع العام (اختياري)')}
-            </label>
-            <input
-              type="text"
-              value={trxNotes}
-              onChange={(e) => setTrxNotes(e.target.value)}
-              placeholder={tr("Ex: Résolution N° 3 votée lors de l'Assemblée Générale Ordinaire", 'مثال: القرار رقم 3 المصوت عليه في الجمع العام العادي')}
-              className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs"
-            />
-          </div>
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                    {tr('N° Chèque / Réf. virement', 'رقم الشيك / مرجع التحويل')}
+                  </label>
+                  <input
+                    type="text"
+                    value={trxReference}
+                    onChange={(e) => setTrxReference(e.target.value)}
+                    placeholder="Ex: CHQ 894120"
+                    className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-mono bg-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                    {tr('Banque', 'البنك')}
+                  </label>
+                  <select
+                    value={trxBankName}
+                    onChange={(e) => setTrxBankName(e.target.value)}
+                    className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs bg-white"
+                  >
+                    {MOROCCAN_BANKS.map((b) => (
+                      <option key={b} value={b}>
+                        {b}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                  {tr("Notes / décision d'AG", 'ملاحظات / قرار الجمع العام')}
+                </label>
+                <input
+                  type="text"
+                  value={trxNotes}
+                  onChange={(e) => setTrxNotes(e.target.value)}
+                  placeholder={tr("Ex: Résolution N° 3 votée en AG", 'مثال: القرار رقم 3 المصوت عليه في الجمع العام')}
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs bg-white"
+                />
+              </div>
+            </div>
+          </details>
 
           {(() => {
             const currentBal = fundType === 'reserve' ? stats.reserveFund : stats.balance;
@@ -3522,35 +3691,30 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
             const isOverdraft = trxType === 'expense' && numericAmt > 0 && Math.round(projBal * 100) < 0;
             return (
               <div className="space-y-3">
-                <div className={`p-3 border rounded-xl space-y-1.5 text-xs ${isOverdraft ? 'bg-rose-50/80 border-rose-300' : 'bg-teal-50/70 border-teal-200'}`}>
-                  <div className="flex items-center justify-between">
-                    <span className={`font-semibold ${isOverdraft ? 'text-rose-900' : 'text-teal-900'}`}>
-                      {tr(
-                        `Impact prévisionnel sur le ${fundType === 'reserve' ? 'Fonds de Réserve' : 'Compte Courant'} :`,
-                        `الأثر المتوقع على ${fundType === 'reserve' ? 'صندوق الاحتياط' : 'الحساب الجاري'}:`
-                      )}
+                <div
+                  className={`p-3 border rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs ${
+                    isOverdraft ? 'bg-rose-50/80 border-rose-300' : 'bg-teal-50/70 border-teal-200'
+                  }`}
+                >
+                  <span className={`font-semibold ${isOverdraft ? 'text-rose-900' : 'text-teal-900'}`}>
+                    {fundType === 'reserve'
+                      ? tr('Solde fonds de réserve après opération :', 'رصيد صندوق الاحتياط بعد العملية:')
+                      : tr('Argent disponible après opération :', 'الرصيد المتاح بعد العملية:')}
+                  </span>
+                  <span className={`font-mono font-bold text-sm ${isOverdraft ? 'text-rose-800' : 'text-teal-900'}`}>
+                    {currencyFormatter.format(projBal)}{' '}
+                    <span className="text-[11px] font-normal text-slate-600">
+                      ({tr('actuel :', 'الحالي:')} {currencyFormatter.format(currentBal)})
                     </span>
-                    <span className="font-mono font-bold text-slate-800">
-                      {tr('Solde actuel :', 'الرصيد الحالي:')} {currencyFormatter.format(currentBal)}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between pt-1 border-t border-teal-200/60 font-mono">
-                    <span className={trxType === 'income' ? 'text-emerald-700 font-bold' : 'text-rose-700 font-bold'}>
-                      {tr('Opération :', 'العملية:')} {trxType === 'income' ? '+' : '-'}
-                      {currencyFormatter.format(numericAmt)}
-                    </span>
-                    <span className={`font-bold text-sm ${isOverdraft ? 'text-rose-800' : 'text-teal-900'}`}>
-                      {tr('Nouveau solde prévu :', 'الرصيد الجديد المتوقع:')} {currencyFormatter.format(projBal)}
-                    </span>
-                  </div>
+                  </span>
                 </div>
 
                 {isOverdraft && (
                   <div className="p-3 bg-amber-50 border border-amber-300 rounded-xl space-y-1.5">
                     <label className="block text-xs font-bold text-amber-950">
                       {tr(
-                        'Dérogation requise : le montant dépasse le solde du fonds sélectionné *',
-                        'ترخيص استثنائي مطلوب: المبلغ يتجاوز رصيد الصندوق المحدد *'
+                        "Le fonds n'a pas assez d'argent. Expliquez pourquoi vous enregistrez quand même *",
+                        'رصيد الصندوق غير كافٍ. وضح سبب تسجيل العملية رغم ذلك *'
                       )}
                     </label>
                     <input
@@ -3563,8 +3727,8 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                         }
                       }}
                       placeholder={tr(
-                        'Ex: Avance urgente syndic validée par le conseil syndical',
-                        'مثال: تسبيق استعجالي للسنديك مصادق عليه'
+                        'Ex: Avance urgente validée par le conseil syndical',
+                        'مثال: تسبيق استعجالي مصادق عليه'
                       )}
                       className={`w-full px-3 py-1.5 border rounded-lg text-xs bg-white ${
                         formErrors.overdraftOverrideReason ? 'border-rose-400 bg-rose-50' : 'border-amber-300'
@@ -3586,7 +3750,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
         <Modal
           isOpen={!!selectedTrxForView}
           onClose={() => setSelectedTrxForView(null)}
-          title={tr("Fiche d'Écriture Comptable (Loi 18-00)", 'بطاقة القيد المحاسبي (القانون 18-00)')}
+          title={tr("Détail de l'opération", 'تفاصيل العملية')}
           footer={
             <div className="flex justify-between items-center w-full gap-2 flex-wrap">
               <div className="flex items-center gap-2 flex-wrap">
@@ -3595,7 +3759,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                   className="text-xs bg-teal-700 hover:bg-teal-800 text-white flex items-center gap-1.5"
                 >
                   <DocumentsIcon />
-                  <span>{tr('Télécharger Pièce Comptable PDF', 'تحميل الوثيقة المحاسبية PDF')}</span>
+                  <span>{tr('Télécharger le justificatif PDF', 'تحميل الوثيقة PDF')}</span>
                 </Button>
                 {!isIncomeTransaction(selectedTrxForView) &&
                   !selectedTrxForView.reversalOf &&
@@ -3609,7 +3773,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                       }}
                       className="text-xs text-rose-700 border-rose-200 hover:bg-rose-50"
                     >
-                      {tr('Contrepasser dépense', 'عكس المصروف')}
+                      {tr('Annuler cette dépense', 'عكس المصروف')}
                     </Button>
                   )}
               </div>
@@ -3623,7 +3787,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
             <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between">
               <div>
                 <span className="font-mono text-[11px] text-slate-400 block">
-                  {tr('Identifiant écriture :', 'معرف القيد:')} {selectedTrxForView.id}
+                  {tr('Identifiant :', 'المعرف:')} {selectedTrxForView.id}
                 </span>
                 <span className="font-bold text-sm text-slate-900 mt-0.5 block">
                   {selectedTrxForView.description}
@@ -3646,14 +3810,19 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
 
             <div className="grid grid-cols-2 gap-3">
               <div className="p-3 bg-white border border-slate-200 rounded-lg space-y-1.5">
-                <p className="text-[11px] font-semibold text-slate-400 uppercase">{tr('Affectation & Catégorie', 'التخصيص والفئة')}</p>
-                <p className="font-medium text-slate-800">
-                  {tr('Fonds :', 'الصندوق:')}{' '}
+                <p className="text-[11px] font-semibold text-slate-400 uppercase">{tr('Fonds & Catégorie', 'الصندوق والفئة')}</p>
+                <p className="font-medium text-slate-800 flex items-center gap-1 flex-wrap">
+                  <span>{tr('Fonds :', 'الصندوق:')}</span>
                   <strong className="text-slate-900">
                     {selectedTrxForView.fundType === 'reserve'
-                      ? tr('Fonds de Réserve (Loi 106-12)', 'صندوق الاحتياط (106-12)')
-                      : tr('Compte Courant', 'الحساب الجاري')}
+                      ? tr('Fonds de réserve', 'صندوق الاحتياط')
+                      : tr('Compte courant', 'الحساب الجاري')}
                   </strong>
+                  {selectedTrxForView.fundType === 'reserve' && (
+                    <InfoTip label={tr('Fonds de réserve', 'صندوق الاحتياط')}>
+                      {tr('Fonds de réserve travaux prévu par la Loi n° 106-12.', 'صندوق احتياط الأشغال المنصوص عليه في القانون 106-12.')}
+                    </InfoTip>
+                  )}
                 </p>
                 <p className="text-slate-600">
                   {tr('Catégorie :', 'الفئة:')}{' '}
@@ -3667,7 +3836,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
               </div>
 
               <div className="p-3 bg-white border border-slate-200 rounded-lg space-y-1.5">
-                <p className="text-[11px] font-semibold text-slate-400 uppercase">{tr('Justificatif & Règlement', 'الإثبات والأداء')}</p>
+                <p className="text-[11px] font-semibold text-slate-400 uppercase">{tr('Justificatif & Paiement', 'الإثبات والأداء')}</p>
                 <p className="font-medium text-slate-800 font-mono">
                   {selectedTrxForView.documentType
                     ? DOCUMENT_TYPE_LABELS[selectedTrxForView.documentType] || selectedTrxForView.documentType
@@ -3689,7 +3858,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
             {(selectedTrxForView.thirdPartyName || selectedTrxForView.thirdPartyIce || selectedTrxForView.lotNumber) && (
               <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-between">
                 <div>
-                  <span className="text-[11px] text-slate-500 block">{tr('Tiers concerné :', 'الطرف المعني:')}</span>
+                  <span className="text-[11px] text-slate-500 block">{tr('Bénéficiaire / Payeur :', 'المستفيد / الدافع:')}</span>
                   <span className="font-bold text-slate-800 text-sm">
                     {selectedTrxForView.thirdPartyName || tr('Tiers', 'طرف ثالث')}
                   </span>
@@ -3712,7 +3881,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
             {selectedTrxForView.notes && (
               <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-lg">
                 <span className="text-[11px] font-semibold text-amber-900 block">
-                  {tr("Observations & Résolution d'AG :", 'ملاحظات وقرار الجمع العام:')}
+                  {tr("Notes / décision d'AG :", 'ملاحظات وقرار الجمع العام:')}
                 </span>
                 <p className="text-slate-700 mt-0.5 italic">{selectedTrxForView.notes}</p>
               </div>
@@ -3731,7 +3900,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
           await generateChargesMutation.mutateAsync();
         }}
         onClose={() => setIsGenerateModalOpen(false)}
-        title={tr('Lancer un Appel de Fonds Général (Loi 18-00)', 'إصدار طلب مساهمات عام (القانون 18-00)')}
+        title={tr('Appeler les charges du mois', 'إصدار مساهمات الشهر')}
         footer={
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setIsGenerateModalOpen(false)}>
@@ -3746,8 +3915,8 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
         <div className="space-y-4">
           <p className="text-xs text-slate-600">
             {tr(
-              'Les lots liés à un résident sont facturés une seule fois par période. Les avis déjà émis conservent leur montant.',
-              'تصدر المساهمات للشقق المرتبطة بساكن مرة واحدة لكل فترة. لا تتغير مبالغ الإشعارات الصادرة سابقاً.'
+              'Chaque lot occupé est facturé une seule fois pour le mois choisi. Les charges déjà créées ne sont pas modifiées.',
+              'تصدر المساهمات للشقق المرتبطة بساكن مرة واحدة لكل شهر. لا تتغير المساهمات الصادرة سابقاً.'
             )}
           </p>
 
@@ -3777,13 +3946,19 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                 className="mt-0.5 rounded text-teal-600 focus:ring-teal-500"
               />
               <div>
-                <span className="text-xs font-bold text-teal-900 block">
-                  {tr('Répartir un budget global selon les tantièmes', 'توزيع ميزانية إجمالية حسب الحصص الشائعة')}
+                <span className="text-xs font-bold text-teal-900 flex items-center gap-1.5">
+                  <span>{tr('Répartir un budget global selon les tantièmes', 'توزيع ميزانية إجمالية حسب الحصص الشائعة')}</span>
+                  <InfoTip label={tr('Répartition aux tantièmes', 'التوزيع حسب الحصص الشائعة')}>
+                    {tr(
+                      'Calcule la part de chaque lot proportionnellement à ses tantièmes de copropriété (Loi n° 18-00).',
+                      'يحسب حصة كل شقة بالتناسب مع حصتها الشائعة في الملكية المشتركة (القانون 18-00).'
+                    )}
+                  </InfoTip>
                 </span>
                 <span className="text-[11px] text-teal-700 block">
                   {tr(
-                    'Optionnel : remplace les cotisations configurées par une répartition du budget. Les montants peuvent différer entre lots.',
-                    'اختياري: يستبدل المساهمات المحددة بتوزيع الميزانية وقد تختلف المبالغ بين الشقق.'
+                    'Optionnel : remplace les montants habituels par une répartition du budget ci-dessous.',
+                    'اختياري: يستبدل المساهمات المعتادة بتوزيع الميزانية الإجمالية أدناه.'
                   )}
                 </span>
               </div>
@@ -3828,72 +4003,89 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
         </div>
       </Modal>
 
-      {/* MODAL 3: MOROCCAN QUITTANCE GENERATOR */}
+      {/* MODAL 3: RECORD RESIDENT PAYMENT & RECEIPT */}
       <Modal
         isOpen={isQuittanceModalOpen}
         busy={createQuittanceMutation.isPending}
         onSubmit={async () => {
-                  const numAmt = parseFloat(quittanceAmount);
-                  if (!Number.isFinite(numAmt) || numAmt <= 0) {
-                    throw new Error(tr('Veuillez saisir un montant de cotisation valide.', 'يرجى إدخال مبلغ مساهمة صحيح.'));
-                  }
-                  if (!receiptCharge || Math.round(numAmt * 100) > Math.round(receiptRemaining * 100)) {
-                    throw new Error(tr('Sélectionnez une charge et respectez son solde restant.', 'اختر مساهمة والتزم برصيدها المتبقي.'));
-                  }
-                  if (!quittanceApartmentId) {
-                    throw new Error(tr('Veuillez sélectionner un lot.', 'يرجى اختيار الشقة.'));
-                  }
+          const numAmt = parseFloat(quittanceAmount);
+          if (!Number.isFinite(numAmt) || numAmt <= 0) {
+            throw new Error(tr('Veuillez saisir un montant de cotisation valide.', 'يرجى إدخال مبلغ مساهمة صحيح.'));
+          }
+          if (!receiptCharge || Math.round(numAmt * 100) > Math.round(receiptRemaining * 100)) {
+            throw new Error(tr('Sélectionnez une charge et respectez son solde restant.', 'اختر مساهمة والتزم برصيدها المتبقي.'));
+          }
+          if (!quittanceApartmentId) {
+            throw new Error(tr('Veuillez sélectionner un lot.', 'يرجى اختيار الشقة.'));
+          }
 
-                  const apt = building.apartments.find((a) => a.id === quittanceApartmentId);
-                  const res = building.residents.find((r) => r.id === quittanceResidentId);
+          const apt = building.apartments.find((a) => a.id === quittanceApartmentId);
+          const res = building.residents.find((r) => r.id === quittanceResidentId);
 
-                  if (!apt || !res) throw new Error(tr('Sélectionnez un lot et son résident.', 'حدد الوحدة وساكنها.'));
-                  if (!quittancePaymentDate || Number.isNaN(Date.parse(quittancePaymentDate))) throw new Error(tr('Indiquez une date de paiement valide.', 'أدخل تاريخ أداء صالحاً.'));
-                  if (quittanceBankTransactionDate && Number.isNaN(Date.parse(quittanceBankTransactionDate))) {
-                    throw new Error(tr('Indiquez une date bancaire valide.', 'أدخل تاريخاً بنكياً صالحاً.'));
-                  }
-                  if (quittancePostingDate && Number.isNaN(Date.parse(quittancePostingDate))) {
-                    throw new Error(tr('Indiquez une date de comptabilisation valide.', 'أدخل تاريخ قيد صالحاً.'));
-                  }
-                  const { reserveFundAmount: reserveAmt, chargesCourantesAmount: courantesAmt } =
-                    splitChargeReserveAndOperating(numAmt, quittanceReserveRatio);
+          if (!apt || !res) throw new Error(tr('Sélectionnez un lot et son résident.', 'حدد الوحدة وساكنها.'));
+          if (!quittancePaymentDate || Number.isNaN(Date.parse(quittancePaymentDate))) {
+            throw new Error(tr('Indiquez une date de paiement valide.', 'أدخل تاريخ أداء صالحاً.'));
+          }
+          if (quittanceBankTransactionDate && Number.isNaN(Date.parse(quittanceBankTransactionDate))) {
+            setQuittanceAccountingOpen(true);
+            throw new Error(tr('Indiquez une date bancaire valide.', 'أدخل تاريخاً بنكياً صالحاً.'));
+          }
+          if (quittancePostingDate && Number.isNaN(Date.parse(quittancePostingDate))) {
+            setQuittanceAccountingOpen(true);
+            throw new Error(tr('Indiquez une date de comptabilisation valide.', 'أدخل تاريخ قيد صالحاً.'));
+          }
+          const { reserveFundAmount: reserveAmt, chargesCourantesAmount: courantesAmt } =
+            splitChargeReserveAndOperating(numAmt, quittanceReserveRatio);
 
-                  await createQuittanceMutation.mutateAsync({
-                    chargeId: quittanceChargeId,
-                    ...(quittanceReference.trim() ? {} : { paymentId: quittancePaymentId }),
-                    residentId: quittanceResidentId,
-                    residentName: res?.name || tr('Copropriétaire', 'مالك مشترك'),
-                    residentCin: quittanceResidentCin || res?.cin,
-                    apartmentId: quittanceApartmentId,
-                    apartmentNumber: apt?.number || 'Lot',
-                    tantiemes: apt?.tantiemes || 100,
-                    buildingId: building.id,
-                    buildingName: building.name,
-                    syndicId: building.syndicId,
-                    syndicName: syndic?.name || 'Syndic Mandataire',
-                    amount: numAmt,
-                    chargesCourantesAmount: courantesAmt,
-                    reserveFundAmount: reserveAmt,
-                    paymentMethod: quittancePaymentMethod,
-                    paymentDate: quittancePaymentDate,
-                    bankTransactionDate: quittanceBankTransactionDate || undefined,
-                    postingDate: quittancePostingDate || undefined,
-                    priorPeriodAdjustmentReason: quittanceAdjustmentReason.trim() || undefined,
-                    periodCovered: quittancePeriod,
-                    bankName: quittanceBankName,
-                    referenceNumber: quittanceReference || undefined,
-                    remarks: quittanceRemarks || undefined,
-                    addTransactionToLedger: true,
-                  });
-                }}
+          try {
+            await createQuittanceMutation.mutateAsync({
+              chargeId: quittanceChargeId,
+              ...(quittanceReference.trim() ? {} : { paymentId: quittancePaymentId }),
+              residentId: quittanceResidentId,
+              residentName: res?.name || tr('Copropriétaire', 'مالك مشترك'),
+              residentCin: quittanceResidentCin || res?.cin,
+              apartmentId: quittanceApartmentId,
+              apartmentNumber: apt?.number || 'Lot',
+              tantiemes: apt?.tantiemes || 100,
+              buildingId: building.id,
+              buildingName: building.name,
+              syndicId: building.syndicId,
+              syndicName: syndic?.name || 'Syndic Mandataire',
+              amount: numAmt,
+              chargesCourantesAmount: courantesAmt,
+              reserveFundAmount: reserveAmt,
+              paymentMethod: quittancePaymentMethod,
+              paymentDate: quittancePaymentDate,
+              bankTransactionDate: quittanceBankTransactionDate || undefined,
+              postingDate: quittancePostingDate || undefined,
+              priorPeriodAdjustmentReason: quittanceAdjustmentReason.trim() || undefined,
+              periodCovered: quittancePeriod,
+              bankName: quittanceBankName,
+              referenceNumber: quittanceReference || undefined,
+              remarks: quittanceRemarks || undefined,
+              addTransactionToLedger: true,
+            });
+          } catch (err: any) {
+            if (/période|clôtur|comptabilis|ajustement/i.test(String(err?.message || ''))) {
+              setQuittanceAccountingOpen(true);
+            }
+            throw err;
+          }
+        }}
         onClose={() => setIsQuittanceModalOpen(false)}
-        title={tr('Générateur de Quittance Libératoire (Loi n° 18-00 & 106-12)', 'مُصدر وصل الأداء المبرئ للذمة (القانون 18-00 و 106-12)')}
+        title={tr('Encaisser un paiement', 'تحصيل دفعة')}
         footer={
-          <div className="flex justify-between items-center w-full">
-            <span className="text-[11px] text-slate-500 font-mono hidden sm:inline">
-              {tr("Reçu traçable à partir du règlement enregistré", 'وصل مرتبط بالدفعة المسجلة')}
+          <div className="flex justify-between items-center w-full gap-2">
+            <span className="text-[11px] text-slate-500 hidden sm:inline-flex items-center gap-1">
+              <span>{tr('Le reçu PDF officiel est téléchargé dès validation', 'يتم تحميل الوصل الرسمي PDF فور التأكيد')}</span>
+              <InfoTip label={tr('Quittance officielle', 'وصل أداء رسمي')}>
+                {tr(
+                  'Quittance libératoire conforme aux lois n° 18-00 et 106-12 (Art. 18 bis), incluant la part du fonds de réserve.',
+                  'وصل إبراء رسمي مطابق للقانونين 18-00 و106-12 (المادة 18 مكرر) يتضمن حصة صندوق الاحتياط.'
+                )}
+              </InfoTip>
             </span>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 ms-auto">
               <Button variant="secondary" onClick={() => setIsQuittanceModalOpen(false)}>
                 {tr('Annuler', 'إلغاء')}
               </Button>
@@ -3905,8 +4097,8 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                 <QuittanceIcon />
                 <span>
                   {createQuittanceMutation.isPending
-                    ? tr('Émission en cours...', 'جاري الإصدار...')
-                    : tr('Délivrer & Télécharger PDF', 'إصدار وتحميل PDF')}
+                    ? tr('Enregistrement...', 'جاري التسجيل...')
+                    : tr('Encaisser et générer le reçu', 'تحصيل وإصدار الوصل')}
                 </span>
               </Button>
             </div>
@@ -3914,24 +4106,10 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
         }
       >
         <div className="space-y-4 max-h-[75vh] overflow-y-auto pe-1">
-          <div className="p-3 bg-teal-50 border border-teal-200 rounded-lg flex items-start gap-2.5">
-            <div className="p-1.5 bg-teal-600 text-white rounded shrink-0 mt-0.5">
-              <QuittanceIcon />
-            </div>
-            <div className="text-xs text-teal-900 leading-relaxed">
-              <span className="font-bold block">
-                {tr('Conformité Loi 18-00 & 106-12 (Article 18 bis) :', 'المطابقة للقانون 18-00 و 106-12 (المادة 18 مكرر):')}
-              </span>
-              {tr(
-                'Cette quittance officielle libère définitivement le copropriétaire pour la période indiquée. Le calcul intègre automatiquement la répartition obligatoire entre les charges courantes et le Fonds de Réserve pour travaux.',
-                'يُبرئ هذا الوصل الرسمي ذمة المالك المشترك بصفة نهائية عن الفترة المحددة، ويدمج تلقائياً التوزيع الإلزامي بين التكاليف الجارية وصندوق الاحتياط للأشغال.'
-              )}
-            </div>
-          </div>
-
-          <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg space-y-3">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
-              <span>{tr('1. Lot & Copropriétaire Redevable', '1. الوحدة والمالك المشترك')}</span>
+          {/* STEP 1: QUI A PAYÉ ? */}
+          <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+              {tr('1. Qui a payé ?', '1. من أدى؟')}
             </h4>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -3966,7 +4144,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                       );
                     }
                   }}
-                  className="w-full px-3 py-1.5 border border-slate-300 rounded text-xs bg-white text-slate-900"
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs bg-white text-slate-900"
                 >
                   <option value="">{tr('Sélectionnez un lot...', 'اختر شقة...')}</option>
                   {building.apartments.map((a) => {
@@ -3975,7 +4153,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                     );
                     return (
                       <option key={a.id} value={a.id}>
-                        {tr('Lot', 'شقة')} {a.number} — {res?.name || tr('Copropriétaire', 'مالك مشترك')} ({a.tantiemes || 0}/{buildingTantiemesBase})
+                        {tr('Lot', 'شقة')} {a.number} — {res?.name || tr('Copropriétaire', 'مالك مشترك')}
                       </option>
                     );
                   })}
@@ -3984,7 +4162,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  {tr('Nom du Copropriétaire', 'اسم المالك المشترك')}
+                  {tr('Copropriétaire', 'المالك المشترك')}
                 </label>
                 <select
                   value={quittanceResidentId}
@@ -3997,80 +4175,58 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                       if (r.apartmentId) setQuittanceApartmentId(r.apartmentId);
                     }
                   }}
-                  className="w-full px-3 py-1.5 border border-slate-300 rounded text-xs bg-white text-slate-900"
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs bg-white text-slate-900"
                 >
                   {building.residents.map((r) => (
                     <option key={r.id} value={r.id}>
-                      {r.name} {r.cin ? `(CIN: ${r.cin})` : ''} {r.isOwner ? `— ${tr('Copropriétaire', 'مالك')}` : `— ${tr('Locataire', 'مكتري')}`}
+                      {r.name} {r.isOwner ? `— ${tr('Copropriétaire', 'مالك')}` : `— ${tr('Locataire', 'مكتري')}`}
                     </option>
                   ))}
                 </select>
               </div>
             </div>
-
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-2 border-t border-slate-200/80 text-[11px] font-mono">
-              <div className="text-slate-600">
-                <span>CIN / ID : </span>
-                <input
-                  type="text"
-                  value={quittanceResidentCin}
-                  onChange={(e) => setQuittanceResidentCin(e.target.value)}
-                  placeholder="CIN"
-                  className="px-1.5 py-0.5 border border-slate-300 rounded w-24 text-xs font-bold text-slate-800"
-                />
-              </div>
-              <div className="text-slate-600">
-                <span>{tr('Tantièmes :', 'الأجزاء:')} </span>
-                <strong className="text-teal-800">
-                  {building.apartments.find((a) => a.id === quittanceApartmentId)?.tantiemes || 0} / {buildingTantiemesBase}
-                </strong>
-              </div>
-              <div className="text-slate-600">
-                <span>{tr('Résidence :', 'الإقامة:')} </span>
-                <strong className="text-slate-800">{building.name}</strong>
-              </div>
-            </div>
           </div>
 
-          <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg space-y-3">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center justify-between">
-              <span>{tr('2. Période & Ventilation Financière', '2. الفترة والتوزيع المالي')}</span>
-              <span className="text-[10px] text-teal-700 font-semibold bg-teal-100/60 px-2 py-0.5 rounded">
-                {tr('Loi 106-12 Art. 18 bis', 'القانون 106-12 المادة 18 مكرر')}
-              </span>
+          {/* STEP 2: POUR QUOI ? */}
+          <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+              {tr('2. Pour quoi ?', '2. مقابل ماذا؟')}
             </h4>
 
             <div>
               <label htmlFor="quittance-charge" className="block text-xs font-semibold text-slate-700 mb-1">
-                {tr('Charge à régler', 'المساهمة المستحقة')}
+                {tr('Charge à régler', 'المساهمة المستحقة')} <span className="text-rose-500">*</span>
               </label>
-              <select id="quittance-charge" value={quittanceChargeId} onChange={event => setQuittanceChargeId(event.target.value)}
-                className="w-full px-3 py-1.5 border border-slate-300 rounded text-xs bg-white">
+              <select
+                id="quittance-charge"
+                value={quittanceChargeId}
+                onChange={(event) => setQuittanceChargeId(event.target.value)}
+                className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs bg-white"
+              >
                 <option value="">{tr('Sélectionnez une charge...', 'اختر مساهمة...')}</option>
-                {receiptCharges.map(charge => <option key={charge.id} value={charge.id}>
-                  {charge.period} — {currencyFormatter.format(Math.max(0, charge.amount - (charge.paidAmount ?? 0)))}
-                </option>)}
+                {receiptCharges.map((charge) => (
+                  <option key={charge.id} value={charge.id}>
+                    {charge.period} — {tr('Reste à payer :', 'الباقي للأداء:')}{' '}
+                    {currencyFormatter.format(Math.max(0, charge.amount - (charge.paidAmount ?? 0)))}
+                  </option>
+                ))}
               </select>
-              <p className="text-xs text-slate-600 mt-1">{tr('Tout nouveau reçu confirme un paiement enregistré.', 'كل وصل جديد يؤكد دفعة مسجلة.')}</p>
+              <p className="text-xs text-slate-600 mt-1">
+                {tr('Tout nouveau reçu confirme un paiement enregistré.', 'كل وصل جديد يؤكد دفعة مسجلة.')}
+              </p>
             </div>
+          </div>
+
+          {/* STEP 3: COMBIEN ET COMMENT ? */}
+          <div className="p-3.5 bg-white border border-slate-200 rounded-xl space-y-3">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+              {tr('3. Combien et comment ?', '3. كم وكيف؟')}
+            </h4>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  {tr('Période Couverte', 'الفترة المشمولة')} <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={quittancePeriod}
-                  readOnly
-                  placeholder={tr('Ex: Octobre 2026', 'مثال: أكتوبر 2026')}
-                  className="w-full px-3 py-1.5 border border-slate-300 rounded text-xs bg-white"
-                />
-              </div>
-
-              <div>
                 <label htmlFor="quittance-amount" className="block text-xs font-semibold text-slate-700 mb-1">
-                  {tr('Montant Total Encaissé (MAD)', 'المبلغ الإجمالي المحصل (درهم)')} <span className="text-rose-500">*</span>
+                  {tr('Montant encaissé (MAD)', 'المبلغ المحصل (درهم)')} <span className="text-rose-500">*</span>
                 </label>
                 <input
                   type="number"
@@ -4081,175 +4237,198 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                   value={quittanceAmount}
                   onChange={(e) => setQuittanceAmount(e.target.value)}
                   placeholder="0.00"
-                  className="w-full px-3 py-1.5 border border-slate-300 rounded text-xs font-mono font-bold text-teal-900 bg-white"
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs font-mono font-bold text-teal-900 bg-white"
                 />
               </div>
-            </div>
 
-            {parseFloat(quittanceAmount) > 0 && (
-              <div className="p-3 bg-white border border-teal-200 rounded-lg space-y-2">
-                <div className="flex justify-between items-center text-xs">
-                  <span className="font-semibold text-slate-700">{tr('Ventilation des Charges :', 'توزيع المساهمة:')}</span>
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-[11px] text-slate-500">{tr('Quote-part Fonds Réserve :', 'حصة صندوق الاحتياط:')}</span>
-                    <span className="px-2 py-0.5 text-[10px] rounded font-bold bg-teal-700 text-white">
-                      {quittanceReserveRatio}% {tr('(Configuré)', '(معتمد)')}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-100 text-xs font-mono">
-                  <div className="bg-slate-50 p-2 rounded">
-                    <span className="text-[11px] text-slate-500 block">
-                      {tr(`Charges courantes (${100 - quittanceReserveRatio}%) :`, `التكاليف الجارية (${100 - quittanceReserveRatio}%):`)}
-                    </span>
-                    <span className="font-bold text-slate-800">
-                      {currencyFormatter.format(
-                        splitChargeReserveAndOperating(
-                          parseFloat(quittanceAmount),
-                          quittanceReserveRatio
-                        ).chargesCourantesAmount
-                      )}
-                    </span>
-                  </div>
-                  <div className="bg-emerald-50 p-2 rounded border border-emerald-100">
-                    <span className="text-[11px] text-emerald-800 block">
-                      {tr(`Fonds de Réserve Travaux (${quittanceReserveRatio}%) :`, `صندوق احتياط الأشغال (${quittanceReserveRatio}%):`)}
-                    </span>
-                    <span className="font-bold text-emerald-900">
-                      {currencyFormatter.format(
-                        splitChargeReserveAndOperating(
-                          parseFloat(quittanceAmount),
-                          quittanceReserveRatio
-                        ).reserveFundAmount
-                      )}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg space-y-3">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
-              {tr('3. Modalités & Traçabilité du Règlement', '3. طرق وتتبع الأداء')}
-            </h4>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  {tr('Mode de Paiement', 'طريقة الدفع')}
+                  {tr('Mode de paiement', 'طريقة الدفع')}
                 </label>
                 <select
                   value={quittancePaymentMethod}
                   onChange={(e) => setQuittancePaymentMethod(e.target.value as PaymentMethod)}
-                  className="w-full px-3 py-1.5 border border-slate-300 rounded text-xs bg-white text-slate-900"
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs bg-white text-slate-900"
                 >
                   <option value="virement">{tr('Virement bancaire', 'تحويل بنكي')}</option>
-                  <option value="cheque">{tr('Chèque bancaire', 'شيك بنكي')}</option>
+                  <option value="cheque">{tr('Chèque', 'شيك')}</option>
                   <option value="versement">{tr('Versement agence / GAB', 'إيداع بنكي')}</option>
-                  <option value="especes">{tr('Espèces (Reçu caisse)', 'نقداً (وصل صندوق)')}</option>
+                  <option value="especes">{tr('Espèces', 'نقداً')}</option>
                 </select>
               </div>
+            </div>
 
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  {tr('Établissement Bancaire', 'المؤسسة البنكية')}
-                </label>
-                <select
-                  value={quittanceBankName}
-                  onChange={(e) => setQuittanceBankName(e.target.value)}
-                  className="w-full px-3 py-1.5 border border-slate-300 rounded text-xs bg-white text-slate-900"
-                >
-                  {MOROCCAN_BANKS.map((b) => (
-                    <option key={b} value={b}>
-                      {b}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  {tr('Réf. Virement / N° Chèque', 'مرجع التحويل / رقم الشيك')}
+                  {tr('Réf. virement / N° chèque', 'مرجع التحويل / رقم الشيك')}
                 </label>
                 <input
                   type="text"
                   value={quittanceReference}
                   onChange={(e) => setQuittanceReference(e.target.value)}
                   placeholder="Ex: VIR-84920"
-                  className="w-full px-3 py-1.5 border border-slate-300 rounded text-xs font-mono bg-white"
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs font-mono bg-white"
                 />
               </div>
-            </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  {tr("Date Effective d'Encaissement", 'التاريخ الفعلي للتحصيل')}
+                  {tr('Date du paiement', 'تاريخ الأداء')}
                 </label>
                 <input
                   type="date"
                   value={quittancePaymentDate}
                   onChange={(e) => setQuittancePaymentDate(e.target.value)}
-                  className="w-full px-3 py-1.5 border border-slate-300 rounded text-xs bg-white font-mono"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  {tr('Observations & Mentions', 'ملاحظات وبيانات')}
-                </label>
-                <input
-                  type="text"
-                  value={quittanceRemarks}
-                  onChange={(e) => setQuittanceRemarks(e.target.value)}
-                  placeholder={tr("Mention particulière ou accord d'AG", 'ملاحظة خاصة أو قرار جمع عام')}
-                  className="w-full px-3 py-1.5 border border-slate-300 rounded text-xs bg-white"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-slate-100">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  {tr('Date opération bancaire', 'تاريخ العملية البنكية')}
-                </label>
-                <input
-                  type="date"
-                  value={quittanceBankTransactionDate}
-                  onChange={(e) => setQuittanceBankTransactionDate(e.target.value)}
-                  className="w-full px-3 py-1.5 border border-slate-300 rounded text-xs bg-white font-mono"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  {tr('Date de comptabilisation (optionnel)', 'تاريخ القيد المحاسبي (اختياري)')}
-                </label>
-                <input
-                  type="date"
-                  value={quittancePostingDate}
-                  onChange={(e) => setQuittancePostingDate(e.target.value)}
-                  className="w-full px-3 py-1.5 border border-slate-300 rounded text-xs bg-white font-mono"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  {tr('Motif ajustement période', 'سبب تعديل الفترة')}
-                </label>
-                <input
-                  type="text"
-                  maxLength={1000}
-                  value={quittanceAdjustmentReason}
-                  onChange={(e) => setQuittanceAdjustmentReason(e.target.value)}
-                  placeholder={tr('Si période antérieure / clôturée', 'إذا كانت فترة سابقة أو مغلقة')}
-                  className="w-full px-3 py-1.5 border border-slate-300 rounded text-xs bg-white"
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs bg-white font-mono"
                 />
               </div>
             </div>
           </div>
+
+          {/* LIVE SUMMARY SENTENCE */}
+          {(() => {
+            const selectedApt = building.apartments.find((a) => a.id === quittanceApartmentId);
+            const selectedRes = building.residents.find((r) => r.id === quittanceResidentId);
+            const paidNum = parseFloat(quittanceAmount);
+            if (!selectedApt || !selectedRes || !receiptCharge || !(paidNum > 0)) return null;
+            const remainingAfter = Math.max(
+              0,
+              Math.round((receiptRemaining - paidNum) * 100) / 100,
+            );
+            const split = splitChargeReserveAndOperating(paidNum, quittanceReserveRatio);
+            const periodLabel = quittancePeriod || receiptCharge.period || '—';
+            return (
+              <div
+                data-testid="quittance-live-summary"
+                className="p-3 bg-teal-50 border border-teal-200 rounded-xl space-y-1.5 text-xs text-teal-950"
+              >
+                <p className="font-medium leading-relaxed">
+                  {tr(
+                    `Lot ${selectedApt.number} — ${selectedRes.name} paie ${currencyFormatter.format(paidNum)} pour ${periodLabel}. Il restera ${currencyFormatter.format(remainingAfter)}. Un reçu PDF sera généré.`,
+                    `الشقة ${selectedApt.number} — ${selectedRes.name} يؤدي ${currencyFormatter.format(paidNum)} عن فترة ${periodLabel}. سيتبقى ${currencyFormatter.format(remainingAfter)}. سيتم إصدار وصل PDF.`
+                  )}
+                </p>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-teal-800 font-mono">
+                  <span>
+                    {tr('Compte courant :', 'الحساب الجاري:')}{' '}
+                    {currencyFormatter.format(split.chargesCourantesAmount)}
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <span>
+                      {tr(`Fonds de réserve (${quittanceReserveRatio}%) :`, `صندوق الاحتياط (${quittanceReserveRatio}%):`)}{' '}
+                      {currencyFormatter.format(split.reserveFundAmount)}
+                    </span>
+                    <InfoTip label={tr('Ventilation fonds de réserve', 'توزيع صندوق الاحتياط')}>
+                      {tr(
+                        'Répartition automatique prévue par la Loi n° 106-12 (Art. 18 bis).',
+                        'توزيع تلقائي منصوص عليه في القانون 106-12 (المادة 18 مكرر).'
+                      )}
+                    </InfoTip>
+                  </span>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* COLLAPSIBLE ACCOUNTING OPTIONS */}
+          <details
+            open={quittanceAccountingOpen}
+            onToggle={(e) =>
+              setQuittanceAccountingOpen((e.currentTarget as HTMLDetailsElement).open)
+            }
+            className="rounded-xl border border-slate-200 bg-slate-50/70"
+          >
+            <summary className="px-3.5 py-2.5 text-xs font-semibold text-slate-700 cursor-pointer select-none">
+              {tr('Options comptables (optionnel : banque, CIN, date de comptabilisation)', 'خيارات محاسبية (اختياري: البنك، رقم البطاقة، تاريخ القيد)')}
+            </summary>
+            <div className="px-3.5 pb-3.5 pt-2 space-y-3 border-t border-slate-200/70">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    {tr('Banque', 'البنك')}
+                  </label>
+                  <select
+                    value={quittanceBankName}
+                    onChange={(e) => setQuittanceBankName(e.target.value)}
+                    className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs bg-white text-slate-900"
+                  >
+                    {MOROCCAN_BANKS.map((b) => (
+                      <option key={b} value={b}>
+                        {b}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    {tr('CIN sur le reçu', 'رقم البطاقة الوطنية')}
+                  </label>
+                  <input
+                    type="text"
+                    value={quittanceResidentCin}
+                    onChange={(e) => setQuittanceResidentCin(e.target.value)}
+                    placeholder="CIN"
+                    className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs font-mono bg-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    {tr('Observations sur le reçu', 'ملاحظات على الوصل')}
+                  </label>
+                  <input
+                    type="text"
+                    value={quittanceRemarks}
+                    onChange={(e) => setQuittanceRemarks(e.target.value)}
+                    placeholder={tr('Note facultative', 'ملاحظة اختيارية')}
+                    className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs bg-white"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    {tr('Date opération bancaire', 'تاريخ العملية البنكية')}
+                  </label>
+                  <input
+                    type="date"
+                    value={quittanceBankTransactionDate}
+                    onChange={(e) => setQuittanceBankTransactionDate(e.target.value)}
+                    className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs bg-white font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    {tr('Date de comptabilisation (optionnel)', 'تاريخ القيد المحاسبي (اختياري)')}
+                  </label>
+                  <input
+                    type="date"
+                    value={quittancePostingDate}
+                    onChange={(e) => setQuittancePostingDate(e.target.value)}
+                    className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs bg-white font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    {tr('Motif ajustement période', 'سبب تعديل الفترة')}
+                  </label>
+                  <input
+                    type="text"
+                    maxLength={1000}
+                    value={quittanceAdjustmentReason}
+                    onChange={(e) => setQuittanceAdjustmentReason(e.target.value)}
+                    placeholder={tr('Si période antérieure / clôturée', 'إذا كانت فترة سابقة أو مغلقة')}
+                    className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs bg-white"
+                  />
+                </div>
+              </div>
+            </div>
+          </details>
         </div>
       </Modal>
 
@@ -4464,7 +4643,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
       <Modal
         isOpen={isTransferModalOpen}
         onClose={() => setIsTransferModalOpen(false)}
-        title={tr('Virement Interne entre Fonds (Compte Courant ↔ Réserve)', 'تحويل داخلي بين الصناديق (الحساب الجاري ↔ الاحتياط)')}
+        title={tr('Virement entre fonds', 'تحويل بين الصناديق')}
         maxWidthClass="max-w-lg"
         busy={transferFundsMutation.isPending}
         onSubmit={async (e) => {
@@ -4519,10 +4698,10 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white"
               >
                 <option value="courant">
-                  {tr('Compte Courant', 'الحساب الجاري')} ({currencyFormatter.format(stats.balance)})
+                  {tr('Compte courant', 'الحساب الجاري')} ({currencyFormatter.format(stats.balance)})
                 </option>
                 <option value="reserve">
-                  {tr('Fonds de Réserve (106-12)', 'صندوق الاحتياط (106-12)')} ({currencyFormatter.format(stats.reserveFund)})
+                  {tr('Fonds de réserve', 'صندوق الاحتياط')} ({currencyFormatter.format(stats.reserveFund)})
                 </option>
               </select>
             </div>
@@ -4539,8 +4718,8 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
                 }}
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white"
               >
-                <option value="reserve">{tr('Fonds de Réserve (106-12)', 'صندوق الاحتياط (106-12)')}</option>
-                <option value="courant">{tr('Compte Courant', 'الحساب الجاري')}</option>
+                <option value="reserve">{tr('Fonds de réserve', 'صندوق الاحتياط')}</option>
+                <option value="courant">{tr('Compte courant', 'الحساب الجاري')}</option>
               </select>
             </div>
           </div>
@@ -4563,7 +4742,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
             </div>
             <div>
               <label className="block font-semibold text-slate-700 mb-1">
-                {tr('Date comptable', 'التاريخ المحاسبي')}
+                {tr('Date', 'التاريخ')}
               </label>
               <input
                 type="date"
@@ -4577,14 +4756,14 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
 
           <div>
             <label className="block font-semibold text-slate-700 mb-1">
-              {tr('Motif / Référence résolution AG', 'السبب / مرجع قرار الجمع العام')}
+              {tr("Motif / décision d'AG", 'السبب / قرار الجمع العام')}
             </label>
             <input
               type="text"
               maxLength={1000}
               value={transferReason}
               onChange={(e) => setTransferReason(e.target.value)}
-              placeholder={tr('Ex: Affectation dotation annuelle au fonds de réserve (AG 2026)', 'مثال: تخصيص المخصص السنوي لصندوق الاحتياط')}
+              placeholder={tr('Ex: Dotation annuelle au fonds de réserve (AG 2026)', 'مثال: المخصص السنوي لصندوق الاحتياط')}
               className="w-full px-3 py-2 border border-slate-300 rounded-lg"
               required
             />
@@ -4600,7 +4779,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
             setReverseExpenseTarget(null);
             setReverseExpenseReason('');
           }}
-          title={tr("Contrepassation d'une dépense", 'عكس مصروف مسجل')}
+          title={tr('Annuler une dépense', 'عكس مصروف مسجل')}
           maxWidthClass="max-w-md"
           busy={reverseExpenseMutation.isPending}
           onSubmit={async (e) => {
@@ -4615,6 +4794,20 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
           }}
         >
           <div className="space-y-4 text-xs">
+            <p className="text-slate-600 flex items-center gap-1.5">
+              <span>
+                {tr(
+                  "L'opération d'origine est conservée dans l'historique et annulée par une écriture inverse.",
+                  'يبقى القيد الأصلي محفوظاً في السجل ويتم إلغاؤه بقيد معاكس.'
+                )}
+              </span>
+              <InfoTip label={tr('Contrepassation comptable', 'القيد العكسي')}>
+                {tr(
+                  'Principe de traçabilité comptable (Loi n° 18-00) : aucune écriture enregistrée ne peut être supprimée sans trace.',
+                  'مبدأ التتبع المحاسبي (القانون 18-00): لا يُحذف أي قيد مسجل دون أثر.'
+                )}
+              </InfoTip>
+            </p>
             <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-1">
               <p className="font-semibold text-slate-900">{reverseExpenseTarget.description}</p>
               <p className="font-mono text-slate-600">

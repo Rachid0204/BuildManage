@@ -12,8 +12,8 @@ Immeubles, lots & tantièmes, finances Loi 18-00, AG, maintenance, documents et 
 4. [Lots, Appartements & Répartition des Tantièmes (1000/1000)](#4-lots-appartements-repartition-des-tantiemes-1000-1000)
 5. [Résidents, Copropriétaires & Fiches d’Accès PDF](#5-residents-coproprietaires-fiches-d-acces-pdf)
 6. [Appels de Fonds, Cotisations Mensuelles & Soldes Initiaux](#6-appels-de-fonds-cotisations-mensuelles-soldes-initiaux)
-7. [Validation des Justificatifs, Rapprochement CSV & Quittances PDF](#7-validation-des-justificatifs-rapprochement-csv-quittances-pdf)
-8. [Dépenses, Fonds de Réserve, Transferts & Clôture d’Exercice](#8-depenses-fonds-de-reserve-transferts-cloture-d-exercice)
+7. [Virements à vérifier, Rapprochement CSV & Reçus (quittances)](#7-virements-a-verifier-rapprochement-csv-recus-quittances)
+8. [Enregistrer une dépense, Fonds de réserve & Historique](#8-enregistrer-une-depense-fonds-de-reserve-historique)
 9. [Assemblées Générales (AGO/AGE), Convocations, Quorum & PV PDF](#9-assemblees-generales-ago-age-convocations-quorum-pv-pdf)
 10. [Suivi des Incidents, Priorités & Affectation Prestataire](#10-suivi-des-incidents-priorites-affectation-prestataire)
 11. [Annuaire Prestataires Agréés (ICE/RC/RIB) & Fiches d’Accès](#11-annuaire-prestataires-agrees-ice-rc-rib-fiches-d-acces)
@@ -157,30 +157,30 @@ Initialisez la reprise comptable de la copropriété, générez les appels de ch
 
 Dans « Comptabilité & Trésorerie », ouvrez l’assistant « Soldes initiaux » pour saisir le solde bancaire initial du fonds courant, celui du fonds de réserve et les arriérés antérieurs de chaque lot.
 
-#### Étape 2 — Générer l’appel de cotisations du mois et encaisser un règlement
+#### Étape 2 — Appeler les charges du mois et encaisser un paiement
 
-Cliquez sur « Générer l’appel du mois » pour créer automatiquement les appels de tous les lots actifs sans doublon. Pour encaisser un règlement au bureau, cliquez sur « Encaisser » sur la ligne du copropriétaire : la quittance PDF est créée instantanément.
+Cliquez sur « Appeler les charges du mois » en haut de Finances pour créer les montants à payer de tous les lots actifs sans doublon. Lorsqu’un copropriétaire règle ses charges, cliquez sur « Encaisser un paiement » (ou « Encaisser » sur la ligne du lot) : un résumé en clair s’affiche avant confirmation et le reçu PDF (quittance) est téléchargé instantanément.
 
-![Module Comptabilité & Trésorerie affichant la synthèse des fonds et la liste des charges](../../public/guides/screenshots/syndic/financials-charges.jpg)
-*Comptabilité Loi 18-00 : séparation Fonds Courant / Fonds de Réserve, suivi des appels de charges et encaissement rapide.*
+![Module Finances affichant les actions rapides, le panneau À faire maintenant et les charges appelées](../../public/guides/screenshots/syndic/financials-charges.jpg)
+*Vue Finances simplifiée : actions rapides, panneau « À faire maintenant », suivi des charges appelées et encaissement guidé.*
 
 ---
 
-## 7. Validation des Justificatifs, Rapprochement CSV & Quittances PDF
-> **AR:** المصادقة على وصولات السكان، مطابقة كشف البنك CSV والتوصيلات
+## 7. Virements à vérifier, Rapprochement CSV & Reçus (quittances)
+> **AR:** التحويلات للمراجعة، مطابقة كشف البنك CSV والوصولات (المخالصات)
 
 **Catégorie :** Comptabilité & Trésorerie · **Durée estimée :** ~4 min
 
-Validez les reçus bancaires soumis par les résidents, importez votre relevé bancaire CSV (Attijariwafa, BCP, CIH, BMCE…) et délivrez les quittances officielles.
+Validez les preuves de virement envoyées par les résidents, importez votre relevé bancaire CSV (Attijariwafa, BCP, CIH, BMCE…) et retrouvez tous les reçus PDF.
 
 ### Étapes pas à pas
 
-#### Étape 1 — Contrôler et valider les justificatifs soumis par les copropriétaires
+#### Étape 1 — Contrôler et valider les virements envoyés par les copropriétaires
 
-Ouvrez l’onglet « Justificatifs / Banque » dans Finances. Prévisualisez le reçu bancaire téléversé par le résident, vérifiez le montant et la référence sur votre relevé, puis cliquez sur « Approuver » (génère la quittance et crédite le lot) ou « Rejeter » avec un motif.
+Ouvrez l’onglet « Virements à vérifier » (ou cliquez sur « Vérifier » dans « À faire maintenant »). Ouvrez le justificatif du résident, comparez le montant et la référence avec votre relevé, puis cliquez sur « Valider le virement » (crée automatiquement le reçu PDF dans « Reçus (quittances) ») ou « Rejeter » avec un motif.
 
-![Onglet Quittances et Validation bancaire dans le module Finances du Syndic](../../public/guides/screenshots/syndic/financials-bank.jpg)
-*Validation 1-clic des justificatifs, import CSV bancaire et archivage sécurisé des quittances PDF.*
+![Onglet Virements à vérifier et Reçus (quittances) dans le module Finances du Syndic](../../public/guides/screenshots/syndic/financials-bank.jpg)
+*Validation 1-clic des virements, import CSV bancaire et registre « Reçus (quittances) » téléchargeable en PDF.*
 
 #### Étape 2 — Rapprocher un relevé bancaire CSV en lot
 
@@ -188,25 +188,25 @@ Importez le fichier CSV de votre banque marocaine : l’outil associe automatiqu
 
 ---
 
-## 8. Dépenses, Fonds de Réserve, Transferts & Clôture d’Exercice
-> **AR:** المصاريف، صندوق الاحتياط، التحويلات وإغلاق السنة المالية
+## 8. Enregistrer une dépense, Fonds de réserve & Historique
+> **AR:** تسجيل مصروف، صندوق الاحتياط وكل السجل المالي
 
 **Catégorie :** Comptabilité & Trésorerie · **Durée estimée :** ~3 min
 
-Enregistrez vos factures fournisseurs (eau, électricité, gardiennage, ascenseur), gérez les transferts entre fonds courant et réserve, et générez les états comptables.
+Enregistrez vos factures fournisseurs (eau, électricité, gardiennage, ascenseur), gérez les virements entre fonds et exportez la clôture annuelle.
 
 ### Étapes pas à pas
 
-#### Étape 1 — Saisir une dépense avec justificatif et choix du fonds imputé
+#### Étape 1 — Enregistrer une dépense en quelques champs essentiels
 
-Dans l’onglet « Dépenses & Journal », cliquez sur « Nouvelle dépense », sélectionnez le poste (Électricité, Eau, Ascenseur, Nettoyage, Travaux…), choisissez le fonds (Fonds Courant ou Fonds de Réserve), saisissez le montant TTC et joignez la facture.
+Cliquez sur « Enregistrer une dépense » en haut de Finances. Renseignez l’essentiel (montant, catégorie, date, libellé — le fonds est pré-sélectionné selon la catégorie) ainsi que le fournisseur et le numéro de facture. Les détails facultatifs (ICE, chèque, banque, notes d’AG) restent disponibles dans « Plus de détails ».
 
-![Onglet Dépenses et Journal Comptable dans le module Finances du Syndic](../../public/guides/screenshots/syndic/financials-expenses.jpg)
-*Journal comptable inaltérable : contre-passation traçable en cas d’erreur, jamais de suppression silencieuse.*
+![Onglet Tout l’historique et formulaire simplifié Enregistrer une dépense](../../public/guides/screenshots/syndic/financials-expenses.jpg)
+*Historique inaltérable : annulation traçable par écriture inverse en cas d’erreur, jamais de suppression silencieuse.*
 
-#### Étape 2 — Transférer vers le Fonds de Réserve ou contre-passer une écriture
+#### Étape 2 — Virement entre fonds, clôture annuelle ou annulation d’une dépense
 
-Utilisez « Transfert entre fonds » pour alimenter le fonds de réserve conformément à la décision d’AG. En cas d’erreur sur une dépense, utilisez « Contre-passer / Annuler » avec motif pour préserver la piste d’audit.
+Ouvrez le menu « Plus d’actions » pour effectuer un « Virement entre fonds », saisir une « Recette diverse » ou télécharger la « Clôture annuelle (PDF) ». Dans « Tout l’historique », ouvrez le détail d’une dépense et cliquez sur « Annuler cette dépense » avec un motif pour conserver la trace comptable.
 
 ---
 
