@@ -40,12 +40,12 @@ export const SYNDIC_GUIDES: UserGuideArticle[] = [
           'في «السكان وحسابات الولوج»، سجل كل مالك مشترك (والمكتري إن وجد) واربطه بشقته ثم حمّل بطاقة الولوج PDF لتسليمها له.',
       },
       {
-        titleFr: '4. Confirmer les soldes initiaux de trésorerie (Reprise d’exercice)',
-        titleAr: '4. تأكيد الأرصدة الافتتاحية للخزينة والمتأخرات السابقة',
+        titleFr: "4. Confirmer le solde de départ de l'immeuble (1ère étape unique)",
+        titleAr: '4. تأكيد الرصيد الافتتاحي للعمارة (خطوة أولى لمرة واحدة)',
         bodyFr:
-          'Dans « Comptabilité & Trésorerie », enregistrez la trésorerie initiale (Fonds Courant + Fonds de Réserve) ainsi que les éventuels arriérés d’ouverture des copropriétaires avant de générer le premier appel de fonds mensuel.',
+          "Dans « Finances », cliquez en 1 clic sur « Nouvel immeuble : démarrer à 0 MAD » (ou « Saisir des soldes existants » si la copropriété a déjà de l'argent en banque). S'il reste d'anciens impayés antérieurs, ajoutez-les via « Plus d'actions → Ajouter un ancien impayé ».",
         bodyAr:
-          'في قسم «المحاسبة والمالية»، أدخل الرصيد الافتتاحي لصندوق التسيير وصندوق الاحتياط والمتأخرات السابقة قبل إصدار أول طلب واجبات شهري.',
+          'في صفحة «المالية»، اضغط بنقرة واحدة على «عمارة جديدة: البدء بـ 0 درهم» (أو «إدخال أرصدة موجودة» إذا كان للعمارة رصيد سابق). وإذا كانت هناك ديون سابقة على بعض الشقق، أضفها عبر «إجراءات أخرى ← إضافة متأخرات سابقة».',
         screenshot: {
           src: '/guides/screenshots/syndic/dashboard.jpg',
           altFr: 'Tableau de bord Syndic présentant la synthèse financière et les indicateurs clés de la résidence',
@@ -241,12 +241,12 @@ export const SYNDIC_GUIDES: UserGuideArticle[] = [
       'سجل الأرصدة الافتتاحية للعمارة، أصدر طلبات الواجبات الشهرية بنقرة واحدة وسجل المدفوعات المباشرة (نقداً، شيك، تحويل).',
     steps: [
       {
-        titleFr: 'Enregistrer les soldes initiaux de reprise (une seule fois)',
-        titleAr: 'تسجيل الأرصدة الافتتاحية (مرة واحدة عند البدء)',
+        titleFr: "Confirmer le solde de départ (une seule fois) et les anciens impayés",
+        titleAr: 'تأكيد الرصيد الافتتاحي (مرة واحدة) والمتأخرات السابقة',
         bodyFr:
-          'Dans « Comptabilité & Trésorerie », ouvrez l’assistant « Soldes initiaux » pour saisir le solde bancaire initial du fonds courant, celui du fonds de réserve et les arriérés antérieurs de chaque lot.',
+          "Au premier accès à « Finances », cliquez sur « Nouvel immeuble : démarrer à 0 MAD » ou sur « Saisir des soldes existants » (Compte courant + Fonds de réserve) : la bannière disparaît dès confirmation. Pour reprendre un impayé antérieur au démarrage, utilisez « Plus d'actions → Ajouter un ancien impayé ». Consultez à tout moment le récapitulatif global dans « Charges appelées → Par copropriétaire ».",
         bodyAr:
-          'في قسم «المحاسبة والمالية»، افتح أداة «الأرصدة الافتتاحية» لإدخال الرصيد البنكي الأولي لصندوق التسيير وصندوق الاحتياط والمتأخرات السابقة لكل شقة.',
+          'عند أول دخول إلى «المالية»، اضغط على «عمارة جديدة: البدء بـ 0 درهم» أو «إدخال أرصدة موجودة» (الحساب الجاري + صندوق الاحتياط) لتختفي اللافتة فوراً بعد التأكيد. ولإضافة متأخرات سابقة افتح «إجراءات أخرى ← إضافة متأخرات سابقة»، أو راجع الملخص الشامل في «المساهمات المطلوبة ← حسب المالك».',
       },
       {
         titleFr: 'Appeler les charges du mois et encaisser un paiement',
@@ -285,9 +285,9 @@ export const SYNDIC_GUIDES: UserGuideArticle[] = [
         titleFr: 'Contrôler et valider les virements envoyés par les copropriétaires',
         titleAr: 'مراجعة وتأكيد التحويلات المرسلة من الملاك المشتركين',
         bodyFr:
-          'Ouvrez l’onglet « Virements à vérifier » (ou cliquez sur « Vérifier » dans « À faire maintenant »). Ouvrez le justificatif du résident, comparez le montant et la référence avec votre relevé, puis cliquez sur « Valider le virement » (crée automatiquement le reçu PDF dans « Reçus (quittances) ») ou « Rejeter » avec un motif.',
+          'Ouvrez l’onglet « Virements à vérifier » (ou cliquez sur « Vérifier » dans « À faire maintenant »). Ouvrez le justificatif du résident, comparez le montant et la référence avec votre relevé, puis cliquez sur « Valider le virement » (crée automatiquement le reçu PDF dans « Reçus (quittances) ») ou « Rejeter » avec un motif. En cas de chèque rejeté ou d’erreur de saisie, cliquez directement sur « Annuler » en face du reçu dans « Reçus (quittances) ».',
         bodyAr:
-          'افتح تبويب «التحويلات للمراجعة» (أو اضغط «مراجعة» في لوحة «ما يجب القيام به الآن»). عاين الوصل وقارنه بكشف حسابك، ثم اضغط «تأكيد التحويل» لإصدار الوصل تلقائياً أو «رفض» مع ذكر السبب.',
+          'افتح تبويب «التحويلات للمراجعة» (أو اضغط «مراجعة» في لوحة «ما يجب القيام به الآن»). عاين الوصل وقارنه بكشف حسابك، ثم اضغط «تأكيد التحويل» لإصدار الوصل تلقائياً أو «رفض» مع ذكر السبب. وفي حال رجوع شيك بدون رصيد أو خطأ في الإدخال، اضغط مباشرة على «إلغاء» بجانب الوصل في «الوصولات (المخالصات)».',
         screenshot: {
           src: '/guides/screenshots/syndic/financials-bank.jpg',
           altFr: 'Onglet Virements à vérifier et Reçus (quittances) dans le module Finances du Syndic',
@@ -340,12 +340,12 @@ export const SYNDIC_GUIDES: UserGuideArticle[] = [
         },
       },
       {
-        titleFr: 'Virement entre fonds, clôture annuelle ou annulation d’une dépense',
-        titleAr: 'تحويل بين الصناديق، الحصيلة السنوية أو عكس مصروف',
+        titleFr: 'Exports Excel/CSV, verrouillage mensuel et annulation d’opération',
+        titleAr: 'تصدير CSV، قفل الشهر المكتمل أو إلغاء عملية',
         bodyFr:
-          'Ouvrez le menu « Plus d’actions » pour effectuer un « Virement entre fonds », saisir une « Recette diverse » ou télécharger la « Clôture annuelle (PDF) ». Dans « Tout l’historique », ouvrez le détail d’une dépense et cliquez sur « Annuler cette dépense » avec un motif pour conserver la trace comptable.',
+          "Ouvrez le menu « Plus d'actions » pour effectuer un « Virement entre fonds », « Verrouiller un mois terminé » (protège un mois vérifié contre toute modification accidentelle), exporter vos tableaux CSV (« Exporter situation copropriétaires (CSV) » et « Exporter historique opérations (CSV) ») ou télécharger la « Clôture annuelle (PDF) ». Dans « Tout l'historique », ouvrez une opération pour télécharger son justificatif ou cliquer sur « Annuler cette dépense » / « Annuler ce paiement ».",
         bodyAr:
-          'افتح قائمة «إجراءات أخرى» لإجراء «تحويل بين الصناديق» أو تسجيل مدخول آخر أو تحميل «الحصيلة السنوية (PDF)». وفي «كل السجل المالي» يمكنك فتح تفاصيل أي مصروف والضغط على «عكس المصروف» مع ذكر السبب.',
+          'افتح قائمة «إجراءات أخرى» لإجراء «تحويل بين الصناديق»، أو «قفل شهر مكتمل» لحماية الحسابات المراجعة، أو تصدير جداول CSV («تصدير وضعية الملاك» و«تصدير سجل العمليات»)، أو تحميل «الحصيلة السنوية (PDF)». وفي «كل السجل المالي» يمكنك فتح أي عملية لتحميل وثيقتها أو إلغائها مع حفظ الأثر المحاسبي.',
       },
     ],
   },

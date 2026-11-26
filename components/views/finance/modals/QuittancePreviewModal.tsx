@@ -4,14 +4,19 @@ import Button from '../../../common/Button';
 import Modal from '../../../common/Modal';
 import { QuittanceIcon } from '../../../icons/IconComponents';
 import { generateQuittancePDF } from '../../../../services/pdfOnDemand';
+import { useAuth } from '../../../../contexts/AuthContext';
 import { useI18n } from '../../../../hooks/useI18n';
 import { currencyFormatter, formatRecordedFund } from '../financeConstants';
+import type { ReversiblePaymentSummary } from '../financeReportExport';
+import type { ReversePaymentModalRequest } from './ReversePaymentModal';
 
 interface QuittancePreviewModalProps {
   building: Building;
   syndic?: Syndic;
   quittance: Quittance | null;
   onClose: () => void;
+  reversibleSummary?: ReversiblePaymentSummary;
+  onRequestReversePayment?: (request: ReversePaymentModalRequest) => void;
 }
 
 const QuittancePreviewModal: React.FC<QuittancePreviewModalProps> = ({
@@ -19,9 +24,20 @@ const QuittancePreviewModal: React.FC<QuittancePreviewModalProps> = ({
   syndic,
   quittance,
   onClose,
+  reversibleSummary,
+  onRequestReversePayment,
 }) => {
   const { tr, isAr } = useI18n();
+  const { userProfile } = useAuth();
   if (!quittance) return null;
+
+  const managed = ['admin', 'syndic'].includes(userProfile?.role || '');
+  const canReversePayment =
+    managed &&
+    !quittance.voidedAt &&
+    Boolean(quittance.paymentId) &&
+    Boolean(reversibleSummary) &&
+    Boolean(onRequestReversePayment);
 
   const buildingTantiemesBase = building.totalTantiemes || 1000;
 
@@ -34,11 +50,32 @@ const QuittancePreviewModal: React.FC<QuittancePreviewModalProps> = ({
         `شهادة إبراء رسمية — ${quittance.quittanceNumber}`,
       )}
       footer={
-        <div className="flex justify-between items-center w-full">
-          <span className="text-xs text-slate-500 font-mono">
-            {tr('Conforme Loi 18-00 · Délivré par le Syndic', 'مطابق للقانون 18-00 · مسلم من طرف السنديك')}
-          </span>
-          <div className="flex gap-2">
+        <div className="flex flex-wrap justify-between items-center w-full gap-2">
+          <div className="flex items-center gap-2">
+            {canReversePayment && (
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() =>
+                  onRequestReversePayment!({
+                    paymentId: quittance.paymentId!,
+                    residentName: quittance.residentName,
+                    apartmentNumber: quittance.apartmentNumber,
+                    quittanceNumber: quittance.quittanceNumber,
+                    periodLabel: quittance.periodCovered,
+                    amount: reversibleSummary!.totalAmount,
+                  })
+                }
+                className="text-xs text-rose-700 border-rose-200 hover:bg-rose-50"
+              >
+                {tr('Annuler ce paiement', 'إلغاء هذه الدفعة')}
+              </Button>
+            )}
+            <span className="text-xs text-slate-500 font-mono hidden sm:inline">
+              {tr('Conforme Loi 18-00 · Délivré par le Syndic', 'مطابق للقانون 18-00 · مسلم من طرف السنديك')}
+            </span>
+          </div>
+          <div className="flex gap-2 ms-auto">
             <Button variant="secondary" onClick={onClose}>
               {tr('Fermer', 'إغلاق')}
             </Button>

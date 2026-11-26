@@ -6,6 +6,7 @@ import InfoTip from '../../../common/InfoTip';
 import { DocumentsIcon } from '../../../icons/IconComponents';
 import { generateTransactionVoucherPDF } from '../../../../services/pdfOnDemand';
 import { isIncomeTransaction, signedTransactionAmount } from '../../../../utils/security';
+import { useAuth } from '../../../../contexts/AuthContext';
 import { useI18n } from '../../../../hooks/useI18n';
 import {
   buildCategoryLabels,
@@ -13,6 +14,8 @@ import {
   buildPaymentMethodLabels,
   currencyFormatter,
 } from '../financeConstants';
+import type { ReversiblePaymentSummary } from '../financeReportExport';
+import type { ReversePaymentModalRequest } from './ReversePaymentModal';
 
 interface TransactionDetailModalProps {
   building: Building;
@@ -20,6 +23,8 @@ interface TransactionDetailModalProps {
   transaction: Transaction | null;
   onClose: () => void;
   onRequestReverseExpense: (transaction: Transaction) => void;
+  reversiblePayments: ReadonlyMap<string, ReversiblePaymentSummary>;
+  onRequestReversePayment: (request: ReversePaymentModalRequest) => void;
 }
 
 const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
@@ -28,19 +33,29 @@ const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
   transaction,
   onClose,
   onRequestReverseExpense,
+  reversiblePayments,
+  onRequestReversePayment,
 }) => {
   const { tr, isAr } = useI18n();
+  const { userProfile } = useAuth();
   const CATEGORY_LABELS = useMemo(() => buildCategoryLabels(tr), [tr]);
   const PAYMENT_METHOD_LABELS = useMemo(() => buildPaymentMethodLabels(tr), [tr]);
   const DOCUMENT_TYPE_LABELS = useMemo(() => buildDocumentTypeLabels(tr), [tr]);
 
   if (!transaction) return null;
 
-  const canReverse =
+  const managed = ['admin', 'syndic'].includes(userProfile?.role || '');
+  const canReverseExpense =
+    managed &&
     !isIncomeTransaction(transaction) &&
     !transaction.reversalOf &&
     !transaction.transferId &&
     !(building.financials?.transactions || []).some((t) => t.reversalOf === transaction.id);
+
+  const reversiblePayment =
+    managed && isIncomeTransaction(transaction) && transaction.paymentId
+      ? reversiblePayments.get(transaction.paymentId)
+      : undefined;
 
   return (
     <Modal
@@ -57,13 +72,29 @@ const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
               <DocumentsIcon />
               <span>{tr('Télécharger le justificatif PDF', 'تحميل الوثيقة PDF')}</span>
             </Button>
-            {canReverse && (
+            {canReverseExpense && (
               <Button
                 variant="secondary"
                 onClick={() => onRequestReverseExpense(transaction)}
                 className="text-xs text-rose-700 border-rose-200 hover:bg-rose-50"
               >
                 {tr('Annuler cette dépense', 'عكس المصروف')}
+              </Button>
+            )}
+            {reversiblePayment && (
+              <Button
+                variant="secondary"
+                onClick={() =>
+                  onRequestReversePayment({
+                    paymentId: reversiblePayment.paymentId,
+                    residentName: transaction.thirdPartyName || transaction.description,
+                    apartmentNumber: transaction.lotNumber,
+                    amount: reversiblePayment.totalAmount,
+                  })
+                }
+                className="text-xs text-rose-700 border-rose-200 hover:bg-rose-50"
+              >
+                {tr('Annuler ce paiement', 'إلغاء هذه الدفعة')}
               </Button>
             )}
           </div>

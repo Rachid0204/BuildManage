@@ -17,11 +17,13 @@ import { isChargeEffectivelyOverdue } from '../../../../shared/moroccoDate';
 import { useI18n } from '../../../../hooks/useI18n';
 import { useToast } from '../../../common/Toast';
 import { currencyFormatter } from '../financeConstants';
+import type { ResidentStatementRow } from '../financeReportExport';
 
 interface ChargesTabProps {
   building: Building;
   syndic?: Syndic;
   charges: Charge[];
+  statements: ResidentStatementRow[];
   invoices: Invoice[];
   quittances: Quittance[];
   onOpenChargeGeneration: () => void;
@@ -35,6 +37,7 @@ const ChargesTab: React.FC<ChargesTabProps> = ({
   building,
   syndic,
   charges,
+  statements,
   invoices,
   quittances,
   onOpenChargeGeneration,
@@ -46,7 +49,7 @@ const ChargesTab: React.FC<ChargesTabProps> = ({
   const { tr, isAr } = useI18n();
   const { showToast } = useToast();
   const queryClient = useQueryClient();
-  const [chargesSubTab, setChargesSubTab] = useState<'charges' | 'invoices'>('charges');
+  const [chargesSubTab, setChargesSubTab] = useState<'charges' | 'residents' | 'invoices'>('charges');
   const [directGeneratingChargeId, setDirectGeneratingChargeId] = useState<string | null>(null);
 
   const buildingTantiemesBase = building.totalTantiemes || 1000;
@@ -103,7 +106,7 @@ const ChargesTab: React.FC<ChargesTabProps> = ({
               'ما يجب على كل شقة أداؤه حسب الفترة مع حالة الدفع.',
             )}
           </p>
-          <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 mt-2">
+          <div className="inline-flex flex-wrap rounded-lg border border-slate-200 bg-white p-0.5 mt-2">
             <button
               type="button"
               onClick={() => setChargesSubTab('charges')}
@@ -114,6 +117,17 @@ const ChargesTab: React.FC<ChargesTabProps> = ({
               }`}
             >
               {tr('Par lot', 'حسب الشقة')} ({charges.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setChargesSubTab('residents')}
+              className={`px-3 py-1 text-xs font-semibold rounded-md transition-colors ${
+                chargesSubTab === 'residents'
+                  ? 'bg-teal-700 text-white'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              {tr('Par copropriétaire', 'حسب المالك')} ({statements.length})
             </button>
             <button
               type="button"
@@ -426,6 +440,130 @@ const ChargesTab: React.FC<ChargesTabProps> = ({
                       <Button onClick={onOpenChargeGeneration} className="mt-2 text-xs">
                         {tr('Appeler les charges du mois', 'إصدار مساهمات الشهر')}
                       </Button>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </>
+      ) : chargesSubTab === 'residents' ? (
+        <>
+          {/* Mobile Cards (< md) */}
+          <div className="md:hidden divide-y divide-slate-200 bg-white">
+            {statements.map((s) => {
+              const arrearsDue = s.openingArrearsOutstanding ?? s.openingArrears ?? 0;
+              return (
+                <div key={`stmt-card-${s.residentId}`} className="p-3.5 space-y-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="font-bold text-sm text-slate-900">{s.name}</span>
+                    <span
+                      className={`font-mono font-bold text-sm ${
+                        s.outstanding > 0 ? 'text-rose-700' : 'text-emerald-700'
+                      }`}
+                    >
+                      {s.outstanding} MAD
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-[11px] font-mono text-slate-600 bg-slate-50 rounded-lg p-2">
+                    <div>
+                      <span className="text-slate-400 block font-sans">
+                        {tr('Total appelé', 'إجمالي المطالب به')}
+                      </span>
+                      <span className="font-semibold text-slate-800">{s.billed} MAD</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block font-sans">
+                        {tr('Déjà payé', 'المؤدى')}
+                      </span>
+                      <span className="font-semibold text-emerald-700">{s.paid} MAD</span>
+                    </div>
+                    {arrearsDue > 0 && (
+                      <div>
+                        <span className="text-slate-400 block font-sans">
+                          {tr('Dont anciens impayés', 'منها متأخرات سابقة')}
+                        </span>
+                        <span className="font-semibold text-amber-800">{arrearsDue} MAD</span>
+                      </div>
+                    )}
+                    {s.over90Days > 0 && (
+                      <div>
+                        <span className="text-slate-400 block font-sans">
+                          {tr('Retard > 90 j', 'تأخر > 90 يوم')}
+                        </span>
+                        <span className="font-semibold text-rose-700">{s.over90Days} MAD</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+            {statements.length === 0 && (
+              <div className="px-4 py-10 text-center text-xs text-slate-500">
+                {tr(
+                  'Aucun copropriétaire enregistré pour cet immeuble.',
+                  'لا يوجد أي مالك مشترك مسجل لهذه العمارة.',
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="hidden md:block overflow-x-auto">
+            <table
+              aria-label={tr('Relevés des résidents', 'كشوف السكان')}
+              className="min-w-full divide-y divide-slate-200 text-xs sm:text-sm"
+            >
+              <thead className="bg-slate-50 text-slate-500 text-start font-medium">
+                <tr>
+                  <th className="px-4 py-2.5 text-start">{tr('Copropriétaire', 'المالك المشترك')}</th>
+                  <th className="px-4 py-2.5 text-end">{tr('Total appelé', 'إجمالي المطالب به')}</th>
+                  <th className="px-4 py-2.5 text-end">{tr('Déjà payé', 'المؤدى')}</th>
+                  <th className="px-4 py-2.5 text-end">
+                    {tr('Dont anciens impayés', 'منها متأخرات سابقة')}
+                  </th>
+                  <th className="px-4 py-2.5 text-end">{tr('Reste à payer', 'الباقي للأداء')}</th>
+                  <th className="px-4 py-2.5 text-end">
+                    {tr('Plus de 90 jours', 'أكثر من 90 يوماً')}
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 bg-white">
+                {statements.map((s) => {
+                  const arrearsDue = s.openingArrearsOutstanding ?? s.openingArrears ?? 0;
+                  return (
+                    <tr key={s.residentId} className="hover:bg-slate-50 transition-colors">
+                      <td className="px-4 py-2.5 font-semibold text-slate-900">{s.name}</td>
+                      <td className="px-4 py-2.5 text-end font-mono text-slate-700">{s.billed} MAD</td>
+                      <td className="px-4 py-2.5 text-end font-mono text-emerald-700 font-medium">
+                        {s.paid} MAD
+                      </td>
+                      <td className="px-4 py-2.5 text-end font-mono text-xs text-slate-500">
+                        {arrearsDue > 0 ? `${arrearsDue} MAD` : '—'}
+                      </td>
+                      <td
+                        className={`px-4 py-2.5 text-end font-mono font-bold ${
+                          s.outstanding > 0 ? 'text-rose-700' : 'text-slate-900'
+                        }`}
+                      >
+                        {s.outstanding} MAD
+                      </td>
+                      <td
+                        className={`px-4 py-2.5 text-end font-mono ${
+                          s.over90Days > 0 ? 'text-rose-700 font-semibold' : 'text-slate-500'
+                        }`}
+                      >
+                        {s.over90Days} MAD
+                      </td>
+                    </tr>
+                  );
+                })}
+                {statements.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-10 text-center text-xs text-slate-500">
+                      {tr(
+                        'Aucun copropriétaire enregistré pour cet immeuble.',
+                        'لا يوجد أي مالك مشترك مسجل لهذه العمارة.',
+                      )}
                     </td>
                   </tr>
                 )}
