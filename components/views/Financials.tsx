@@ -48,12 +48,9 @@ import {
   exportAnnualRepartitionPDF,
 } from '../../services/pdfOnDemand';
 import {
-  computeBuildingFundBalances,
   splitChargeReserveAndOperating,
   getBuildingReserveRate,
   resolveChargeReserveRate,
-  getRecordedReserveSplit,
-  allocateBudgetInCentimes,
   isIncomeTransaction,
   signedTransactionAmount,
 } from '../../utils/security';
@@ -63,6 +60,28 @@ import { useI18n } from '../../hooks/useI18n';
 import { useToast } from '../common/Toast';
 import { resolveAssetUrl } from '../../utils/apiBase';
 import { isNativeApp } from '../../utils/nativeBridge';
+import { parseBankCsvRows } from './finance/bankCsv';
+import {
+  type FinanceTabType,
+  currencyFormatter,
+  MOROCCAN_BANKS,
+  formatRecordedFund as formatRecordedFundHelper,
+  buildCategoryLabels,
+  buildPaymentMethodLabels,
+  buildDocumentTypeLabels,
+} from './finance/financeConstants';
+import {
+  computeAvailableFiscalYears,
+  computeHasBillableLots,
+  computeChargePreview,
+  computeFinanceOverviewStats,
+  groupOverdueChargesByResident,
+  computeAgingBuckets,
+  filterTransactions,
+  computeFilteredTransactionStats,
+  filterQuittances,
+  computeQuittanceTotals,
+} from './finance/financeSelectors';
 
 interface FinancialsProps {
   building: Building;
@@ -71,146 +90,13 @@ interface FinancialsProps {
   onGenerateCharges?: () => void;
 }
 
-type TabType = 'transactions' | 'charges' | 'verifications' | 'quittances' | 'impayes';
-
-const currencyFormatter = new Intl.NumberFormat('fr-MA', {
-  style: 'currency',
-  currency: 'MAD',
-  minimumFractionDigits: 2,
-});
-
-const MOROCCAN_BANKS = [
-  '',
-  'Attijariwafa Bank',
-  'Banque Populaire (BCP)',
-  'Bank of Africa (BMCE)',
-  'CIH Bank',
-  'Société Générale Maroc',
-  'Crédit du Maroc',
-  'Al Barid Bank',
-  'CFG Bank',
-  'Autre / Trésorerie Caisse',
-];
-
-function splitCsvRecord(line: string, delimiter: string): string[] {
-  const fields: string[] = [];
-  let current = '';
-  let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (ch === '"') {
-      if (inQuotes && line[i + 1] === '"') {
-        current += '"';
-        i++;
-      } else {
-        inQuotes = !inQuotes;
-      }
-    } else if (ch === delimiter && !inQuotes) {
-      fields.push(current.trim());
-      current = '';
-    } else {
-      current += ch;
-    }
-  }
-  fields.push(current.trim());
-  return fields;
-}
-
-function parseBankCsvAmount(raw: string): number {
-  const compact = raw.replace(/[\s\u00A0\u202F]/g, '').replace(/(?:MAD|DH|DHS)$/i, '');
-  if (!/^[+-]?\d+(?:[.,]\d+)*$/.test(compact)) return Number.NaN;
-  const lastComma = compact.lastIndexOf(',');
-  const lastDot = compact.lastIndexOf('.');
-  let normalized = compact;
-  if (lastComma !== -1 && lastDot !== -1) {
-    normalized = lastComma > lastDot
-      ? compact.replace(/\./g, '').replace(',', '.')
-      : compact.replace(/,/g, '');
-  } else if (lastComma !== -1) {
-    normalized = compact.replace(',', '.');
-  }
-  const value = Number(normalized);
-  return Number.isFinite(value) ? value : Number.NaN;
-}
-
-function parseBankCsvRows(text: string): Array<{ date: string; label: string; amount: number; reference?: string }> {
-  const lines = text
-    .replace(/^\uFEFF/, '')
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter(Boolean);
-  if (!lines.length) return [];
-
-  // Prefer semicolon when unquoted semicolons appear, so quoted decimals with commas don't confuse delimiter selection
-  const firstLine = lines[0];
-  let unquotedSemi = 0;
-  let unquotedComma = 0;
-  let inQuotes = false;
-  for (const ch of firstLine) {
-    if (ch === '"') inQuotes = !inQuotes;
-    else if (!inQuotes && ch === ';') unquotedSemi++;
-    else if (!inQuotes && ch === ',') unquotedComma++;
-  }
-  const delimiter = unquotedSemi >= unquotedComma && unquotedSemi > 0 ? ';' : ',';
-
-  const firstCols = splitCsvRecord(firstLine, delimiter).map((c) =>
-    c.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-  );
-  const hasHeader = firstCols.some((c) =>
-    ['date', 'montant', 'amount', 'credit', 'debit', 'libelle', 'label', 'reference', 'ref'].some((k) =>
-      c.includes(k)
-    )
-  );
-
-  const findCol = (keywords: string[]) =>
-    hasHeader ? firstCols.findIndex((c) => keywords.some((k) => c.includes(k))) : -1;
-  const dateIdx = findCol(['date']);
-  const labelIdx = findCol(['libelle', 'label', 'description', 'motif']);
-  const refIdx = findCol(['reference', 'ref']);
-  const amountIdx = findCol(['montant', 'amount']);
-  const creditIdx = findCol(['credit']);
-  const debitIdx = findCol(['debit']);
-
-  const dataLines = hasHeader ? lines.slice(1) : lines;
-  const rows: Array<{ date: string; label: string; amount: number; reference?: string }> = [];
-
-  for (const line of dataLines) {
-    const cols = splitCsvRecord(line, delimiter);
-    let amount = Number.NaN;
-    if (amountIdx >= 0 && cols[amountIdx]) {
-      amount = parseBankCsvAmount(cols[amountIdx]);
-    } else if (creditIdx >= 0 || debitIdx >= 0) {
-      const creditVal = creditIdx >= 0 && cols[creditIdx] ? parseBankCsvAmount(cols[creditIdx]) : 0;
-      const debitVal = debitIdx >= 0 && cols[debitIdx] ? parseBankCsvAmount(cols[debitIdx]) : 0;
-      if (Number.isFinite(creditVal) && creditVal > 0) amount = creditVal;
-      else if (Number.isFinite(debitVal) && debitVal !== 0) amount = -Math.abs(debitVal);
-    } else {
-      for (const col of cols) {
-        const parsed = parseBankCsvAmount(col);
-        if (Number.isFinite(parsed)) {
-          amount = parsed;
-          break;
-        }
-      }
-    }
-    if (!Number.isFinite(amount) || amount === 0) continue;
-    const date = (dateIdx >= 0 ? cols[dateIdx] : cols[0]) || '';
-    const label = (labelIdx >= 0 ? cols[labelIdx] : cols[1]) || line;
-    const reference = (refIdx >= 0 ? cols[refIdx] : hasHeader ? undefined : cols[2])?.trim() || undefined;
-    rows.push({ date, label, amount, reference });
-  }
-  return rows;
-}
-
 const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
   const { tr, isAr } = useI18n();
-  const formatRecordedFund = (receipt: Quittance, fund: 'reserveFundAmount' | 'chargesCourantesAmount') => {
-    const split = getRecordedReserveSplit(receipt);
-    return split ? currencyFormatter.format(split[fund]) : tr('Non documenté', 'غير موثق');
-  };
+  const formatRecordedFund = (receipt: Quittance, fund: 'reserveFundAmount' | 'chargesCourantesAmount') =>
+    formatRecordedFundHelper(receipt, fund, tr);
   const { showToast, confirmAction } = useToast();
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<TabType>('charges');
+  const [activeTab, setActiveTab] = useState<FinanceTabType>('charges');
   const [isTrxModalOpen, setIsTrxModalOpen] = useState(false);
   const [trxDetailsOpen, setTrxDetailsOpen] = useState(false);
   const [quittanceAccountingOpen, setQuittanceAccountingOpen] = useState(false);
@@ -220,47 +106,9 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
   const [rejectingProofId, setRejectingProofId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState('');
 
-  const CATEGORY_LABELS: Record<string, string> = useMemo(
-    () => ({
-      maintenance: tr('Maintenance & Dépannages', 'الصيانة والإصلاحات'),
-      elevator: tr('Ascenseur & Équipements', 'المصعد والتجهيزات'),
-      salary: tr('Salaires (Gardien / Concierge)', 'رواتب (الحارس / البواب)'),
-      utility: tr('Électricité & Eau (Lydec/Redal)', 'الكهرباء والماء (ليدك / ريضال)'),
-      cleaning: tr('Nettoyage & Hygiène', 'النظافة والصحة'),
-      fees: tr('Cotisations Copropriété', 'مساهمات الملكية المشتركة'),
-      insurance: tr('Assurance Multirisque', 'التأمين المتعدد المخاطر'),
-      bank_fees: tr('Frais Bancaires', 'المصاريف البنكية'),
-      legal: tr('Contentieux & Recouvrement', 'المنازعات والتحصيل'),
-      reserve: tr('Gros travaux (Fonds Réserve)', 'الأشغال الكبرى (صندوق الاحتياط)'),
-      reimbursement: tr('Remboursement / Sinistre', 'تعويض / حادث'),
-      other: tr('Autre opération', 'عملية أخرى'),
-    }),
-    [tr]
-  );
-
-  const PAYMENT_METHOD_LABELS: Record<string, string> = useMemo(
-    () => ({
-      virement: tr('Virement bancaire', 'تحويل بنكي'),
-      cheque: tr('Chèque', 'شيك'),
-      versement: tr('Versement agence', 'إيداع بالوكالة'),
-      versement_especes: tr('Versement espèces', 'إيداع نقدي'),
-      cmi: tr('Carte CMI', 'بطاقة بنكية CMI'),
-      especes: tr('Espèces (Caisse)', 'نقداً (الصندوق)'),
-    }),
-    [tr]
-  );
-
-  const DOCUMENT_TYPE_LABELS: Record<string, string> = useMemo(
-    () => ({
-      facture: tr('Facture Fournisseur', 'فاتورة المورد'),
-      quittance: tr('Quittance', 'وصل إبراء (مخالصة)'),
-      recu: tr('Reçu / Décharge', 'إيصال / إبراء'),
-      releve: tr('Relevé / Avis d’opéré', 'كشف / إشعار بالعملية'),
-      devis: tr('Devis validé AG', 'عرض سعر مصادق عليه بالجمع العام'),
-      autre: tr('Autre pièce', 'وثيقة أخرى'),
-    }),
-    [tr]
-  );
+  const CATEGORY_LABELS = useMemo(() => buildCategoryLabels(tr), [tr]);
+  const PAYMENT_METHOD_LABELS = useMemo(() => buildPaymentMethodLabels(tr), [tr]);
+  const DOCUMENT_TYPE_LABELS = useMemo(() => buildDocumentTypeLabels(tr), [tr]);
 
   // Filter state for Transactions Journal
   const [filterFund, setFilterFund] = useState<'all' | 'courant' | 'reserve'>('all');
@@ -383,21 +231,7 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
 
   const buildingTantiemesBase = building.totalTantiemes || 1000;
 
-  const availableFiscalYears = useMemo(() => {
-    const currentYear = new Date().getFullYear();
-    const years = new Set<number>([
-      currentYear,
-      currentYear - 1,
-      currentYear - 2,
-      currentYear - 3,
-      currentYear - 4,
-    ]);
-    charges.forEach((c) => {
-      const m = `${c.period || ''} ${c.dueDate || ''}`.match(/\b(20\d{2})\b/);
-      if (m) years.add(Number(m[1]));
-    });
-    return Array.from(years).sort((a, b) => b - a);
-  }, [charges]);
+  const availableFiscalYears = useMemo(() => computeAvailableFiscalYears(charges), [charges]);
 
   const openChargeGeneration = () => {
     setUseTantiemes(false);
@@ -406,52 +240,17 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
       .reduce((sum, a) => sum + (a.monthlyFees ?? building.monthlySyndicFees ?? 0), 0)));
     setIsGenerateModalOpen(true);
   };
-  const { chargePreview, vacantLotsInTantiemesMode } = useMemo(() => {
-    const lots = building.apartments.filter((a: any) => !a.archivedAt);
-    const parsedBudget = Number(totalBudgetInput);
-    let allocations: Map<string, number> | null = null;
-    if (useTantiemes && Number.isFinite(parsedBudget) && parsedBudget > 0 && lots.length > 0) {
-      try {
-        allocations = allocateBudgetInCentimes(
-          parsedBudget,
-          lots.map((a) => ({ id: a.id, tantiemes: a.tantiemes ?? 100 })),
-          buildingTantiemesBase
-        );
-      } catch {
-        allocations = null;
-      }
-    }
-    let vacantCount = 0;
-    const rows = lots.flatMap((apt) => {
-      const residentId =
-        apt.ownerId ||
-        apt.tenantId ||
-        building.residents.find((r: any) => !r.archivedAt && r.apartmentId === apt.id)?.id;
-      if (!residentId) {
-        vacantCount += 1;
-        return [];
-      }
-      const existing = charges.find(
-        (c) =>
-          c.apartmentId === apt.id &&
-          normalizeBillingPeriodKey(c.period || '') === normalizeBillingPeriodKey(periodName) &&
-          (c.chargeType || 'courante') === 'courante'
-      );
-      return [
-        {
-          id: apt.id,
-          number: apt.number,
-          existing: !!existing,
-          amount:
-            existing?.amount ??
-            (useTantiemes
-              ? allocations?.get(apt.id) ?? Number.NaN
-              : Math.round((apt.monthlyFees ?? building.monthlySyndicFees ?? 0) * 100) / 100),
-        },
-      ];
-    });
-    return { chargePreview: rows, vacantLotsInTantiemesMode: vacantCount };
-  }, [building, buildingTantiemesBase, charges, periodName, totalBudgetInput, useTantiemes]);
+  const { chargePreview, vacantLotsInTantiemesMode } = useMemo(
+    () =>
+      computeChargePreview({
+        building,
+        charges,
+        periodName,
+        useTantiemes,
+        totalBudgetInput,
+      }),
+    [building, charges, periodName, totalBudgetInput, useTantiemes]
+  );
 
   // Reset form helper
   const resetTrxForm = () => {
@@ -773,102 +572,21 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
   };
 
   // Calculated Stats
-  const stats = useMemo(() => {
-    const { operatingBalance: balance, reserveBalance: reserveFund } =
-      computeBuildingFundBalances(building);
-
-    let pendingCents = 0;
-    let overdueCents = 0;
-    charges.forEach((c) => {
-      const remCents = Math.max(0, Math.round((c.amount - (c.paidAmount || 0)) * 100));
-      if (remCents <= 0 || c.status === 'paid') return;
-      if (isChargeEffectivelyOverdue(c)) {
-        overdueCents += remCents;
-      } else {
-        pendingCents += remCents;
-      }
-    });
-
-    const pendingProofsCount = paymentProofs.filter((p) => p.status === 'pending').length;
-
-    return {
-      balance,
-      reserveFund,
-      pendingChargesTotal: pendingCents / 100,
-      overdueChargesTotal: overdueCents / 100,
-      pendingProofsCount,
-    };
-  }, [building, charges, paymentProofs]);
+  const stats = useMemo(
+    () => computeFinanceOverviewStats(building, charges, paymentProofs),
+    [building, charges, paymentProofs]
+  );
 
   // Overdue Debts Grouped by Resident (supports multi-lot owners & dynamic dueDate overdue detection)
-  const overdueResidents = useMemo(() => {
-    const overdueList = charges.filter((c) => isChargeEffectivelyOverdue(c));
-    const grouped: Record<
-      string,
-      {
-        residentId: string;
-        residentName: string;
-        apartmentNumbers: string[];
-        apartmentNumber: string;
-        apartment?: Apartment;
-        apartments: Apartment[];
-        charges: Charge[];
-        totalOverdue: number;
-        overdueCount: number;
-        oldestDate: string;
-      }
-    > = {};
-
-    overdueList.forEach((c) => {
-      const res = building.residents.find((r) => r.id === c.residentId);
-      const apt = building.apartments.find((a) => a.id === c.apartmentId);
-      if (!grouped[c.residentId]) {
-        grouped[c.residentId] = {
-          residentId: c.residentId,
-          residentName: res?.name || tr('Copropriétaire', 'مالك مشترك'),
-          apartmentNumbers: apt?.number ? [apt.number] : [],
-          apartmentNumber: apt?.number || 'Lot',
-          apartment: apt,
-          apartments: apt ? [apt] : [],
-          charges: [],
-          totalOverdue: 0,
-          overdueCount: 0,
-          oldestDate: c.dueDate,
-        };
-      } else if (apt && !grouped[c.residentId].apartments.some((a) => a.id === apt.id)) {
-        grouped[c.residentId].apartments.push(apt);
-        if (apt.number && !grouped[c.residentId].apartmentNumbers.includes(apt.number)) {
-          grouped[c.residentId].apartmentNumbers.push(apt.number);
-          grouped[c.residentId].apartmentNumber = grouped[c.residentId].apartmentNumbers.join(', ');
-        }
-      }
-      grouped[c.residentId].charges.push(c);
-      grouped[c.residentId].totalOverdue =
-        Math.round(
-          (grouped[c.residentId].totalOverdue + Math.max(0, c.amount - (c.paidAmount || 0))) * 100
-        ) / 100;
-      grouped[c.residentId].overdueCount += 1;
-      if (new Date(c.dueDate) < new Date(grouped[c.residentId].oldestDate)) {
-        grouped[c.residentId].oldestDate = c.dueDate;
-      }
-    });
-
-    return Object.values(grouped).sort((a, b) => b.totalOverdue - a.totalOverdue);
-  }, [charges, building, tr]);
+  const overdueResidents = useMemo(
+    () => groupOverdueChargesByResident(charges, building, tr('Copropriétaire', 'مالك مشترك')),
+    [charges, building, tr]
+  );
 
   const currentMonthPeriod = useMemo(() => todayCasablancaIsoDate().slice(0, 7), []);
   const hasBillableLots = useMemo(
-    () =>
-      building.apartments
-        .filter((a: any) => !a.archivedAt)
-        .some((apt) =>
-          Boolean(
-            apt.ownerId ||
-              apt.tenantId ||
-              building.residents.some((r: any) => !r.archivedAt && r.apartmentId === apt.id),
-          ),
-        ),
-    [building.apartments, building.residents],
+    () => computeHasBillableLots(building),
+    [building]
   );
 
   const financeTodos = useMemo(
@@ -894,134 +612,45 @@ const FinancialsView: React.FC<FinancialsProps> = ({ building, syndic }) => {
   );
 
   // Balance Âgée (Aging Report buckets in integer centimes)
-  const agingBuckets = useMemo(() => {
-    const todayMs = Date.parse(`${todayCasablancaIsoDate()}T00:00:00Z`);
-    const buckets = { d0_30: 0, d31_60: 0, d61_90: 0, d90_plus: 0 };
-    charges.forEach((c) => {
-      if (!isChargeEffectivelyOverdue(c)) return;
-      const remCents = Math.max(0, Math.round((c.amount - (c.paidAmount || 0)) * 100));
-      if (remCents <= 0) return;
-      const dueIso = (c.dueDate || '').slice(0, 10);
-      const dueMs = Date.parse(`${dueIso}T00:00:00Z`);
-      const ageDays = Number.isFinite(dueMs)
-        ? Math.max(0, Math.floor((todayMs - dueMs) / 86_400_000))
-        : 0;
-      if (ageDays <= 30) buckets.d0_30 += remCents;
-      else if (ageDays <= 60) buckets.d31_60 += remCents;
-      else if (ageDays <= 90) buckets.d61_90 += remCents;
-      else buckets.d90_plus += remCents;
-    });
-    return {
-      d0_30: buckets.d0_30 / 100,
-      d31_60: buckets.d31_60 / 100,
-      d61_90: buckets.d61_90 / 100,
-      d90_plus: buckets.d90_plus / 100,
-    };
-  }, [charges]);
+  const agingBuckets = useMemo(() => computeAgingBuckets(charges), [charges]);
 
   // Filtered transactions for the Grand Livre
-  const filteredTransactions = useMemo(() => {
-    const list = building.financials?.transactions || [];
-    return list.filter((trx) => {
-      if (filterFund === 'courant' && trx.fundType === 'reserve') return false;
-      if (filterFund === 'reserve' && trx.fundType !== 'reserve') return false;
+  const filteredTransactions = useMemo(
+    () =>
+      filterTransactions(building.financials?.transactions || [], {
+        fund: filterFund,
+        type: filterType,
+        category: filterCategory,
+        search: searchTrx,
+      }),
+    [building.financials?.transactions, filterFund, filterType, filterCategory, searchTrx]
+  );
 
-      if (filterType === 'income' && !isIncomeTransaction(trx)) return false;
-      if (filterType === 'expense' && isIncomeTransaction(trx)) return false;
-
-      if (filterCategory !== 'all' && trx.category !== filterCategory) return false;
-
-      if (searchTrx.trim()) {
-        const q = searchTrx.toLowerCase();
-        const desc = (trx.description || '').toLowerCase();
-        const ref = (trx.reference || '').toLowerCase();
-        const third = (trx.thirdPartyName || '').toLowerCase();
-        const ice = (trx.thirdPartyIce || '').toLowerCase();
-        const inv = (trx.invoiceNumber || '').toLowerCase();
-        const lot = (trx.lotNumber || '').toLowerCase();
-        if (
-          !desc.includes(q) &&
-          !ref.includes(q) &&
-          !third.includes(q) &&
-          !ice.includes(q) &&
-          !inv.includes(q) &&
-          !lot.includes(q)
-        ) {
-          return false;
-        }
-      }
-      return true;
-    });
-  }, [building.financials?.transactions, filterFund, filterType, filterCategory, searchTrx]);
-
-  const filteredStats = useMemo(() => {
-    const reversedOriginalIds = new Set(
-      (building.financials?.transactions || [])
-        .map((t) => t.reversalOf)
-        .filter((id): id is string => Boolean(id))
-    );
-    let incomeCents = 0;
-    let expenseCents = 0;
-    let netCents = 0;
-    filteredTransactions.forEach((t) => {
-      const signedCents = Math.round(signedTransactionAmount(t) * 100);
-      netCents += signedCents;
-      // Exclude inter-fund transfers when viewing both funds combined, and exclude cancelled original+reversal pairs from gross flows
-      if (filterFund === 'all' && t.transferId) return;
-      if (t.reversalOf || reversedOriginalIds.has(t.id)) return;
-      if (signedCents >= 0) incomeCents += signedCents;
-      else expenseCents += Math.abs(signedCents);
-    });
-    return {
-      income: incomeCents / 100,
-      expense: expenseCents / 100,
-      net: netCents / 100,
-      count: filteredTransactions.length,
-    };
-  }, [building.financials?.transactions, filteredTransactions, filterFund]);
+  const filteredStats = useMemo(
+    () =>
+      computeFilteredTransactionStats(
+        building.financials?.transactions || [],
+        filteredTransactions,
+        filterFund
+      ),
+    [building.financials?.transactions, filteredTransactions, filterFund]
+  );
 
   // Filtered Quittances and stats (active totals exclude voided quittances)
-  const filteredQuittances = useMemo(() => {
-    return quittances.filter((q) => {
-      const qNum = (q.quittanceNumber || '').toLowerCase();
-      const resName = (q.residentName || '').toLowerCase();
-      const aptNum = (q.apartmentNumber || '').toLowerCase();
-      const ref = (q.referenceNumber || '').toLowerCase();
-      const search = quittanceSearch.trim().toLowerCase();
-
-      const matchesSearch =
-        search === '' ||
-        qNum.includes(search) ||
-        resName.includes(search) ||
-        aptNum.includes(search) ||
-        ref.includes(search);
-
-      const matchesMethod =
-        quittanceFilterMethod === 'all' || q.paymentMethod === quittanceFilterMethod;
-
-      return matchesSearch && matchesMethod;
-    });
-  }, [quittances, quittanceSearch, quittanceFilterMethod]);
+  const filteredQuittances = useMemo(
+    () => filterQuittances(quittances, quittanceSearch, quittanceFilterMethod),
+    [quittances, quittanceSearch, quittanceFilterMethod]
+  );
 
   const activeQuittances = useMemo(
     () => quittances.filter((q) => !q.voidedAt),
     [quittances]
   );
 
-  const totalQuittancesAmount = useMemo(() => {
-    return (
-      activeQuittances.reduce((sum, q) => sum + Math.round((q.amount || 0) * 100), 0) / 100
-    );
-  }, [activeQuittances]);
-
-  const totalReserveFundAmount = useMemo(() => {
-    return (
-      activeQuittances.reduce(
-        (sum, q) => sum + Math.round((getRecordedReserveSplit(q)?.reserveFundAmount ?? 0) * 100),
-        0
-      ) / 100
-    );
-  }, [activeQuittances]);
+  const { totalAmount: totalQuittancesAmount, totalReserveFundAmount } = useMemo(
+    () => computeQuittanceTotals(quittances),
+    [quittances]
+  );
 
   // Prestataire quick-select handler
   const handleSelectPrestataire = (pId: string) => {
