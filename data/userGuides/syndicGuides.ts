@@ -249,20 +249,20 @@ export const SYNDIC_GUIDES: UserGuideArticle[] = [
           'في قسم «المحاسبة والمالية»، افتح أداة «الأرصدة الافتتاحية» لإدخال الرصيد البنكي الأولي لصندوق التسيير وصندوق الاحتياط والمتأخرات السابقة لكل شقة.',
       },
       {
-        titleFr: 'Générer l’appel de cotisations du mois et encaisser un règlement',
-        titleAr: 'توليد واجبات الشهر وتسجيل الأداء وإصدار التوصيل',
+        titleFr: 'Appeler les charges du mois et encaisser un paiement',
+        titleAr: 'إصدار مساهمات الشهر وتحصيل دفعة وإصدار الوصل',
         bodyFr:
-          'Cliquez sur « Générer l’appel du mois » pour créer automatiquement les appels de tous les lots actifs sans doublon. Pour encaisser un règlement au bureau, cliquez sur « Encaisser » sur la ligne du copropriétaire : la quittance PDF est créée instantanément.',
+          'Cliquez sur « Appeler les charges du mois » en haut de Finances pour créer les montants à payer de tous les lots actifs sans doublon. Lorsqu’un copropriétaire règle ses charges, cliquez sur « Encaisser un paiement » (ou « Encaisser » sur la ligne du lot) : un résumé en clair s’affiche avant confirmation et le reçu PDF (quittance) est téléchargé instantanément.',
         bodyAr:
-          'اضغط «توليد واجبات الشهر» لإنشاء طلبات جميع الشقق تلقائياً دون تكرار. لتسجيل أداء مباشر، اضغط «تحصيل» بجانب الشقة ليصدر التوصيل الرسمي PDF فوراً.',
+          'اضغط «إصدار مساهمات الشهر» أعلى صفحة المالية لإنشاء المبالغ المستحقة لجميع الشقق النشطة دون تكرار. عند الأداء اضغط «تحصيل دفعة» (أو «تحصيل» بجانب الشقة) ليظهر ملخص واضح قبل التأكيد ويصدر الوصل الرسمي PDF فوراً.',
         screenshot: {
           src: '/guides/screenshots/syndic/financials-charges.jpg',
-          altFr: 'Module Comptabilité & Trésorerie affichant la synthèse des fonds et la liste des charges',
-          altAr: 'وحدة المحاسبة والمالية تعرض ملخص الصناديق وقائمة الواجبات',
+          altFr: 'Module Finances affichant les actions rapides, le panneau À faire maintenant et les charges appelées',
+          altAr: 'وحدة المالية تعرض الإجراءات السريعة ولوحة ما يجب القيام به الآن والمساهمات المطلوبة',
           captionFr:
-            'Comptabilité Loi 18-00 : séparation Fonds Courant / Fonds de Réserve, suivi des appels de charges et encaissement rapide.',
+            'Vue Finances simplifiée : actions rapides, panneau « À faire maintenant », suivi des charges appelées et encaissement guidé.',
           captionAr:
-            'محاسبة متوافقة مع القانون 18-00: فصل صندوق التسيير عن صندوق الاحتياط ومتابعة التحصيل.',
+            'واجهة مالية مبسطة: إجراءات سريعة، لوحة «ما يجب القيام به الآن»، متابعة المساهمات وتحصيل موجه.',
         },
       },
     ],
@@ -274,28 +274,28 @@ export const SYNDIC_GUIDES: UserGuideArticle[] = [
     categoryAr: 'المحاسبة والمالية',
     contextKeys: ['financials'],
     estimatedMinutes: 4,
-    titleFr: 'Validation des Justificatifs, Rapprochement CSV & Quittances PDF',
-    titleAr: 'المصادقة على وصولات السكان، مطابقة كشف البنك CSV والتوصيلات',
+    titleFr: 'Virements à vérifier, Rapprochement CSV & Reçus (quittances)',
+    titleAr: 'التحويلات للمراجعة، مطابقة كشف البنك CSV والوصولات (المخالصات)',
     summaryFr:
-      'Validez les reçus bancaires soumis par les résidents, importez votre relevé bancaire CSV (Attijariwafa, BCP, CIH, BMCE…) et délivrez les quittances officielles.',
+      'Validez les preuves de virement envoyées par les résidents, importez votre relevé bancaire CSV (Attijariwafa, BCP, CIH, BMCE…) et retrouvez tous les reçus PDF.',
     summaryAr:
-      'صادق على وصولات التحويل المرسلة من السكان، استورد كشف الحساب البنكي CSV وأصدر توصيلات الأداء الرسمية PDF.',
+      'صادق على إثباتات التحويل المرسلة من السكان، استورد كشف الحساب البنكي CSV وراجع جميع الوصولات الرسمية PDF.',
     steps: [
       {
-        titleFr: 'Contrôler et valider les justificatifs soumis par les copropriétaires',
-        titleAr: 'مراجعة والمصادقة على إثباتات الدفع المرسلة من السكان',
+        titleFr: 'Contrôler et valider les virements envoyés par les copropriétaires',
+        titleAr: 'مراجعة وتأكيد التحويلات المرسلة من الملاك المشتركين',
         bodyFr:
-          'Ouvrez l’onglet « Justificatifs / Banque » dans Finances. Prévisualisez le reçu bancaire téléversé par le résident, vérifiez le montant et la référence sur votre relevé, puis cliquez sur « Approuver » (génère la quittance et crédite le lot) ou « Rejeter » avec un motif.',
+          'Ouvrez l’onglet « Virements à vérifier » (ou cliquez sur « Vérifier » dans « À faire maintenant »). Ouvrez le justificatif du résident, comparez le montant et la référence avec votre relevé, puis cliquez sur « Valider le virement » (crée automatiquement le reçu PDF dans « Reçus (quittances) ») ou « Rejeter » avec un motif.',
         bodyAr:
-          'افتح تبويب «الوصولات / البنك» داخل المالية. عاين صورة الوصل وتأكد من المبلغ والمرجع في كشف حسابك، ثم اضغط «مصادقة» لإصدار التوصيل أو «رفض» مع ذكر السبب.',
+          'افتح تبويب «التحويلات للمراجعة» (أو اضغط «مراجعة» في لوحة «ما يجب القيام به الآن»). عاين الوصل وقارنه بكشف حسابك، ثم اضغط «تأكيد التحويل» لإصدار الوصل تلقائياً أو «رفض» مع ذكر السبب.',
         screenshot: {
           src: '/guides/screenshots/syndic/financials-bank.jpg',
-          altFr: 'Onglet Quittances et Validation bancaire dans le module Finances du Syndic',
-          altAr: 'تبويب التوصيلات والمصادقة البنكية في وحدة المالية',
+          altFr: 'Onglet Virements à vérifier et Reçus (quittances) dans le module Finances du Syndic',
+          altAr: 'تبويب التحويلات للمراجعة والوصولات في وحدة المالية',
           captionFr:
-            'Validation 1-clic des justificatifs, import CSV bancaire et archivage sécurisé des quittances PDF.',
+            'Validation 1-clic des virements, import CSV bancaire et registre « Reçus (quittances) » téléchargeable en PDF.',
           captionAr:
-            'مصادقة فورية على الوصولات ومطابقة كشف الحساب البنكي وأرشيف التوصيلات.',
+            'تأكيد فوري للتحويلات ومطابقة كشف الحساب البنكي وسجل الوصولات الجاهز للتحميل.',
         },
       },
       {
@@ -315,37 +315,37 @@ export const SYNDIC_GUIDES: UserGuideArticle[] = [
     categoryAr: 'المحاسبة والمالية',
     contextKeys: ['financials'],
     estimatedMinutes: 3,
-    titleFr: 'Dépenses, Fonds de Réserve, Transferts & Clôture d’Exercice',
-    titleAr: 'المصاريف، صندوق الاحتياط، التحويلات وإغلاق السنة المالية',
+    titleFr: 'Enregistrer une dépense, Fonds de réserve & Historique',
+    titleAr: 'تسجيل مصروف، صندوق الاحتياط وكل السجل المالي',
     summaryFr:
-      'Enregistrez vos factures fournisseurs (eau, électricité, gardiennage, ascenseur), gérez les transferts entre fonds courant et réserve, et générez les états comptables.',
+      'Enregistrez vos factures fournisseurs (eau, électricité, gardiennage, ascenseur), gérez les virements entre fonds et exportez la clôture annuelle.',
     summaryAr:
-      'سجل فواتير المزودين والماء والكهرباء والحراسة، وأدر التحويلات بين صندوق التسيير وصندوق الاحتياط وأصدر التقارير المالية.',
+      'سجل فواتير المزودين والماء والكهرباء والحراسة، وأدر التحويلات بين الصناديق وأصدر الحصيلة السنوية PDF.',
     steps: [
       {
-        titleFr: 'Saisir une dépense avec justificatif et choix du fonds imputé',
-        titleAr: 'تسجيل مصروف مع الفاتورة وتحديد الصندوق المعني',
+        titleFr: 'Enregistrer une dépense en quelques champs essentiels',
+        titleAr: 'تسجيل مصروف عبر الحقول الأساسية والوثيقة المثبتة',
         bodyFr:
-          'Dans l’onglet « Dépenses & Journal », cliquez sur « Nouvelle dépense », sélectionnez le poste (Électricité, Eau, Ascenseur, Nettoyage, Travaux…), choisissez le fonds (Fonds Courant ou Fonds de Réserve), saisissez le montant TTC et joignez la facture.',
+          'Cliquez sur « Enregistrer une dépense » en haut de Finances. Renseignez l’essentiel (montant, catégorie, date, libellé — le fonds est pré-sélectionné selon la catégorie) ainsi que le fournisseur et le numéro de facture. Les détails facultatifs (ICE, chèque, banque, notes d’AG) restent disponibles dans « Plus de détails ».',
         bodyAr:
-          'في تبويب «المصاريف والسجل»، اضغط «مصروف جديد»، اختر البند والصندوق (التسيير أو الاحتياط) وأدخل المبلغ وأرفق الفاتورة.',
+          'اضغط «تسجيل مصروف» أعلى صفحة المالية. أدخل المعلومات الأساسية (المبلغ، الفئة، التاريخ، البيان — يتم اختيار الصندوق تلقائياً حسب الفئة) واسم المهني ورقم الفاتورة، مع إمكانية فتح «تفاصيل إضافية» عند الحاجة.',
         screenshot: {
           src: '/guides/screenshots/syndic/financials-expenses.jpg',
-          altFr: 'Onglet Dépenses et Journal Comptable dans le module Finances du Syndic',
-          altAr: 'تبويب المصاريف والسجل المحاسبي في وحدة المالية',
+          altFr: 'Onglet Tout l’historique et formulaire simplifié Enregistrer une dépense',
+          altAr: 'تبويب كل السجل المالي ونموذج تسجيل مصروف المبسط',
           captionFr:
-            'Journal comptable inaltérable : contre-passation traçable en cas d’erreur, jamais de suppression silencieuse.',
+            'Historique inaltérable : annulation traçable par écriture inverse en cas d’erreur, jamais de suppression silencieuse.',
           captionAr:
-            'سجل محاسبي غير قابل للتلاعب: يتم التصحيح عبر قيد عكسي موثق بدلاً من الحذف الصامت.',
+            'سجل مالي غير قابل للتلاعب: يتم التصحيح عبر قيد عكسي موثق بدلاً من الحذف الصامت.',
         },
       },
       {
-        titleFr: 'Transférer vers le Fonds de Réserve ou contre-passer une écriture',
-        titleAr: 'التحويل إلى صندوق الاحتياط أو إلغاء قيد محاسبي',
+        titleFr: 'Virement entre fonds, clôture annuelle ou annulation d’une dépense',
+        titleAr: 'تحويل بين الصناديق، الحصيلة السنوية أو عكس مصروف',
         bodyFr:
-          'Utilisez « Transfert entre fonds » pour alimenter le fonds de réserve conformément à la décision d’AG. En cas d’erreur sur une dépense, utilisez « Contre-passer / Annuler » avec motif pour préserver la piste d’audit.',
+          'Ouvrez le menu « Plus d’actions » pour effectuer un « Virement entre fonds », saisir une « Recette diverse » ou télécharger la « Clôture annuelle (PDF) ». Dans « Tout l’historique », ouvrez le détail d’une dépense et cliquez sur « Annuler cette dépense » avec un motif pour conserver la trace comptable.',
         bodyAr:
-          'استخدم «تحويل بين الصناديق» لتغذية صندوق الاحتياط حسب قرار الجمع العام، وعند خطأ في مصروف استخدم «إلغاء بقيد عكسي» للحفاظ على مسار التدقيق.',
+          'افتح قائمة «إجراءات أخرى» لإجراء «تحويل بين الصناديق» أو تسجيل مدخول آخر أو تحميل «الحصيلة السنوية (PDF)». وفي «كل السجل المالي» يمكنك فتح تفاصيل أي مصروف والضغط على «عكس المصروف» مع ذكر السبب.',
       },
     ],
   },

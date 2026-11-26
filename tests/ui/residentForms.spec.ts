@@ -579,7 +579,7 @@ test("resident uploads a private receipt, sees errors, retries once, and syndic 
 
   await login(page, 0);
   await page
-    .getByRole("button", { name: /Vérification des Virements/ })
+    .getByRole("button", { name: /Virements à vérifier/ })
     .click();
   const row = page
     .locator("div.p-4")
@@ -593,7 +593,7 @@ test("resident uploads a private receipt, sees errors, retries once, and syndic 
   expect(receiptResponse.status()).toBe(200);
   expect(await receiptResponse.body()).toEqual(pdf.buffer);
   await row
-    .getByRole("button", { name: "Valider & Délivrer Quittance" })
+    .getByRole("button", { name: "Valider le virement" })
     .click();
   await expect
     .poll(
@@ -668,7 +668,7 @@ test("a rejected proof can be resubmitted from the exact charge on mobile in Ara
   ).toBe("rejected");
   await login(page, 0);
   await page
-    .getByRole("button", { name: /Vérification des Virements/ })
+    .getByRole("button", { name: /Virements à vérifier/ })
     .click();
   const row = page
     .locator("div.p-4")
@@ -921,14 +921,15 @@ test('receipt form cannot bypass posting and limits payment to the selected outs
   const charge = generated.data.result.find((c: any) => c.residentId === 'r-ui');
   expect(charge).toBeTruthy();
   await page.reload();
-  await page.getByRole('button', { name: /Appels de Charges/ }).click();
-  await page.getByRole('button', { name: /Émettre une Quittance/ }).click();
+  await page.getByRole('button', { name: /Charges appelées/ }).click();
+  await page.getByRole('button', { name: /Encaisser un paiement/ }).first().click();
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByRole('checkbox', { name: /Inscrire automatiquement/ })).toHaveCount(0);
-  await dialog.getByLabel('Charge à régler').selectOption(charge.id);
-  const amount = dialog.getByLabel('Montant Total Encaissé (MAD)');
+  await dialog.getByLabel(/Charge à régler/).selectOption(charge.id);
+  const amount = dialog.getByLabel(/Montant encaissé \(MAD\)/);
   await expect(amount).toHaveAttribute('max', String(charge.amount));
   await expect(dialog.getByText('Tout nouveau reçu confirme un paiement enregistré.')).toBeVisible();
+  await expect(dialog.getByTestId('quittance-live-summary')).toContainText('Un reçu PDF sera généré.');
   await amount.fill('1');
   const unrelated = await apiCommand(token, 'generateMonthlyCharges', ['b-ui', 's-ui', '2034-07', false]);
   expect(unrelated.status, JSON.stringify(unrelated.data)).toBe(200);
@@ -1023,7 +1024,7 @@ test('landing page showcases community chat, Le Souk marketplace, and plans with
 
 test('expense form saves a positive input as one negative ledger entry', async ({ page }) => {
   await login(page, 0);
-  await page.getByRole('button', { name: /Nouvelle.*Opération|Ajouter.*opération|Nouvelle écriture/i }).first().click();
+  await page.getByRole('button', { name: /Enregistrer une dépense/i }).first().click();
   const dialog = page.getByRole('dialog');
   await dialog.getByRole('button', { name: 'Valider & Enregistrer' }).click();
   await expect(dialog.getByRole('alert')).toContainText(/montant|libellé/i);
@@ -1181,7 +1182,7 @@ test('admin cabinet creation validates and retries, and provider reports require
 
 test('monthly charges use the period selected in the form', async ({ page }) => {
   await login(page, 0);
-  await page.getByRole('button', { name: 'Lancer un appel de fonds', exact: true }).click();
+  await page.getByRole('button', { name: /Appeler les charges du mois/ }).first().click();
   const dialog = page.getByRole('dialog');
   await dialog.locator('input[type=month]').fill('2027-02');
   await expectRetryableFailure(page, 'Générer pour tous les lots');
@@ -1232,7 +1233,7 @@ test('250 MAD monthly fees stay fixed as residents are added and opening setup u
   await expect(page.getByLabel('Fonds courant MAD')).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('opening-balances-mobile.png'), fullPage: true });
   const issue = async (expectedRows: number, weightedPreview = false) => {
-    await page.getByRole('button', { name: 'Lancer un appel de fonds', exact: true }).click();
+    await page.getByRole('button', { name: /Appeler les charges du mois/ }).first().click();
     const dialog = page.getByRole('dialog');
     await dialog.getByLabel('Période concernée').fill('2027-04');
     const weighted = dialog.getByRole('checkbox', { name: /Répartir un budget global/ });
@@ -1271,7 +1272,7 @@ test('250 MAD monthly fees stay fixed as residents are added and opening setup u
   expect(blocked.status).toBe(409);
   expect((await disk()).syndik_prod_proofs_v1.find((p: any) => p.id === proofId).status).toBe('pending');
   await page.reload(); // Load the proof submitted through the separate API session.
-  await page.getByRole('button', { name: /Vérification des Virements/ }).click();
+  await page.getByRole('button', { name: /Virements à vérifier/ }).click();
   await page.getByRole('button', { name: /Valider les virements conformes/ }).click();
   await expect(page.getByRole('alert').filter({ hasText: 'Confirmez les soldes initiaux' }).first()).toBeVisible();
   await page.getByRole('button', { name: 'Configurer les soldes initiaux' }).click();
@@ -1281,8 +1282,8 @@ test('250 MAD monthly fees stay fixed as residents are added and opening setup u
   await page.getByLabel('Motif de confirmation des soldes').fill('Verified zero opening funds for this new residence');
   await page.getByRole('button', { name: 'Confirmer une fois' }).click();
   await expect(page.getByRole('button', { name: 'Configurer les soldes initiaux' })).toHaveCount(0);
-  await page.getByRole('button', { name: /Vérification des Virements/ }).click();
-  await page.getByRole('button', { name: 'Valider & Délivrer Quittance' }).click();
+  await page.getByRole('button', { name: /Virements à vérifier/ }).click();
+  await page.getByRole('button', { name: 'Valider le virement' }).click();
   await expect.poll(async () => (await disk()).syndik_prod_proofs_v1.find((p: any) => p.id === proofId).status).toBe('approved');
   expect((await apiCommand(token, 'reviewPaymentProof', [proofId, 'approved'])).status).toBe(200);
   state = await disk();
@@ -1293,7 +1294,7 @@ test('250 MAD monthly fees stay fixed as residents are added and opening setup u
   expect(financials.balance).toBe(237.5);
   expect(financials.reserveFundBalance).toBe(12.5);
   expect(financials.transactions.reduce((sum: number, t: any) => sum + t.amount, 0)).toBe(250);
-  await expect(page.getByRole('button', { name: 'Valider & Délivrer Quittance' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Valider le virement' })).toHaveCount(0);
 });
 
 test('server validation returns safe field details instead of an unexplained save failure', async () => {
@@ -1377,7 +1378,7 @@ test('session recovery: fresh sign-in cancels a hung verification and ignores it
 
 test('session recovery: temporary verification failure retains the verified view and its open draft', async ({ page }) => {
   await login(page, 0);
-  await page.getByRole('button', { name: /Ajouter.*opération/i }).first().click();
+  await page.getByRole('button', { name: /Enregistrer une dépense/i }).first().click();
   const dialog = page.getByRole('dialog');
   const description = await field(page, /Libellé/), amount = await field(page, /Montant/);
   await description.fill('Session recovery draft'); await amount.fill('37.45');
@@ -1438,7 +1439,7 @@ test('connection retry verifies the saved session without reloading and transien
       available = true;
       await page.getByRole('button', { name: 'Réessayer la connexion', exact: true }).click();
     }
-    await expect(page.getByRole('heading', { name: 'Gestion Financière & Recouvrement' })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole('heading', { name: /Finances —/ })).toBeVisible({ timeout: 20_000 });
     expect(await page.evaluate(() => (window as any).__retryProbe)).toBe('keep-this-document');
     await page.unroute('**/api/auth/session');
   }
@@ -1531,7 +1532,7 @@ test('live state changes update separate resident and syndic sessions through pa
   const oldReportGate = new Promise<void>(resolve => { releaseOldReport = resolve; });
   try {
     await login(residentPage);
-    await page.getByRole('button', { name: /Vérification des Virements/ }).click();
+    await page.getByRole('button', { name: /Virements à vérifier/ }).click();
     const chargeRow = residentPage.getByText('Live payment probe', { exact: true }).locator('../..');
     await expect(chargeRow).toBeVisible();
     await page.evaluate(() => { (window as any).__liveProbe = 'syndic-original-document'; });
@@ -1543,7 +1544,7 @@ test('live state changes update separate resident and syndic sessions through pa
     await modal.getByRole('button', { name: 'Envoyer pour validation' }).click();
     await expect(modal).toBeHidden();
     const proofRow = page.locator('div.p-4').filter({ has: page.locator('strong', { hasText: 'LIVE-CROSS-SESSION-79' }) }).last();
-    await expect(proofRow.getByRole('button', { name: 'Valider & Délivrer Quittance' })).toBeVisible({ timeout: 20_000 });
+    await expect(proofRow.getByRole('button', { name: 'Valider le virement' })).toBeVisible({ timeout: 20_000 });
     let captured = false, oldReportReady = false;
     await page.route('**/api/reports?*', async route => {
       if (captured) return route.continue();
@@ -1557,7 +1558,7 @@ test('live state changes update separate resident and syndic sessions through pa
       title: 'Report concurrency probe', description: 'Trigger a report refresh before the payment changes.', category: 'other', priority: 'low' }]);
     expect(probe.status, JSON.stringify(probe.data)).toBe(200);
     await expect.poll(() => oldReportReady).toBe(true);
-    await proofRow.getByRole('button', { name: 'Valider & Délivrer Quittance' }).click();
+    await proofRow.getByRole('button', { name: 'Valider le virement' }).click();
     await expect(chargeRow.getByText('✓ Réglé', { exact: true })).toBeVisible({ timeout: 20_000 });
     await expect(chargeRow.getByRole('button', { name: 'Quittance PDF', exact: true })).toBeVisible();
     releaseOldReport();
@@ -2199,6 +2200,84 @@ test('session transport: web sign-in, reload, mutation and logout use HttpOnly c
   const migratedCookie = (await page.context().cookies(base)).find((c) => c.name === 'syndik_session');
   expect(migratedCookie?.httpOnly).toBe(true);
 });
+
+test('Finance UX phase 1: opens on Charges appelées, surfaces À faire maintenant actions, discloses legal refs via InfoTip, and records payment with live summary', async ({ page }) => {
+  page.setDefaultTimeout(10_000);
+  const syndicToken = await login(page, 0);
+
+  // Create an overdue arrear charge (2025-01 -> past due) and a pending bank proof
+  const arrearRes = await apiCommand(syndicToken, 'importOpeningArrears', [
+    'b-ui',
+    [{ residentId: resident.id, apartmentId: 'lot-ui', amount: 320, period: '2025-01', description: 'Arriéré janvier 2025' }],
+    'Phase 1 UX overdue todo verification',
+  ]);
+  expect(arrearRes.status, JSON.stringify(arrearRes.data)).toBe(200);
+
+  const futureRes = await apiCommand(syndicToken, 'generateMonthlyCharges', ['b-ui', 's-ui', '2035-03', false]);
+  expect(futureRes.status, JSON.stringify(futureRes.data)).toBe(200);
+  const futureCharge = futureRes.data.result.find((c: any) => c.residentId === resident.id);
+  expect(futureCharge).toBeTruthy();
+
+  const uploaded = await apiCall(syndicToken, '/api/uploads', {
+    buildingId: 'b-ui',
+    name: 'todo-panel-proof.pdf',
+    dataUrl: `data:application/pdf;base64,${pdf.buffer.toString('base64')}`,
+  });
+  expect(uploaded.status, JSON.stringify(uploaded.data)).toBe(200);
+  const proofSubmitted = await apiCommand(syndicToken, 'submitPaymentProof', [{
+    chargeId: futureCharge.id,
+    amount: futureCharge.amount,
+    receiptUrl: uploaded.data.url,
+    bankName: 'Attijariwafa Bank',
+    referenceNumber: 'TODO-PANEL-PROOF-01',
+    paymentMethod: 'virement',
+  }]);
+  expect(proofSubmitted.status, JSON.stringify(proofSubmitted.data)).toBe(200);
+
+  await page.goto(`${base}/financials`);
+  // Default tab is Charges appelées
+  await expect(page.getByRole('heading', { name: 'Charges appelées aux copropriétaires' })).toBeVisible();
+
+  // À faire maintenant shows both pending transfers and overdue residents
+  await expect(page.getByRole('heading', { name: 'À faire maintenant' })).toBeVisible();
+  await expect(page.getByText(/virement\(s\) à vérifier/)).toBeVisible();
+  await expect(page.getByText(/copropriétaire\(s\) en retard/).first()).toBeVisible();
+
+  // InfoTip discloses Loi 106-12 without switching tabs
+  await page.getByRole('button', { name: 'Information légale fonds de réserve' }).click();
+  await expect(page.getByRole('tooltip')).toContainText('Loi n° 106-12');
+  await expect(page.getByRole('heading', { name: 'Charges appelées aux copropriétaires' })).toBeVisible();
+
+  // Clicking Vérifier in À faire maintenant opens Virements à vérifier
+  await page.getByRole('button', { name: 'Vérifier', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Virements envoyés par les copropriétaires' })).toBeVisible();
+
+  // Encaisser un paiement -> live summary sentence updates remaining balance -> saves 1 quittance
+  const overdueCharge = (await disk()).syndik_prod_charges_v1.find(
+    (c: any) => c.buildingId === 'b-ui' && c.residentId === resident.id && c.period === '2025-01',
+  );
+  expect(overdueCharge).toBeTruthy();
+
+  await page.getByRole('button', { name: /Encaisser un paiement/ }).first().click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel(/Charge à régler/).selectOption(overdueCharge.id);
+  const amountInput = dialog.getByLabel(/Montant encaissé \(MAD\)/);
+  await amountInput.fill('120');
+  await expect(dialog.getByTestId('quittance-live-summary')).toContainText(/200,00/);
+  await expect(dialog.getByTestId('quittance-live-summary')).toContainText('Un reçu PDF sera généré.');
+
+  await amountInput.fill('320');
+  await expect(dialog.getByTestId('quittance-live-summary')).toContainText(/0,00/);
+  await dialog.getByRole('button', { name: /Encaisser et générer le reçu/ }).click();
+  await expect(dialog).toBeHidden();
+
+  const savedReceipts = ((await disk()).syndik_prod_quittances_v1 || []).filter(
+    (q: any) => q.chargeId === overdueCharge.id && !q.voidedAt,
+  );
+  expect(savedReceipts).toHaveLength(1);
+  expect(savedReceipts[0].amount).toBe(320);
+});
+
 
 
 
