@@ -6,6 +6,7 @@ import Button from '../common/Button';
 import Modal from '../common/Modal';
 import { PlusIcon, PencilIcon, TrashIcon } from '../icons/IconComponents';
 import { useI18n } from '../../hooks/useI18n';
+import { useLegalFramework } from '../../hooks/useLegalFramework';
 import { getBuildingReserveRate } from '../../utils/security';
 import {
   PLAN_CATALOG,
@@ -51,6 +52,7 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
   syndicName,
 }) => {
   const { t, tr } = useI18n();
+  const { legal } = useLegalFramework();
   const [name, setName] = useState('');
   const [address, setAddress] = useState('');
   const [city, setCity] = useState('');
@@ -60,7 +62,7 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
     'numeric' | 'alphabetic' | 'floor_numeric'
   >('floor_numeric');
   const [monthlyFees, setMonthlyFees] = useState('250');
-  const [reserveFundRate, setReserveFundRate] = useState('5');
+  const [reserveFundRate, setReserveFundRate] = useState(() => String(legal.rules.defaultReserveFundPercent));
   const [bankName, setBankName] = useState('');
   const [bankRib, setBankRib] = useState('');
   const [managerName, setManagerName] = useState('');
@@ -88,7 +90,7 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
       setFloorsCount('4');
       setNumberingSystem('floor_numeric');
       setMonthlyFees('250');
-      setReserveFundRate('5');
+      setReserveFundRate(String(legal.rules.defaultReserveFundPercent));
       setBankName('');
       setBankRib('');
       setManagerName('');
@@ -386,7 +388,7 @@ const BuildingModal: React.FC<BuildingModalProps> = ({
               htmlFor="bld-reserve-rate"
               className="block text-xs font-semibold text-slate-700 mb-1"
             >
-              {tr('Fonds de réserve Loi 106-12 (%)', 'صندوق الاحتياط قانون 106-12 (%)')}
+              {tr('Fonds de réserve (%)', 'صندوق الاحتياط (%)')}
             </label>
             <input
               type="number"
@@ -865,7 +867,7 @@ const Buildings: React.FC<{
                         {tr('Fonds Réserve', 'صندوق الاحتياط')}
                       </span>
                       <span className="font-mono font-bold text-teal-700">
-                        {getBuildingReserveRate(building)}% ({tr('Loi 106-12', 'قانون 106-12')})
+                        {getBuildingReserveRate(building)}%
                       </span>
                     </div>
                   </div>

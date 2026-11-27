@@ -19,7 +19,7 @@ export const GUIDE_ROLES: GuideRoleMeta[] = [
     labelFr: 'Syndic Gestionnaire',
     labelAr: 'وكيل الاتحاد (السنديك)',
     descriptionFr:
-      'Immeubles, lots & tantièmes, finances Loi 18-00, AG, maintenance, documents et abonnement SaaS.',
+      'Immeubles, lots & tantièmes, comptabilité syndic, AG, maintenance, documents et abonnement SaaS.',
     descriptionAr:
       'العمارات والأنصبة والمحاسبة القانونية والجموع العامة والصيانة والوثائق واشتراك المنصة.',
     badgeClass: 'bg-teal-100 text-teal-900 border-teal-200',

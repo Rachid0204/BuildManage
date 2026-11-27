@@ -217,9 +217,9 @@ export const ADMIN_GUIDES: UserGuideArticle[] = [
   {
     id: 'admin-audit',
     role: 'admin',
-    categoryFr: 'Audit & Observabilité',
-    categoryAr: 'التدقيق والمراقبة',
-    contextKeys: ['audit'],
+    categoryFr: 'Audit & Cadre Légal',
+    categoryAr: 'التدقيق والإطار القانوني',
+    contextKeys: ['audit', 'legal'],
     estimatedMinutes: 2,
     titleFr: 'Surveiller les Webhooks CMI/PayPal & le Journal d’Audit Plateforme',
     titleAr: 'مراقبة Webhooks لبوابات CMI/PayPal وسجل تدقيق المنصة',
@@ -252,6 +252,14 @@ export const ADMIN_GUIDES: UserGuideArticle[] = [
           'Utilisez la recherche libre ou le filtre d’opération (modifications de passerelles, encaissements, annulations, promos, rappels) pour vérifier qui a exécuté quelle action et à quelle heure.',
         bodyAr:
           'استخدم البحث النصي أو فلتر نوع العملية لمعرفة منفذ كل إجراء وتوقيته الدقيق.',
+      },
+      {
+        titleFr: 'Mettre à jour le Cadre Légal sans redéploiement (effet prospectif)',
+        titleAr: 'تحديث الإطار القانوني مباشرة دون إعادة نشر (بأثر مستقبلي)',
+        bodyFr:
+          'Depuis l’onglet « Cadre Légal », ajustez en français et en arabe les références légales officielles ainsi que les seuils réglementaires (taux par défaut du fonds de réserve pour les nouveaux immeubles, plafond de procurations AG, délais de convocation et de mise en demeure). Les quittances et PV déjà émis conservent leur mention légale d’origine.',
+        bodyAr:
+          'من تبويب «الإطار القانوني»، يمكنك تعديل المراجع القانونية بالعربية والفرنسية والعتبات التنظيمية (نسبة صندوق الاحتياط الافتراضية للعمارات الجديدة، سقف الوكالات، آجال الاستدعاء والإنذار)، مع الحفاظ التام على المراجع الأصلية للوصولات والمحاضر السابقة.',
       },
     ],
   },

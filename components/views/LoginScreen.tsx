@@ -192,8 +192,8 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onBack }) => {
           </h1>
           <p className="text-xs text-slate-500 mt-2 uppercase font-semibold tracking-wider">
             {tr(
-              'Plateforme Marocaine de Gestion de Copropriété (Loi 18-00 & 106-12)',
-              'المنصة المغربية لتدبير الملكية المشتركة (القانون 18-00 و 106-12)'
+              'Plateforme Marocaine de Gestion de Copropriété',
+              'المنصة المغربية لتدبير الملكية المشتركة'
             )}
           </p>
         </div>

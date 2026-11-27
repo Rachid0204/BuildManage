@@ -6,6 +6,7 @@ import Modal from '../../../common/Modal';
 import InfoTip from '../../../common/InfoTip';
 import { reverseExpense } from '../../../../firebase/services';
 import { useI18n } from '../../../../hooks/useI18n';
+import { useLegalFramework } from '../../../../hooks/useLegalFramework';
 import { useToast } from '../../../common/Toast';
 import { currencyFormatter } from '../financeConstants';
 
@@ -23,6 +24,7 @@ const ReverseExpenseModal: React.FC<ReverseExpenseModalProps> = ({
   onReversed,
 }) => {
   const { tr, isAr } = useI18n();
+  const { legal } = useLegalFramework();
   const { showToast } = useToast();
   const queryClient = useQueryClient();
   const [reverseExpenseReason, setReverseExpenseReason] = useState('');
@@ -83,8 +85,8 @@ const ReverseExpenseModal: React.FC<ReverseExpenseModalProps> = ({
           </span>
           <InfoTip label={tr('Contrepassation comptable', 'القيد العكسي')}>
             {tr(
-              'Principe de traçabilité comptable (Loi n° 18-00) : aucune écriture enregistrée ne peut être supprimée sans trace.',
-              'مبدأ التتبع المحاسبي (القانون 18-00): لا يُحذف أي قيد مسجل دون أثر.',
+              `Principe de traçabilité comptable (${legal.citations.accountingRefFr}) : aucune écriture enregistrée ne peut être supprimée sans trace.`,
+              `مبدأ التتبع المحاسبي (${legal.citations.accountingRefAr}): لا يُحذف أي قيد مسجل دون أثر.`,
             )}
           </InfoTip>
         </p>

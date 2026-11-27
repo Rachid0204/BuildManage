@@ -14,6 +14,7 @@ import { fileIsReferenced } from '../lifecycle';
 import { mailIsConfigured,queueMail } from "../mailer";
 import { queuePushNotification } from "../pushNotifications";
 import { resolvePlatformBillingConfig } from "../paypalBilling";
+import { resolveLegalFramework } from "../../shared/legalFramework";
 import { type State } from "../repository";
 import { firebaseLinkedResidentIds,LINKED_RESIDENT_EMAIL_CODE,LINKED_RESIDENT_EMAIL_MESSAGE } from '../residentIdentity';
 import { createAssemblyCommands } from './assembly.service';
@@ -600,10 +601,13 @@ async function runOperation(
       "Limite du forfait atteinte.",
       409,
     );
+    const defaultReserveRate = resolveLegalFramework(
+      transactionState.__legalFrameworkConfig,
+    ).rules.defaultReserveFundPercent;
     const data = BuildingSchema.omit({ id: true }).parse({
         ...args[1],
         reserveFundRate: args[1].reserveFundRate !== undefined ? args[1].reserveFundRate
-          : args[1].reserveFundPercentage !== undefined ? args[1].reserveFundPercentage : 5,
+          : args[1].reserveFundPercentage !== undefined ? args[1].reserveFundPercentage : defaultReserveRate,
         syndicId: s.id,
       });
     if (data.bankRib && data.bankRib.trim() !== "")

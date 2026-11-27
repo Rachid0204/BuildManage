@@ -11,6 +11,11 @@ import {
 import type { StateRepository } from "../repository";
 import type { EphemeralGatewayEventBuffer } from "../requestGuard";
 import { PLANS } from "../../shared/domain/subscription";
+import {
+  LegalFrameworkUpdateSchema,
+  resolveLegalFramework,
+  type StoredLegalFrameworkConfig,
+} from "../../shared/legalFramework";
 import type {
   GatewayEventRecord,
   SubscriptionPlan,
@@ -79,6 +84,57 @@ export function registerAdminRoutes(
       sharedStore.__subscriptionPromos || [];
     return res.json({ ok: true, promos: [...promos].reverse() });
   });
+
+  app.put(
+    "/api/admin/legal-framework",
+    wrap(async (req, res) => {
+      const caller = await extractAndVerifyCaller(req, sharedStore);
+      if (!caller)
+        return res.status(401).json({ error: "Authentification requise." });
+      if (caller.role !== "admin")
+        return res.status(403).json({ error: "Administration uniquement." });
+      assertOnboarded(caller, sharedStore);
+
+      const parsed = LegalFrameworkUpdateSchema.parse(req.body || {});
+      if (parsed.resetToDefaults) {
+        delete sharedStore.__legalFrameworkConfig;
+        appendAudit(sharedStore, caller, "adminResetLegalFramework", undefined, {});
+      } else {
+        const prev = (sharedStore.__legalFrameworkConfig ||
+          {}) as StoredLegalFrameworkConfig;
+        const nextStored: StoredLegalFrameworkConfig = {
+          effectiveDate:
+            parsed.effectiveDate !== undefined
+              ? parsed.effectiveDate
+              : prev.effectiveDate,
+          updatedAt: new Date().toISOString(),
+          updatedBy: caller.uid,
+          citations: {
+            ...(prev.citations || {}),
+            ...(parsed.citations || {}),
+          },
+          rules: {
+            ...(prev.rules || {}),
+            ...(parsed.rules || {}),
+          },
+        };
+        sharedStore.__legalFrameworkConfig = nextStored;
+        appendAudit(sharedStore, caller, "adminUpdateLegalFramework", undefined, {
+          effectiveDate: nextStored.effectiveDate,
+          defaultReserveFundPercent: nextStored.rules?.defaultReserveFundPercent,
+          maxProxiesPerHolder: nextStored.rules?.maxProxiesPerHolder,
+          maxProxyTantiemesSharePercent:
+            nextStored.rules?.maxProxyTantiemesSharePercent,
+        });
+      }
+
+      return res.json({
+        ok: true,
+        config: resolveLegalFramework(sharedStore.__legalFrameworkConfig),
+        isCustomized: Boolean(sharedStore.__legalFrameworkConfig),
+      });
+    }),
+  );
 
   api.post("/api/admin/promos", async (req, res) => {
     const caller = await extractAndVerifyCaller(req, sharedStore);

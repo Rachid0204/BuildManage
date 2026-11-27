@@ -1090,7 +1090,7 @@ const PrestatairesView: React.FC<PrestatairesProps> = ({ building }) => {
                 onChange={(e) => setIsVerifiedBySyndic(e.target.checked)}
                 className="rounded border-slate-300 text-teal-600 focus:ring-teal-500"
               />
-              <span>✓ {tr('Agréé par le Syndic (Loi 18-00)', 'معتمد من طرف السنديك (قانون 18-00)')}</span>
+              <span>✓ {tr('Agréé par le Syndic', 'معتمد من طرف السنديك')}</span>
             </label>
           </div>
 

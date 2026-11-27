@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import type express from "express";
 import { z } from "zod";
+import { resolveLegalFramework } from "../../shared/legalFramework";
 import { projectAssemblyForRole } from "../assemblyPrivacy";
 import {
   CommandEnvelopeSchema,
@@ -409,6 +410,15 @@ export function registerPlatformReadRoutes(
   } = deps;
 
   let readyCache: { revision: number; expiresAt: number } | undefined;
+
+  api.get("/api/legal-framework", async (_req, res) => {
+    const raw = sharedStore.__legalFrameworkConfig;
+    return res.json({
+      ok: true,
+      config: resolveLegalFramework(raw),
+      isCustomized: Boolean(raw),
+    });
+  });
 
   api.get("/api/reports", async (req, res) => {
     const caller = await extractAndVerifyCaller(req, sharedStore);

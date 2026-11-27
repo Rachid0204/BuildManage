@@ -93,7 +93,7 @@ test('every Syndic route, Resident tab, Provider screen, and Admin tab resolves 
 
   assert.ok(resolveContextualGuides('provider', 'interventions').length > 0);
 
-  for (const tab of ['cabinets', 'reports', 'billing', 'commercial', 'audit']) {
+  for (const tab of ['cabinets', 'reports', 'billing', 'commercial', 'legal', 'audit']) {
     const matched = resolveContextualGuides('admin', tab);
     assert.ok(matched.length > 0, `No contextual guide for admin/${tab}`);
   }

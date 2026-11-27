@@ -13,6 +13,7 @@ import {
   splitChargeReserveAndOperating,
 } from '../../../../utils/security';
 import { useI18n } from '../../../../hooks/useI18n';
+import { useLegalFramework } from '../../../../hooks/useLegalFramework';
 import { useToast } from '../../../common/Toast';
 import { currencyFormatter, MOROCCAN_BANKS } from '../financeConstants';
 
@@ -42,6 +43,7 @@ const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
   onClose,
 }) => {
   const { tr, isAr } = useI18n();
+  const { legal } = useLegalFramework();
   const { showToast } = useToast();
   const queryClient = useQueryClient();
 
@@ -113,8 +115,8 @@ const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
       setQuittanceRemarks(
         prefill?.remarks ||
           tr(
-            'Cotisation copropriété - Récépissé libératoire (Loi 18-00 / 106-12)',
-            'مساهمة الملكية المشتركة - وصل إبراء الذمة (القانون 18-00 / 106-12)',
+            'Cotisation copropriété - Récépissé libératoire',
+            'مساهمة الملكية المشتركة - وصل إبراء الذمة',
           ),
       );
       lastSyncedQuittanceKeyRef.current = `${charge.id}:${prefilledAmount}`;
@@ -318,8 +320,8 @@ const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
             <span>{tr('Le reçu PDF officiel est téléchargé dès validation', 'يتم تحميل الوصل الرسمي PDF فور التأكيد')}</span>
             <InfoTip label={tr('Quittance officielle', 'وصل أداء رسمي')}>
               {tr(
-                'Quittance libératoire conforme aux lois n° 18-00 et 106-12 (Art. 18 bis), incluant la part du fonds de réserve.',
-                'وصل إبراء رسمي مطابق للقانونين 18-00 و106-12 (المادة 18 مكرر) يتضمن حصة صندوق الاحتياط.',
+                `Quittance libératoire conforme (${legal.citations.statuteShortFr} · ${legal.citations.reserveFundRefFr}), incluant la part du fonds de réserve.`,
+                `وصل إبراء رسمي مطابق (${legal.citations.statuteShortAr} · ${legal.citations.reserveFundRefAr}) يتضمن حصة صندوق الاحتياط.`,
               )}
             </InfoTip>
           </span>
@@ -553,8 +555,8 @@ const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
                   </span>
                   <InfoTip label={tr('Ventilation fonds de réserve', 'توزيع صندوق الاحتياط')}>
                     {tr(
-                      'Répartition automatique prévue par la Loi n° 106-12 (Art. 18 bis).',
-                      'توزيع تلقائي منصوص عليه في القانون 106-12 (المادة 18 مكرر).',
+                      `Répartition automatique prévue par le cadre réglementaire (${legal.citations.reserveFundRefFr}).`,
+                      `توزيع تلقائي منصوص عليه قانوناً (${legal.citations.reserveFundRefAr}).`,
                     )}
                   </InfoTip>
                 </span>

@@ -58,9 +58,13 @@ export function allocateBudgetInCentimes(
 export const allocateBudgetCentimes = allocateBudgetInCentimes;
 
 /** Canonical configuration wins, including zero; percentage-only legacy records remain readable. */
-export function getBuildingReserveRate(building?: Pick<Building, 'reserveFundRate' | 'reserveFundPercentage'>): number {
-  const rate = building?.reserveFundRate ?? building?.reserveFundPercentage ?? 5;
-  return Number.isFinite(rate) && rate >= 0 && rate <= 100 ? rate : 5;
+export function getBuildingReserveRate(
+  building?: Pick<Building, 'reserveFundRate' | 'reserveFundPercentage'>,
+  fallbackRate = 5,
+): number {
+  const fallback = Number.isFinite(fallbackRate) && fallbackRate >= 0 && fallbackRate <= 100 ? fallbackRate : 5;
+  const rate = building?.reserveFundRate ?? building?.reserveFundPercentage ?? fallback;
+  return Number.isFinite(rate) && rate >= 0 && rate <= 100 ? rate : fallback;
 }
 
 /** Resolve the reserve-fund allocation percentage for a charge, honoring per-resolution AG works routing. */

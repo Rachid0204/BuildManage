@@ -121,8 +121,8 @@ const SettingsForm: React.FC<SettingsProps> = ({ syndic, onUpdate }) => {
         <h1 className="text-2xl font-bold text-slate-900 tracking-tight">{t('settings.title')}</h1>
         <p className="text-xs sm:text-sm text-slate-500 mt-1">
           {tr(
-            'Identité légale et fiscale figurant sur les quittances, appels de fonds et procès-verbaux (Loi 18-00)',
-            'الهوية القانونية والضريبية التي تظهر على وصولات الأداء، طلبات المساهمات ومحاضر الجموع العامة (قانون 18-00)'
+            'Identité légale et fiscale figurant sur les quittances, appels de fonds et procès-verbaux officiels',
+            'الهوية القانونية والضريبية التي تظهر على وصولات الأداء، طلبات المساهمات ومحاضر الجموع العامة الرسمية'
           )}
         </p>
       </div>
@@ -283,8 +283,8 @@ const SettingsForm: React.FC<SettingsProps> = ({ syndic, onUpdate }) => {
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
               {tr(
-                'Consultez la politique de confidentialité (Loi 09-08), les CGU ou gérez la suppression de votre compte.',
-                'اطلع على سياسة الخصوصية (القانون 09-08) وشروط الاستخدام أو اطلب حذف حسابك.',
+                'Consultez la politique de confidentialité, les CGU ou gérez la suppression de votre compte.',
+                'اطلع على سياسة الخصوصية وشروط الاستخدام أو اطلب حذف حسابك.',
               )}
             </p>
           </div>

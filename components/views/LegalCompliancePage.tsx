@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ShieldCheck, FileText, Trash2, ArrowLeft, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { useI18n } from '../../hooks/useI18n';
+import { useLegalFramework } from '../../hooks/useLegalFramework';
 import { useAuth, getHomeRouteForRole } from '../../contexts/AuthContext';
 import LanguageToggle from '../common/LanguageToggle';
 import Button from '../common/Button';
@@ -23,6 +24,7 @@ const SUPPORT_EMAIL = 'support@syndicunion.ma';
 
 const LegalCompliancePage: React.FC<{ section: LegalSection }> = ({ section }) => {
   const { language, tr } = useI18n();
+  const { legal } = useLegalFramework();
   const { currentUser, userProfile } = useAuth();
   const navigate = useNavigate();
   const isAr = language === 'ar';
@@ -232,7 +234,7 @@ const LegalCompliancePage: React.FC<{ section: LegalSection }> = ({ section }) =
             <div className="border-b border-slate-200 pb-4">
               <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-teal-50 text-teal-800 border border-teal-200">
                 <ShieldCheck className="w-3.5 h-3.5" />
-                {tr('Loi 09-08 (CNDP Maroc) · App Store & Google Play', 'القانون 09-08 (CNDP المغرب) · App Store و Google Play')}
+                {tr(`${legal.citations.dataPrivacyLawFr} · App Store & Google Play`, `${legal.citations.dataPrivacyLawAr} · App Store و Google Play`)}
               </span>
               <h1 className="text-2xl font-extrabold text-slate-900 mt-2 font-display">
                 {tr('Politique de Confidentialité — SyndicUnion', 'سياسة الخصوصية — SyndicUnion')}
@@ -248,8 +250,8 @@ const LegalCompliancePage: React.FC<{ section: LegalSection }> = ({ section }) =
               </h2>
               <p>
                 {tr(
-                  'SyndicUnion collecte uniquement les données strictement nécessaires à la gestion de la copropriété au Maroc conformément aux Lois n° 18-00 et 106-12 :',
-                  'يجمع تطبيق SyndicUnion فقط البيانات الضرورية لتدبير الملكية المشتركة بالمغرب وفق القانونين 18-00 و 106-12:',
+                  `SyndicUnion collecte uniquement les données strictement nécessaires à la gestion de la copropriété au Maroc conformément au cadre légal applicable (${legal.citations.statuteShortFr}) :`,
+                  `يجمع تطبيق SyndicUnion فقط البيانات الضرورية لتدبير الملكية المشتركة بالمغرب وفق الإطار القانوني الجاري به العمل (${legal.citations.statuteShortAr}):`,
                 )}
               </p>
               <ul className="list-disc ps-5 space-y-1">
@@ -294,12 +296,12 @@ const LegalCompliancePage: React.FC<{ section: LegalSection }> = ({ section }) =
 
             <section className="space-y-2 text-sm text-slate-700 leading-relaxed">
               <h2 className="text-base font-bold text-slate-900">
-                {tr('3. Vos droits (Loi 09-08) & suppression de compte', '3. حقوقكم (القانون 09-08) وحذف الحساب')}
+                {tr(`3. Vos droits (${legal.citations.dataPrivacyLawFr}) & suppression de compte`, `3. حقوقكم (${legal.citations.dataPrivacyLawAr}) وحذف الحساب`)}
               </h2>
               <p>
                 {tr(
-                  'Conformément à la Loi marocaine n° 09-08 relative à la protection des personnes physiques à l’égard du traitement des données à caractère personnel, vous disposez d’un droit d’accès, de rectification et de suppression. Vous pouvez soumettre une demande directement depuis notre page dédiée :',
-                  'وفقاً للقانون المغربي رقم 09-08 المتعلق بحماية الأشخاص الذاتيين تجاه معالجة المعطيات ذات الطابع الشخصي، يحق لكم الولوج وتصحيح وطلب حذف بياناتكم مباشرة عبر صفحتنا المخصصة:',
+                  `Conformément à la réglementation relative à la protection des données à caractère personnel (${legal.citations.dataPrivacyLawFr}), vous disposez d’un droit d’accès, de rectification et de suppression. Vous pouvez soumettre une demande directement depuis notre page dédiée :`,
+                  `وفقاً للتشريع المتعلق بحماية المعطيات ذات الطابع الشخصي (${legal.citations.dataPrivacyLawAr})، يحق لكم الولوج وتصحيح وطلب حذف بياناتكم مباشرة عبر صفحتنا المخصصة:`,
                 )}
               </p>
               <div className="pt-1 flex flex-wrap gap-3 items-center">
@@ -343,7 +345,7 @@ const LegalCompliancePage: React.FC<{ section: LegalSection }> = ({ section }) =
 
             <section className="space-y-2 text-sm text-slate-700 leading-relaxed">
               <h2 className="text-base font-bold text-slate-900">
-                {tr('2. Comptes, responsabilités & conformité Loi 18-00', '2. الحسابات والمسؤوليات والامتثال للقانون 18-00')}
+                {tr(`2. Comptes, responsabilités & conformité (${legal.citations.statuteShortFr})`, `2. الحسابات والمسؤوليات والامتثال (${legal.citations.statuteShortAr})`)}
               </h2>
               <p>
                 {tr(
@@ -393,7 +395,7 @@ const LegalCompliancePage: React.FC<{ section: LegalSection }> = ({ section }) =
               </div>
               <div className="p-4 rounded-xl bg-amber-50/70 border border-amber-200 space-y-1.5">
                 <h2 className="font-bold text-amber-950">
-                  {tr('Archives légales conservées (Loi 18-00)', 'الأرشيف القانوني المحفوظ (القانون 18-00)')}
+                  {tr(`Archives légales conservées (${legal.citations.statuteShortFr})`, `الأرشيف القانوني المحفوظ (${legal.citations.statuteShortAr})`)}
                 </h2>
                 <p className="text-amber-900 leading-relaxed">
                   {tr(

@@ -5,7 +5,7 @@ import { useI18n } from '../hooks/useI18n';
 import { startLiveSync, type LiveStatus } from '../firebase/liveSync';
 
 const directServerQuery = (query: { queryKey: readonly unknown[] }) =>
-  ['financialReport', 'archivedBuildings'].includes(String(query.queryKey[0]));
+  ['financialReport', 'archivedBuildings', 'legalFramework'].includes(String(query.queryKey[0]));
 
 export default function LiveDataSync() {
   const { userProfile, retrySession, sessionError } = useAuth();

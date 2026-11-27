@@ -173,6 +173,9 @@ export interface PaymentProof extends PaymentDates {
 export interface Quittance extends PaymentDates {
   /** Rate captured when the payment was posted; absent for undocumented/mixed legacy allocations. */
   reserveRateApplied?: number;
+  /** Statutory citation captured when the receipt was issued so historical receipts stay immutable. */
+  legalCitationFr?: string;
+  legalCitationAr?: string;
   voidedAt?: string;
   voidReason?: string;
   paymentId?: string;
@@ -411,8 +414,18 @@ export interface AGVotingSnapshot {
   apartments: Pick<Apartment, 'id' | 'number' | 'ownerId' | 'tantiemes'>[];
 }
 
+export type {
+  LegalFrameworkCitations,
+  LegalFrameworkConfig,
+  LegalFrameworkRules,
+  LegalFrameworkUpdateInput,
+  StoredLegalFrameworkConfig,
+} from './shared/legalFramework';
+
 export interface AssembleeGenerale {
   votingSnapshot?: AGVotingSnapshot;
+  legalCitationFr?: string;
+  legalCitationAr?: string;
   id: string;
   buildingId: string;
   syndicId: string;

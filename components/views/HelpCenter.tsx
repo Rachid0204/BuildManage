@@ -243,8 +243,8 @@ const HelpCenter: React.FC<HelpCenterProps> = ({
               </h1>
               <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
                 {tr(
-                  'Apprenez à maîtriser chaque module pas à pas : comptabilité Loi 18-00, Assemblées Générales, portail résidents, prestataires et paiements CMI / Espèces.',
-                  'تعلّم استخدام كل وحدة خطوة بخطوة: المحاسبة القانونية 18-00، الجموع العامة، بوابة السكان، مقدمو الخدمات وبوابات الدفع المغربية.',
+                  'Apprenez à maîtriser chaque module pas à pas : comptabilité de copropriété, Assemblées Générales, portail résidents, prestataires et paiements CMI / Espèces.',
+                  'تعلّم استخدام كل وحدة خطوة بخطوة: محاسبة الملكية المشتركة، الجموع العامة، بوابة السكان، مقدمو الخدمات وبوابات الدفع المغربية.',
                 )}
               </p>
             </div>

@@ -25,6 +25,7 @@ import NotificationBell from '../common/NotificationBell';
 import LanguageToggle from '../common/LanguageToggle';
 import BrandLogo from '../common/BrandLogo';
 import { useI18n } from '../../hooks/useI18n';
+import { useLegalFramework } from '../../hooks/useLegalFramework';
 import {
   getMaintenanceRequestsForResident,
   addMaintenanceRequest,
@@ -57,6 +58,7 @@ const ResidentHelpDrawer = React.lazy(() => import('../help/HelpDrawer'));
 const ResidentDashboard: React.FC = () => {
   const { userProfile, logout, changePassword } = useAuth();
   const { t, tr, language } = useI18n();
+  const { legal } = useLegalFramework();
   const { showToast } = useToast();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -276,7 +278,7 @@ const ResidentDashboard: React.FC = () => {
     [ownedApartments]
   );
 
-  // Fetch Assemblées Générales & Digital Voting Sessions (owners only per Law 18-00)
+  // Fetch Assemblées Générales & Digital Voting Sessions (owners only)
   const { data: agSessions = [] } = useQuery({
     queryKey: ['ag', activeBuilding?.id],
     queryFn: () => (activeBuilding ? getAssembleesGeneralesForBuilding(activeBuilding.id) : []),
@@ -609,7 +611,7 @@ const ResidentDashboard: React.FC = () => {
                   </span>
                 ) : (
                   <span className="text-[10px] bg-teal-100 text-teal-800 px-1.5 py-0.2 rounded font-bold">
-                    18-00
+                    AG
                   </span>
                 )}
               </button>
@@ -757,7 +759,7 @@ const ResidentDashboard: React.FC = () => {
                     <div>
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-[10px] font-bold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full border border-emerald-500/30">
-                          {tr('Scrutin en cours · Loi 18-00', 'تصويت جاري · قانون 18-00')}
+                          {tr('Scrutin en cours', 'تصويت جاري')}
                         </span>
                         <span className="text-xs text-teal-200">{activeAGSession.title}</span>
                       </div>
@@ -901,7 +903,7 @@ const ResidentDashboard: React.FC = () => {
                       {myQuittances.length}
                     </p>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      {tr('Attestations officielles (Loi 18-00)', 'شهادات إبراء رسمية (قانون 18-00)')}
+                      {tr('Attestations officielles', 'شهادات إبراء رسمية')}
                     </p>
                   </div>
                   <div className="p-2.5 rounded-lg bg-emerald-50 text-emerald-700">
@@ -1081,8 +1083,8 @@ const ResidentDashboard: React.FC = () => {
                                   disabled={isDownloadingChargeQuit === charge.id}
                                   className="px-2.5 py-1 text-xs bg-teal-50 hover:bg-teal-100 text-teal-700 font-semibold rounded transition-colors flex items-center gap-1"
                                   title={tr(
-                                    'Télécharger la quittance libératoire officielle (Loi 18-00)',
-                                    'تحميل وصل الإبراء الرسمي بصيغة PDF (قانون 18-00)'
+                                    'Télécharger la quittance libératoire officielle',
+                                    'تحميل وصل الإبراء الرسمي بصيغة PDF'
                                   )}
                                 >
                                   <QuittanceIcon />
@@ -1301,7 +1303,7 @@ const ResidentDashboard: React.FC = () => {
                     <h3 className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
                       <QuittanceIcon />
                       <span>
-                        {tr('Mes Quittances Certifiées (Loi 18-00)', 'وصولات الأداء المعتمدة (قانون 18-00)')}
+                        {tr('Mes Quittances Certifiées', 'وصولات الأداء المعتمدة')}
                       </span>
                     </h3>
                   </div>
@@ -1514,7 +1516,7 @@ const ResidentDashboard: React.FC = () => {
                   </div>
                 </div>
                 <span className="px-2.5 py-1 rounded bg-teal-100 text-teal-800 font-mono font-bold text-[11px]">
-                  {tr('Loi n° 18-00', 'قانون رقم 18-00')}
+                  {tr(legal.citations.statuteShortFr, legal.citations.statuteShortAr)}
                 </span>
               </div>
               {hasInlineUrl && (
@@ -1536,8 +1538,8 @@ const ResidentDashboard: React.FC = () => {
               )}
               <p className="leading-relaxed">
                 {tr(
-                  `Ce document fait partie intégrante du registre légal de la copropriété ${activeBuilding?.name} (${activeBuilding?.address}, ${activeBuilding?.city}). Il est mis à la disposition de l'ensemble des copropriétaires conformément aux dispositions de la Loi n° 18-00 telle que modifiée et complétée par la Loi n° 106-12.`,
-                  `تعتبر هذه الوثيقة جزءاً لا يتجزأ من السجل القانوني للملكية المشتركة ${activeBuilding?.name} (${activeBuilding?.address}، ${activeBuilding?.city}). وهي موضوعة رهن إشارة جميع الملاك المشتركين طبقا لمقتضيات القانون رقم 18-00 كما تم تغييره وتتميمه بالقانون رقم 106-12.`
+                  `Ce document fait partie intégrante du registre légal de la copropriété ${activeBuilding?.name} (${activeBuilding?.address}, ${activeBuilding?.city}). Il est mis à la disposition de l'ensemble des copropriétaires conformément aux dispositions de la ${legal.citations.statuteFullTitleFr}.`,
+                  `تعتبر هذه الوثيقة جزءاً لا يتجزأ من السجل القانوني للملكية المشتركة ${activeBuilding?.name} (${activeBuilding?.address}، ${activeBuilding?.city}). وهي موضوعة رهن إشارة جميع الملاك المشتركين طبقا لمقتضيات ${legal.citations.statuteFullTitleAr}.`
                 )}
               </p>
               <div className="p-3 bg-white rounded-lg border border-slate-200 font-mono text-[11px] text-slate-600 space-y-1">
@@ -1825,8 +1827,8 @@ const ResidentDashboard: React.FC = () => {
             <div className="flex justify-between items-center w-full">
               <span className="text-xs text-slate-500 font-mono hidden sm:inline">
                 {tr(
-                  'Reçu officiel certifié conforme (Loi n° 18-00 & 106-12)',
-                  'وصل رسمي مطابق للقانون (قانون رقم 18-00 و 106-12)'
+                  `Reçu officiel certifié conforme (${selectedResidentQuittanceForPreview.legalCitationFr || legal.citations.statuteShortFr})`,
+                  `وصل رسمي مطابق للقانون (${selectedResidentQuittanceForPreview.legalCitationAr || legal.citations.statuteShortAr})`
                 )}
               </span>
               <div className="flex gap-2">
@@ -1872,8 +1874,8 @@ const ResidentDashboard: React.FC = () => {
               </h3>
               <p className="text-[10px] text-slate-500">
                 {tr(
-                  'Loi n° 18-00 modifiée par la Loi n° 106-12 · Reçu libératoire officiel',
-                  'القانون رقم 18-00 المعدل بالقانون رقم 106-12 · وصل إبراء رسمي'
+                  `${selectedResidentQuittanceForPreview.legalCitationFr || legal.citations.statuteShortFr} · Reçu libératoire officiel`,
+                  `${selectedResidentQuittanceForPreview.legalCitationAr || legal.citations.statuteShortAr} · وصل إبراء رسمي`
                 )}
               </p>
               <div className="inline-block bg-teal-100/70 border border-teal-300 text-teal-900 font-mono text-xs px-2.5 py-0.5 rounded font-bold mt-1.5">
@@ -1934,8 +1936,8 @@ const ResidentDashboard: React.FC = () => {
               <div className="flex justify-between items-center text-emerald-800">
                 <span>
                   {tr(
-                    'Provision obligatoire Fonds de Réserve (Loi 106-12)',
-                    'مساهمة صندوق الاحتياط الإلزامية (قانون 106-12)'
+                    `Provision obligatoire Fonds de Réserve (${legal.citations.reserveFundRefFr})`,
+                    `مساهمة صندوق الاحتياط الإلزامية (${legal.citations.reserveFundRefAr})`
                   )}
                 </span>
                 <span className="font-mono font-semibold">
@@ -1977,7 +1979,7 @@ const ResidentDashboard: React.FC = () => {
                 <span className="font-bold text-[6px]">SYNDICAT COPRO</span>
                 <span className="font-extrabold text-[8px] text-teal-900">CERTIFIÉ</span>
                 <span className="font-bold text-[7px]">CONFORME</span>
-                <span className="text-[5px]">LOI 18-00</span>
+                <span className="text-[5px]">{legal.citations.stampCodeFr}</span>
               </div>
             </div>
           </div>

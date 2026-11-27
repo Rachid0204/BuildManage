@@ -1,5 +1,6 @@
 import type { AddBuildingCommand } from '../../shared/domain/commands';
 import { getBuildingReserveRate } from '../../shared/domain/money';
+import { resolveLegalFramework } from '../../shared/legalFramework';
 import {
   countActiveBuildings,
   getBuildingCapacity,
@@ -68,6 +69,9 @@ export function createBuildingService(context: DomainContext) {
     buildingData: AddBuildingCommand['building'],
   ) => {
     const { apartments, ...coreBuilding } = buildingData;
+    const defaultReserveRate = resolveLegalFramework(
+      context.state.__legalFrameworkConfig,
+    ).rules.defaultReserveFundPercent;
     const validation = BuildingSchema.safeParse({
       ...coreBuilding,
       syndicId,
@@ -76,7 +80,7 @@ export function createBuildingService(context: DomainContext) {
           ? coreBuilding.reserveFundRate
           : coreBuilding.reserveFundPercentage !== undefined
             ? coreBuilding.reserveFundPercentage
-            : 5,
+            : defaultReserveRate,
     });
     if (!validation.success) {
       throw new OperationError('Invalid Building Data: ' + validation.error.message, 400);
@@ -1023,7 +1027,8 @@ async function createCabinet(actor: Actor, input: any) {
         city: cabinet.city,
         monthlySyndicFees: fee,
         syndicId: id,
-        reserveFundRate: 5,
+        reserveFundRate: resolveLegalFramework(transactionState.__legalFrameworkConfig).rules
+          .defaultReserveFundPercent,
         apartments: Array.from({ length: count }, (_, i) => ({
           number: String(i + 1),
           floor: 0,

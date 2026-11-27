@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { State } from './repository';
 import { mailIsConfigured, queueMail } from './mailer';
 import { unregisterDeviceToken } from './pushNotifications';
+import { resolveLegalFramework } from '../shared/legalFramework';
 
 export interface AccountDeletionRequestRecord {
   id: string;
@@ -118,7 +119,7 @@ export function submitAccountDeletionRequest(
           '',
           `Votre demande de suppression de compte (${record.id}) a bien été enregistrée le ${nowIso}.`,
           'Vos notifications push mobiles ont été immédiatement désactivées.',
-          'Conformément à la Loi 09-08 (CNDP) et à la Loi 18-00/106-12 sur la copropriété au Maroc, vos accès personnels et coordonnées seront supprimés sous 30 jours maximum, tandis que les pièces comptables et PV légaux de copropriété sont conservés sous forme archivée réglementaire.',
+          `Conformément à ${resolveLegalFramework(state.__legalFrameworkConfig).citations.dataPrivacyLawFr} et à la réglementation sur la copropriété (${resolveLegalFramework(state.__legalFrameworkConfig).citations.statuteShortFr}), vos accès personnels et coordonnées seront supprimés sous 30 jours maximum, tandis que les pièces comptables et PV légaux de copropriété sont conservés sous forme archivée réglementaire.`,
           '',
           "Si vous n'êtes pas à l'origine de cette demande, reconnectez-vous immédiatement pour l'annuler depuis /account-deletion.",
         ].join('\n'),

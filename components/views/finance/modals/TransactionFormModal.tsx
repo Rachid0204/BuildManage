@@ -6,6 +6,7 @@ import Modal from '../../../common/Modal';
 import InfoTip from '../../../common/InfoTip';
 import { addTransaction } from '../../../../firebase/services';
 import { useI18n } from '../../../../hooks/useI18n';
+import { useLegalFramework } from '../../../../hooks/useLegalFramework';
 import { currencyFormatter, MOROCCAN_BANKS } from '../financeConstants';
 import type { FinanceOverviewStats } from '../financeSelectors';
 
@@ -30,6 +31,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = ({
   onClose,
 }) => {
   const { tr } = useI18n();
+  const { legal } = useLegalFramework();
   const queryClient = useQueryClient();
 
   const [trxDetailsOpen, setTrxDetailsOpen] = useState(false);
@@ -149,7 +151,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = ({
     }
 
     if (!trxDesc.trim()) {
-      errors.description = tr("Le libellé de l'opération est obligatoire (Art. 26 Loi 18-00)", 'بيان العملية إجباري (المادة 26 من القانون 18-00)');
+      errors.description = tr("Le libellé de l'opération est obligatoire", 'بيان العملية إجباري');
     }
 
     if (trxType === 'expense' && !trxThirdPartyName.trim()) {
@@ -157,7 +159,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = ({
     }
 
     if (trxType === 'expense' && !trxInvoiceNumber.trim()) {
-      errors.invoiceNumber = tr('Le N° de facture ou pièce justificative est obligatoire (Loi 18-00)', 'رقم الفاتورة أو الوثيقة المثبتة إجباري (القانون 18-00)');
+      errors.invoiceNumber = tr('Le N° de facture ou pièce justificative est obligatoire', 'رقم الفاتورة أو الوثيقة المثبتة إجباري');
     }
 
     if (isOverdraft && overdraftOverrideReason.trim().length < 3) {
@@ -226,8 +228,8 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = ({
             <span>{tr('* Champs obligatoires', '* حقول إجبارية')}</span>
             <InfoTip label={tr('Obligation légale de justificatif', 'الإلزام القانوني للوثائق المثبتة')}>
               {tr(
-                'Article 26 de la Loi n° 18-00 : chaque dépense de la copropriété doit être appuyée par une pièce justificative numérotée.',
-                'المادة 26 من القانون 18-00: يجب أن يستند كل مصروف للملكية المشتركة إلى وثيقة مثبتة مرقمة.',
+                `Obligation comptable (${legal.citations.accountingRefFr}) : chaque dépense de la copropriété doit être appuyée par une pièce justificative numérotée.`,
+                `التزام محاسبي (${legal.citations.accountingRefAr}): يجب أن يستند كل مصروف للملكية المشتركة إلى وثيقة مثبتة مرقمة.`,
               )}
             </InfoTip>
           </span>
@@ -419,8 +421,8 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = ({
               </select>
               <InfoTip label={tr('Choix du fonds', 'اختيار الصندوق')}>
                 {tr(
-                  'Compte courant : dépenses habituelles (eau, électricité, gardiennage, entretien). Fonds de réserve (Loi 106-12) : gros travaux votés.',
-                  'الحساب الجاري: المصاريف العادية (الماء، الكهرباء، الحراسة، الصيانة). صندوق الاحتياط (القانون 106-12): الأشغال الكبرى.',
+                  `Compte courant : dépenses habituelles (eau, électricité, gardiennage, entretien). Fonds de réserve (${legal.citations.reserveFundRefFr}) : gros travaux votés.`,
+                  `الحساب الجاري: المصاريف العادية (الماء، الكهرباء، الحراسة، الصيانة). صندوق الاحتياط (${legal.citations.reserveFundRefAr}): الأشغال الكبرى.`,
                 )}
               </InfoTip>
             </div>
@@ -435,8 +437,8 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = ({
             </h4>
             <InfoTip label={tr('Justificatif obligatoire', 'الوثيقة المثبتة إجبارية')}>
               {tr(
-                'Conservez le numéro de facture ou de reçu pour le contrôle des comptes en Assemblée Générale (Art. 26 Loi 18-00).',
-                'احتفظ برقم الفاتورة أو الإيصال لمراقبة الحسابات في الجمع العام (المادة 26 من القانون 18-00).',
+                `Conservez le numéro de facture ou de reçu pour le contrôle des comptes en Assemblée Générale (${legal.citations.accountingRefFr}).`,
+                `احتفظ برقم الفاتورة أو الإيصال لمراقبة الحسابات في الجمع العام (${legal.citations.accountingRefAr}).`,
               )}
             </InfoTip>
           </div>

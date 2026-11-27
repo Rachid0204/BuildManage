@@ -8,8 +8,8 @@ export const SYNDIC_GUIDES: UserGuideArticle[] = [
     categoryAr: 'الانطلاق والامتثال',
     contextKeys: ['quickstart', 'checklist', 'help'],
     estimatedMinutes: 4,
-    titleFr: 'Démarrage Rapide d’un Cabinet Syndic (Checklist Loi 18-00)',
-    titleAr: 'الانطلاق السريع لمكتب السنديك (قائمة الجاهزية القانونية 18-00)',
+    titleFr: 'Démarrage Rapide d’un Cabinet Syndic (Checklist de Conformité)',
+    titleAr: 'الانطلاق السريع لمكتب السنديك (قائمة الجاهزية القانونية)',
     summaryFr:
       'Suivez ces 5 étapes dans l’ordre lors de la reprise ou création d’une résidence pour obtenir une comptabilité exacte, des votes pondérés conformes et des portails résidents prêts en moins de 15 minutes.',
     summaryAr:
@@ -19,7 +19,7 @@ export const SYNDIC_GUIDES: UserGuideArticle[] = [
         titleFr: '1. Créer la résidence et renseigner son RIB bancaire (24 chiffres)',
         titleAr: '1. إنشاء العمارة وإدخال رقم الحساب البنكي RIB (24 رقماً)',
         bodyFr:
-          'Ouvrez « Immeubles & Résidences » et créez votre résidence avec son adresse complète, sa ville, sa cotisation mensuelle par défaut et le RIB 24 chiffres du compte bancaire dédié de la copropriété (obligatoire selon la Loi 18-00).',
+          'Ouvrez « Immeubles & Résidences » et créez votre résidence avec son adresse complète, sa ville, sa cotisation mensuelle par défaut et le RIB 24 chiffres du compte bancaire dédié de la copropriété.',
         bodyAr:
           'افتح قسم «العمارات والإقامات» وأنشئ الإقامة مع العنوان الكامل والمدينة وواجب السنديك الشهري ورقم RIB المكون من 24 رقماً للحساب البنكي الخاص بالعمارة.',
       },
@@ -58,9 +58,9 @@ export const SYNDIC_GUIDES: UserGuideArticle[] = [
       },
     ],
     legalNoteFr:
-      'Loi 18-00 / 106-12 (Maroc) : chaque syndicat de copropriétaires doit disposer d’un compte bancaire séparé et d’un fonds de réserve dédié aux gros travaux, distinct du budget courant.',
+      'Réglementation marocaine de la copropriété : chaque syndicat de copropriétaires doit disposer d’un compte bancaire séparé et d’un fonds de réserve dédié aux gros travaux, distinct du budget courant.',
     legalNoteAr:
-      'القانون 18-00 / 106-12: يجب أن يتوفر كل اتحاد ملاك مشتركين على حساب بنكي مستقل وصندوق احتياط خاص بالأشغال الكبرى منفصل عن ميزانية التسيير.',
+      'التشريع المغربي للملكية المشتركة: يجب أن يتوفر كل اتحاد ملاك مشتركين على حساب بنكي مستقل وصندوق احتياط خاص بالأشغال الكبرى منفصل عن ميزانية التسيير.',
   },
   {
     id: 'syndic-buildings',
@@ -352,16 +352,16 @@ export const SYNDIC_GUIDES: UserGuideArticle[] = [
   {
     id: 'syndic-ag',
     role: 'syndic',
-    categoryFr: 'Gouvernance Loi 18-00',
-    categoryAr: 'الحكامة والقانون 18-00',
+    categoryFr: 'Gouvernance & AG',
+    categoryAr: 'الحكامة والجموع العامة',
     contextKeys: ['ag'],
     estimatedMinutes: 5,
     titleFr: 'Assemblées Générales (AGO/AGE), Convocations, Quorum & PV PDF',
     titleAr: 'الجموع العامة (العادية والاستثنائية)، الاستدعاءات، النصاب والمحضر PDF',
     summaryFr:
-      'Organisez vos Assemblées Générales conformes à la Loi 18-00 / 106-12 : 1ère/2ème convocation, feuille de présence et procurations plafonnées, vote en ligne pondéré et génération du PV officiel PDF.',
+      'Organisez vos Assemblées Générales conformes à la réglementation en vigueur : 1ère/2ème convocation, feuille de présence et procurations plafonnées, vote en ligne pondéré et génération du PV officiel PDF.',
     summaryAr:
-      'نظّم الجموع العامة وفق القانون 18-00 / 106-12: الاستدعاء الأول والثاني، ورقة الحضور والوكالات، التصويت الإلكتروني الموزون وإصدار المحضر الرسمي PDF.',
+      'نظّم الجموع العامة وفق التشريع الجاري به العمل: الاستدعاء الأول والثاني، ورقة الحضور والوكالات، التصويت الإلكتروني الموزون وإصدار المحضر الرسمي PDF.',
     steps: [
       {
         titleFr: 'Planifier une AG, choisir la convocation (1ère ou 2ème) et rédiger les résolutions',
@@ -398,9 +398,9 @@ export const SYNDIC_GUIDES: UserGuideArticle[] = [
       },
     ],
     legalNoteFr:
-      'Conformité Art. 16-6, 16-8, 16-10 et Art. 18 (Loi 18-00 modifiée par 106-12) : les brouillons de PV avant clôture portent automatiquement un filigrane « BROUILLON ».',
+      'Conformité réglementaire : les brouillons de PV avant clôture portent automatiquement un filigrane « BROUILLON » et figent les références légales à l’ouverture de la séance.',
     legalNoteAr:
-      'الامتثال للمواد 16-6 و16-8 و16-10 و18 من القانون 18-00 المعدل بـ 106-12: تحمل مسودات المحضر قبل الإغلاق علامة «مسودة» تلقائياً.',
+      'الامتثال القانوني: تحمل مسودات المحضر قبل الإغلاق علامة «مسودة» تلقائياً مع حفظ المرجع القانوني الساري بتاريخ الجلسة.',
   },
   {
     id: 'syndic-maintenance',

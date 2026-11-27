@@ -2,11 +2,11 @@
 # Guide d’Utilisation — Syndic Gestionnaire
 > **AR :** دليل الاستخدام — وكيل الاتحاد (السنديك)
 
-Immeubles, lots & tantièmes, finances Loi 18-00, AG, maintenance, documents et abonnement SaaS.
+Immeubles, lots & tantièmes, comptabilité syndic, AG, maintenance, documents et abonnement SaaS.
 
 ## Sommaire
 
-1. [Démarrage Rapide d’un Cabinet Syndic (Checklist Loi 18-00)](#1-demarrage-rapide-d-un-cabinet-syndic-checklist-loi-18-00)
+1. [Démarrage Rapide d’un Cabinet Syndic (Checklist de Conformité)](#1-demarrage-rapide-d-un-cabinet-syndic-checklist-de-conformite)
 2. [Gérer les Immeubles, Coordonnées Bancaires RIB & Capacité Forfait](#2-gerer-les-immeubles-coordonnees-bancaires-rib-capacite-forfait)
 3. [Lire le Tableau de Bord & KPIs de la Résidence](#3-lire-le-tableau-de-bord-kpis-de-la-residence)
 4. [Lots, Appartements & Répartition des Tantièmes (1000/1000)](#4-lots-appartements-repartition-des-tantiemes-1000-1000)
@@ -24,8 +24,8 @@ Immeubles, lots & tantièmes, finances Loi 18-00, AG, maintenance, documents et 
 
 ---
 
-## 1. Démarrage Rapide d’un Cabinet Syndic (Checklist Loi 18-00)
-> **AR:** الانطلاق السريع لمكتب السنديك (قائمة الجاهزية القانونية 18-00)
+## 1. Démarrage Rapide d’un Cabinet Syndic (Checklist de Conformité)
+> **AR:** الانطلاق السريع لمكتب السنديك (قائمة الجاهزية القانونية)
 
 **Catégorie :** Démarrage & Conformité · **Durée estimée :** ~4 min
 
@@ -35,7 +35,7 @@ Suivez ces 5 étapes dans l’ordre lors de la reprise ou création d’une rés
 
 #### Étape 1 — 1. Créer la résidence et renseigner son RIB bancaire (24 chiffres)
 
-Ouvrez « Immeubles & Résidences » et créez votre résidence avec son adresse complète, sa ville, sa cotisation mensuelle par défaut et le RIB 24 chiffres du compte bancaire dédié de la copropriété (obligatoire selon la Loi 18-00).
+Ouvrez « Immeubles & Résidences » et créez votre résidence avec son adresse complète, sa ville, sa cotisation mensuelle par défaut et le RIB 24 chiffres du compte bancaire dédié de la copropriété.
 
 #### Étape 2 — 2. Structurer les lots et équilibrer les tantièmes à 1000/1000
 
@@ -52,7 +52,7 @@ Dans « Finances », cliquez en 1 clic sur « Nouvel immeuble : démarrer à 0 M
 ![Tableau de bord Syndic présentant la synthèse financière et les indicateurs clés de la résidence](../../public/guides/screenshots/syndic/dashboard.jpg)
 *Une fois les 5 étapes cochées, la barre de préparation disparaît et votre tableau de bord reflète la situation réelle.*
 
-> **Conformité Maroc (Loi 18-00 / CGI) :** Loi 18-00 / 106-12 (Maroc) : chaque syndicat de copropriétaires doit disposer d’un compte bancaire séparé et d’un fonds de réserve dédié aux gros travaux, distinct du budget courant.
+> **Conformité Maroc (Loi 18-00 / CGI) :** Réglementation marocaine de la copropriété : chaque syndicat de copropriétaires doit disposer d’un compte bancaire séparé et d’un fonds de réserve dédié aux gros travaux, distinct du budget courant.
 
 ---
 
@@ -213,9 +213,9 @@ Ouvrez le menu « Plus d'actions » pour effectuer un « Virement entre fonds »
 ## 9. Assemblées Générales (AGO/AGE), Convocations, Quorum & PV PDF
 > **AR:** الجموع العامة (العادية والاستثنائية)، الاستدعاءات، النصاب والمحضر PDF
 
-**Catégorie :** Gouvernance Loi 18-00 · **Durée estimée :** ~5 min
+**Catégorie :** Gouvernance & AG · **Durée estimée :** ~5 min
 
-Organisez vos Assemblées Générales conformes à la Loi 18-00 / 106-12 : 1ère/2ème convocation, feuille de présence et procurations plafonnées, vote en ligne pondéré et génération du PV officiel PDF.
+Organisez vos Assemblées Générales conformes à la réglementation en vigueur : 1ère/2ème convocation, feuille de présence et procurations plafonnées, vote en ligne pondéré et génération du PV officiel PDF.
 
 ### Étapes pas à pas
 
@@ -234,7 +234,7 @@ Téléchargez la « Convocation PDF » à envoyer aux copropriétaires (15 jours
 
 Cliquez sur « Clôturer l’AG » : les résultats définitifs et réserves deviennent visibles par tous les copropriétaires, et le « PV Officiel PDF » (sans filigrane brouillon) est prêt à signer. Si une résolution travaux budgétée est adoptée, générez directement les appels de fonds répartis aux tantièmes.
 
-> **Conformité Maroc (Loi 18-00 / CGI) :** Conformité Art. 16-6, 16-8, 16-10 et Art. 18 (Loi 18-00 modifiée par 106-12) : les brouillons de PV avant clôture portent automatiquement un filigrane « BROUILLON ».
+> **Conformité Maroc (Loi 18-00 / CGI) :** Conformité réglementaire : les brouillons de PV avant clôture portent automatiquement un filigrane « BROUILLON » et figent les références légales à l’ouverture de la séance.
 
 ---
 

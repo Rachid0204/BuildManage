@@ -314,8 +314,8 @@ export const CommunityChat: React.FC<CommunityChatProps> = ({
               </div>
               <p className="text-amber-800 leading-relaxed">
                 {tr(
-                  'Cet espace est régi par la courtoisie et le respect du Règlement de Copropriété (Loi 18-00). Restons bienveillants et constructifs !',
-                  'يخضع هذا الفضاء لقواعد الاحترام المتبادل ونظام الملكية المشتركة (قانون 18-00). لنحافظ على روح التعاون وحسن الجوار!'
+                  'Cet espace est régi par la courtoisie et le respect du Règlement de Copropriété. Restons bienveillants et constructifs !',
+                  'يخضع هذا الفضاء لقواعد الاحترام المتبادل ونظام الملكية المشتركة. لنحافظ على روح التعاون وحسن الجوار!'
                 )}
               </p>
             </div>

@@ -8,6 +8,7 @@ import { generateTransactionVoucherPDF } from '../../../../services/pdfOnDemand'
 import { isIncomeTransaction, signedTransactionAmount } from '../../../../utils/security';
 import { useAuth } from '../../../../contexts/AuthContext';
 import { useI18n } from '../../../../hooks/useI18n';
+import { useLegalFramework } from '../../../../hooks/useLegalFramework';
 import {
   buildCategoryLabels,
   buildDocumentTypeLabels,
@@ -38,6 +39,7 @@ const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
 }) => {
   const { tr, isAr } = useI18n();
   const { userProfile } = useAuth();
+  const { legal } = useLegalFramework();
   const CATEGORY_LABELS = useMemo(() => buildCategoryLabels(tr), [tr]);
   const PAYMENT_METHOD_LABELS = useMemo(() => buildPaymentMethodLabels(tr), [tr]);
   const DOCUMENT_TYPE_LABELS = useMemo(() => buildDocumentTypeLabels(tr), [tr]);
@@ -141,7 +143,10 @@ const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
               </strong>
               {transaction.fundType === 'reserve' && (
                 <InfoTip label={tr('Fonds de réserve', 'صندوق الاحتياط')}>
-                  {tr('Fonds de réserve travaux prévu par la Loi n° 106-12.', 'صندوق احتياط الأشغال المنصوص عليه في القانون 106-12.')}
+                  {tr(
+                    `Fonds de réserve travaux (${legal.citations.reserveFundRefFr}).`,
+                    `صندوق احتياط الأشغال (${legal.citations.reserveFundRefAr}).`,
+                  )}
                 </InfoTip>
               )}
             </p>

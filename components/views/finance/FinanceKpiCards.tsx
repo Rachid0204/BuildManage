@@ -2,6 +2,7 @@ import React from 'react';
 import Card from '../../common/Card';
 import InfoTip from '../../common/InfoTip';
 import { useI18n } from '../../../hooks/useI18n';
+import { useLegalFramework } from '../../../hooks/useLegalFramework';
 import { currencyFormatter, type FinanceTabType } from './financeConstants';
 import type { FinanceOverviewStats } from './financeSelectors';
 
@@ -21,6 +22,7 @@ const FinanceKpiCards: React.FC<FinanceKpiCardsProps> = ({
   onSelectTab,
 }) => {
   const { tr } = useI18n();
+  const { legal } = useLegalFramework();
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -50,8 +52,8 @@ const FinanceKpiCards: React.FC<FinanceKpiCardsProps> = ({
           </span>
           <InfoTip label={tr('Information légale fonds de réserve', 'معلومة قانونية حول صندوق الاحتياط')}>
             {tr(
-              'Obligation légale (Loi n° 106-12) : épargne réservée aux gros travaux et réparations majeures de la copropriété.',
-              'إلزام قانوني (القانون 106-12): مدخرات مخصصة للأشغال والإصلاحات الكبرى للملكية المشتركة.',
+              `Obligation légale (${legal.citations.reserveFundRefFr}) : épargne réservée aux gros travaux et réparations majeures de la copropriété.`,
+              `إلزام قانوني (${legal.citations.reserveFundRefAr}): مدخرات مخصصة للأشغال والإصلاحات الكبرى للملكية المشتركة.`,
             )}
           </InfoTip>
         </div>
