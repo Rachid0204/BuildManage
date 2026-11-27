@@ -78,6 +78,25 @@ for (const c of cases) await test(c.name, async () => {
       }
     }
   }
+  if ((c.operation === 'createQuittance' || c.operation === 'recordPayment') && !c.rejected) {
+    // Configurable legal framework intentionally stamps historical legalCitationFr/Ar on issued Quittances;
+    // verify the default statutory stamps across results, store, and idempotency receipts before oracle diff.
+    const normalizeQuittances = (node: any) => {
+      if (!node || typeof node !== 'object') return;
+      if (Array.isArray(node)) {
+        node.forEach(normalizeQuittances);
+        return;
+      }
+      if ('quittanceNumber' in node && 'legalCitationFr' in node) {
+        assert.equal(node.legalCitationFr, 'Loi n° 18-00 / 106-12');
+        assert.equal(node.legalCitationAr, 'القانون رقم 18-00 / 106-12');
+        delete node.legalCitationFr;
+        delete node.legalCitationAr;
+      }
+      Object.values(node).forEach(normalizeQuittances);
+    };
+    normalizeQuittances(after);
+  }
   assert.deepStrictEqual(after,before);
 });
 

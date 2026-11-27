@@ -151,7 +151,7 @@ const ApartmentModal: React.FC<ApartmentModalProps> = ({
       title={
         existingApartment
           ? `${tr('Modifier le lot', 'تعديل الشقة / الوحدة')} ${existingApartment.number}`
-          : tr('Ajouter un lot de copropriété (Loi 18-00)', 'إضافة شقة / وحدة للملكية المشتركة (قانون 18-00)')
+          : tr('Ajouter un lot de copropriété', 'إضافة شقة / وحدة للملكية المشتركة')
       }
       footer={
         <>
@@ -1081,8 +1081,8 @@ const Apartments: React.FC<ApartmentsProps> = ({
           </h1>
           <p className="text-sm text-slate-500 mt-0.5">
             {tr(
-              `Répartition des quotes-parts d'indivision (Loi 18-00) pour ${building.name}`,
-              `توزيع الحصص الشائعة للملكية المشتركة (قانون 18-00) لإقامة ${building.name}`
+              `Répartition des quotes-parts d'indivision pour ${building.name}`,
+              `توزيع الحصص الشائعة للملكية المشتركة لإقامة ${building.name}`
             )}
           </p>
         </div>
@@ -1093,8 +1093,8 @@ const Apartments: React.FC<ApartmentsProps> = ({
             disabled={activeApartments.length === 0}
             className="flex items-center gap-1.5 text-xs sm:text-sm"
             title={tr(
-              "Exporter l'inventaire des lots et tantièmes en PDF (Loi 18-00)",
-              'تصدير جرد الشقق والحصص العقارية بصيغة PDF (قانون 18-00)'
+              "Exporter l'inventaire des lots et tantièmes en PDF",
+              'تصدير جرد الشقق والحصص العقارية بصيغة PDF'
             )}
           >
             <DocumentsIcon />

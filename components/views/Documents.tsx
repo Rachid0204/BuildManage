@@ -200,8 +200,8 @@ const Documents: React.FC<{
           </h1>
           <p className="text-xs text-slate-500 mt-1">
             {tr(
-              "Archives légales de la copropriété (Règlement de copropriété, PV d'AG, contrats et assurances — Loi 18-00)",
-              'الأرشيف القانوني للملكية المشتركة (نظام الملكية المشتركة، محاضر الجموع العامة، العقود والتأمينات — قانون 18-00)'
+              "Archives légales de la copropriété (Règlement de copropriété, PV d'AG, contrats et assurances)",
+              'الأرشيف القانوني للملكية المشتركة (نظام الملكية المشتركة، محاضر الجموع العامة، العقود والتأمينات)'
             )}
           </p>
         </div>
@@ -380,7 +380,7 @@ const Documents: React.FC<{
                 </p>
               </div>
               <span className="px-2.5 py-1 rounded bg-teal-100 text-teal-800 font-mono font-bold text-[11px] self-start sm:self-center">
-                {tr('Certifié Loi 18-00', 'معتمد قانون 18-00')}
+                {tr('Archive Certifiée', 'أرشيف معتمد')}
               </span>
             </div>
 

@@ -143,8 +143,8 @@ export const HelpGuideReader: React.FC<HelpGuideReaderProps> = ({
           <div>
             <div className="font-bold text-amber-900 mb-0.5">
               {tr(
-                'Conformité Maroc (Loi 18-00 / 106-12 & CGI)',
-                'الامتثال القانوني بالمغرب (القانون 18-00 / 106-12)',
+                'Cadre réglementaire marocain de la copropriété',
+                'الإطار القانوني المغربي للملكية المشتركة',
               )}
             </div>
             <p>{legalNote}</p>

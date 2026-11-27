@@ -1,4 +1,5 @@
 import { allocateBudgetInCentimes, centimes } from '../../shared/domain/money';
+import { resolveLegalFramework } from '../../shared/legalFramework';
 import type { AssembleeGenerale, Building, Charge, Syndic } from '../../types';
 import {
   applyResidentVote,
@@ -23,7 +24,7 @@ export function createAssemblyService(context: DomainContext) {
   } = transactionRecords(context.state);
 
   /**
-   * Phase 4.1: Generates prorated calls for funds (Appels de fonds Loi 18-00 Art. 24 / 37)
+   * Phase 4.1: Generates prorated calls for funds (Appels de fonds votés en AG)
    * across all building lots using exact centime allocation when an AG resolution with a budget is adopted.
    */
   const generateChargesFromAGResolution = async (
@@ -446,8 +447,11 @@ async function meetingOperation(actor: Actor, operation: string, args: any[]) {
         "Résolutions en double.",
         409,
       );
+      const legalOnCreate = resolveLegalFramework(transactionState.__legalFrameworkConfig);
       ag = {
         convocationNumber: old?.convocationNumber ?? 1,
+        legalCitationFr: old?.legalCitationFr || legalOnCreate.citations.statuteShortFr,
+        legalCitationAr: old?.legalCitationAr || legalOnCreate.citations.statuteShortAr,
         ...metadata,
         id: old?.id || randomUUID(),
         buildingId: b.id,
@@ -560,6 +564,10 @@ async function meetingOperation(actor: Actor, operation: string, args: any[]) {
         );
       let trimmedProxyName: string | undefined;
       if (args[2] === "represented") {
+        const legal = resolveLegalFramework(transactionState.__legalFrameworkConfig);
+        const proxyRef = legal.citations.agProxyRefFr;
+        const maxProxies = legal.rules.maxProxiesPerHolder;
+        const maxSharePct = legal.rules.maxProxyTantiemesSharePercent;
         trimmedProxyName = str(args[3], 200).trim();
         check(
           trimmedProxyName.length > 0,
@@ -567,7 +575,6 @@ async function meetingOperation(actor: Actor, operation: string, args: any[]) {
           400,
         );
         const normalizedProxy = normalizePersonName(trimmedProxyName);
-        // Law 18-00 / 106-12 Art. 16-6: Syndic (or secretary/cabinet) cannot hold proxies.
         const cabinet = (state.syndik_prod_syndics_v1 || []).find(
           (s: any) => s.id === b.syndicId,
         );
@@ -581,7 +588,7 @@ async function meetingOperation(actor: Actor, operation: string, args: any[]) {
           .filter(Boolean);
         check(
           !forbiddenHolders.includes(normalizedProxy),
-          "Conformément à la Loi 18-00 (Art. 16-6), le syndic ou le secrétaire de séance ne peut recevoir de procuration.",
+          `Conformément à la réglementation (${proxyRef}), le syndic ou le secrétaire de séance ne peut recevoir de procuration.`,
           400,
         );
         // Count distinct mandants (owners) already represented by this mandataire (excluding target owner).
@@ -599,8 +606,8 @@ async function meetingOperation(actor: Actor, operation: string, args: any[]) {
         }
         const totalMandants = otherMandants.size + 1;
         check(
-          totalMandants <= 3,
-          "Conformément à la Loi 18-00 (Art. 16-6), un mandataire ne peut détenir plus de 3 procurations.",
+          totalMandants <= maxProxies,
+          `Conformément à la réglementation (${proxyRef}), un mandataire ne peut détenir plus de ${maxProxies} procuration(s).`,
           400,
         );
         const targetTantiemes = attendees.reduce(
@@ -609,14 +616,14 @@ async function meetingOperation(actor: Actor, operation: string, args: any[]) {
         );
         const totalRepresentedTantiemes =
           otherRepresentedTantiemes + targetTantiemes;
-        const maxProxyTantiemes = (Number(ag.totalTantiemes) || 1000) * 0.1;
-        // Law 18-00 Art. 16-6: Cap at 10% of total votes, allowing single-mandant exception when one represented lot already exceeds 10%.
+        const maxProxyTantiemes =
+          (Number(ag.totalTantiemes) || 1000) * (maxSharePct / 100);
         const singleOwnerException =
           totalMandants === 1 && targetTantiemes > maxProxyTantiemes;
         check(
           totalRepresentedTantiemes <= maxProxyTantiemes + 1e-9 ||
             singleOwnerException,
-          "Conformément à la Loi 18-00 (Art. 16-6), un mandataire ne peut cumuler des procurations dépassant 10% des tantièmes de la copropriété.",
+          `Conformément à la réglementation (${proxyRef}), un mandataire ne peut cumuler des procurations dépassant ${maxSharePct}% des tantièmes de la copropriété.`,
           400,
         );
       }

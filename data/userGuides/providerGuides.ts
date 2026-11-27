@@ -55,8 +55,8 @@ export const PROVIDER_GUIDES: UserGuideArticle[] = [
       {
         qFr: 'Pourquoi je ne vois pas les documents comptables ou les AG de l’immeuble ?',
         qAr: 'لماذا لا أرى الوثائق المحاسبية أو الجمعيات العامة للإقامة؟',
-        aFr: 'Par conformité et confidentialité (Loi 18-00), le portail Prestataire donne accès uniquement aux bons d’intervention techniques qui vous concernent.',
-        aAr: 'حفاظاً على السرية ووفقاً للقانون 18-00، تقتصر صلاحيات بوابة المزود على أوامر التدخل التقنية الخاصة به فقط.',
+        aFr: 'Par conformité et confidentialité, le portail Prestataire donne accès uniquement aux bons d’intervention techniques qui vous concernent.',
+        aAr: 'حفاظاً على السرية ووفقاً لضوابط الملكية المشتركة، تقتصر صلاحيات بوابة المزود على أوامر التدخل التقنية الخاصة به فقط.',
       },
     ],
   },

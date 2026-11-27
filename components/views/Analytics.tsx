@@ -179,8 +179,8 @@ const Analytics: React.FC<{ building: Building }> = ({ building }) => {
           </h1>
           <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
             {tr(
-              'Indicateurs de recouvrement Loi 18-00, occupation des lots et évolution des charges',
-              'مؤشرات التحصيل المالي قانون 18-00، نسبة شغل الشقق وتطور المصاريف'
+              'Indicateurs de recouvrement, occupation des lots et évolution des charges',
+              'مؤشرات التحصيل المالي، نسبة شغل الشقق وتطور المصاريف'
             )}
           </p>
         </div>

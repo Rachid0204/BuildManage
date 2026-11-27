@@ -168,7 +168,7 @@ export const ServiceProvidersDirectory: React.FC<ServiceProvidersDirectoryProps>
               </span>
             </h1>
             <span className="text-xs bg-teal-100 text-teal-800 font-semibold px-2.5 py-0.5 rounded-full">
-              {tr('Loi 18-00 & Répertoire Agréé', 'قانون 18-00 والدليل المعتمد')}
+              {tr('Répertoire Officiel Agréé', 'الدليل الرسمي المعتمد')}
             </span>
           </div>
           <p className="text-xs sm:text-sm text-slate-500 mt-1">

@@ -7,6 +7,7 @@ import { QuittanceIcon } from '../../../icons/IconComponents';
 import { generateQuittancePDF } from '../../../../services/pdfOnDemand';
 import { useAuth } from '../../../../contexts/AuthContext';
 import { useI18n } from '../../../../hooks/useI18n';
+import { useLegalFramework } from '../../../../hooks/useLegalFramework';
 import {
   buildPaymentMethodLabels,
   currencyFormatter,
@@ -41,6 +42,7 @@ const QuittancesTab: React.FC<QuittancesTabProps> = ({
 }) => {
   const { tr, isAr } = useI18n();
   const { userProfile } = useAuth();
+  const { legal } = useLegalFramework();
   const managed = ['admin', 'syndic'].includes(userProfile?.role || '');
   const [quittanceSearch, setQuittanceSearch] = useState('');
   const [quittanceFilterMethod, setQuittanceFilterMethod] = useState('all');
@@ -74,8 +76,8 @@ const QuittancesTab: React.FC<QuittancesTabProps> = ({
               </h3>
               <InfoTip label={tr('Information légale quittances', 'معلومة قانونية حول الوصولات')}>
                 {tr(
-                  'Conformément aux lois n° 18-00 et 106-12 (Art. 18 bis), chaque quittance officielle libère le copropriétaire pour la période réglée et ventile automatiquement la part du fonds de réserve.',
-                  'وفقاً للقانونين 18-00 و106-12 (المادة 18 مكرر)، يبرئ كل وصل رسمي ذمة المالك المشترك عن الفترة المؤداة ويوزع تلقائياً حصة صندوق الاحتياط.',
+                  `Conformément au cadre légal (${legal.citations.statuteShortFr} · ${legal.citations.reserveFundRefFr}), chaque quittance officielle libère le copropriétaire pour la période réglée et ventile automatiquement la part du fonds de réserve.`,
+                  `وفقاً للإطار القانوني (${legal.citations.statuteShortAr} · ${legal.citations.reserveFundRefAr})، يبرئ كل وصل رسمي ذمة المالك المشترك عن الفترة المؤداة ويوزع تلقائياً حصة صندوق الاحتياط.`,
                 )}
               </InfoTip>
             </div>

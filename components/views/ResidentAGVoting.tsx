@@ -10,6 +10,8 @@ import { generatePvAgPDF, generateConvocationAgPDF } from '../../services/pdfOnD
 import { canonicalQuorum } from '../../shared/domain/voting';
 import Loading from '../common/Loading';
 import { useI18n } from '../../hooks/useI18n';
+import { useLegalFramework } from '../../hooks/useLegalFramework';
+import { getActiveLegalFramework } from '../../shared/legalFramework';
 import { useToast } from '../common/Toast';
 
 interface ResidentAGVotingProps {
@@ -32,30 +34,31 @@ function formatMajorityLabel(
   const total = totalTantiemes || 1000;
   const absThreshold = canonicalQuorum(total);
   const threeQuartersThreshold = Math.ceil(total * 0.75);
+  const { citations } = getActiveLegalFramework();
   switch (majorityType) {
     case 'simple':
     case 'simple_24':
-      return tr('Majorité simple (Art. 21) · Majorité des voix exprimées', 'الأغلبية البسيطة (المادة 21) · أغلبية الأصوات المعبر عنها');
+      return tr(`Majorité simple (${citations.agMajoritySimpleRefFr}) · Majorité des voix exprimées`, `الأغلبية البسيطة (${citations.agMajoritySimpleRefAr}) · أغلبية الأصوات المعبر عنها`);
     case 'absolute':
     case 'absolue_25':
       return tr(
-        `Majorité absolue (Art. 22) · Au moins ${absThreshold} / ${total} tantièmes`,
-        `الأغلبية المطلقة (المادة 22) · على الأقل ${absThreshold} / ${total} جزء`
+        `Majorité absolue (${citations.agMajorityAbsoluteRefFr}) · Au moins ${absThreshold} / ${total} tantièmes`,
+        `الأغلبية المطلقة (${citations.agMajorityAbsoluteRefAr}) · على الأقل ${absThreshold} / ${total} جزء`
       );
     case 'three_quarters':
     case 'trois_quarts_26':
       return tr(
-        `Majorité 3/4 (Art. 22 · Loi 106-12) · Au moins ${threeQuartersThreshold} / ${total} tantièmes`,
-        `أغلبية 3/4 (المادة 22 · القانون 106-12) · على الأقل ${threeQuartersThreshold} / ${total} جزء`
+        `Majorité 3/4 (${citations.agMajorityThreeQuartersRefFr}) · Au moins ${threeQuartersThreshold} / ${total} tantièmes`,
+        `أغلبية 3/4 (${citations.agMajorityThreeQuartersRefAr}) · على الأقل ${threeQuartersThreshold} / ${total} جزء`
       );
     case 'unanimity':
     case 'unanimite':
       return tr(
-        `Unanimité (Art. 23) · ${total} / ${total} tantièmes`,
-        `الإجماع (المادة 23) · ${total} / ${total} جزء`
+        `Unanimité (${citations.agMajorityUnanimityRefFr}) · ${total} / ${total} tantièmes`,
+        `الإجماع (${citations.agMajorityUnanimityRefAr}) · ${total} / ${total} جزء`
       );
     default:
-      return tr('Majorité simple (Art. 21) · Majorité des voix exprimées', 'الأغلبية البسيطة (المادة 21) · أغلبية الأصوات المعبر عنها');
+      return tr(`Majorité simple (${citations.agMajoritySimpleRefFr}) · Majorité des voix exprimées`, `الأغلبية البسيطة (${citations.agMajoritySimpleRefAr}) · أغلبية الأصوات المعبر عنها`);
   }
 }
 
@@ -67,6 +70,7 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
   syndic,
 }) => {
   const { tr, isAr } = useI18n();
+  const { legal } = useLegalFramework();
   const { showToast } = useToast();
   const queryClient = useQueryClient();
   const [selectedAGId, setSelectedAGId] = useState<string | null>(null);
@@ -153,8 +157,8 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
       if (currentResident.isOwner !== true) {
         throw new Error(
           tr(
-            'Conformément à la Loi 18-00, seuls les copropriétaires (ou leurs mandataires) disposent du droit de vote en Assemblée Générale.',
-            'وفقاً للقانون 18-00، يقتصر حق التصويت في الجمع العام على الملاك المشتركين (أو وكلائهم).'
+            'Seuls les copropriétaires (ou leurs mandataires) disposent du droit de vote en Assemblée Générale.',
+            'يقتصر حق التصويت في الجمع العام على الملاك المشتركين (أو وكلائهم).'
           )
         );
       }
@@ -231,7 +235,7 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
           <div className="space-y-2">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-[11px] font-bold uppercase tracking-wider bg-teal-700/80 text-teal-100 px-2.5 py-0.5 rounded-full border border-teal-500/30">
-                {tr('Loi n° 18-00 · Art. 18 à 24', 'القانون رقم 18-00 · المواد 18 إلى 24')}
+                {tr(activeAG.legalCitationFr || legal.citations.statuteShortFr, activeAG.legalCitationAr || legal.citations.statuteShortAr)}
               </span>
               <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full border bg-indigo-500/20 text-indigo-200 border-indigo-400/30">
                 {isSecondConvocation
@@ -334,7 +338,7 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
               onClick={() => setShowLawInfoModal(true)}
               className="text-[11px] text-teal-300 hover:text-white underline"
             >
-              {tr('Comprendre la règle des tantièmes (Loi 18-00)', 'فهم قاعدة الحصة الشائعة (القانون 18-00)')}
+              {tr('Comprendre la règle des tantièmes', 'فهم قاعدة الحصة الشائعة')}
             </button>
           </div>
         </div>
@@ -479,7 +483,7 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
                   isOwner ? 'text-emerald-600' : 'text-slate-500'
                 }`}
               >
-                {tr('Loi n° 18-00', 'القانون 18-00')}
+                {tr(legal.citations.statuteShortFr, legal.citations.statuteShortAr)}
               </span>
             </div>
           </div>
@@ -713,7 +717,7 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
                     {/* Optional Note */}
                     <div>
                       <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                        {tr('Observation ou réserve au procès-verbal (facultatif - Loi 18-00) :', 'ملاحظة أو تحفظ في المحضر (اختياري - القانون 18-00):')}
+                        {tr('Observation ou réserve au procès-verbal (facultatif) :', 'ملاحظة أو تحفظ في المحضر (اختياري):')}
                       </label>
                       <input
                         type="text"
@@ -750,7 +754,7 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
                     <div>
                       <div className="text-xs font-bold text-amber-900">
                         {!isOwner
-                          ? tr('Droit de vote réservé aux copropriétaires (Loi 18-00)', 'حق التصويت مخصص للملاك المشتركين (القانون 18-00)')
+                          ? tr('Droit de vote réservé aux copropriétaires', 'حق التصويت مخصص للملاك المشتركين')
                           : !activeApartment
                           ? tr('Aucun lot privatif rattaché à votre compte', 'لا توجد وحدة مفرزة مرتبطة بحسابكم')
                           : !isVotingOpen
@@ -823,8 +827,8 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
             {!isClosed && (
               <div className="p-2.5 bg-teal-50 border border-teal-200 rounded-lg text-[11px] text-teal-900">
                 {tr(
-                  'Confidentialité du scrutin : pendant le vote, seul votre propre bulletin est affiché. Le détail nominal complet est publié dans le procès-verbal dès la clôture de l’assemblée (Loi 18-00 Art. 16-8).',
-                  'سرية الاقتراع: أثناء التصويت، يظهر تصويتك الشخصي فقط. يُنشر التفصيل الاسمي الكامل في المحضر فور إغلاق الجمعية العامة (المادة 16-8).'
+                  'Confidentialité du scrutin : pendant le vote, seul votre propre bulletin est affiché. Le détail nominal complet est publié dans le procès-verbal dès la clôture de l’assemblée.',
+                  'سرية الاقتراع: أثناء التصويت، يظهر تصويتك الشخصي فقط. يُنشر التفصيل الاسمي الكامل في المحضر فور إغلاق الجمعية العامة.'
                 )}
               </div>
             )}
@@ -899,7 +903,7 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
         <Modal
           isOpen={showLawInfoModal}
           onClose={() => setShowLawInfoModal(false)}
-          title={tr('Règles Juridiques du Vote en Copropriété (Loi 18-00 & 106-12)', 'القواعد القانونية للتصويت في الملكية المشتركة (القانون 18-00 و 106-12)')}
+          title={tr(`Règles Juridiques du Vote en Copropriété (${legal.citations.statuteShortFr})`, `القواعد القانونية للتصويت في الملكية المشتركة (${legal.citations.statuteShortAr})`)}
           footer={
             <div className="flex justify-end">
               <Button onClick={() => setShowLawInfoModal(false)}>{tr("J'ai compris", 'فهمت')}</Button>
@@ -949,7 +953,7 @@ export const ResidentAGVoting: React.FC<ResidentAGVotingProps> = ({
 
               <div className="border border-slate-200 rounded-lg p-2.5">
                 <span className="font-bold text-slate-900 block">
-                  {tr('3. Majorité des 3/4 (Article 22 · Loi 106-12)', '3. أغلبية ثلاثة أرباع 3/4 (المادة 22 · القانون 106-12)')}
+                  {tr(`3. Majorité des 3/4 (${legal.citations.agMajorityThreeQuartersRefFr})`, `3. أغلبية ثلاثة أرباع 3/4 (${legal.citations.agMajorityThreeQuartersRefAr})`)}
                 </span>
                 <p className="text-slate-600 mt-0.5">
                   {tr(

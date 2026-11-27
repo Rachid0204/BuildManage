@@ -2407,3 +2407,183 @@ test('Finance UX phase 2: 1-click 0 MAD opening balance, Ajouter un ancien impay
   await expect(stmtRow.locator('td').nth(2)).toHaveText('0 MAD');
   await expect(stmtRow.locator('td').nth(4)).toHaveText('420 MAD');
 });
+
+test('Super-Admin Cadre Légal updates statutory citations prospectively while preserving historical receipts', async ({ page }) => {
+  await page.unroute('**/*');
+  await page.route('**/*', (route) =>
+    new URL(route.request().url()).origin === base ? route.continue() : route.abort(),
+  );
+
+  const email = `syndic-legal-${Date.now()}@ui.invalid`;
+  const reg = await apiCall('', '/api/auth/register', {
+    email,
+    password,
+    profile: { role: 'syndic', displayName: 'Nadia Tazi' },
+    syndic: {
+      name: 'Cabinet Cadre Légal',
+      city: 'Casablanca',
+      initialBuilding: {
+        name: 'Résidence Anfa',
+        address: '10 Bd Anfa',
+        apartmentsCount: 2,
+        monthlyFees: 300,
+      },
+    },
+  });
+  expect(reg.status, JSON.stringify(reg.data)).toBe(200);
+  const token = reg.data.token;
+  const cabinetId = reg.data.syndic.id;
+  const freshBuilding = reg.data.syndic.buildings[0];
+  const [lot0, lot1] = freshBuilding.apartments;
+
+  const r0 = await apiCommand(token, 'addResident', [
+    {
+      syndicId: cabinetId,
+      buildingId: freshBuilding.id,
+      name: 'Salma Berrada',
+      email: 'salma.legal@ui.invalid',
+      phone: '0661112233',
+      isOwner: true,
+      apartmentId: lot0.id,
+    },
+    false,
+  ]);
+  expect(r0.status).toBe(200);
+  const salma = r0.data.result;
+
+  const r1 = await apiCommand(token, 'addResident', [
+    {
+      syndicId: cabinetId,
+      buildingId: freshBuilding.id,
+      name: 'Youssef Chraibi',
+      email: 'youssef.legal@ui.invalid',
+      phone: '0661445566',
+      isOwner: true,
+      apartmentId: lot1.id,
+    },
+    false,
+  ]);
+  expect(r1.status).toBe(200);
+
+  // 1. Seed opening balances, monthly charges, and Salma's pre-reform receipt BEFORE legal update
+  const openRes = await apiCommand(token, 'setOpeningBalances', [
+    freshBuilding.id,
+    { working: 0, reserve: 0, reason: 'Démarrage' },
+  ]);
+  expect(openRes.status).toBe(200);
+
+  const genRes = await apiCommand(token, 'generateMonthlyCharges', [
+    freshBuilding.id,
+    cabinetId,
+    '2026-10',
+    { useTantiemes: false },
+  ]);
+  expect(genRes.status, JSON.stringify(genRes.data)).toBe(200);
+  const stateSnap = await disk();
+  const salmaCharge = (stateSnap.syndik_prod_charges_v1 as Array<any>).find(
+    (c) => c.buildingId === freshBuilding.id && c.residentId === salma.id,
+  )!;
+  expect(salmaCharge).toBeTruthy();
+
+  const preQuitRes = await apiCommand(token, 'createQuittance', [
+    {
+      chargeId: salmaCharge.id,
+      buildingId: freshBuilding.id,
+      buildingName: freshBuilding.name,
+      syndicId: cabinetId,
+      syndicName: 'Cabinet Cadre Légal',
+      residentId: salma.id,
+      residentName: 'Salma Berrada',
+      apartmentId: lot0.id,
+      apartmentNumber: lot0.number,
+      amount: salmaCharge.amount,
+      periodCovered: '2026-10',
+      paymentDate: '2026-10-10T10:00:00.000Z',
+      paymentMethod: 'virement',
+      bankName: 'Attijariwafa Bank',
+      referenceNumber: 'VIR-PRE-1800',
+      addTransactionToLedger: true,
+    },
+  ]);
+  expect(preQuitRes.status, JSON.stringify(preQuitRes.data)).toBe(200);
+
+  try {
+    // 2. Log in as Super-Admin and update Cadre Légal live via UI
+    await login(page, 3, 'fr');
+    await page.getByRole('tab', { name: /Cadre Légal/i }).click();
+    await expect(
+      page.getByRole('heading', { name: /Cadre Légal & Seuils Réglementaires/ }),
+    ).toBeVisible();
+    await expect(page.getByText('Valeurs standards actives')).toBeVisible();
+
+    await page.getByLabel('Fonds de réserve par défaut (%)').fill('8');
+    await page.getByLabel('Procurations max / mandataire').fill('2');
+    await page.getByLabel('Référence courte (FR)').fill('Loi n° 45-28 Copropriété');
+    await page.getByLabel('Réf. Fonds de réserve (FR)').fill('Loi n° 45-28 (Art. 19)');
+    await page.getByRole('button', { name: 'Enregistrer le cadre légal' }).click();
+    await expect(page.getByText('Personnalisé par Super-Admin')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Rétablir les valeurs par défaut' })).toBeVisible();
+
+    // 3. Log in as Syndic: verify live tooltip + prospective receipt citation + historical immutability
+    await page.goto(`${base}/welcome`);
+    await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+    await page.evaluate(() => localStorage.removeItem('syndik_auth_session_v1'));
+    const r = await page.request.post(`${base}/api/auth/login`, {
+      data: { identifier: email, password },
+    });
+    expect(r.status()).toBe(200);
+    await page.evaluate(() => {
+      localStorage.setItem('syndik_auth_session_v1', JSON.stringify({ sessionTransport: 'cookie' }));
+      localStorage.setItem('syndik_lang', 'fr');
+    });
+
+    await page.goto(`${base}/financials`);
+    await expect(page.getByRole('heading', { name: 'Finances — Résidence Anfa' })).toBeVisible();
+
+    await page.getByRole('button', { name: 'Information légale fonds de réserve' }).click();
+    await expect(page.getByRole('tooltip')).toContainText('Loi n° 45-28 (Art. 19)');
+    await page.keyboard.press('Escape');
+
+    // Pay Youssef's charge AFTER legal reform
+    const youssefRow = page.getByRole('row').filter({ hasText: 'Youssef Chraibi' });
+    await youssefRow.getByRole('button', { name: 'Encaisser', exact: true }).click();
+    let dlg = page.getByRole('dialog');
+    await dlg.getByRole('button', { name: /Encaisser et générer le reçu/ }).click();
+    await expect(dlg).toBeHidden();
+
+    // Inspect both receipts in Reçus (quittances): new receipt has new law, historical receipt preserves old law
+    await page.getByRole('button', { name: /Reçus \(quittances\)/ }).click();
+
+    await page.getByRole('row').filter({ hasText: 'Youssef Chraibi' }).getByRole('button', { name: 'Aperçu' }).click();
+    dlg = page.getByRole('dialog');
+    await expect(dlg).toContainText('Loi n° 45-28 Copropriété');
+    await dlg.getByRole('button', { name: 'Fermer', exact: true }).click();
+    await expect(dlg).toBeHidden();
+
+    await page.getByRole('row').filter({ hasText: 'Salma Berrada' }).getByRole('button', { name: 'Aperçu' }).click();
+    dlg = page.getByRole('dialog');
+    await expect(dlg).toContainText('Loi n° 18-00 / 106-12');
+    await dlg.getByRole('button', { name: 'Fermer', exact: true }).click();
+    await expect(dlg).toBeHidden();
+  } finally {
+    // 4. Guaranteed reset to defaults so shared state remains clean
+    const adminLogin = await apiCall('', '/api/auth/login', {
+      identifier: profiles[3].email,
+      password,
+    }).catch(() => null);
+    if (adminLogin?.data?.token) {
+      const resetRes = await fetch(`${base}/api/admin/legal-framework`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${adminLogin.data.token}`,
+        },
+        body: JSON.stringify({ resetToDefaults: true }),
+      });
+      expect(resetRes.status).toBe(200);
+      const resetBody = await resetRes.json();
+      expect(resetBody.isCustomized).toBe(false);
+    }
+  }
+});
+

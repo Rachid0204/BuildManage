@@ -18,6 +18,7 @@ import {
   usesFirebaseAuth,
 } from "../firebaseIdentity";
 import { createIdentityAction } from "../identity";
+import { resolveLegalFramework } from "../../shared/legalFramework";
 import { assertIdentityReady, queueFirebaseMutation } from "../identityMutations";
 import { deliverOutbox, mailIsConfigured } from "../mailer";
 import { appendAudit } from "../operations";
@@ -160,7 +161,7 @@ export function registerAuthRoutes(app: express.Express, deps: AuthRoutesDeps) {
     }
   });
 
-  // Account Deletion Requests (CNDP Law 09-08, Apple App Store Guideline 5.1.1(v), Google Play Data Safety)
+  // Account Deletion Requests (CNDP data privacy, Apple App Store Guideline 5.1.1(v), Google Play Data Safety)
   app.get("/api/account/deletion-request", async (req, res) => {
     if (!(await hasValidCallerCredential(req))) {
       return res.status(401).json({ ok: false, error: "Authentification requise." });
@@ -653,7 +654,8 @@ export function registerAuthRoutes(app: express.Express, deps: AuthRoutesDeps) {
             address: String(initial.address || "").slice(0, 300),
             city: createdSyndic.city,
             monthlySyndicFees: initial.monthlyFees,
-            reserveFundRate: 5,
+            reserveFundRate: resolveLegalFramework(sharedStore.__legalFrameworkConfig).rules
+              .defaultReserveFundPercent,
             apartments,
             residents: [],
             announcements: [],

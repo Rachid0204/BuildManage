@@ -18,8 +18,8 @@ export const BRAND_MOTIF_PREFIX = 'SYNDICUNION';
 
 export const BRAND_TAGLINE_FR = 'La copropriété unie, transparente et conforme.';
 export const BRAND_TAGLINE_AR = 'ملكية مشتركة موحّدة، شفافة ومطابقة للقانون.';
-export const BRAND_LAW_BADGE = 'Loi 18-00 & 106-12';
-export const BRAND_LAW_BADGE_AR = 'القانون 18-00 و 106-12';
+export const BRAND_LAW_BADGE = 'Copropriété Maroc';
+export const BRAND_LAW_BADGE_AR = 'الملكية المشتركة بالمغرب';
 
 export const BRAND_COLORS = {
   primary: '#0F766E',

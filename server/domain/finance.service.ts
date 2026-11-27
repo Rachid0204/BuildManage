@@ -14,6 +14,7 @@ import {
   splitChargeReserveAndOperating,
 } from '../../shared/domain/money';
 import { bankDate } from '../../shared/domain/paymentDates';
+import { resolveLegalFramework } from '../../shared/legalFramework';
 import { resolveOpenStatus } from '../../shared/moroccoDate';
 import type {
   Building,
@@ -959,8 +960,11 @@ export function createFinanceService(context: DomainContext) {
       throw new Error(
         'Séquence de quittance invalide : rapprochement nécessaire.',
       );
+    const legal = resolveLegalFramework(context.state.__legalFrameworkConfig);
     return {
       ...core,
+      legalCitationFr: core.legalCitationFr || legal.citations.statuteShortFr,
+      legalCitationAr: core.legalCitationAr || legal.citations.statuteShortAr,
       reserveRateApplied: split.reservePercentageUsed,
       reserveFundAmount: split.reserveFundAmount,
       chargesCourantesAmount: split.chargesCourantesAmount,
@@ -1517,7 +1521,7 @@ export function createFinanceService(context: DomainContext) {
           delete newTrx.overdraftOverrideReason;
         }
         bld.financials.transactions.unshift(newTrx);
-        // Separate operating fund vs mandatory reserve fund (Law 106-12)
+        // Separate operating fund vs mandatory reserve fund
         syncBuildingFinancialBalances(bld);
         setLocalItem(STORAGE_KEYS.SYNDICS, syndics);
         return newTrx;

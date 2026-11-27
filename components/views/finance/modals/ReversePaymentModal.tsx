@@ -6,6 +6,7 @@ import Modal from '../../../common/Modal';
 import InfoTip from '../../../common/InfoTip';
 import { remoteMutation } from '../../../../firebase/services';
 import { useI18n } from '../../../../hooks/useI18n';
+import { useLegalFramework } from '../../../../hooks/useLegalFramework';
 import { useToast } from '../../../common/Toast';
 import { currencyFormatter } from '../financeConstants';
 
@@ -32,6 +33,7 @@ const ReversePaymentModal: React.FC<ReversePaymentModalProps> = ({
   onReversed,
 }) => {
   const { tr } = useI18n();
+  const { legal } = useLegalFramework();
   const { showToast } = useToast();
   const queryClient = useQueryClient();
   const [reason, setReason] = useState('');
@@ -109,8 +111,8 @@ const ReversePaymentModal: React.FC<ReversePaymentModalProps> = ({
           </span>
           <InfoTip label={tr('Traçabilité comptable', 'التتبع المحاسبي')}>
             {tr(
-              "Conformément à la Loi n° 18-00, l'écriture initiale reste visible dans l'historique accompagnée d'une écriture d'annulation (contrepassation).",
-              'وفقاً للقانون 18-00، يبقى القيد الأصلي ظاهراً في السجل مرفقاً بقيد إلغاء معاكس.',
+              `Conformément au cadre comptable (${legal.citations.accountingRefFr}), l'écriture initiale reste visible dans l'historique accompagnée d'une écriture d'annulation (contrepassation).`,
+              `وفقاً للإطار المحاسبي (${legal.citations.accountingRefAr})، يبقى القيد الأصلي ظاهراً في السجل مرفقاً بقيد إلغاء معاكس.`,
             )}
           </InfoTip>
         </p>

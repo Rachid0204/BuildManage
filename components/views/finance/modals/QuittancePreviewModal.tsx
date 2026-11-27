@@ -6,6 +6,7 @@ import { QuittanceIcon } from '../../../icons/IconComponents';
 import { generateQuittancePDF } from '../../../../services/pdfOnDemand';
 import { useAuth } from '../../../../contexts/AuthContext';
 import { useI18n } from '../../../../hooks/useI18n';
+import { useLegalFramework } from '../../../../hooks/useLegalFramework';
 import { currencyFormatter, formatRecordedFund } from '../financeConstants';
 import type { ReversiblePaymentSummary } from '../financeReportExport';
 import type { ReversePaymentModalRequest } from './ReversePaymentModal';
@@ -29,6 +30,7 @@ const QuittancePreviewModal: React.FC<QuittancePreviewModalProps> = ({
 }) => {
   const { tr, isAr } = useI18n();
   const { userProfile } = useAuth();
+  const { legal } = useLegalFramework();
   if (!quittance) return null;
 
   const managed = ['admin', 'syndic'].includes(userProfile?.role || '');
@@ -40,6 +42,11 @@ const QuittancePreviewModal: React.FC<QuittancePreviewModalProps> = ({
     Boolean(onRequestReversePayment);
 
   const buildingTantiemesBase = building.totalTantiemes || 1000;
+  const receiptShortLawFr = quittance.legalCitationFr || legal.citations.statuteShortFr;
+  const receiptShortLawAr = quittance.legalCitationAr || legal.citations.statuteShortAr;
+  const isHistoricalSnapshot = Boolean(
+    quittance.legalCitationFr && quittance.legalCitationFr !== legal.citations.statuteShortFr,
+  );
 
   return (
     <Modal
@@ -72,7 +79,10 @@ const QuittancePreviewModal: React.FC<QuittancePreviewModalProps> = ({
               </Button>
             )}
             <span className="text-xs text-slate-500 font-mono hidden sm:inline">
-              {tr('Conforme Loi 18-00 · Délivré par le Syndic', 'مطابق للقانون 18-00 · مسلم من طرف السنديك')}
+              {tr(
+                `Conforme ${receiptShortLawFr} · Délivré par le Syndic`,
+                `مطابق لـ ${receiptShortLawAr} · مسلم من طرف السنديك`,
+              )}
             </span>
           </div>
           <div className="flex gap-2 ms-auto">
@@ -115,10 +125,15 @@ const QuittancePreviewModal: React.FC<QuittancePreviewModalProps> = ({
             {tr('Quittance de Paiement des Charges de Copropriété', 'وصل أداء مساهمات الملكية المشتركة')}
           </h3>
           <p className="text-[10px] text-slate-500 mt-0.5">
-            {tr(
-              'En vertu de la Loi n° 18-00 relative au statut de la copropriété des immeubles bâtis (modifiée par la Loi n° 106-12)',
-              'بموجب القانون رقم 18-00 المتعلق بنظام الملكية المشتركة للعقارات المبنية (المعدل بالقانون رقم 106-12)',
-            )}
+            {isHistoricalSnapshot
+              ? tr(
+                  `En vertu du cadre légal en vigueur à l'émission : ${receiptShortLawFr}`,
+                  `بموجب الإطار القانوني الجاري به العمل وقت الإصدار: ${receiptShortLawAr}`,
+                )
+              : tr(
+                  `En vertu de la ${legal.citations.statuteFullTitleFr}`,
+                  `بموجب ${legal.citations.statuteFullTitleAr}`,
+                )}
           </p>
           <div className="inline-block bg-teal-100/70 border border-teal-300 text-teal-900 font-mono text-xs px-3 py-0.5 rounded font-bold mt-2">
             {tr('Réf:', 'المرجع:')} {quittance.quittanceNumber} · {tr('Émise le', 'صادر في')}{' '}
@@ -158,7 +173,12 @@ const QuittancePreviewModal: React.FC<QuittancePreviewModalProps> = ({
 
         <div className="bg-white rounded border border-slate-200 overflow-hidden text-xs">
           <div className="bg-teal-900 text-white p-2 font-bold flex justify-between">
-            <span>{tr('Désignation des charges (Loi 18-00 & 106-12)', 'بيان التكاليف والمساهمات (القانون 18-00 و 106-12)')}</span>
+            <span>
+              {tr(
+                `Désignation des charges (${receiptShortLawFr})`,
+                `بيان التكاليف والمساهمات (${receiptShortLawAr})`,
+              )}
+            </span>
             <span>{tr('Montant Réglé', 'المبلغ المؤدى')}</span>
           </div>
           <div className="p-3 space-y-2">
@@ -169,7 +189,12 @@ const QuittancePreviewModal: React.FC<QuittancePreviewModalProps> = ({
               </span>
             </div>
             <div className="flex justify-between items-center text-emerald-800">
-              <span>{tr('2. Provision obligatoire Fonds de Réserve (Loi 106-12 Art. 18 bis)', '2. مساهمة صندوق الاحتياط الإلزامي (القانون 106-12)')}</span>
+              <span>
+                {tr(
+                  `2. Provision Fonds de Réserve (${legal.citations.reserveFundRefFr})`,
+                  `2. مساهمة صندوق الاحتياط (${legal.citations.reserveFundRefAr})`,
+                )}
+              </span>
               <span className="font-mono font-semibold">
                 {formatRecordedFund(quittance, 'reserveFundAmount', tr)}
               </span>
@@ -202,7 +227,7 @@ const QuittancePreviewModal: React.FC<QuittancePreviewModalProps> = ({
             <span className="font-bold text-[7px]">SYNDICAT COPRO</span>
             <span className="font-extrabold text-[9px] text-teal-900">{tr('CERTIFIÉ', 'معتمد')}</span>
             <span className="font-bold text-[8px]">{tr('CONFORME', 'مطابق')}</span>
-            <span className="text-[6px]">LOI 18-00</span>
+            <span className="text-[6px] truncate max-w-[76px]">{legal.citations.stampCodeFr}</span>
           </div>
         </div>
       </div>

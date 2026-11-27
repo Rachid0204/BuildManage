@@ -1,6 +1,7 @@
 import { normalFont,boldFont } from '../assets/pdfFonts';
 import { jsPDF } from "jspdf";
 import { buildAnnualRepartitionSummary } from '../shared/annualRepartition';
+import { getActiveLegalFramework } from '../shared/legalFramework';
 import { getRecordedReserveSplit, isIncomeTransaction } from '../utils/security';
 import { saveOrShareBlob, saveOrSharePdf } from '../utils/nativeBridge';
 import type {
@@ -102,7 +103,7 @@ export const generateInvoicePDF = (invoice: Invoice, building: Building, residen
   void saveOrSharePdf(doc, `Avis_Charges_${invoice.invoiceNumber}.pdf`);return doc;
 };
 
-// 2. GENERATE OFFICIAL MOROCCAN QUITTANCE DE PAIEMENT (Loi 18-00 & Loi 106-12)
+// 2. GENERATE OFFICIAL QUITTANCE DE PAIEMENT
 export const generateQuittancePDF = (
   quittance: Quittance,
   building: Building,
@@ -111,19 +112,23 @@ export const generateQuittancePDF = (
   resident?: Resident,
   options: { autoDownload?: boolean } = { autoDownload: true }
 ) => {
+  const legal = getActiveLegalFramework();
+  const receiptLawFr = quittance.legalCitationFr || legal.citations.statuteShortFr;
   const doc=new jsPDF(),q=quittance as any;
   doc.setFillColor(15,118,110);doc.rect(0,0,210,34,'F');doc.setTextColor(255,255,255);doc.setFont('helvetica','bold');doc.setFontSize(18);doc.text(q.voidedAt?'QUITTANCE ANNULÉE':'QUITTANCE DE PAIEMENT',14,18);doc.setFontSize(10);doc.text(sanitizePdfText(String(quittance.quittanceNumber)),14,27);doc.setTextColor(30,41,59);doc.setFont('helvetica','normal');doc.setFontSize(10);let y=48;
   const write=(label:string,value:any)=>{const lines=doc.splitTextToSize(`${label} : ${sanitizePdfText(value!=null?String(value):'')||'Non renseigné'}`,180);if(y+lines.length*6>265){doc.addPage();y=24;}doc.text(lines,14,y);y+=lines.length*6+5;};
-  write('Syndic',syndic?.name||building.managerName);write('Immeuble',`${building.name} · ${building.address||''} · ${building.city||''}`);write('Résident',resident?.name||quittance.residentName);write('Lot',apartment?.number||quittance.apartmentNumber);write('Période couverte',quittance.periodCovered);write('Date du paiement',new Date(quittance.paymentDate).toLocaleDateString('fr-MA'));write('Date bancaire',quittance.bankTransactionDate || 'Non renseignée');write('Date de comptabilisation',quittance.postingDate || quittance.paymentDate);write('Date de soumission',quittance.submissionDate || 'Non renseignée');write('Mode de règlement',quittance.paymentMethod);write('Référence du règlement',quittance.referenceNumber||q.paymentId);write('Identifiant du reçu',quittance.id);
+  write('Syndic',syndic?.name||building.managerName);write('Immeuble',`${building.name} · ${building.address||''} · ${building.city||''}`);write('Résident',resident?.name||quittance.residentName);write('Lot',apartment?.number||quittance.apartmentNumber);write('Période couverte',quittance.periodCovered);write('Date du paiement',new Date(quittance.paymentDate).toLocaleDateString('fr-MA'));write('Date bancaire',quittance.bankTransactionDate || 'Non renseignée');write('Date de comptabilisation',quittance.postingDate || quittance.paymentDate);write('Date de soumission',quittance.submissionDate || 'Non renseignée');write('Mode de règlement',quittance.paymentMethod);write('Référence du règlement',quittance.referenceNumber||q.paymentId);write('Cadre légal',receiptLawFr);write('Identifiant du reçu',quittance.id);
   const allocation = getRecordedReserveSplit(quittance);
   doc.setFont('helvetica','bold');write('Montant enregistré',currencyFormatter.format(quittance.amount));doc.setFont('helvetica','normal');write('Fonds courant',allocation ? currencyFormatter.format(allocation.chargesCourantesAmount) : 'Non documenté');write('Fonds de réserve',allocation ? currencyFormatter.format(allocation.reserveFundAmount) : 'Non documenté');
   if(q.voidedAt){write('Annulation',new Date(q.voidedAt).toLocaleDateString('fr-MA'));write('Motif',q.voidReason);}else{y+=6;write('Signature du syndic','________________________________');}
-  doc.setFontSize(8);doc.setTextColor(100,116,139);doc.text('Reçu établi à partir du règlement enregistré dans SyndicUnion.',14,285);
+  doc.setFontSize(8);doc.setTextColor(100,116,139);doc.text(sanitizePdfText(`Reçu établi dans SyndicUnion · ${receiptLawFr}.`),14,285);
   const fileName=`Quittance_${quittance.quittanceNumber}_Lot_${quittance.apartmentNumber.replace(/\s+/g,'_')}.pdf`;if(options.autoDownload!==false)void saveOrSharePdf(doc, fileName);return{doc,fileName,outputBlobUri:()=>doc.output('bloburl')};
 };
 
-// 3. GENERATE MISE EN DEMEURE (Article 25 de la Loi 18-00)
+// 3. GENERATE MISE EN DEMEURE
 export const generateMiseEnDemeurePDF = (resident: Resident, apartment: Apartment, building: Building, unpaidAmount: number, syndic?: Syndic) => {
+  const legal = getActiveLegalFramework();
+  const medDays = legal.rules.miseEnDemeureNoticeDays;
   const doc = new jsPDF();
 
   // Header
@@ -157,7 +162,7 @@ export const generateMiseEnDemeurePDF = (resident: Resident, apartment: Apartmen
   doc.setFont("helvetica", "bold");
   doc.text("Objet : MISE EN DEMEURE POUR NON-PAIEMENT DES CHARGES DE COPROPRIÉTÉ", 14, 88);
   doc.setFont("helvetica", "normal");
-  doc.text("Réf légale : Article 25 de la Loi n° 18-00 relative à la copropriété des immeubles bâtis", 14, 94);
+  doc.text(sanitizePdfText(`Réf légale : ${legal.citations.collectionNoticeRefFr}`), 14, 94);
 
   // Body
   let y = 108;
@@ -178,12 +183,12 @@ export const generateMiseEnDemeurePDF = (resident: Resident, apartment: Apartmen
   doc.setFont("helvetica", "normal");
   doc.setFontSize(10);
   doc.setTextColor(15, 23, 42);
-  const paragraph2 = `Par la présente, nous vous METTONS FORMELLEMENT EN DEMEURE de procéder au règlement intégral de cette somme dans un DÉLAI STRICT DE TRENTE (30) JOURS à compter de la réception de la présente lettre.`;
+  const paragraph2 = sanitizePdfText(`Par la présente, nous vous METTONS FORMELLEMENT EN DEMEURE de procéder au règlement intégral de cette somme dans un DÉLAI STRICT DE ${medDays} JOURS à compter de la réception de la présente lettre.`);
   const splitP2 = doc.splitTextToSize(paragraph2, 182);
   doc.text(splitP2, 14, y);
 
   y += 20;
-  const paragraph3 = `À défaut de règlement dans ce délai légal imparti par l'article 25 de la Loi 18-00, nous serons dans l'obligation de saisir Monsieur le Président du Tribunal de Première Instance territorialement compétent afin d'obtenir une ORDONNANCE D'INJONCTION DE PAYER avec exécution provisoire.`;
+  const paragraph3 = sanitizePdfText(`À défaut de règlement dans ce délai légal imparti (${legal.citations.collectionNoticeRefFr}), nous serons dans l'obligation de saisir Monsieur le Président du Tribunal de Première Instance territorialement compétent afin d'obtenir une ORDONNANCE D'INJONCTION DE PAYER avec exécution provisoire.`);
   const splitP3 = doc.splitTextToSize(paragraph3, 182);
   doc.text(splitP3, 14, y);
 
@@ -205,19 +210,20 @@ export const generateMiseEnDemeurePDF = (resident: Resident, apartment: Apartmen
 };
 
 // 4. GENERATE PROCÈS-VERBAL D'ASSEMBLÉE GÉNÉRALE (PV AG)
-const AG_MAJORITY_PDF_LABELS: Record<string, string> = {
-  simple: 'Majorité simple des voix exprimées (Loi 18-00 Art. 21)',
-  simple_24: 'Majorité simple des voix exprimées (Loi 18-00 Art. 21)',
-  absolute: 'Majorité absolue des tantièmes (Loi 18-00 Art. 21)',
-  absolue_25: 'Majorité absolue des tantièmes (Loi 18-00 Art. 21)',
-  three_quarters: 'Majorité des 3/4 des voix (Loi 18-00 Art. 22)',
-  trois_quarts_26: 'Majorité des 3/4 des voix (Loi 18-00 Art. 22)',
-  unanimity: 'Unanimité de tous les copropriétaires (Loi 18-00 Art. 24)',
-  unanimite: 'Unanimité de tous les copropriétaires (Loi 18-00 Art. 24)',
+const formatAgMajorityLabel = (maj?: string) => {
+  const { citations } = getActiveLegalFramework();
+  const map: Record<string, string> = {
+    simple: `Majorité simple des voix exprimées (${citations.agMajoritySimpleRefFr})`,
+    simple_24: `Majorité simple des voix exprimées (${citations.agMajoritySimpleRefFr})`,
+    absolute: `Majorité absolue des tantièmes (${citations.agMajorityAbsoluteRefFr})`,
+    absolue_25: `Majorité absolue des tantièmes (${citations.agMajorityAbsoluteRefFr})`,
+    three_quarters: `Majorité des 3/4 des voix (${citations.agMajorityThreeQuartersRefFr})`,
+    trois_quarts_26: `Majorité des 3/4 des voix (${citations.agMajorityThreeQuartersRefFr})`,
+    unanimity: `Unanimité de tous les copropriétaires (${citations.agMajorityUnanimityRefFr})`,
+    unanimite: `Unanimité de tous les copropriétaires (${citations.agMajorityUnanimityRefFr})`,
+  };
+  return map[maj || 'simple'] || `Majorité simple (${citations.statuteShortFr})`;
 };
-
-const formatAgMajorityLabel = (maj?: string) =>
-  AG_MAJORITY_PDF_LABELS[maj || 'simple'] || 'Majorité simple (Loi 18-00)';
 
 const formatAgTypeLabel = (type?: string) =>
   type === 'AGE' || type === 'extraordinaire'
@@ -225,6 +231,8 @@ const formatAgTypeLabel = (type?: string) =>
     : 'ORDINAIRE (AGO)';
 
 export const generatePvAgPDF = (ag: AssembleeGenerale, building: Building, syndic?: Syndic) => {
+  const legal = getActiveLegalFramework();
+  const agLawFr = ag.legalCitationFr || legal.citations.statuteShortFr;
   const doc = new jsPDF();
   const isClosed = ['completed', 'closed'].includes(ag.status);
   const convocationNum = ag.convocationNumber === 2 ? 2 : 1;
@@ -252,7 +260,7 @@ export const generatePvAgPDF = (ag: AssembleeGenerale, building: Building, syndi
   doc.text(sanitizePdfText(`Copropriété : ${building.name} — ${building.city || ''}`), 105, 23, { align: 'center' });
   doc.text(
     sanitizePdfText(
-      `${convocationNum === 2 ? '2ème convocation (Art. 18 — sans condition de quorum)' : '1ère convocation'} · ${ag.title || ''}`,
+      `${convocationNum === 2 ? '2ème convocation (sans condition de quorum)' : '1ère convocation'} · ${ag.title || ''}`,
     ),
     105,
     29.5,
@@ -290,7 +298,7 @@ export const generatePvAgPDF = (ag: AssembleeGenerale, building: Building, syndi
   doc.rect(14, y, 182, 24, 'F');
   doc.setFont("helvetica", "bold");
   doc.setFontSize(9.5);
-  doc.text(sanitizePdfText('CONSTATATION DU QUORUM LÉGAL (Loi 18-00 / Loi 106-12) :'), 18, y + 6);
+  doc.text(sanitizePdfText(`CONSTATATION DU QUORUM LÉGAL (${agLawFr}) :`), 18, y + 6);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
   doc.text(
@@ -304,18 +312,18 @@ export const generatePvAgPDF = (ag: AssembleeGenerale, building: Building, syndi
   const canDeliberate = ag.quorumReached || convocationNum === 2;
   doc.setTextColor(canDeliberate ? 15 : 185, canDeliberate ? 118 : 28, canDeliberate ? 110 : 28);
   const quorumStatusLine = convocationNum === 2
-    ? "-> 2ÈME CONVOCATION (Art. 18) : L'Assemblée délibère valablement quel que soit le nombre de tantièmes présents."
+    ? "-> 2ÈME CONVOCATION : L'Assemblée délibère valablement quel que soit le nombre de tantièmes présents."
     : ag.quorumReached
       ? "-> QUORUM ATTEINT : L'Assemblée peut valablement délibérer."
-      : "-> QUORUM NON ATTEINT : Deuxième convocation requise (Loi 18-00 Art. 18).";
+      : `-> QUORUM NON ATTEINT : Deuxième convocation requise (${legal.citations.agConvocationRefFr}).`;
   doc.text(sanitizePdfText(quorumStatusLine), 18, y + 19);
 
-  // Feuille de présence (Art. 16-8)
+  // Feuille de présence
   y += 30;
   doc.setTextColor(15, 23, 42);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(10);
-  doc.text(sanitizePdfText('FEUILLE DE PRÉSENCE (Loi 18-00 Art. 16-8) :'), 14, y);
+  doc.text(sanitizePdfText(`FEUILLE DE PRÉSENCE (${legal.citations.agAttendanceRefFr}) :`), 14, y);
   y += 5;
 
   const attendees = ag.attendees || [];
@@ -529,8 +537,11 @@ export const generatePvAgPDF = (ag: AssembleeGenerale, building: Building, syndi
   void saveOrSharePdf(doc, `PV_Assemblee_Generale_${safeName}_${ag.date || 'session'}.pdf`);
 };
 
-// 4B. GENERATE CONVOCATION & BLANK PROCURATION PDF (LOI 18-00 ART. 16-2 & 16-6)
+// 4B. GENERATE CONVOCATION & BLANK PROCURATION PDF
 export const generateConvocationAgPDF = (ag: AssembleeGenerale, building: Building, syndic?: Syndic) => {
+  const legal = getActiveLegalFramework();
+  const agLawFr = ag.legalCitationFr || legal.citations.statuteShortFr;
+  const noticeDays = legal.rules.convocationNoticeDays;
   const doc = new jsPDF();
   const convocationNum = ag.convocationNumber === 2 ? 2 : 1;
   const totalTant = ag.totalTantiemes || building.totalTantiemes || 1000;
@@ -568,7 +579,7 @@ export const generateConvocationAgPDF = (ag: AssembleeGenerale, building: Buildi
   );
   doc.text(
     sanitizePdfText(
-      `${convocationNum === 2 ? '2ème convocation (Art. 18)' : '1ère convocation'} · Conformité Loi n° 18-00 / 106-12 (Art. 16-2)`,
+      `${convocationNum === 2 ? '2ème convocation' : '1ère convocation'} · Conformité ${agLawFr} (${legal.citations.agConvocationRefFr})`,
     ),
     105,
     29,
@@ -587,12 +598,12 @@ export const generateConvocationAgPDF = (ag: AssembleeGenerale, building: Buildi
   doc.text(sanitizePdfText(`Date d'émission : ${new Date().toLocaleDateString('fr-MA')}`), 196, y, { align: 'right' });
   y += 7;
 
-  // Law 18-00 Art. 16-2 15-day notice check
+  // Statutory convocation notice check
   const agTimestamp = Date.parse(ag.date || '');
   const daysUntilAg = Number.isFinite(agTimestamp)
     ? Math.floor((agTimestamp - Date.now()) / 86_400_000)
     : null;
-  if (daysUntilAg !== null && daysUntilAg < 15) {
+  if (daysUntilAg !== null && daysUntilAg < noticeDays) {
     doc.setFillColor(254, 243, 199);
     doc.setDrawColor(217, 119, 6);
     doc.rect(14, y, 182, 11, 'FD');
@@ -601,7 +612,7 @@ export const generateConvocationAgPDF = (ag: AssembleeGenerale, building: Buildi
     doc.setFontSize(8.2);
     doc.text(
       sanitizePdfText(
-        `Rappel légal (Art. 16-2) : le délai légal de convocation est de 15 jours francs (séance prévue dans ${Math.max(0, daysUntilAg)} jour(s)).`,
+        `Rappel légal (${legal.citations.agConvocationRefFr}) : le délai légal de convocation est de ${noticeDays} jours francs (séance prévue dans ${Math.max(0, daysUntilAg)} jour(s)).`,
       ),
       18,
       y + 7,
@@ -690,7 +701,7 @@ export const generateConvocationAgPDF = (ag: AssembleeGenerale, building: Buildi
   doc.setTextColor(15, 23, 42);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(10);
-  doc.text('POUVOIR / PROCURATION (Loi n° 18-00 Art. 16-6)', 105, y + 7, { align: 'center' });
+  doc.text(sanitizePdfText(`POUVOIR / PROCURATION (${agLawFr} · ${legal.citations.agProxyRefFr})`), 105, y + 7, { align: 'center' });
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8.5);
   doc.text('Je soussigné(e) : ________________________________________________   CIN : ___________________', 18, y + 16);
@@ -709,7 +720,9 @@ export const generateConvocationAgPDF = (ag: AssembleeGenerale, building: Buildi
   doc.setFontSize(7.5);
   doc.setTextColor(100, 116, 139);
   doc.text(
-    sanitizePdfText('Rappel Art. 16-6 : Un mandataire ne peut détenir plus de 3 procurations ni cumuler plus de 10% des voix.'),
+    sanitizePdfText(
+      `Rappel (${legal.citations.agProxyRefFr}) : Un mandataire ne peut détenir plus de ${legal.rules.maxProxiesPerHolder} procuration(s) ni cumuler plus de ${legal.rules.maxProxyTantiemesSharePercent}% des voix.`,
+    ),
     18,
     y + 44,
   );
@@ -728,12 +741,13 @@ export const generateConvocationAgPDF = (ag: AssembleeGenerale, building: Buildi
   void saveOrSharePdf(doc, `Convocation_AG_${safeName}_${ag.date || 'session'}.pdf`);
 };
 
-// 5. GENERATE TRANSACTION ACCOUNTING VOUCHER (PIÈCE COMPTABLE LOI 18-00)
+// 5. GENERATE TRANSACTION ACCOUNTING VOUCHER (PIÈCE COMPTABLE)
 export const generateTransactionVoucherPDF = (
   trx: Transaction,
   building: Building,
   syndic?: Syndic
 ) => {
+  const legal = getActiveLegalFramework();
   const doc = new jsPDF();
   const isIncome = isIncomeTransaction(trx);
   const absAmount = Math.abs(trx.amount);
@@ -752,14 +766,14 @@ export const generateTransactionVoucherPDF = (
   );
   doc.setFontSize(8.5);
   doc.setFont("helvetica", "normal");
-  doc.text("Conformité Comptabilité Syndic · Loi 18-00 relative à la copropriété", 14, 27);
+  doc.text(sanitizePdfText(`Conformité Comptabilité Syndic · ${legal.citations.accountingRefFr}`), 14, 27);
 
   doc.setFontSize(9);
   doc.setFont("helvetica", "bold");
   doc.text(sanitizePdfText(`Réf Écriture : ${trx.id}`), 145, 16);
   doc.setFont("helvetica", "normal");
   doc.text(`Date : ${new Date(trx.date).toLocaleDateString('fr-MA')}`, 145, 22);
-  doc.text(`Fonds : ${trx.fundType === 'reserve' ? 'FONDS DE RÉSERVE (Loi 106-12)' : 'COMPTE COURANT'}`, 145, 28);
+  doc.text(sanitizePdfText(`Fonds : ${trx.fundType === 'reserve' ? `FONDS DE RÉSERVE (${legal.citations.reserveFundRefFr})` : 'COMPTE COURANT'}`), 145, 28);
 
   // General details
   doc.setTextColor(15, 23, 42);
@@ -853,16 +867,13 @@ export const generateTransactionVoucherPDF = (
   y += 26;
   doc.setFontSize(7.5);
   doc.setTextColor(100, 116, 139);
-  doc.text(
-    "Le présent document tient lieu de justificatif d'écriture comptable pour le syndicat des copropriétaires conformément aux dispositions",
-    14,
-    y
+  const legalLines = doc.splitTextToSize(
+    sanitizePdfText(
+      `Le présent document tient lieu de justificatif d'écriture comptable pour le syndicat des copropriétaires conformément aux dispositions de la ${legal.citations.statuteFullTitleFr}.`,
+    ),
+    182,
   );
-  doc.text(
-    "de la Loi 18-00 régissant la copropriété des immeubles bâtis au Royaume du Maroc et de la Loi 106-12 relative aux fonds de réserve.",
-    14,
-    y + 4
-  );
+  doc.text(legalLines, 14, y);
 
   // Signatures
   y += 18;
@@ -968,6 +979,7 @@ export const exportResidentsCSV = (building: Building) => {
 
 // 7. EXPORT RESIDENT LIST AS OFFICIAL PDF REPORT
 export const exportResidentsPDF = (building: Building, syndic?: Syndic) => {
+  const legal = getActiveLegalFramework();
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
   const pageWidth = 297;
   const pageHeight = 210;
@@ -1001,7 +1013,7 @@ export const exportResidentsPDF = (building: Building, syndic?: Syndic) => {
     doc.setTextColor(255, 255, 255);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(14);
-    doc.text('REGISTRE OFFICIEL DES COPROPRIÉTAIRES ET RÉSIDENTS (LOI 18-00)', 14, 12);
+    doc.text(sanitizePdfText(`REGISTRE OFFICIEL DES COPROPRIÉTAIRES ET RÉSIDENTS (${legal.citations.statuteShortFr})`), 14, 12);
 
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9);
@@ -1108,7 +1120,7 @@ export const exportResidentsPDF = (building: Building, syndic?: Syndic) => {
   doc.setFontSize(7.5);
   doc.setTextColor(100, 116, 139);
   doc.text(
-    `Document officiel généré pour le reporting syndic — ${sanitizePdfText(building.name)} (${sanitizePdfText(building.city)}) — Loi n° 18-00 & 106-12`,
+    sanitizePdfText(`Document officiel généré pour le reporting syndic — ${building.name} (${building.city}) — ${legal.citations.statuteShortFr}`),
     pageWidth / 2,
     pageHeight - 8,
     { align: 'center' }
@@ -1203,6 +1215,7 @@ export const exportApartmentsPDF = (
   residents?: Resident[],
   syndic?: Syndic
 ) => {
+  const legal = getActiveLegalFramework();
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
   const pageWidth = 297;
   const pageHeight = 210;
@@ -1234,7 +1247,7 @@ export const exportApartmentsPDF = (
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(14);
     doc.text(
-      'ÉTAT DESCRIPTIF DE DIVISION & INVENTAIRE DES LOTS DE COPROPRIÉTÉ (LOI 18-00)',
+      sanitizePdfText(`ÉTAT DESCRIPTIF DE DIVISION & INVENTAIRE DES LOTS DE COPROPRIÉTÉ (${legal.citations.statuteShortFr})`),
       14,
       12
     );
@@ -1377,7 +1390,7 @@ export const exportApartmentsPDF = (
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(100, 116, 139);
   doc.text(
-    `Inventaire officiel des lots et quotes-parts d'indivision — ${sanitizePdfText(building.name)} (${sanitizePdfText(building.city)}) — Conforme Loi n° 18-00`,
+    sanitizePdfText(`Inventaire officiel des lots et quotes-parts d'indivision — ${building.name} (${building.city}) — Conforme ${legal.citations.statuteShortFr}`),
     pageWidth / 2,
     pageHeight - 8,
     { align: 'center' }
@@ -1398,6 +1411,7 @@ export const exportResidentCredentialsPDF = (
   apartmentNumber?: string,
   syndic?: Syndic | null
 ) => {
+  const legal = getActiveLegalFramework();
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
@@ -1420,7 +1434,7 @@ export const exportResidentCredentialsPDF = (
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9);
   doc.text(
-    'ROYAUME DU MAROC · SYNDICAT DES COPROPRIÉTAIRES (LOI N° 18-00 & 106-12)',
+    sanitizePdfText(`ROYAUME DU MAROC · SYNDICAT DES COPROPRIÉTAIRES (${legal.citations.statuteShortFr})`),
     105,
     13,
     { align: 'center' }
@@ -1604,7 +1618,7 @@ export const exportResidentCredentialsPDF = (
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8.5);
   doc.text('• Consultation de vos appels de charges et envoi de justificatifs de virement.', 18, y + 14);
-  doc.text('• Téléchargement immédiat de vos Quittances Officielles de Copropriété (Loi 18-00).', 18, y + 20);
+  doc.text(sanitizePdfText(`• Téléchargement immédiat de vos Quittances Officielles de Copropriété (${legal.citations.statuteShortFr}).`), 18, y + 20);
   doc.text('• Vote numérique pondéré par tantièmes aux Assemblées Générales (AGO / AGE).', 18, y + 26);
   doc.text('• Déclaration et suivi photo des incidents de maintenance & messagerie de l’immeuble.', 18, y + 31);
 
@@ -1631,6 +1645,7 @@ export const exportPrestataireCredentialsPDF = (
   building: Building,
   syndic?: Syndic | null
 ) => {
+  const legal = getActiveLegalFramework();
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
@@ -1653,7 +1668,7 @@ export const exportPrestataireCredentialsPDF = (
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9);
   doc.text(
-    'ROYAUME DU MAROC · GESTION TECHNIQUE DE COPROPRIÉTÉ (LOI N° 18-00)',
+    sanitizePdfText(`ROYAUME DU MAROC · GESTION TECHNIQUE DE COPROPRIÉTÉ (${legal.citations.statuteShortFr})`),
     105,
     13,
     { align: 'center' }
@@ -1874,6 +1889,7 @@ export const exportBuildingSummaryReportPDF = (
     (m) => m.status !== 'completed'
   );
 
+  const legal = getActiveLegalFramework();
   // Header Banner
   doc.setFillColor(15, 118, 110); // Teal 700
   doc.rect(0, 0, 210, 38, 'F');
@@ -1883,7 +1899,7 @@ export const exportBuildingSummaryReportPDF = (
   doc.setTextColor(255, 255, 255);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9);
-  doc.text('ROYAUME DU MAROC · SYNDICAT DES COPROPRIÉTAIRES (LOI 18-00 & 106-12)', 14, 12);
+  doc.text(sanitizePdfText(`ROYAUME DU MAROC · SYNDICAT DES COPROPRIÉTAIRES (${legal.citations.statuteShortFr})`), 14, 12);
 
   doc.setFontSize(16);
   doc.text('RAPPORT DE SYNTHÈSE DE LA COPROPRIÉTÉ', 14, 22);
@@ -1925,7 +1941,7 @@ export const exportBuildingSummaryReportPDF = (
   doc.text(currencyFormatter.format(summaryData?.workingBalance ?? 0), 75, y + 8);
 
   doc.setTextColor(30, 41, 59);
-  doc.text('Fonds de Réserve (Loi 106-12) :', 18, y + 16);
+  doc.text(sanitizePdfText(`Fonds de Réserve (${legal.citations.reserveFundRefFr}) :`), 18, y + 16);
   doc.setTextColor(67, 56, 202);
   doc.text(currencyFormatter.format(summaryData?.reserveBalance ?? 0), 75, y + 16);
 
@@ -2077,6 +2093,7 @@ export const exportBuildingSummaryReportPDF = (
  * so it can be previewed in-browser via a Blob URL or downloaded.
  */
 function buildArchiveDocumentJsPDF(docItem: BuildingDocument, building: Building): jsPDF {
+  const legal = getActiveLegalFramework();
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
@@ -2095,7 +2112,7 @@ function buildArchiveDocumentJsPDF(docItem: BuildingDocument, building: Building
   doc.setTextColor(255, 255, 255);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9);
-  doc.text('ARCHIVES LÉGALES DE LA COPROPRIÉTÉ · LOI N° 18-00 & 106-12', 14, 13);
+  doc.text(sanitizePdfText(`ARCHIVES LÉGALES DE LA COPROPRIÉTÉ · ${legal.citations.statuteShortFr}`), 14, 13);
 
   doc.setFontSize(14);
   doc.text(sanitizePdfText(docItem.name), 14, 23);
@@ -2130,7 +2147,7 @@ function buildArchiveDocumentJsPDF(docItem: BuildingDocument, building: Building
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9.5);
   const lines = doc.splitTextToSize(
-    `Ce document officiel (« ${sanitizePdfText(docItem.name)} ») fait partie intégrante du registre d'archives numériques de la copropriété ${sanitizePdfText(building.name)}, sise à ${sanitizePdfText(building.address)}, ${sanitizePdfText(building.city) || 'Maroc'}, conformément aux dispositions de la Loi n° 18-00 relative au statut de la copropriété des immeubles bâtis telle que modifiée et complétée par la Loi n° 106-12.\n\nIl est mis à la disposition des copropriétaires et du syndic pour consultation directe en ligne et conservation légale.`,
+    sanitizePdfText(`Ce document officiel (« ${docItem.name} ») fait partie intégrante du registre d'archives numériques de la copropriété ${building.name}, sise à ${building.address}, ${building.city || 'Maroc'}, conformément aux dispositions de la ${legal.citations.statuteFullTitleFr}.\n\nIl est mis à la disposition des copropriétaires et du syndic pour consultation directe en ligne et conservation légale.`),
     180
   );
   doc.text(lines, 14, y);
@@ -2187,7 +2204,7 @@ export function sanitizePdfText(input?: string | null): string {
 }
 
 /**
- * Phase 4.2: État de Répartition Annuel & Clôture d'Exercice (Loi 18-00 Art. 24 & 37 / Loi 106-12)
+ * Phase 4.2: État de Répartition Annuel & Clôture d'Exercice
  */
 export const exportAnnualRepartitionPDF = (
   building: Building,
@@ -2196,6 +2213,7 @@ export const exportAnnualRepartitionPDF = (
   quittances: Quittance[] = [],
   fiscalYear: number = new Date().getFullYear()
 ) => {
+  const legal = getActiveLegalFramework();
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const summary = buildAnnualRepartitionSummary(
     building,
@@ -2210,7 +2228,7 @@ export const exportAnnualRepartitionPDF = (
   doc.setTextColor(255, 255, 255);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
-  doc.text('ROYAUME DU MAROC · SYNDICAT DES COPROPRIÉTAIRES (LOI 18-00 & 106-12)', 105, 13, {
+  doc.text(sanitizePdfText(`ROYAUME DU MAROC · SYNDICAT DES COPROPRIÉTAIRES (${legal.citations.statuteShortFr})`), 105, 13, {
     align: 'center',
   });
   doc.setFontSize(14);
@@ -2309,7 +2327,7 @@ export const exportAnnualRepartitionPDF = (
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(100, 116, 139);
   doc.text(
-    `Arrêté des comptes exercice ${fiscalYear} certifié conforme aux articles 24 et 37 de la Loi 18-00 — Quittances exercice : ${summary.receiptCount}`,
+    sanitizePdfText(`Arrêté des comptes exercice ${fiscalYear} certifié conforme (${legal.citations.accountingRefFr}) — Quittances exercice : ${summary.receiptCount}`),
     105,
     284,
     { align: 'center' }
@@ -2319,7 +2337,7 @@ export const exportAnnualRepartitionPDF = (
 };
 
 /**
- * Phase 5.2: Mise en Demeure Officielle de Payer (Article 25 de la Loi n° 18-00 modifiée par la Loi 106-12)
+ * Phase 5.2: Mise en Demeure Officielle de Payer
  */
 export const exportMiseEnDemeurePDF = (
   building: Building,
@@ -2328,6 +2346,8 @@ export const exportMiseEnDemeurePDF = (
   apartmentOrList: Apartment | Apartment[] | undefined,
   unpaidCharges: Charge[]
 ) => {
+  const legal = getActiveLegalFramework();
+  const noticeDays = legal.rules.miseEnDemeureNoticeDays;
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const totalTantiemes = building.totalTantiemes || 1000;
   const apartments = Array.isArray(apartmentOrList)
@@ -2359,7 +2379,7 @@ export const exportMiseEnDemeurePDF = (
   doc.setTextColor(255, 255, 255);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9.5);
-  doc.text('ROYAUME DU MAROC · PROCÉDURE LÉGALE DE RECOUVREMENT (LOI 18-00 ART. 25)', 105, 13, {
+  doc.text(sanitizePdfText(`ROYAUME DU MAROC · PROCÉDURE LÉGALE DE RECOUVREMENT (${legal.citations.collectionNoticeRefFr})`), 105, 13, {
     align: 'center',
   });
   doc.setFontSize(15);
@@ -2369,7 +2389,7 @@ export const exportMiseEnDemeurePDF = (
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
   doc.text(
-    `Lettre recommandée avec accusé de réception · Délai légal de 30 jours avant injonction de payer`,
+    sanitizePdfText(`Lettre recommandée avec accusé de réception · Délai légal de ${noticeDays} jours avant injonction de payer`),
     105,
     31,
     { align: 'center' }
@@ -2398,7 +2418,7 @@ export const exportMiseEnDemeurePDF = (
 
   y += Math.max(26, 14 + wrappedLots.length * 5);
   const bodyText = doc.splitTextToSize(
-    `Madame, Monsieur,\n\nMalgré nos précédents rappels amiables, nous constatons qu'à la date du ${issueDate}, votre compte copropriétaire au sein de la résidence « ${sanitizePdfText(building.name)} » présente un solde débiteur exigible de ${currencyFormatter.format(totalDue)} au titre des cotisations votées en Assemblée Générale.\n\nPar la présente, nous vous mettons formellement en demeure, conformément à l'article 25 de la Loi n° 18-00 (telle que modifiée par la Loi n° 106-12), de régulariser ce montant sous un délai de trente (30) jours à compter de la réception de cet avis.`,
+    sanitizePdfText(`Madame, Monsieur,\n\nMalgré nos précédents rappels amiables, nous constatons qu'à la date du ${issueDate}, votre compte copropriétaire au sein de la résidence « ${building.name} » présente un solde débiteur exigible de ${currencyFormatter.format(totalDue)} au titre des cotisations votées en Assemblée Générale.\n\nPar la présente, nous vous mettons formellement en demeure, conformément aux dispositions applicables (${legal.citations.collectionNoticeRefFr}), de régulariser ce montant sous un délai de ${noticeDays} jours à compter de la réception de cet avis.`),
     180
   );
   doc.text(bodyText, 14, y);
@@ -2457,7 +2477,7 @@ export const exportMiseEnDemeurePDF = (
   doc.setFontSize(8);
   doc.setFont('helvetica', 'normal');
   doc.text(
-    "À défaut de règlement dans le délai de 30 jours, le Président du Tribunal de Première Instance sera saisi d'une requête en injonction de payer (Art. 25 bis Loi 18-00).",
+    sanitizePdfText(`À défaut de règlement dans le délai de ${noticeDays} jours, le Président du Tribunal de Première Instance pourra être saisi d'une requête en injonction de payer (${legal.citations.collectionNoticeRefFr}).`),
     105,
     283,
     { align: 'center' }
@@ -2481,6 +2501,7 @@ export const exportResidentStatementPDF = (
   charges: Charge[],
   quittances: Quittance[]
 ) => {
+  const legal = getActiveLegalFramework();
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const totalTantiemes = building.totalTantiemes || 1000;
   const residentCharges = charges.filter(
@@ -2537,7 +2558,7 @@ export const exportResidentStatementPDF = (
   doc.setTextColor(255, 255, 255);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9.5);
-  doc.text('ROYAUME DU MAROC · RELEVÉ DE COMPTE COPROPRIÉTAIRE (LOI 18-00)', 105, 12, {
+  doc.text(sanitizePdfText(`ROYAUME DU MAROC · RELEVÉ DE COMPTE COPROPRIÉTAIRE (${legal.citations.statuteShortFr})`), 105, 12, {
     align: 'center',
   });
   doc.setFontSize(14);
@@ -2634,7 +2655,7 @@ export const exportResidentStatementPDF = (
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(100, 116, 139);
   doc.text(
-    `Relevé de compte généré par ${sanitizePdfText(syndic?.name || 'SyndicUnion')} — Conforme à la Loi n° 18-00 relative à la copropriété`,
+    sanitizePdfText(`Relevé de compte généré par ${syndic?.name || 'SyndicUnion'} — Conforme (${legal.citations.statuteShortFr})`),
     105,
     284,
     { align: 'center' }

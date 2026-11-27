@@ -71,30 +71,32 @@ const EXPECTED_PRODUCTION_AND_TEST_STACK: StackEntry[] = [
   { index: 40, kind: 'route', methods: ['GET'], path: '/api/subscription/cmi/return', handlers: 1 },
   { index: 41, kind: 'route', methods: ['POST'], path: '/api/webhooks/cmi', handlers: 1 },
   { index: 42, kind: 'route', methods: ['GET'], path: '/api/admin/promos', handlers: 1 },
-  { index: 43, kind: 'route', methods: ['POST'], path: '/api/admin/promos', handlers: 1 },
-  { index: 44, kind: 'route', methods: ['PATCH'], path: '/api/admin/promos/:id', handlers: 1 },
-  { index: 45, kind: 'route', methods: ['DELETE'], path: '/api/admin/promos/:id', handlers: 1 },
-  { index: 46, kind: 'route', methods: ['GET'], path: '/api/admin/audit-logs', handlers: 1 },
-  { index: 47, kind: 'route', methods: ['GET'], path: '/api/admin/gateway-events', handlers: 1 },
-  { index: 48, kind: 'route', methods: ['POST'], path: '/api/admin/cabinets/:id/send-reminder', handlers: 1 },
-  { index: 49, kind: 'route', methods: ['POST'], path: '/api/operations/status', handlers: 1 },
-  { index: 50, kind: 'route', methods: ['POST'], path: '/api/commands', handlers: 1 },
-  { index: 51, kind: 'route', methods: ['GET'], path: '/api/auth/session', handlers: 1 },
-  { index: 52, kind: 'route', methods: ['POST'], path: '/api/auth/logout', handlers: 1 },
-  { index: 53, kind: 'route', methods: ['GET'], path: '/api/reports', handlers: 1 },
-  { index: 54, kind: 'route', methods: ['GET'], path: '/api/archives', handlers: 1 },
-  { index: 55, kind: 'route', methods: ['GET'], path: '/api/ready', handlers: 1 },
-  { index: 56, kind: 'route', methods: ['GET'], path: '/api/diagnostics', handlers: 1 },
-  { index: 57, kind: 'route', methods: ['POST'], path: '/api/jobs/lifecycle', handlers: 1 },
-  { index: 58, kind: 'route', methods: ['POST'], path: '/api/jobs/monthly-charges', handlers: 1 },
-  { index: 59, kind: 'route', methods: ['GET'], path: '/api/billing-runs', handlers: 1 },
-  { index: 60, kind: 'route', methods: ['POST'], path: '/api/billing-runs/retry', handlers: 1 },
-  { index: 61, kind: 'route', methods: ['POST'], path: '/api/jobs/outbox', handlers: 1 },
-  { index: 62, kind: 'route', methods: ['POST'], path: '/api/jobs/overdue', handlers: 1 },
-  { index: 63, kind: 'route', methods: ['POST'], path: '/api/shared-state', handlers: 1 },
-  { index: 64, kind: 'route', methods: ['POST'], path: '/api/shared-state/reset', handlers: 1 },
-  { index: 65, kind: 'middleware', name: 'serveStatic', path: null },
-  { index: 66, kind: 'route', methods: ['GET'], path: '*all', handlers: 1 },
+  { index: 43, kind: 'route', methods: ['PUT'], path: '/api/admin/legal-framework', handlers: 1 },
+  { index: 44, kind: 'route', methods: ['POST'], path: '/api/admin/promos', handlers: 1 },
+  { index: 45, kind: 'route', methods: ['PATCH'], path: '/api/admin/promos/:id', handlers: 1 },
+  { index: 46, kind: 'route', methods: ['DELETE'], path: '/api/admin/promos/:id', handlers: 1 },
+  { index: 47, kind: 'route', methods: ['GET'], path: '/api/admin/audit-logs', handlers: 1 },
+  { index: 48, kind: 'route', methods: ['GET'], path: '/api/admin/gateway-events', handlers: 1 },
+  { index: 49, kind: 'route', methods: ['POST'], path: '/api/admin/cabinets/:id/send-reminder', handlers: 1 },
+  { index: 50, kind: 'route', methods: ['POST'], path: '/api/operations/status', handlers: 1 },
+  { index: 51, kind: 'route', methods: ['POST'], path: '/api/commands', handlers: 1 },
+  { index: 52, kind: 'route', methods: ['GET'], path: '/api/auth/session', handlers: 1 },
+  { index: 53, kind: 'route', methods: ['POST'], path: '/api/auth/logout', handlers: 1 },
+  { index: 54, kind: 'route', methods: ['GET'], path: '/api/legal-framework', handlers: 1 },
+  { index: 55, kind: 'route', methods: ['GET'], path: '/api/reports', handlers: 1 },
+  { index: 56, kind: 'route', methods: ['GET'], path: '/api/archives', handlers: 1 },
+  { index: 57, kind: 'route', methods: ['GET'], path: '/api/ready', handlers: 1 },
+  { index: 58, kind: 'route', methods: ['GET'], path: '/api/diagnostics', handlers: 1 },
+  { index: 59, kind: 'route', methods: ['POST'], path: '/api/jobs/lifecycle', handlers: 1 },
+  { index: 60, kind: 'route', methods: ['POST'], path: '/api/jobs/monthly-charges', handlers: 1 },
+  { index: 61, kind: 'route', methods: ['GET'], path: '/api/billing-runs', handlers: 1 },
+  { index: 62, kind: 'route', methods: ['POST'], path: '/api/billing-runs/retry', handlers: 1 },
+  { index: 63, kind: 'route', methods: ['POST'], path: '/api/jobs/outbox', handlers: 1 },
+  { index: 64, kind: 'route', methods: ['POST'], path: '/api/jobs/overdue', handlers: 1 },
+  { index: 65, kind: 'route', methods: ['POST'], path: '/api/shared-state', handlers: 1 },
+  { index: 66, kind: 'route', methods: ['POST'], path: '/api/shared-state/reset', handlers: 1 },
+  { index: 67, kind: 'middleware', name: 'serveStatic', path: null },
+  { index: 68, kind: 'route', methods: ['GET'], path: '*all', handlers: 1 },
 ];
 
 function inspectServerStack(nodeEnv: 'test' | 'development'): StackEntry[] {
@@ -157,15 +159,15 @@ function inspectServerStack(nodeEnv: 'test' | 'development'): StackEntry[] {
 
 test('Express middleware and route stack order, methods, paths and positions match baseline identically', () => {
   const testStack = inspectServerStack('test');
-  assert.equal(testStack.length, 67);
-  assert.equal(testStack.filter((entry) => entry.kind === 'route').length, 58);
+  assert.equal(testStack.length, 69);
+  assert.equal(testStack.filter((entry) => entry.kind === 'route').length, 60);
   assert.deepEqual(testStack, EXPECTED_PRODUCTION_AND_TEST_STACK);
 
   const devStack = inspectServerStack('development');
-  assert.equal(devStack.length, 66);
-  assert.deepEqual(devStack.slice(0, 65), EXPECTED_PRODUCTION_AND_TEST_STACK.slice(0, 65));
-  assert.deepEqual(devStack[65], {
-    index: 65,
+  assert.equal(devStack.length, 68);
+  assert.deepEqual(devStack.slice(0, 67), EXPECTED_PRODUCTION_AND_TEST_STACK.slice(0, 67));
+  assert.deepEqual(devStack[67], {
+    index: 67,
     kind: 'middleware',
     name: 'app',
     path: null,

@@ -58,7 +58,7 @@ export const RESIDENT_GUIDES: UserGuideArticle[] = [
     titleFr: 'Consulter mes Charges, Envoyer un Justificatif & Télécharger mes Quittances PDF',
     titleAr: 'الاطلاع على واجباتي، إرسال وصل الأداء وتحميل التوصيلات PDF',
     summaryFr:
-      'Suivez votre solde en temps réel, envoyez votre justificatif de virement bancaire au Syndic et téléchargez à tout moment vos quittances officielles de copropriété (Loi 18-00).',
+      'Suivez votre solde en temps réel, envoyez votre justificatif de virement bancaire au Syndic et téléchargez à tout moment vos quittances officielles de copropriété.',
     summaryAr:
       'تابع رصيدك المالي في الوقت الفعلي، أرسل إيصال التحويل البنكي للسنديك وحمّل توصيلات الأداء الرسمية PDF في أي وقت.',
     steps: [
@@ -98,9 +98,9 @@ export const RESIDENT_GUIDES: UserGuideArticle[] = [
       },
     ],
     legalNoteFr:
-      'Chaque quittance générée après validation comporte le numéro séquentiel officiel, les références de la copropriété, le montant en chiffres et en toutes lettres (conforme Loi 18-00).',
+      'Chaque quittance générée après validation comporte le numéro séquentiel officiel, les références de la copropriété, le montant en chiffres et en toutes lettres ainsi que la référence légale en vigueur à sa date d’émission.',
     legalNoteAr:
-      'كل توصيل أداء يصدر بعد المصادقة يحمل رقماً تسلسلياً رسمياً ومراجع الإقامة والمبلغ بالأرقام والحروف وفقاً للقانون 18-00.',
+      'كل توصيل أداء يصدر بعد المصادقة يحمل رقماً تسلسلياً رسمياً ومراجع الإقامة والمبلغ بالأرقام والحروف والمرجع القانوني الساري بتاريخ إصداره.',
   },
   {
     id: 'resident-ag-voting',
@@ -116,11 +116,11 @@ export const RESIDENT_GUIDES: UserGuideArticle[] = [
     summaryAr:
       'مارس حقك في التصويت كمالك مشترك على كل قرار في الجمع العام، حيث يُحتسب صوتك تلقائياً وفق أنصبة كل شقة تملكها.',
     prerequisitesFr: [
-      'Être enregistré en tant que Copropriétaire Titulaire (les locataires ne participent pas au vote AG selon la Loi 18-00).',
+      'Être enregistré en tant que Copropriétaire Titulaire (les locataires ne participent pas au vote en Assemblée Générale).',
       'Une Assemblée Générale doit être ouverte au vote par le Syndic.',
     ],
     prerequisitesAr: [
-      'أن تكون مسجلاً كمالك مشترك (المكترون لا يشاركون في تصويت الجمع العام وفق القانون 18-00).',
+      'أن تكون مسجلاً كمالك مشترك (المكترون لا يشاركون في تصويت الجمع العام).',
       'أن يكون السنديك قد فتح باب التصويت للجمع العام.',
     ],
     steps: [

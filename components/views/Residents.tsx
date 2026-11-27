@@ -1089,8 +1089,8 @@ const Residents: React.FC<{
             disabled={activeResidents.length === 0}
             className="flex items-center gap-1.5 text-xs sm:text-sm"
             title={tr(
-              'Exporter le registre officiel des résidents en PDF (Loi 18-00)',
-              'تصدير السجل الرسمي للسكان بصيغة PDF (قانون 18-00)'
+              'Exporter le registre officiel des résidents en PDF',
+              'تصدير السجل الرسمي للسكان بصيغة PDF'
             )}
           >
             <DocumentsIcon />

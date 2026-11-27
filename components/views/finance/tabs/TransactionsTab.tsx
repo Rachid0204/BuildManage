@@ -7,6 +7,7 @@ import { DocumentsIcon, PlusIcon } from '../../../icons/IconComponents';
 import { generateTransactionVoucherPDF } from '../../../../services/pdfOnDemand';
 import { isIncomeTransaction, signedTransactionAmount } from '../../../../utils/security';
 import { useI18n } from '../../../../hooks/useI18n';
+import { useLegalFramework } from '../../../../hooks/useLegalFramework';
 import {
   buildCategoryLabels,
   buildDocumentTypeLabels,
@@ -38,6 +39,7 @@ const TransactionsTab: React.FC<TransactionsTabProps> = ({
   onSelectTransaction,
 }) => {
   const { tr, isAr } = useI18n();
+  const { legal } = useLegalFramework();
   const [filterType, setFilterType] = useState<'all' | 'income' | 'expense'>('all');
   const [filterCategory, setFilterCategory] = useState<string>('all');
   const [searchTrx, setSearchTrx] = useState('');
@@ -173,8 +175,8 @@ const TransactionsTab: React.FC<TransactionsTabProps> = ({
               </h3>
               <InfoTip label={tr('Information légale grand livre', 'معلومة قانونية حول السجل المحاسبي')}>
                 {tr(
-                  'Grand livre comptable inaltérable (Loi n° 18-00) : séparation stricte entre le compte courant et le fonds de réserve (Loi n° 106-12).',
-                  'السجل المحاسبي العام (القانون 18-00): فصل قانوني بين الحساب الجاري وصندوق الاحتياط (القانون 106-12).',
+                  `Grand livre comptable inaltérable (${legal.citations.accountingRefFr}) : séparation stricte entre le compte courant et le fonds de réserve (${legal.citations.reserveFundRefFr}).`,
+                  `السجل المحاسبي العام (${legal.citations.accountingRefAr}): فصل قانوني بين الحساب الجاري وصندوق الاحتياط (${legal.citations.reserveFundRefAr}).`,
                 )}
               </InfoTip>
             </div>

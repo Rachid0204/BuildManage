@@ -9,6 +9,7 @@ import {
   exportResidentStatementPDF,
 } from '../../../../services/pdfOnDemand';
 import { useI18n } from '../../../../hooks/useI18n';
+import { useLegalFramework } from '../../../../hooks/useLegalFramework';
 import { useToast } from '../../../common/Toast';
 import { currencyFormatter } from '../financeConstants';
 import type { AgingBuckets, OverdueResidentGroup } from '../financeSelectors';
@@ -33,6 +34,7 @@ const OverdueTab: React.FC<OverdueTabProps> = ({
   agingBuckets,
 }) => {
   const { tr, isAr } = useI18n();
+  const { legal } = useLegalFramework();
   const { showToast } = useToast();
 
   return (
@@ -82,8 +84,8 @@ const OverdueTab: React.FC<OverdueTabProps> = ({
               </h3>
               <InfoTip label={tr('Procédure légale en cas de retard', 'المسطرة القانونية في حالة التأخر')}>
                 {tr(
-                  "Article 25 de la Loi n° 18-00 : en cas de non-paiement, le syndic peut envoyer une mise en demeure par courrier recommandé avec accusé de réception (délai de 30 jours), puis demander une ordonnance d'injonction de payer au Tribunal de Première Instance.",
-                  'المادة 25 من القانون 18-00: في حالة عدم الأداء، يوجه السنديك إنذاراً مضموناً مع إشعار بالتوصل يمنح أجلاً مدته 30 يوماً، ثم يمكنه طلب أمر بالأداء من المحكمة الابتدائية.',
+                  `Procédure de recouvrement (${legal.citations.collectionNoticeRefFr}) : en cas de non-paiement, le syndic peut envoyer une mise en demeure par courrier recommandé avec accusé de réception (délai de ${legal.rules.miseEnDemeureNoticeDays} jours), puis demander une ordonnance d'injonction de payer au Tribunal de Première Instance.`,
+                  `مسطرة التحصيل (${legal.citations.collectionNoticeRefAr}): في حالة عدم الأداء، يوجه السنديك إنذاراً مضموناً مع إشعار بالتوصل يمنح أجلاً مدته ${legal.rules.miseEnDemeureNoticeDays} يوماً، ثم يمكنه طلب أمر بالأداء من المحكمة الابتدائية.`,
                 )}
               </InfoTip>
             </div>

@@ -99,7 +99,7 @@ const LandingPage: React.FC<LandingPageProps> = ({
       ],
       metricLabelFr: 'Portefeuille & Comptabilité',
       metricLabelAr: 'المحفظة والمحاسبة',
-      metricValue: 'Loi 18-00 & 106-12',
+      metricValue: '100% Conforme',
     },
     resident: {
       labelFr: 'Portail Copropriétaire & Locataire',
@@ -161,8 +161,8 @@ const LandingPage: React.FC<LandingPageProps> = ({
     {
       qFr: 'Comment les copropriétaires, locataires et prestataires reçoivent-ils leurs accès ?',
       qAr: 'كيف يتسلم الملاك المشتركون والمكترون ومقدمو الخدمات بيانات ولوجهم؟',
-      aFr: 'Par sécurité et conformément à la gouvernance Loi 18-00, aucune inscription publique n’est ouverte pour les résidents. Depuis votre espace Syndic, vous rattachez le résident ou prestataire à son lot et téléchargez en 1 clic sa Fiche d’Accès PDF officielle avec ses identifiants personnels.',
-      aAr: 'لأسباب أمنية وتماشياً مع القانون 18-00، لا يوجد تسجيل مفتوح وعشوائي للسكان. من لوحة السنديك، تربط المالك أو المزود بشقته وتحمّل بنقرة واحدة بطاقة الولوج الرسمية PDF التي تتضمن بيانات الدخول.',
+      aFr: 'Par sécurité et conformément à la gouvernance de la copropriété, aucune inscription publique n’est ouverte pour les résidents. Depuis votre espace Syndic, vous rattachez le résident ou prestataire à son lot et téléchargez en 1 clic sa Fiche d’Accès PDF officielle avec ses identifiants personnels.',
+      aAr: 'لأسباب أمنية وتماشياً مع حكامة الملكية المشتركة، لا يوجد تسجيل مفتوح وعشوائي للسكان. من لوحة السنديك، تربط المالك أو المزود بشقته وتحمّل بنقرة واحدة بطاقة الولوج الرسمية PDF التي تتضمن بيانات الدخول.',
     },
     {
       qFr: 'Comment la Messagerie interne et Le Souk favorisent-ils l’entraide entre résidents ?',
@@ -179,7 +179,7 @@ const LandingPage: React.FC<LandingPageProps> = ({
     {
       qFr: 'Puis-je reprendre un immeuble déjà géré avec ses soldes et impayés existants ?',
       qAr: 'هل يمكنني إدخال عمارة قائمة مع أرصدتها الافتتاحية والمتأخرات السابقة؟',
-      aFr: 'Oui. Lors de la configuration, vous saisissez les soldes d’ouverture (compte courant et fonds de réserve Loi 106-12), les tantièmes sur 1000 millièmes, ainsi que la date d’affectation des propriétaires pour que la facturation mensuelle démarre proprement sans doublons.',
+      aFr: 'Oui. Lors de la configuration, vous saisissez les soldes d’ouverture (compte courant et fonds de réserve), les tantièmes sur 1000 millièmes, ainsi que la date d’affectation des propriétaires pour que la facturation mensuelle démarre proprement sans doublons.',
       aAr: 'نعم. يمكنك إدخال الأرصدة الافتتاحية (الحساب الجاري وصندوق الاحتياط)، وجدول الحصص على 1000 جزء، وتاريخ تعيين الملاك لبدء الفوترة الشهرية بدقة دون تكرار.',
     },
     {
@@ -206,8 +206,8 @@ const LandingPage: React.FC<LandingPageProps> = ({
       enterprise: tr('Illimités', 'غير محدود'),
     },
     {
-      labelFr: 'Finance Loi 18-00, Tantièmes & Fonds de Réserve 106-12',
-      labelAr: 'المالية، التانتييم وصندوق الاحتياط 106-12',
+      labelFr: 'Finance Syndic, Tantièmes & Fonds de Réserve',
+      labelAr: 'المالية، التانتييم وصندوق الاحتياط',
       starter: '✓',
       professional: '✓',
       enterprise: '✓',
@@ -276,7 +276,7 @@ const LandingPage: React.FC<LandingPageProps> = ({
                 theme="light"
                 size="sm"
                 showBadge
-                badgeText={tr('Loi 18-00 & 106-12', 'القانون 18-00 و 106-12')}
+                badgeText={tr('Copropriété Maroc', 'الملكية المشتركة بالمغرب')}
               />
             </a>
 
@@ -420,8 +420,8 @@ const LandingPage: React.FC<LandingPageProps> = ({
             <main className="lg:col-span-6 text-start">
               <p className="text-xs font-bold tracking-[0.14em] uppercase text-teal-800 mb-3">
                 {tr(
-                  'Logiciel de Syndic au Maroc · Conformité Loi 18-00 & 106-12',
-                  'منصة تدبير الملكية المشتركة بالمغرب · قانون 18-00 و 106-12',
+                  'Logiciel de Syndic au Maroc · Gouvernance & Comptabilité Certifiée',
+                  'منصة تدبير الملكية المشتركة بالمغرب · حكامة ومحاسبة معتمدة',
                 )}
               </p>
               <h1 className="text-3xl sm:text-5xl xl:text-[3.15rem] font-extrabold text-slate-900 tracking-tight leading-[1.12]">
@@ -514,7 +514,7 @@ const LandingPage: React.FC<LandingPageProps> = ({
                         },
                         {
                           id: 'assembly',
-                          fr: 'Vote AGO 18-00',
+                          fr: 'Vote AG pondéré',
                           ar: 'تصويت الجمع العام',
                         },
                       ] as const
@@ -550,7 +550,7 @@ const LandingPage: React.FC<LandingPageProps> = ({
                         </div>
                         <div className="p-3 rounded-xl bg-teal-50/70 border border-teal-200">
                           <span className="text-[11px] font-semibold text-teal-800 block">
-                            {tr('Réserve 106-12', 'صندوق الاحتياط')}
+                            {tr('Fonds de réserve', 'صندوق الاحتياط')}
                           </span>
                           <span className="text-base sm:text-lg font-extrabold font-mono text-teal-900">
                             19 400 DH
@@ -764,7 +764,7 @@ const LandingPage: React.FC<LandingPageProps> = ({
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="max-w-3xl">
             <p className="text-xs font-bold uppercase tracking-[0.14em] text-teal-400">
-              {tr('Gouvernance Loi 18-00', 'حكامة القانون 18-00')}
+              {tr('Gouvernance de Copropriété', 'حكامة الملكية المشتركة')}
             </p>
             <h2 className="mt-1.5 text-2xl sm:text-3xl font-extrabold tracking-tight">
               {tr(
@@ -790,7 +790,7 @@ const LandingPage: React.FC<LandingPageProps> = ({
               </h3>
               <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
                 {tr(
-                  'Démarrez votre essai de 30 jours, créez vos immeubles, importez vos tantièmes et fixez votre taux de fonds de réserve (Loi 106-12).',
+                  'Démarrez votre essai de 30 jours, créez vos immeubles, importez vos tantièmes et fixez votre taux de fonds de réserve.',
                   'ابدأ فترتك التجريبية لـ 30 يوماً، أنشئ عماراتك، اضبط حصص التانتييم وحدد نسبة صندوق الاحتياط.',
                 )}
               </p>
@@ -855,7 +855,7 @@ const LandingPage: React.FC<LandingPageProps> = ({
                 </h3>
                 <p className="mt-1.5 text-sm text-slate-600 leading-relaxed">
                   {tr(
-                    'Appels mensuels automatisés, paiements partiels ou multi-échéances, calcul exact au centime, Fonds de Réserve Loi 106-12, contrôle budgétaire strict des dépenses et clôture de période.',
+                    'Appels mensuels automatisés, paiements partiels ou multi-échéances, calcul exact au centime, Fonds de Réserve dédié, contrôle budgétaire strict des dépenses et clôture de période.',
                     'إصدار شهري آلي، أداءات جزئية أو مجمعة بدقة السنتيم، صندوق الاحتياط، مراقبة صارمة للميزانية وإغلاق الفترات المحاسبية.',
                   )}
                 </p>
@@ -1379,8 +1379,8 @@ const LandingPage: React.FC<LandingPageProps> = ({
             <span className="text-xs text-slate-400">
               •{' '}
               {tr(
-                'Gestion de Copropriété Maroc (Loi 18-00 & 106-12)',
-                'تدبير الملكية المشتركة بالمغرب (القانون 18-00 و 106-12)',
+                'Gestion de Copropriété au Maroc',
+                'تدبير الملكية المشتركة بالمغرب',
               )}
             </span>
           </div>

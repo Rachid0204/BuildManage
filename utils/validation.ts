@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DEFAULT_LEGAL_FRAMEWORK } from '../shared/legalFramework';
 
 export const ResidentSchema = z.object({
   id: z.string().optional(),
@@ -53,7 +54,13 @@ export const BuildingSchema = z.object({
   rc: z.string().max(50).optional(),
   monthlySyndicFees: z.number().nonnegative(),
   totalTantiemes: z.number().positive().optional().default(1000),
-  reserveFundRate: z.number().finite().min(0).max(100).optional().default(5),
+  reserveFundRate: z
+    .number()
+    .finite()
+    .min(0)
+    .max(100)
+    .optional()
+    .default(DEFAULT_LEGAL_FRAMEWORK.rules.defaultReserveFundPercent),
   bankName: z.string().optional(),
   bankRib: z.string().optional(),
   managerName: z.string().optional(),

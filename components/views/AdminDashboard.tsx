@@ -11,6 +11,7 @@ import { saveOrShareBlob } from '../../utils/nativeBridge';
 import AdminGatewaysTab from './admin/AdminGatewaysTab';
 import AdminCommercialTab from './admin/AdminCommercialTab';
 import AdminAuditWebhooksTab from './admin/AdminAuditWebhooksTab';
+import AdminLegalFrameworkTab from './admin/AdminLegalFrameworkTab';
 import {
   escapeCsvCell,
   getCasablancaMonthKey,
@@ -63,7 +64,7 @@ import {
   TrashIcon,
 } from '../icons/IconComponents';
 
-type AdminTab = 'cabinets' | 'reports' | 'billing' | 'commercial' | 'audit';
+type AdminTab = 'cabinets' | 'reports' | 'billing' | 'commercial' | 'audit' | 'legal';
 type StatusFilter = 'all' | SubscriptionStatus | 'archived';
 type PlanFilter = 'all' | SubscriptionPlan;
 type QueueFilter = 'all' | 'virement' | 'cash';
@@ -1312,6 +1313,19 @@ const AdminDashboard: React.FC = () => {
             }`}
           >
             {tr('Audit & Webhooks', 'التدقيق و Webhooks')}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'legal'}
+            onClick={() => setActiveTab('legal')}
+            className={`px-4 py-2.5 text-xs sm:text-sm font-bold rounded-t-xl border-b-2 transition-colors ${
+              activeTab === 'legal'
+                ? 'border-teal-700 text-teal-800 bg-white'
+                : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            {tr('Cadre Légal', 'الإطار القانوني')}
           </button>
         </div>
 
@@ -2593,6 +2607,8 @@ const AdminDashboard: React.FC = () => {
         )}
 
         {activeTab === 'audit' && <AdminAuditWebhooksTab />}
+
+        {activeTab === 'legal' && <AdminLegalFrameworkTab />}
       </main>
 
       {/* Create New Syndic Cabinet Modal */}

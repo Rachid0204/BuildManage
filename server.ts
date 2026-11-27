@@ -1023,6 +1023,7 @@ async function startServer() {
   };
   const PUBLIC_WRAPPED_PATHS = new Set([
     "/api/ready",
+    "/api/legal-framework",
     "/api/auth/login",
     "/api/auth/register",
     "/api/auth/firebase-session",

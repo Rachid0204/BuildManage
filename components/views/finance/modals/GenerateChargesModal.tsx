@@ -6,6 +6,7 @@ import Modal from '../../../common/Modal';
 import InfoTip from '../../../common/InfoTip';
 import { generateMonthlyCharges } from '../../../../firebase/services';
 import { useI18n } from '../../../../hooks/useI18n';
+import { useLegalFramework } from '../../../../hooks/useLegalFramework';
 import { useToast } from '../../../common/Toast';
 import { currencyFormatter } from '../financeConstants';
 import { computeChargePreview } from '../financeSelectors';
@@ -29,6 +30,7 @@ const GenerateChargesModal: React.FC<GenerateChargesModalProps> = ({
   onClose,
 }) => {
   const { tr } = useI18n();
+  const { legal } = useLegalFramework();
   const { showToast } = useToast();
   const queryClient = useQueryClient();
 
@@ -152,8 +154,8 @@ const GenerateChargesModal: React.FC<GenerateChargesModalProps> = ({
                 <span>{tr('Répartir un budget global selon les tantièmes', 'توزيع ميزانية إجمالية حسب الحصص الشائعة')}</span>
                 <InfoTip label={tr('Répartition aux tantièmes', 'التوزيع حسب الحصص الشائعة')}>
                   {tr(
-                    'Calcule la part de chaque lot proportionnellement à ses tantièmes de copropriété (Loi n° 18-00).',
-                    'يحسب حصة كل شقة بالتناسب مع حصتها الشائعة في الملكية المشتركة (القانون 18-00).',
+                    `Calcule la part de chaque lot proportionnellement à ses tantièmes de copropriété (${legal.citations.statuteShortFr}).`,
+                    `يحسب حصة كل شقة بالتناسب مع حصتها الشائعة في الملكية المشتركة (${legal.citations.statuteShortAr}).`,
                   )}
                 </InfoTip>
               </span>

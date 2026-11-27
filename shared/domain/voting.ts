@@ -11,7 +11,7 @@ export function evaluateResolutionStatus(resolution: AGResolution, ag: Assemblee
   const unapprovedStatus: AGResolution['status'] = isClosed ? 'rejected' : 'pending';
   const quorumWaived = ag.convocationNumber === 2;
 
-  // Audit Item 20 / Loi 18-00 Art. 18: 1st convocation requires quorum; 2nd convocation deliberates without quorum.
+  // Audit Item 20: 1st convocation requires quorum; 2nd convocation deliberates without quorum.
   if (!ag.quorumReached && !quorumWaived) {
     if (isUnanimity && resolution.votesAgainst > 0) {
       return 'rejected';

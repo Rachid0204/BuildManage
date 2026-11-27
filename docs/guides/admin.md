@@ -128,7 +128,7 @@ Créez un code (ex. BIENVENUE20 ou RAMADAN100) en pourcentage ou montant fixe MA
 ## 5. Surveiller les Webhooks CMI/PayPal & le Journal d’Audit Plateforme
 > **AR:** مراقبة Webhooks لبوابات CMI/PayPal وسجل تدقيق المنصة
 
-**Catégorie :** Audit & Observabilité · **Durée estimée :** ~2 min
+**Catégorie :** Audit & Cadre Légal · **Durée estimée :** ~2 min
 
 Contrôlez en temps réel chaque callback CMI, webhook PayPal et action sensible réalisée sur la console d’administration.
 
@@ -144,5 +144,9 @@ Ouvrez l’onglet « Audit & Webhooks ». Filtrez par passerelle (CMI, PayPal, V
 #### Étape 2 — Rechercher une opération dans le Journal d’Audit Plateforme
 
 Utilisez la recherche libre ou le filtre d’opération (modifications de passerelles, encaissements, annulations, promos, rappels) pour vérifier qui a exécuté quelle action et à quelle heure.
+
+#### Étape 3 — Mettre à jour le Cadre Légal sans redéploiement (effet prospectif)
+
+Depuis l’onglet « Cadre Légal », ajustez en français et en arabe les références légales officielles ainsi que les seuils réglementaires (taux par défaut du fonds de réserve pour les nouveaux immeubles, plafond de procurations AG, délais de convocation et de mise en demeure). Les quittances et PV déjà émis conservent leur mention légale d’origine.
 
 ---

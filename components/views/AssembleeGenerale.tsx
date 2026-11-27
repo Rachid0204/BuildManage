@@ -5,6 +5,8 @@ import Card from '../common/Card';
 import Button from '../common/Button';
 import Modal from '../common/Modal';
 import { useI18n } from '../../hooks/useI18n';
+import { useLegalFramework } from '../../hooks/useLegalFramework';
+import { getActiveLegalFramework } from '../../shared/legalFramework';
 import { AGIcon, PlusIcon, DocumentsIcon } from '../icons/IconComponents';
 import {
   getAssembleesGeneralesForBuilding,
@@ -37,30 +39,31 @@ function formatMajorityLabel(
   const total = totalTantiemes || 1000;
   const absThreshold = canonicalQuorum(total);
   const threeQuartersThreshold = Math.ceil(total * 0.75);
+  const { citations } = getActiveLegalFramework();
   switch (majorityType) {
     case 'simple':
     case 'simple_24':
-      return tr('Majorité simple (Art. 21) · Pour > Contre', 'الأغلبية البسيطة (المادة 21) · نعم > لا');
+      return tr(`Majorité simple (${citations.agMajoritySimpleRefFr}) · Pour > Contre`, `الأغلبية البسيطة (${citations.agMajoritySimpleRefAr}) · نعم > لا`);
     case 'absolute':
     case 'absolue_25':
       return tr(
-        `Majorité absolue (Art. 22) · min. ${absThreshold} / ${total} tantièmes`,
-        `الأغلبية المطلقة (المادة 22) · ${absThreshold} / ${total} جزء على الأقل`
+        `Majorité absolue (${citations.agMajorityAbsoluteRefFr}) · min. ${absThreshold} / ${total} tantièmes`,
+        `الأغلبية المطلقة (${citations.agMajorityAbsoluteRefAr}) · ${absThreshold} / ${total} جزء على الأقل`
       );
     case 'three_quarters':
     case 'trois_quarts_26':
       return tr(
-        `Majorité 3/4 (Art. 22 · Loi 106-12) · min. ${threeQuartersThreshold} / ${total} tantièmes`,
-        `أغلبية 3/4 (المادة 22 · القانون 106-12) · ${threeQuartersThreshold} / ${total} جزء على الأقل`
+        `Majorité 3/4 (${citations.agMajorityThreeQuartersRefFr}) · min. ${threeQuartersThreshold} / ${total} tantièmes`,
+        `أغلبية 3/4 (${citations.agMajorityThreeQuartersRefAr}) · ${threeQuartersThreshold} / ${total} جزء على الأقل`
       );
     case 'unanimity':
     case 'unanimite':
       return tr(
-        `Unanimité (Art. 23) · ${total} / ${total} tantièmes`,
-        `الإجماع (المادة 23) · ${total} / ${total} جزء`
+        `Unanimité (${citations.agMajorityUnanimityRefFr}) · ${total} / ${total} tantièmes`,
+        `الإجماع (${citations.agMajorityUnanimityRefAr}) · ${total} / ${total} جزء`
       );
     default:
-      return tr('Majorité simple (Art. 21) · Pour > Contre', 'الأغلبية البسيطة (المادة 21) · نعم > لا');
+      return tr(`Majorité simple (${citations.agMajoritySimpleRefFr}) · Pour > Contre`, `الأغلبية البسيطة (${citations.agMajoritySimpleRefAr}) · نعم > لا`);
   }
 }
 
@@ -106,6 +109,7 @@ function ResolutionBudgetEditor({ resolution, onSave }: {
 
 const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syndic }) => {
   const { tr, isAr } = useI18n();
+  const { legal } = useLegalFramework();
   const { showToast } = useToast();
   const queryClient = useQueryClient();
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -117,7 +121,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
   const [newTime, setNewTime] = useState('18:30');
   const [newLocation, setNewLocation] = useState(`Hall d'entrée - ${building.name}`);
   const [agendaInput, setAgendaInput] = useState(
-    "1. Approbation du rapport moral et financier\n2. Quitus de gestion au Syndic\n3. Vote du budget prévisionnel de l'exercice\n4. Constitution du Fonds de réserve pour travaux (Loi 106-12)\n5. Travaux d'étanchéité de la toiture-terrasse"
+    "1. Approbation du rapport moral et financier\n2. Quitus de gestion au Syndic\n3. Vote du budget prévisionnel de l'exercice\n4. Constitution du Fonds de réserve pour travaux\n5. Travaux d'étanchéité de la toiture-terrasse"
   );
 
   const [newBudgets, setNewBudgets] = useState<Record<number, string>>({});
@@ -464,7 +468,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
               <span className="shrink-0 flex items-center"><AGIcon /></span>
-              <span>{tr('Gouvernance & Assemblées Générales (Loi 18-00)', 'الحكامة والجمعيات العامة (القانون 18-00)')}</span>
+              <span>{tr('Gouvernance & Assemblées Générales', 'الحكامة والجمعيات العامة')}</span>
             </h1>
             <span className="text-xs bg-teal-50 text-teal-800 font-semibold px-2.5 py-0.5 rounded-full border border-teal-200 whitespace-nowrap">
               {tr('Scrutin pondéré par tantièmes', 'تصويت مرجح بالحصة الشائعة')}
@@ -639,7 +643,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
             <div className="md:col-span-7 space-y-1.5">
               <div className="flex justify-between items-center text-xs">
                 <span className="text-teal-200 font-medium">
-                  {tr('Quorum légal de copropriété (Loi 18-00 Art. 18) :', 'النصاب القانوني للملكية المشتركة (المادة 18 من القانون 18-00):')}
+                  {tr(`Quorum légal de copropriété (${legal.citations.statuteShortFr}) :`, `النصاب القانوني للملكية المشتركة (${legal.citations.statuteShortAr}):`)}
                 </span>
                 <span className="font-mono font-bold text-white">
                   {activeAG.presentTantiemes} / {effectiveTotalTantiemes} {tr('tantièmes', 'جزء')} (
@@ -818,8 +822,8 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                   <h3 className="font-bold text-slate-900 text-sm">{tr('Délibérations & Vote des Résolutions', 'المداولات والتصويت على القرارات')}</h3>
                   <p className="text-xs text-slate-500">
                     {tr(
-                      'Calcul automatique des majorités légales selon la Loi 18-00 & 106-12 (Articles 21, 22 et 23)',
-                      'حساب تلقائي للأغلبيات القانونية وفق القانون 18-00 و 106-12 (المواد 21، 22 و 23)'
+                      `Calcul automatique des majorités légales selon le cadre en vigueur (${legal.citations.statuteShortFr})`,
+                      `حساب تلقائي للأغلبيات القانونية وفق الإطار الجاري به العمل (${legal.citations.statuteShortAr})`
                     )}
                   </p>
                 </div>
@@ -1068,7 +1072,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
         onSubmit={handleCreateAG}
         busy={saveAGMutation.isPending}
         onClose={() => setIsCreateModalOpen(false)}
-        title={tr('Planifier une Assemblée Générale (Loi 18-00)', 'برمجة جمع عام (القانون 18-00)')}
+        title={tr('Planifier une Assemblée Générale', 'برمجة جمع عام')}
         footer={
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setIsCreateModalOpen(false)}>
@@ -1105,7 +1109,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
               </select>
             </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">{tr('Convocation (Loi 18-00 Art. 18)', 'الدعوة (القانون 18-00 المادة 18)')}</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">{tr('Numéro de convocation', 'رقم الدعوة')}</label>
               <select
                 value={newConvocationNumber}
                 onChange={(e) => setNewConvocationNumber(Number(e.target.value) === 2 ? 2 : 1)}
@@ -1185,10 +1189,10 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
                   className="border rounded px-1.5 py-0.5 bg-white text-[11px]"
                   aria-label={tr('Majorité requise', 'الأغلبية المطلوبة')}
                 >
-                  <option value="simple">{tr('Majorité simple (Art. 21)', 'الأغلبية البسيطة (المادة 21)')}</option>
-                  <option value="absolute">{tr('Majorité absolue (Art. 22)', 'الأغلبية المطلقة (المادة 22)')}</option>
-                  <option value="three_quarters">{tr('Majorité 3/4 (Loi 106-12)', 'أغلبية 3/4 (القانون 106-12)')}</option>
-                  <option value="unanimity">{tr('Unanimité (Art. 23)', 'الإجماع (المادة 23)')}</option>
+                  <option value="simple">{tr(`Majorité simple (${legal.citations.agMajoritySimpleRefFr})`, `الأغلبية البسيطة (${legal.citations.agMajoritySimpleRefAr})`)}</option>
+                  <option value="absolute">{tr(`Majorité absolue (${legal.citations.agMajorityAbsoluteRefFr})`, `الأغلبية المطلقة (${legal.citations.agMajorityAbsoluteRefAr})`)}</option>
+                  <option value="three_quarters">{tr(`Majorité 3/4 (${legal.citations.agMajorityThreeQuartersRefFr})`, `أغلبية 3/4 (${legal.citations.agMajorityThreeQuartersRefAr})`)}</option>
+                  <option value="unanimity">{tr(`Unanimité (${legal.citations.agMajorityUnanimityRefFr})`, `الإجماع (${legal.citations.agMajorityUnanimityRefAr})`)}</option>
                 </select>
               </div>
               {newBudgets[index] !== undefined && (
@@ -1397,7 +1401,7 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
             {/* Optional Comment / Proxy */}
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
-                {tr('Observation, mandat de procuration ou réserve (Loi 18-00) :', 'ملاحظة، تفويض وكالة أو تحفظ (القانون 18-00):')}
+                {tr('Observation, mandat de procuration ou réserve :', 'ملاحظة، تفويض وكالة أو تحفظ:')}
               </label>
               <input
                 type="text"
@@ -1530,8 +1534,8 @@ const AssembleeGeneraleView: React.FC<AssembleeGeneraleProps> = ({ building, syn
           <div className="space-y-4">
             <p className="text-xs text-slate-600">
               {tr(
-                `Saisissez le nom complet du mandataire représentant ${proxyAttendee.residentName} (Loi 106-12 Art. 16-6 : max 3 mandats et 10% des voix, hors syndic) :`,
-                `أدخل الاسم الكامل للوكيل الذي يمثل ${proxyAttendee.residentName} (القانون 106-12 المادة 16-6: حد أقصى 3 وكالات و 10% من الأصوات، باستثناء السنديك):`
+                `Saisissez le nom complet du mandataire représentant ${proxyAttendee.residentName} (${legal.citations.agProxyRefFr} : max ${legal.rules.maxProxiesPerHolder} mandat(s) et ${legal.rules.maxProxyTantiemesSharePercent}% des voix, hors syndic) :`,
+                `أدخل الاسم الكامل للوكيل الذي يمثل ${proxyAttendee.residentName} (${legal.citations.agProxyRefAr}: حد أقصى ${legal.rules.maxProxiesPerHolder} وكالات و ${legal.rules.maxProxyTantiemesSharePercent}% من الأصوات، باستثناء السنديك):`
               )}
             </p>
             <div>

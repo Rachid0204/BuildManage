@@ -234,7 +234,7 @@ const Dashboard: React.FC<DashboardProps> = ({ building, syndic }) => {
                   </strong>
                 </span>
                 <span>
-                  {tr('Fonds de Réserve Global (Loi 106-12) :', 'صندوق الاحتياط الإجمالي:')}{' '}
+                  {tr('Fonds de Réserve Global :', 'صندوق الاحتياط الإجمالي:')}{' '}
                   <strong className="font-mono text-indigo-300">
                     {currencyFormatter.format(portfolioSummary.totalPortfolioReserve)}
                   </strong>
@@ -319,7 +319,7 @@ const Dashboard: React.FC<DashboardProps> = ({ building, syndic }) => {
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
             <div>
               <span className="text-[11px] font-mono uppercase tracking-widest text-teal-300 font-bold">
-                {tr('ASSISTANT DE DÉMARRAGE LOI 18-00', 'دليل الإعداد السريع — قانون 18-00')}
+                {tr('ASSISTANT DE DÉMARRAGE COPROPRIÉTÉ', 'دليل الإعداد السريع للملكية المشتركة')}
               </span>
               <h2 className="text-base sm:text-lg font-bold text-white mt-0.5">
                 {tr(

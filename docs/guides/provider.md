@@ -39,7 +39,7 @@ Depuis le tableau de bord Prestataire, repérez le nom de la résidence, le nive
 
 ### Questions fréquentes
 
-- **Pourquoi je ne vois pas les documents comptables ou les AG de l’immeuble ?** — Par conformité et confidentialité (Loi 18-00), le portail Prestataire donne accès uniquement aux bons d’intervention techniques qui vous concernent.
+- **Pourquoi je ne vois pas les documents comptables ou les AG de l’immeuble ?** — Par conformité et confidentialité, le portail Prestataire donne accès uniquement aux bons d’intervention techniques qui vous concernent.
 
 ---
 

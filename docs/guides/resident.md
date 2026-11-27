@@ -32,7 +32,7 @@ Activez votre espace Copropriétaire ou Locataire avec la fiche d’accès remis
 
 Rendez-vous sur la page de connexion, sélectionnez l’onglet « Connexion », puis saisissez l’identifiant (email ou CIN) et le mot de passe temporaire figurant sur votre fiche d’accès.
 
-![Écran de connexion sécurisée au portail BuildManage / Syndik Maroc](../../public/guides/screenshots/resident/login.jpg)
+![Écran de connexion sécurisée au portail SyndicUnion Maroc](../../public/guides/screenshots/resident/login.jpg)
 *Page de connexion unique : accès Syndic, Copropriétaire, Locataire et Prestataire Agréé.*
 
 #### Étape 2 — Définir un mot de passe personnel (minimum 10 caractères)
@@ -46,7 +46,7 @@ Lors de votre première connexion, un écran de sécurité vous demande obligato
 
 **Catégorie :** Charges & Quittances · **Durée estimée :** ~3 min
 
-Suivez votre solde en temps réel, envoyez votre justificatif de virement bancaire au Syndic et téléchargez à tout moment vos quittances officielles de copropriété (Loi 18-00).
+Suivez votre solde en temps réel, envoyez votre justificatif de virement bancaire au Syndic et téléchargez à tout moment vos quittances officielles de copropriété.
 
 ### Étapes pas à pas
 
@@ -64,7 +64,7 @@ Cliquez sur « Payer / Envoyer justificatif » sur un appel de charges. Copiez l
 ![Fenêtre d’envoi de justificatif de paiement résident avec RIB de la copropriété](../../public/guides/screenshots/resident/payment-modal.jpg)
 *Déclaration de virement avec RIB officiel de la copropriété et téléversement sécurisé du justificatif.*
 
-> **Conformité Maroc (Loi 18-00 / CGI) :** Chaque quittance générée après validation comporte le numéro séquentiel officiel, les références de la copropriété, le montant en chiffres et en toutes lettres (conforme Loi 18-00).
+> **Conformité Maroc (Loi 18-00 / CGI) :** Chaque quittance générée après validation comporte le numéro séquentiel officiel, les références de la copropriété, le montant en chiffres et en toutes lettres ainsi que la référence légale en vigueur à sa date d’émission.
 
 ---
 
@@ -76,7 +76,7 @@ Cliquez sur « Payer / Envoyer justificatif » sur un appel de charges. Copiez l
 Exercez votre droit de vote de copropriétaire sur chaque résolution de l’AGO/AGE : votre voix est pondérée automatiquement selon les tantièmes officiels de chacun de vos lots.
 
 ### Prérequis
-- Être enregistré en tant que Copropriétaire Titulaire (les locataires ne participent pas au vote AG selon la Loi 18-00).
+- Être enregistré en tant que Copropriétaire Titulaire (les locataires ne participent pas au vote en Assemblée Générale).
 - Une Assemblée Générale doit être ouverte au vote par le Syndic.
 
 ### Étapes pas à pas
